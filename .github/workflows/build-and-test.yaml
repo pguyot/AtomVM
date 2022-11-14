@@ -139,6 +139,9 @@ jobs:
       with:
         submodules: 'recursive'
 
+    - name: "Disable IPv6 for hex.pm"
+      run: ping6 -c 1 www.ietf.org || sudo sysctl -w net.ipv6.conf.eth0.disable_ipv6=1
+
     - uses: erlef/setup-beam@v1
       with:
         otp-version: ${{ matrix.otp }}
