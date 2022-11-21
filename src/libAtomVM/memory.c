@@ -28,6 +28,7 @@
 #include "memory.h"
 #include "refc_binary.h"
 #include "tempstack.h"
+#include "term.h"
 
 //#define ENABLE_TRACE
 
@@ -35,49 +36,65 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **new_heap_pos, term *mso_list, int move);
-static term memory_shallow_copy_term(term t, term **new_heap, int move);
+static void memory_scan_and_copy(HeapFragment *old_fragment, term *mem_start, const term *mem_end, term **new_heap_pos, term *mso_list, bool move);
+static term memory_shallow_copy_term(HeapFragment *old_fragment, term t, term **new_heap, bool move);
 static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 
-HOT_FUNC term *memory_heap_alloc(Context *c, size_t size)
-{
-    term *allocated = c->heap_ptr;
-    c->heap_ptr += size;
-
-    return allocated;
-}
-
-MALLOC_LIKE term *memory_alloc_heap_fragment(Context *ctx, size_t fragment_size)
-{
-    struct ListHead *heap_fragment = malloc(fragment_size * sizeof(term) + sizeof(struct ListHead));
-    if (IS_NULL_PTR(heap_fragment)) {
-        return NULL;
+enum MemoryGCResult memory_init_heap(Heap *heap, size_t size) {
+    HeapFragment* fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + size * sizeof(term));
+    if (UNLIKELY(fragment == NULL)) {
+        return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
-    list_append(&ctx->heap_fragments, heap_fragment);
-    ctx->heap_fragments_size += fragment_size;
-    return (term *) (heap_fragment + 1);
+    heap->next = NULL;
+    heap->heap_start = fragment->storage - 1; // Use heap_end for mso_list
+    heap->heap_end = fragment->storage + size;
+    memory_init_heap_fragment(heap);
+    return MEMORY_GC_OK;
 }
 
-enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_t num_roots, term *roots, enum MemoryShrinkMode shrink_mode)
+void memory_init_heap_fragment(Heap *fragment) {
+    fragment->next = NULL;
+    fragment->heap_start[0] = term_nil(); // mso_list
+    fragment->heap_ptr = fragment->heap_start + 1;
+}
+
+enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_t num_roots, term *roots, enum MemoryAllocMode alloc_mode)
 {
     size_t free_space = context_avail_free_memory(c);
-    size_t maximum_free_space = 2 * (size + MIN_FREE_SPACE_SIZE);
-    if (free_space < size || (shrink_mode == MEMORY_FORCE_SHRINK) || ((shrink_mode == MEMORY_CAN_SHRINK) && free_space > maximum_free_space)) {
-        size_t memory_size = context_memory_size(c);
-        if (UNLIKELY(memory_gc(c, memory_size + size + MIN_FREE_SPACE_SIZE, num_roots, roots) != MEMORY_GC_OK)) {
-            //TODO: handle this more gracefully
-            TRACE("Unable to allocate memory for GC.  memory_size=%zu size=%u\n", memory_size, size);
-            return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+    if (alloc_mode == MEMORY_NO_GC) {
+        if (free_space < size) {
+            HeapFragment *fragment = HEAP_START_TO_FRAGMENT(c->heap.heap_start);
+            HeapFragment *old_next = c->heap.next;
+            term *old_end = c->heap.heap_end;
+            term mso_list = c->heap.heap_start[0];
+            if (UNLIKELY(memory_init_heap(&c->heap, size) != MEMORY_GC_OK)) {
+                TRACE("Unable to allocate memory fragment.  size=%u\n", size);
+                return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+            }
+            fragment->heap_end = old_end; // used to hold mso_list when it was the root heap
+            fragment->next = old_next;
+            c->heap.next = fragment;
+            c->heap.heap_start[0] = mso_list;
         }
-        if (shrink_mode != MEMORY_NO_SHRINK) {
-            size_t new_free_space = context_avail_free_memory(c);
-            if (new_free_space > maximum_free_space) {
-                size_t new_memory_size = context_memory_size(c);
-                size_t new_requested_size = (new_memory_size - new_free_space) + maximum_free_space;
-                if (!c->has_min_heap_size || (c->min_heap_size < new_requested_size)) {
-                    if (UNLIKELY(memory_gc(c, new_requested_size, num_roots, roots) != MEMORY_GC_OK)) {
-                        TRACE("Unable to allocate memory for GC shrink.  new_memory_size=%zu new_free_space=%zu new_minimum_free_space=%zu size=%u\n", new_memory_size, new_free_space, maximum_free_space, size);
-                        return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+    } else {
+        size_t maximum_free_space = 2 * (size + MIN_FREE_SPACE_SIZE);
+        if (free_space < size || (alloc_mode == MEMORY_FORCE_SHRINK) || ((alloc_mode == MEMORY_CAN_SHRINK) && free_space > maximum_free_space)) {
+            size_t memory_size = memory_heap_memory_size(&c->heap);
+            if (UNLIKELY(memory_gc(c, memory_size + size + MIN_FREE_SPACE_SIZE, num_roots, roots) != MEMORY_GC_OK)) {
+                //TODO: handle this more gracefully
+                TRACE("Unable to allocate memory for GC.  memory_size=%zu size=%u\n", memory_size, size);
+                return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+            }
+            if (alloc_mode != MEMORY_NO_SHRINK) {
+                size_t new_free_space = context_avail_free_memory(c);
+                if (new_free_space > maximum_free_space) {
+                    size_t new_memory_size = memory_heap_memory_size(&c->heap);
+                    size_t new_requested_size = (new_memory_size - new_free_space) + maximum_free_space;
+                    if (!c->has_min_heap_size || (c->min_heap_size < new_requested_size)) {
+                        if (UNLIKELY(memory_gc(c, new_requested_size, num_roots, roots) != MEMORY_GC_OK)) {
+                            TRACE("Unable to allocate memory for GC shrink.  new_memory_size=%zu new_free_space=%zu new_minimum_free_space=%zu size=%u\n", new_memory_size, new_free_space, maximum_free_space, size);
+                            return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+                        }
                     }
                 }
             }
@@ -97,84 +114,93 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
 {
     TRACE("Going to perform gc on process %i\n", ctx->process_id);
     size_t min_heap_size = ctx->has_min_heap_size ? ctx->min_heap_size : 0;
-    new_size = MAX(new_size, min_heap_size);
-
-    new_size += ctx->heap_fragments_size;
-    ctx->heap_fragments_size = 0;
+    // new_size is computed by caller from current used memory and therefore
+    // includes mso list. However, we shouldn't count it when initializing the
+    // heap and in computing the stack pointer.
+    new_size = MAX(new_size - 1, min_heap_size);
 
     if (UNLIKELY(ctx->has_max_heap_size && (new_size > ctx->max_heap_size))) {
         return MEMORY_GC_DENIED_ALLOCATION;
     }
 
-    term *new_heap = calloc(new_size, sizeof(term));
-    if (IS_NULL_PTR(new_heap)) {
+    term old_mso_list = ctx->heap.heap_start[0];
+    term *old_heap_end = ctx->heap.heap_end;
+    HeapFragment *fragment = ctx->heap.next;
+    HeapFragment *old_heap_fragment = HEAP_START_TO_FRAGMENT(ctx->heap.heap_start);
+
+    if (UNLIKELY(memory_init_heap(&ctx->heap, new_size) != MEMORY_GC_OK)) {
         return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
-    TRACE("- Allocated %i words for new heap at address 0x%x\n", new_size, (int) new_heap);
-    term *new_stack = new_heap + new_size;
+    // We need old heap fragment to only copy terms that were in the heap (as opposed to in messages)
+    old_heap_fragment->next = fragment;
+    old_heap_fragment->heap_end = old_heap_end;
 
-    term *heap_ptr = new_heap;
-    term *stack_ptr = new_stack;
+    term *new_heap = ctx->heap.heap_start + 1;
+    TRACE("- Allocated %i words for new heap at address 0x%p\n", (int) new_size, (void *) new_heap);
 
     TRACE("- Running copy GC on registers\n");
     for (int i = 0; i < MAX_REG; i++) {
-        term new_root = memory_shallow_copy_term(ctx->x[i], &heap_ptr, 1);
+        term new_root = memory_shallow_copy_term(old_heap_fragment, ctx->x[i], &ctx->heap.heap_ptr, true);
         ctx->x[i] = new_root;
     }
+    TRACE("- after registers, heap.heap_ptr now is at %p, heap.heap_start = %p\n", (void *) ctx->heap.heap_ptr, (void *) ctx->heap.heap_start);
 
-    term *stack = ctx->e;
-    int stack_size = ctx->stack_base - ctx->e;
-    TRACE("- Running copy GC on stack (stack size: %i)\n", stack_size);
-    for (int i = stack_size - 1; i >= 0; i--) {
-        term new_root = memory_shallow_copy_term(stack[i], &heap_ptr, 1);
+    // Determine which fragment the stack belongs to
+    term *old_stack_ptr = old_heap_end;
+    HeapFragment *fragment_cursor = fragment;
+    TRACE("- First fragment is %p\n", (void*) fragment_cursor);
+    while (fragment_cursor) {
+        if (ctx->e >= fragment_cursor->storage && ctx->e <= fragment_cursor->heap_end) {
+            TRACE("- Stack was in fragment at %p\n", (void*) fragment_cursor);
+            old_stack_ptr = fragment_cursor->heap_end;
+            break;
+        }
+        fragment_cursor = fragment_cursor->next;
+    }
+    TRACE("- Running copy GC on stack (stack size: %i)\n", (int) (old_stack_ptr - ctx->e));
+    term *stack_ptr = new_heap + new_size;
+    while (old_stack_ptr > ctx->e) {
+        term new_root = memory_shallow_copy_term(old_heap_fragment, *(--old_stack_ptr), &ctx->heap.heap_ptr, true);
         push_to_stack(&stack_ptr, new_root);
     }
+    ctx->e = stack_ptr;
 
     struct ListHead *item;
     TRACE("- Running copy GC on process dictionary\n");
     LIST_FOR_EACH (item, &ctx->dictionary) {
         struct DictEntry *entry = GET_LIST_ENTRY(item, struct DictEntry, head);
-        entry->key = memory_shallow_copy_term(entry->key, &heap_ptr, 1);
-        entry->value = memory_shallow_copy_term(entry->value, &heap_ptr, 1);
+        entry->key = memory_shallow_copy_term(old_heap_fragment, entry->key, &ctx->heap.heap_ptr, true);
+        entry->value = memory_shallow_copy_term(old_heap_fragment, entry->value, &ctx->heap.heap_ptr, true);
     }
 
     TRACE("- Running copy GC on exit reason\n");
-    ctx->exit_reason = memory_shallow_copy_term(ctx->exit_reason, &heap_ptr, 1);
+    ctx->exit_reason = memory_shallow_copy_term(old_heap_fragment, ctx->exit_reason, &ctx->heap.heap_ptr, true);
 
     TRACE("- Running copy GC on provided roots\n");
     for (size_t i = 0; i < num_roots; i++) {
-        roots[i] = memory_shallow_copy_term(roots[i], &heap_ptr, 1);
+        roots[i] = memory_shallow_copy_term(old_heap_fragment, roots[i], &ctx->heap.heap_ptr, 1);
     }
 
     term *temp_start = new_heap;
-    term *temp_end = heap_ptr;
+    term *temp_end = ctx->heap.heap_ptr;
     term new_mso_list = term_nil();
     do {
         term *next_end = temp_end;
-        TRACE("- Running scan and copy GC from 0x%lx to 0x%x\n", (int) temp_start, (int) temp_end);
-        memory_scan_and_copy(temp_start, temp_end, &next_end, &new_mso_list, 1);
+        TRACE("- Running scan and copy GC from %p to %p\n", (void *) temp_start, (void *) temp_end);
+        memory_scan_and_copy(old_heap_fragment, temp_start, temp_end, &next_end, &new_mso_list, true);
         temp_start = temp_end;
         temp_end = next_end;
     } while (temp_start != temp_end);
 
-    heap_ptr = temp_end;
-    memory_sweep_mso_list(ctx->mso_list);
-    ctx->mso_list = new_mso_list;
+    ctx->heap.heap_ptr = temp_end;
 
-    free(ctx->heap_start);
+    memory_sweep_mso_list(old_mso_list);
+    ctx->heap.heap_start[0] = new_mso_list;
 
-    struct ListHead *fragment;
-    struct ListHead *tmp;
-    MUTABLE_LIST_FOR_EACH (fragment, tmp, &ctx->heap_fragments) {
-        // no need to get list entry, since it is guaranteed to be at offset 0
-        free(fragment);
+    if (fragment) {
+        memory_deinit_heap_fragment(fragment);
     }
-    list_init(&ctx->heap_fragments);
-
-    ctx->heap_start = new_heap;
-    ctx->stack_base = ctx->heap_start + new_size;
-    ctx->heap_ptr = heap_ptr;
-    ctx->e = stack_ptr;
+    free(old_heap_fragment);
 
     return MEMORY_GC_OK;
 }
@@ -196,24 +222,38 @@ static inline term memory_dereference_moved_marker(const term *moved_marker)
     return moved_marker[1];
 }
 
-term memory_copy_term_tree(term **new_heap, term t, term *mso_list)
+static term memory_copy_term_tree_internal(term **heap_ptr, term *mso_list, term t)
 {
-    TRACE("Copy term tree: 0x%lx, heap: 0x%p\n", t, *new_heap);
+    TRACE("Copy term tree: %p, heap_ptr: %p\n", (void *)t, (void *)*heap_ptr);
 
-    term *temp_start = *new_heap;
-    term copied_term = memory_shallow_copy_term(t, new_heap, 0);
-    term *temp_end = *new_heap;
+    term *temp_start = *heap_ptr;
+    term copied_term = memory_shallow_copy_term(NULL, t, heap_ptr, false);
+    term *temp_end = *heap_ptr;
 
     do {
         term *next_end = temp_end;
-        memory_scan_and_copy(temp_start, temp_end, &next_end, mso_list, 0);
+        memory_scan_and_copy(NULL, temp_start, temp_end, &next_end, mso_list, false);
         temp_start = temp_end;
         temp_end = next_end;
     } while (temp_start != temp_end);
 
-    *new_heap = temp_end;
+    *heap_ptr = temp_end;
 
     return copied_term;
+}
+
+term memory_copy_term_tree(Heap *new_heap, term t)
+{
+    return memory_copy_term_tree_internal(&new_heap->heap_ptr, &new_heap->heap_start[MSO_LIST_TERM_INDEX], t);
+}
+
+term memory_copy_term_tree_to_storage(term *storage, term **heap_end, term t)
+{
+    term *heap_ptr = storage + 1;
+    storage[MSO_LIST_TERM_INDEX] = term_nil(); // mso_list
+    term result = memory_copy_term_tree_internal(&heap_ptr, &storage[MSO_LIST_TERM_INDEX], t);
+    *heap_end = heap_ptr;
+    return result;
 }
 
 unsigned long memory_estimate_usage(term t)
@@ -317,7 +357,7 @@ unsigned long memory_estimate_usage(term t)
     return acc;
 }
 
-static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **new_heap_pos, term *mso_list, int move)
+static void memory_scan_and_copy(HeapFragment *old_fragment, term *mem_start, const term *mem_end, term **new_heap_pos, term *mso_list, bool move)
 {
     term *ptr = mem_start;
     term *new_heap = *new_heap_pos;
@@ -326,39 +366,39 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
         term t = *ptr;
 
         if (term_is_atom(t)) {
-            TRACE("Found atom (%lx)\n", t);
+            TRACE("Found atom (%" TERM_X_FMT ")\n", t);
             ptr++;
 
         } else if (term_is_integer(t)) {
-            TRACE("Found integer (%lx)\n", t);
+            TRACE("Found integer (%" TERM_X_FMT ")\n", t);
             ptr++;
 
         } else if (term_is_nil(t)) {
-            TRACE("Found NIL (%lx)\n", t);
+            TRACE("Found NIL (%" TERM_X_FMT ")\n", t);
             ptr++;
 
         } else if (term_is_pid(t)) {
-            TRACE("Found PID (%lx)\n", t);
+            TRACE("Found PID (%" TERM_X_FMT ")\n", t);
             ptr++;
 
         } else if ((t & 0x3) == 0x0) {
-            TRACE("Found boxed header (%lx)\n", t);
+            TRACE("Found boxed header (%" TERM_X_FMT ")\n", t);
 
             switch (t & TERM_BOXED_TAG_MASK) {
                 case TERM_BOXED_TUPLE: {
                     int arity = term_get_size_from_boxed_header(t);
-                    TRACE("- Boxed is tuple (%lx), arity: %i\n", t, arity);
+                    TRACE("- Boxed is tuple (%" TERM_X_FMT "), arity: %i\n", t, arity);
 
                     for (int i = 1; i <= arity; i++) {
-                        TRACE("-- Elem: %lx\n", ptr[i]);
-                        ptr[i] = memory_shallow_copy_term(ptr[i], &new_heap, move);
+                        TRACE("-- Elem: %" TERM_X_FMT "\n", ptr[i]);
+                        ptr[i] = memory_shallow_copy_term(old_fragment, ptr[i], &new_heap, move);
                     }
                     break;
                 }
 
                 case TERM_BOXED_BIN_MATCH_STATE: {
                     TRACE("- Found bin match state.\n");
-                    ptr[1] = memory_shallow_copy_term(ptr[1], &new_heap, move);
+                    ptr[1] = memory_shallow_copy_term(old_fragment, ptr[1], &new_heap, move);
                     break;
                 }
 
@@ -377,8 +417,8 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
                     // first term is the boxed header, followed by module and fun index.
 
                     for (int i = 3; i <= fun_size; i++) {
-                        TRACE("-- Frozen: %lx\n", ptr[i]);
-                        ptr[i] = memory_shallow_copy_term(ptr[i], &new_heap, move);
+                        TRACE("-- Frozen: %" TERM_X_FMT "\n", ptr[i]);
+                        ptr[i] = memory_shallow_copy_term(old_fragment, ptr[i], &new_heap, move);
                     }
                     break;
                 }
@@ -398,7 +438,7 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
 
                 case TERM_BOXED_SUB_BINARY: {
                     TRACE("- Found sub binary.\n");
-                    ptr[3] = memory_shallow_copy_term(ptr[3], &new_heap, move);
+                    ptr[3] = memory_shallow_copy_term(old_fragment, ptr[3], &new_heap, move);
                     break;
                 }
 
@@ -411,11 +451,11 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
                     size_t map_size = term_get_size_from_boxed_header(t) - 1;
                     size_t keys_offset = term_get_map_keys_offset();
                     size_t value_offset = term_get_map_value_offset();
-                    TRACE("-- Map keys: %lx\n", ptr[keys_offset]);
-                    ptr[keys_offset] = memory_shallow_copy_term(ptr[keys_offset], &new_heap, move);
+                    TRACE("-- Map keys: %" TERM_X_FMT "\n", ptr[keys_offset]);
+                    ptr[keys_offset] = memory_shallow_copy_term(old_fragment, ptr[keys_offset], &new_heap, move);
                     for (size_t i = value_offset; i < value_offset + map_size; ++i) {
-                        TRACE("-- Map Value: %lx\n", ptr[i]);
-                        ptr[i] = memory_shallow_copy_term(ptr[i], &new_heap, move);
+                        TRACE("-- Map Value: %" TERM_X_FMT "\n", ptr[i]);
+                        ptr[i] = memory_shallow_copy_term(old_fragment, ptr[i], &new_heap, move);
                     }
                 }
                     break;
@@ -428,13 +468,13 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
             ptr += term_get_size_from_boxed_header(t) + 1;
 
         } else if (term_is_nonempty_list(t)) {
-            TRACE("Found nonempty list (%lx)\n", t);
-            *ptr = memory_shallow_copy_term(t, &new_heap, move);
+            TRACE("Found nonempty list (%p)\n", (void *)t);
+            *ptr = memory_shallow_copy_term(old_fragment, t, &new_heap, move);
             ptr++;
 
         } else if (term_is_boxed(t)) {
-            TRACE("Found boxed (%lx)\n", t);
-            *ptr = memory_shallow_copy_term(t, &new_heap, move);
+            TRACE("Found boxed (%p)\n", (void *)t);
+            *ptr = memory_shallow_copy_term(old_fragment, t, &new_heap, move);
             ptr++;
 
         } else {
@@ -446,7 +486,18 @@ static void memory_scan_and_copy(term *mem_start, const term *mem_end, term **ne
     *new_heap_pos = new_heap;
 }
 
-HOT_FUNC static term memory_shallow_copy_term(term t, term **new_heap, int move)
+HOT_FUNC static inline bool memory_heap_fragment_contains_pointer(HeapFragment *old_fragment, term *ptr)
+{
+    do {
+        if (ptr >= old_fragment->storage && ptr < old_fragment->heap_end) {
+            return true;
+        }
+        old_fragment = old_fragment->next;
+    } while (old_fragment);
+    return false;
+}
+
+HOT_FUNC static term memory_shallow_copy_term(HeapFragment *old_fragment, term t, term **new_heap, bool move)
 {
     if (term_is_atom(t)) {
         return t;
@@ -470,6 +521,10 @@ HOT_FUNC static term memory_shallow_copy_term(term t, term **new_heap, int move)
 
     } else if (term_is_boxed(t)) {
         term *boxed_value = term_to_term_ptr(t);
+        // Do not GC terms from messages until the message is destroyed
+        if (old_fragment != NULL && !memory_heap_fragment_contains_pointer(old_fragment, boxed_value)) {
+            return t;
+        }
 
         if (memory_is_moved_marker(boxed_value)) {
             return memory_dereference_moved_marker(boxed_value);
@@ -505,6 +560,9 @@ HOT_FUNC static term memory_shallow_copy_term(term t, term **new_heap, int move)
 
     } else if (term_is_nonempty_list(t)) {
         term *list_ptr = term_get_list_ptr(t);
+        if (old_fragment != NULL && !memory_heap_fragment_contains_pointer(old_fragment, list_ptr)) {
+            return t;
+        }
 
         if (memory_is_moved_marker(list_ptr)) {
             return memory_dereference_moved_marker(list_ptr);
@@ -526,6 +584,36 @@ HOT_FUNC static term memory_shallow_copy_term(term t, term **new_heap, int move)
     } else {
         fprintf(stderr, "Unexpected term. Term is: %" TERM_X_FMT "\n", t);
         AVM_ABORT();
+    }
+}
+
+void memory_heap_append_fragment(Heap *heap, HeapFragment *fragment, term mso_list) {
+    // The fragment we are appending may have next fragments
+    // So we take our current next and we add it to the tail of the passed list
+    if (heap->next) {
+        HeapFragment *tail = fragment;
+        do {
+            if (tail->next == NULL) {
+                tail->next = heap->next;
+                break;
+            }
+            tail = tail->next;
+        } while (true);
+    }
+    heap->next = fragment;
+    if (!term_is_nil(mso_list)) {
+        // Suppose fragment mso_list is smaller and append heap mso at the end
+        term old_mso = heap->heap_start[0];
+        heap->heap_start[0] = mso_list;
+        do {
+            term *list_ptr = term_get_list_ptr(mso_list);
+            if (term_is_nonempty_list(*list_ptr)) {
+                mso_list = *list_ptr;
+            } else {
+                *list_ptr = old_mso;
+                break;
+            }
+        } while (true);
     }
 }
 

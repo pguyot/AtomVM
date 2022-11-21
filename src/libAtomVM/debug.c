@@ -85,12 +85,21 @@ COLD_FUNC void debug_dump_context(Context *ctx)
 
 COLD_FUNC void debug_dump_heap(Context *ctx)
 {
-    debug_dump_memory(ctx, ctx->heap_start, ctx->heap_ptr, "heap");
+    debug_dump_memory(ctx, ctx->heap.heap_start, ctx->heap.heap_ptr, "heap");
 }
 
 COLD_FUNC void debug_dump_stack(Context *ctx)
 {
-    debug_dump_memory(ctx, ctx->e, ctx->stack_base, "stack");
+    term *stack_base = ctx->heap.heap_end;
+    HeapFragment *fragment = ctx->heap.next;
+    while (fragment) {
+        if (ctx->e >= fragment->storage && ctx->e <= fragment->heap_end) {
+            stack_base = fragment->heap_end;
+            break;
+        }
+        fragment = fragment->next;
+    }
+    debug_dump_memory(ctx, ctx->e, stack_base, "stack");
 }
 
 COLD_FUNC void debug_dump_registers(Context *ctx)

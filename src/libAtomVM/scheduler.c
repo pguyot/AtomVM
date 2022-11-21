@@ -93,7 +93,7 @@ static void scheduler_process_native_signal_messages(Context *ctx)
             context_process_process_info_request_signal(ctx, request_signal);
         }
         MailboxMessage *next = signal_message->next;
-        mailbox_destroy_signal_message(signal_message);
+        mailbox_message_dispose(signal_message, &ctx->heap);
         signal_message = next;
     }
 }

@@ -26,11 +26,6 @@
 
 #define ADDITIONAL_PROCESSING_MEMORY_SIZE 4
 
-static inline term *mailbox_message_memory(term *msg_term)
-{
-    return msg_term + 1;
-}
-
 void mailbox_init(Mailbox *mbx)
 {
     mbx->outer_first = NULL;
@@ -40,22 +35,35 @@ void mailbox_init(Mailbox *mbx)
     mbx->receive_pointer_prev = NULL;
 }
 
-// Generic destroy function name refers to signal message to make sure ports do
-// not call it. They should call mailbox_remove instead.
-void mailbox_destroy_signal_message(MailboxMessage *m)
+// Convert a mailbox message to a heap fragment so it can be owned by the
+// recipient
+HeapFragment *mailbox_message_to_heap_fragment(void *m, term mso_list, term *heap_end)
+{
+    HeapFragment *fragment = (HeapFragment *) m;
+    fragment->next = NULL; // MailboxMessage.next
+    fragment->heap_end = heap_end; // MailboxMessage.type/heap_fragment_end
+    fragment->storage[0] = mso_list; // Message/TrapSignal.message
+    fragment->storage[1] = term_nil(); // Message/TrapSignal.heap_end
+
+    return fragment;
+}
+
+// Dispose message. Normal / signal messages are not destroyed, instead they
+// are appended to the current heap.
+void mailbox_message_dispose(MailboxMessage *m, Heap *heap)
 {
     switch (m->type) {
         case NormalMessage: {
             Message *normal_message = CONTAINER_OF(m, Message, base);
-            memory_sweep_mso_list(normal_message->mso_list);
-            free(normal_message);
+            HeapFragment *fragment = mailbox_message_to_heap_fragment(normal_message, normal_message->storage[0], normal_message->heap_end);
+            memory_heap_append_fragment(heap, fragment, fragment->storage[0]);
             break;
         }
         case KillSignal:
         case TrapAnswerSignal: {
             struct TermSignal *term_signal = CONTAINER_OF(m, struct TermSignal, base);
-            memory_sweep_mso_list(term_signal->mso_list);
-            free(term_signal);
+            HeapFragment *fragment = mailbox_message_to_heap_fragment(term_signal, term_signal->storage[0], term_signal->heap_end);
+            memory_heap_append_fragment(heap, fragment, fragment->storage[0]);
             break;
         }
         case ProcessInfoRequestSignal: {
@@ -75,23 +83,18 @@ void mailbox_destroy_signal_message(MailboxMessage *m)
     }
 }
 
-static inline void mailbox_destroy_message(MailboxMessage *m)
-{
-    mailbox_destroy_signal_message(m);
-}
-
-void mailbox_destroy(Mailbox *mbox)
+void mailbox_destroy(Mailbox *mbox, Heap *heap)
 {
     MailboxMessage *msg = mbox->outer_first;
     while (msg) {
         MailboxMessage *next = msg->next;
-        mailbox_destroy_message(msg);
+        mailbox_message_dispose(msg, heap);
         msg = next;
     }
     msg = mbox->inner_first;
     while (msg) {
         MailboxMessage *next = msg->next;
-        mailbox_destroy_message(msg);
+        mailbox_message_dispose(msg, heap);
         msg = next;
     }
 }
@@ -120,14 +123,14 @@ size_t mailbox_size(Mailbox *mbox)
         // We don't count signals.
         if (msg->type == NormalMessage) {
             Message *normal_message = CONTAINER_OF(msg, Message, base);
-            result += sizeof(Message) + normal_message->msg_memory_size;
+            result += sizeof(Message) + normal_message->heap_end - normal_message->storage;
         }
         msg = msg->next;
     }
     msg = mbox->inner_first;
     while (msg) {
         Message *normal_message = CONTAINER_OF(msg, Message, base);
-        result += sizeof(Message) + normal_message->msg_memory_size;
+        result += sizeof(Message) + normal_message->heap_end - normal_message->storage;
         msg = msg->next;
     }
     return result;
@@ -153,40 +156,32 @@ static void mailbox_post_message(Context *c, MailboxMessage *m)
 
 void mailbox_send(Context *c, term t)
 {
-    TRACE("Sending 0x%lx to pid %i\n", t, c->process_id);
-
-    unsigned long estimated_mem_usage = memory_estimate_usage(t);
+    unsigned long estimated_mem_usage = memory_estimate_usage(t) + 1; // mso_list
 
     Message *msg = malloc(sizeof(Message) + estimated_mem_usage * sizeof(term));
     if (IS_NULL_PTR(msg)) {
         fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         return;
     }
-    msg->mso_list = term_nil();
-
-    term *heap_pos = mailbox_message_memory(&msg->message);
     msg->base.type = NormalMessage;
-    msg->message = memory_copy_term_tree(&heap_pos, t, &msg->mso_list);
-    msg->msg_memory_size = estimated_mem_usage;
+    msg->message = memory_copy_term_tree_to_storage(msg->storage, &msg->heap_end, t);
+
+    TRACE("Sending %p to pid %i\n", (void *) msg->message, c->process_id);
 
     mailbox_post_message(c, &msg->base);
 }
 
 void mailbox_send_term_signal(Context *c, enum MessageType type, term t)
 {
-    unsigned long estimated_mem_usage = memory_estimate_usage(t);
+    unsigned long estimated_mem_usage = memory_estimate_usage(t) + 1; // mso_list
 
     struct TermSignal *ts = malloc(sizeof(struct TermSignal) + estimated_mem_usage * sizeof(term));
     if (IS_NULL_PTR(ts)) {
         fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         return;
     }
-    ts->mso_list = term_nil();
-
-    term *heap_pos = mailbox_message_memory(&ts->signal_term);
     ts->base.type = type;
-    ts->signal_term = memory_copy_term_tree(&heap_pos, t, &ts->mso_list);
-    ts->msg_memory_size = estimated_mem_usage;
+    ts->signal_term = memory_copy_term_tree_to_storage(ts->storage, &ts->heap_end, t);
 
     mailbox_post_message(c, &ts->base);
 }
@@ -320,20 +315,12 @@ bool mailbox_peek(Context *c, term *out)
 
     TRACE("Pid %i is peeking 0x%lx.\n", c->process_id, data_message->message);
 
-    if (c->e - c->heap_ptr < data_message->msg_memory_size) {
-        // ADDITIONAL_PROCESSING_MEMORY_SIZE: ensure some additional memory for message processing,
-        // so there is no need to run GC again.
-        if (UNLIKELY(memory_ensure_free(c, data_message->msg_memory_size + ADDITIONAL_PROCESSING_MEMORY_SIZE) != MEMORY_GC_OK)) {
-            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
-        }
-    }
-
-    *out = memory_copy_term_tree(&c->heap_ptr, data_message->message, &c->mso_list);
+    *out = data_message->message;
 
     return true;
 }
 
-void mailbox_remove(Mailbox *mbox)
+void mailbox_remove_message(Mailbox *mbox, Heap *heap)
 {
     // This is called from OP_REMOVE_MESSAGE opcode, so we cannot make any
     // assumption about the state and should perform a nop if the mailbox
@@ -359,7 +346,7 @@ void mailbox_remove(Mailbox *mbox)
         }
     }
 
-    mailbox_destroy_message(removed);
+    mailbox_message_dispose(removed, heap);
     // Reset receive pointers
     mailbox_reset(mbox);
 }
