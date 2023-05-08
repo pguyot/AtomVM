@@ -56,22 +56,23 @@ enum MemoryAllocMode
     MEMORY_NO_GC = 3
 };
 
-// mso_list is the first term of heap
-#define MSO_LIST_TERM_INDEX 0
-
 struct HeapFragment;
 typedef struct HeapFragment HeapFragment;
 
 struct HeapFragment
 {
     HeapFragment *next;
-    term *heap_end;
+    union
+    {
+        term mso_list;
+        term *heap_end;
+    };
     term storage[];
 };
 
 struct Heap
 {
-    HeapFragment *next;
+    HeapFragment *root;
     term *heap_start;
     term *heap_ptr;
     term *heap_end;
@@ -82,31 +83,38 @@ struct Heap
 typedef struct Heap Heap;
 #endif
 
-#define HEAP_START_TO_FRAGMENT(heap_start) \
-    ((HeapFragment *) (((char *) (heap_start)) - ((unsigned long) &((HeapFragment *) 0)->heap_end)))
+#define BEGIN_WITH_STACK_HEAP(size, name) \
+    struct                                \
+    {                                     \
+        HeapFragment *next;               \
+        union                             \
+        {                                 \
+            term mso_list;                \
+            term *heap_end;               \
+        };                                \
+        term storage[size];               \
+    } name##__root__;                     \
+    Heap name;                            \
+    memory_init_heap_root_fragment(&name, (HeapFragment *) &(name##__root__), size);
 
-#define BEGIN_WITH_STACK_HEAP(size, name)        \
-    {                                            \
-        term heap_storage[size + 1];             \
-        Heap name;                               \
-        name.heap_start = heap_storage;          \
-        name.heap_end = heap_storage + size + 1; \
-        memory_init_heap_fragment(&name);
-
-#define END_WITH_STACK_HEAP(name)                                \
-    memory_sweep_mso_list(heap.heap_start[MSO_LIST_TERM_INDEX]); \
-    if (name.next) {                                             \
-        memory_deinit_heap_fragment(name.next);                  \
-    }                                                            \
+#define END_WITH_STACK_HEAP(name)                     \
+    memory_sweep_mso_list(name.root->mso_list);       \
+    if (name.root->next) {                            \
+        memory_deinit_heap_fragment(name.root->next); \
     }
 
+// mso_list is the first term for message storage
+#define STORAGE_MSO_LIST_INDEX 0
+#define STORAGE_HEAP_START_INDEX 1
+
 /**
- * @brief Initialize a heap fragment, typically allocated on the stack or part
- * of a message. Set the `mso_list` to NIL and initialize `heap_ptr`.
+ * @brief Setup heap from its root.
+ * Set the `mso_list` to NIL and initialize `heap_ptr`.
  *
- * @param fragment fragment to initialize.
+ * @param heap heap to initialize.
+ * @param root fragment root.
  */
-void memory_init_heap_fragment(Heap *fragment);
+void memory_init_heap_root_fragment(Heap *heap, HeapFragment *root, size_t size);
 
 /**
  * @brief Initialize a root heap.
@@ -117,29 +125,26 @@ void memory_init_heap_fragment(Heap *fragment);
 enum MemoryGCResult memory_init_heap(Heap *heap, size_t size) MUST_CHECK;
 
 /**
- * @brief Deinitialize a heap fragment, by recursively freeing the fragments.
+ * @brief Deinitialize a chain of heap fragments.
  *
  * @param fragment fragment to deinitialize.
  */
 static inline void memory_deinit_heap_fragment(HeapFragment *fragment)
 {
-    if (fragment->next) {
-        memory_deinit_heap_fragment(fragment->next);
+    while (fragment->next) {
+        HeapFragment *next = fragment->next;
+        free(fragment);
+        fragment = next;
     }
     free(fragment);
 }
 
 /**
  * @brief Deinitialize a root heap.
- *
- * @param size capacity of the heap to create, including the mso_list.
  */
 static inline void memory_deinit_heap(Heap *heap)
 {
-    if (heap->next) {
-        memory_deinit_heap_fragment(heap->next);
-    }
-    free(HEAP_START_TO_FRAGMENT(heap->heap_start));
+    memory_deinit_heap_fragment(heap->root);
 }
 
 /**
@@ -180,8 +185,8 @@ static inline size_t memory_heap_fragment_memory_size(const HeapFragment *fragme
 static inline size_t memory_heap_memory_size(const Heap *heap)
 {
     size_t result = heap->heap_end - heap->heap_start;
-    if (heap->next) {
-        result += memory_heap_fragment_memory_size(heap->next);
+    if (heap->root->next) {
+        result += memory_heap_fragment_memory_size(heap->root->next);
     }
     return result;
 }
@@ -288,6 +293,22 @@ unsigned long memory_estimate_usage(term t);
  * @param mso_list associated mso list or nil
  */
 void memory_heap_append_fragment(Heap *heap, HeapFragment *fragment, term mso_list);
+
+/**
+ * @brief append a heap to another heap. The MSO list is merged. The fragments
+ * of the source heap will be owned by the target heap.
+ *
+ * @param target the heap to append the heap's fragments to
+ * @param source the heap to add
+ */
+static inline void memory_heap_append_heap(Heap *target, Heap *source)
+{
+    // Convert root fragment to non-root
+    HeapFragment *root = source->root;
+    term mso_list = root->mso_list;
+    root->heap_end = source->heap_end;
+    memory_heap_append_fragment(target, root, mso_list);
+}
 
 /**
  * @brief Sweep any unreferenced binaries in the "Mark Sweep Object" (MSO) list

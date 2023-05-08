@@ -714,13 +714,17 @@ static EventListener *active_recv_callback(GlobalContext *glb, EventListener *ba
             ensure_packet_avail = len * 2;
         }
         // {tcp, pid, binary}
-        BEGIN_WITH_STACK_HEAP(20 + ensure_packet_avail, heap)
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, 20 + ensure_packet_avail) != MEMORY_GC_OK)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
         term pid = socket_data->controlling_process;
         term packet = socket_create_packet_term(buf, len, socket_data->binary, &heap, glb);
         term msgs[3] = { TCP_ATOM, term_from_local_process_id(ctx->process_id), packet };
         term msg = port_heap_create_tuple_n(&heap, 3, msgs);
         port_send_message_nolock(glb, pid, msg);
-        END_WITH_STACK_HEAP(heap)
+        memory_deinit_heap(&heap);
     }
     globalcontext_get_process_unlock(glb, ctx);
     free(buf);
@@ -783,14 +787,18 @@ static EventListener *passive_recv_callback(GlobalContext *glb, EventListener *b
             ensure_packet_avail = len * 2;
         }
         // {Ref, {ok, Packet::binary()}}
-        BEGIN_WITH_STACK_HEAP(20 + ensure_packet_avail, heap);
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, 20 + ensure_packet_avail) != MEMORY_GC_OK)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
         term pid = listener->pid;
         term ref = term_from_ref_ticks(listener->ref_ticks, &heap);
         term packet = socket_create_packet_term(buf, len, socket_data->binary, &heap, glb);
         term payload = port_heap_create_ok_tuple(&heap, packet);
         term reply = port_heap_create_reply(&heap, ref, payload);
         port_send_message_nolock(glb, pid, reply);
-        END_WITH_STACK_HEAP(heap);
+        memory_deinit_heap(&heap);
     }
     socket_data->passive_listener = NULL;
     globalcontext_get_process_unlock(glb, ctx);
@@ -843,7 +851,11 @@ static EventListener *active_recvfrom_callback(GlobalContext *glb, EventListener
             ensure_packet_avail = len * 2;
         }
         // {udp, pid, {int,int,int,int}, int, binary}
-        BEGIN_WITH_STACK_HEAP(20 + ensure_packet_avail, heap);
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, 20 + ensure_packet_avail) != MEMORY_GC_OK)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
         term pid = socket_data->controlling_process;
         term addr = socket_heap_tuple_from_addr(&heap, htonl(clientaddr.sin_addr.s_addr));
         term port = term_from_int32(htons(clientaddr.sin_port));
@@ -851,7 +863,7 @@ static EventListener *active_recvfrom_callback(GlobalContext *glb, EventListener
         term msgs[5] = { UDP_ATOM, term_from_local_process_id(ctx->process_id), addr, port, packet };
         term msg = port_heap_create_tuple_n(&heap, 5, msgs);
         port_send_message_nolock(glb, pid, msg);
-        END_WITH_STACK_HEAP(heap);
+        memory_deinit_heap(&heap);
     }
     globalcontext_get_process_unlock(glb, ctx);
     free(buf);
@@ -905,7 +917,11 @@ static EventListener *passive_recvfrom_callback(GlobalContext *glb, EventListene
             ensure_packet_avail = len * 2;
         }
         // {Ref, {ok, {{int,int,int,int}, int, binary}}}
-        BEGIN_WITH_STACK_HEAP(20 + ensure_packet_avail, heap);
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, 20 + ensure_packet_avail) != MEMORY_GC_OK)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
         term pid = listener->pid;
         term ref = term_from_ref_ticks(listener->ref_ticks, &heap);
         term addr = socket_heap_tuple_from_addr(&heap, htonl(clientaddr.sin_addr.s_addr));
@@ -915,7 +931,7 @@ static EventListener *passive_recvfrom_callback(GlobalContext *glb, EventListene
         term payload = port_heap_create_ok_tuple(&heap, addr_port_packet);
         term reply = port_heap_create_reply(&heap, ref, payload);
         port_send_message_nolock(glb, pid, reply);
-        END_WITH_STACK_HEAP(heap);
+        memory_deinit_heap(&heap);
     }
     socket_data->passive_listener = NULL;
     globalcontext_get_process_unlock(glb, ctx);

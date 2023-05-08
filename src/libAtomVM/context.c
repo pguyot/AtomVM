@@ -118,7 +118,7 @@ void context_destroy(Context *ctx)
 
     free(ctx->fr);
 
-    memory_sweep_mso_list(ctx->heap.heap_start[MSO_LIST_TERM_INDEX]);
+    memory_sweep_mso_list(ctx->heap.root->mso_list);
     dictionary_destroy(&ctx->dictionary);
 
     if (ctx->timer_list_head.head.next != &ctx->timer_list_head.head) {

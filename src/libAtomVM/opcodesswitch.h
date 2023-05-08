@@ -856,7 +856,7 @@ typedef union
             NEXT_INSTRUCTION(next_off);                                 \
             PROCESS_MAYBE_TRAP_RETURN_VALUE(return_value);              \
             ctx->x[0] = return_value;                                   \
-            if (ctx->heap.next) {                                       \
+            if (ctx->heap.root->next) {                                 \
                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) { \
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);                    \
                 }                                                       \
@@ -1693,7 +1693,7 @@ schedule_in:
                             term return_value = nif->nif_ptr(ctx, arity, ctx->x);
                             PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_I(return_value, orig_i);
                             ctx->x[0] = return_value;
-                            if (ctx->heap.next) {
+                            if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                 }
@@ -1761,7 +1761,7 @@ schedule_in:
                             ctx->cp = ctx->e[n_words];
                             ctx->e += (n_words + 1);
 
-                            if (ctx->heap.next) {
+                            if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                 }
@@ -1919,7 +1919,7 @@ schedule_in:
                 #ifdef IMPL_EXECUTE_LOOP
                     context_clean_registers(ctx, live);
 
-                    if (ctx->heap.next || ((ctx->heap.heap_ptr > ctx->e - (stack_need + 1)))) {
+                    if (ctx->heap.root->next || ((ctx->heap.heap_ptr > ctx->e - (stack_need + 1)))) {
                         if (UNLIKELY(memory_ensure_free_opt(ctx, stack_need + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         }
@@ -1955,7 +1955,7 @@ schedule_in:
                 #ifdef IMPL_EXECUTE_LOOP
                     context_clean_registers(ctx, live);
 
-                    if (ctx->heap.next || ((ctx->heap.heap_ptr + heap_need) > ctx->e - (stack_need + 1))) {
+                    if (ctx->heap.root->next || ((ctx->heap.heap_ptr + heap_need) > ctx->e - (stack_need + 1))) {
                         if (UNLIKELY(memory_ensure_free_opt(ctx, heap_need + stack_need + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         }
@@ -1988,7 +1988,7 @@ schedule_in:
                 #ifdef IMPL_EXECUTE_LOOP
                     context_clean_registers(ctx, live);
 
-                    if (ctx->heap.next || ((ctx->heap.heap_ptr > ctx->e - (stack_need + 1)))) {
+                    if (ctx->heap.root->next || ((ctx->heap.heap_ptr > ctx->e - (stack_need + 1)))) {
                         if (UNLIKELY(memory_ensure_free_opt(ctx, stack_need + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         }
@@ -2028,7 +2028,7 @@ schedule_in:
                 #ifdef IMPL_EXECUTE_LOOP
                     context_clean_registers(ctx, live);
 
-                    if (ctx->heap.next || ((ctx->heap.heap_ptr + heap_need) > ctx->e - (stack_need + 1))) {
+                    if (ctx->heap.root->next || ((ctx->heap.heap_ptr + heap_need) > ctx->e - (stack_need + 1))) {
                         if (UNLIKELY(memory_ensure_free_opt(ctx, heap_need + stack_need + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         }
@@ -2108,7 +2108,7 @@ schedule_in:
                     ctx->cp = ctx->e[n_words];
                     ctx->e += n_words + 1;
                     DEBUG_DUMP_STACK(ctx);
-                    if (ctx->heap.next) {
+                    if (ctx->heap.root->next) {
                         if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         }
@@ -3421,7 +3421,7 @@ wait_timeout_trap_handler:
                             PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value);
                             ctx->x[0] = return_value;
 
-                            if (ctx->heap.next) {
+                            if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                 }

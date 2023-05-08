@@ -19,6 +19,9 @@
  */
 
 #include "scheduler.h"
+
+#include <stdio.h>
+
 #include "debug.h"
 #include "list.h"
 #include "smp.h"
@@ -231,6 +234,14 @@ Context *scheduler_run(GlobalContext *global)
             scheduler_process_native_signal_messages(result);
             if (!(result->flags & Killed)) {
                 if (result->native_handler(result) == NativeContinue) {
+                    // If native handler has memory fragments, garbage collect
+                    // them
+                    if (result->heap.root->next) {
+                        if (UNLIKELY(memory_ensure_free_opt(result, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
+                            fprintf(stderr, "Out of memory error in native handler\n");
+                            AVM_ABORT();
+                        }
+                    }
                     context_update_flags(result, ~Running, NoFlags);
                 } else {
                     scheduler_terminate(result);

@@ -667,7 +667,7 @@ term term_alloc_refc_binary(size_t size, bool is_const, Heap *heap, GlobalContex
             AVM_ABORT();
         }
         boxed_value[3] = (term) refc;
-        heap->heap_start[MSO_LIST_TERM_INDEX] = term_list_init_prepend(boxed_value + 4, ret, heap->heap_start[MSO_LIST_TERM_INDEX]);
+        heap->root->mso_list = term_list_init_prepend(boxed_value + 4, ret, heap->root->mso_list);
         synclist_append(&glb->refc_binaries, &refc->head);
     }
     return ret;

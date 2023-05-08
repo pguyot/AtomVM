@@ -105,17 +105,12 @@ static term externalterm_to_term_internal(const void *external_term, size_t size
     if (opts & ExternalTermToHeapFragment) {
         // We need to allocate fragments as reading external terms from modules
         // is not accounted for by the compiler when it emits test_heap opcodes
-        Heap fragment_heap;
-        if (UNLIKELY(memory_init_heap(&fragment_heap, heap_usage) != MEMORY_GC_OK)) {
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, heap_usage) != MEMORY_GC_OK)) {
             return term_invalid_term();
         }
-        result = parse_external_terms(external_term_buf + 1, &eterm_size, copy, &fragment_heap, ctx->global);
-        // Append the fragment
-        term mso_list = fragment_heap.heap_start[0]; // Heap's mso_list and fragment's heap_end occupy the same slot
-        HeapFragment *fragment = HEAP_START_TO_FRAGMENT(fragment_heap.heap_start);
-        fragment->next = NULL;
-        fragment->heap_end = fragment_heap.heap_end;
-        memory_heap_append_fragment(&ctx->heap, fragment, mso_list);
+        result = parse_external_terms(external_term_buf + 1, &eterm_size, copy, &heap, ctx->global);
+        memory_heap_append_heap(&ctx->heap, &heap);
     } else {
         if (UNLIKELY(memory_ensure_free(ctx, heap_usage) != MEMORY_GC_OK)) {
             fprintf(stderr, "Unable to ensure %zu free words in heap\n", eterm_size);

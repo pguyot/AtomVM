@@ -241,7 +241,7 @@ static inline term *context_stack_base(const Context *ctx)
     if (ctx->e >= ctx->heap.heap_start && ctx->e <= ctx->heap.heap_end) {
         return ctx->heap.heap_end;
     }
-    HeapFragment *fragment = ctx->heap.next;
+    HeapFragment *fragment = ctx->heap.root->next;
     while (fragment) {
         if (ctx->e >= fragment->storage && ctx->e <= fragment->heap_end) {
             return fragment->heap_end;

@@ -37,12 +37,11 @@ void mailbox_init(Mailbox *mbx)
 
 // Convert a mailbox message to a heap fragment so it can be owned by the
 // recipient
-HeapFragment *mailbox_message_to_heap_fragment(void *m, term mso_list, term *heap_end)
+HeapFragment *mailbox_message_to_heap_fragment(void *m, term *heap_end)
 {
     HeapFragment *fragment = (HeapFragment *) m;
     fragment->next = NULL; // MailboxMessage.next
     fragment->heap_end = heap_end; // MailboxMessage.type/heap_fragment_end
-    fragment->storage[0] = mso_list; // Message/TrapSignal.message
     fragment->storage[1] = term_nil(); // Message/TrapSignal.heap_end
 
     return fragment;
@@ -55,15 +54,17 @@ void mailbox_message_dispose(MailboxMessage *m, Heap *heap)
     switch (m->type) {
         case NormalMessage: {
             Message *normal_message = CONTAINER_OF(m, Message, base);
-            HeapFragment *fragment = mailbox_message_to_heap_fragment(normal_message, normal_message->storage[0], normal_message->heap_end);
-            memory_heap_append_fragment(heap, fragment, fragment->storage[0]);
+            term mso_list = normal_message->storage[STORAGE_MSO_LIST_INDEX];
+            HeapFragment *fragment = mailbox_message_to_heap_fragment(normal_message, normal_message->heap_end);
+            memory_heap_append_fragment(heap, fragment, mso_list);
             break;
         }
         case KillSignal:
         case TrapAnswerSignal: {
             struct TermSignal *term_signal = CONTAINER_OF(m, struct TermSignal, base);
-            HeapFragment *fragment = mailbox_message_to_heap_fragment(term_signal, term_signal->storage[0], term_signal->heap_end);
-            memory_heap_append_fragment(heap, fragment, fragment->storage[0]);
+            term mso_list = term_signal->storage[STORAGE_MSO_LIST_INDEX];
+            HeapFragment *fragment = mailbox_message_to_heap_fragment(term_signal, term_signal->heap_end);
+            memory_heap_append_fragment(heap, fragment, mso_list);
             break;
         }
         case ProcessInfoRequestSignal: {
