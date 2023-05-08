@@ -57,6 +57,10 @@ jobs:
       if: runner.os == 'Linux'
       with:
         otp-version: ${{ matrix.otp }}
+        hexpm-mirrors: |
+            - https://cdn.jsdelivr.net/hex
+            - https://repo.hex.pm
+            - https://builds.hex.pm
 
     - name: "Install deps (Linux)"
       if: runner.os == 'Linux'

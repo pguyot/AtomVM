@@ -69,6 +69,10 @@ jobs:
       with:
         otp-version: ${{ env.otp_version }}
         elixir-version: ${{ env.elixir_version }}
+        hexpm-mirrors: |
+            - https://cdn.jsdelivr.net/hex
+            - https://repo.hex.pm
+            - https://builds.hex.pm
 
     - name: apt update
       run: sudo apt update

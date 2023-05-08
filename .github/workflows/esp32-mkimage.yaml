@@ -43,6 +43,10 @@ jobs:
       with:
         otp-version: ${{ matrix.otp }}
         elixir-version: ${{ matrix.elixir_version }}
+        hexpm-mirrors: |
+            - https://cdn.jsdelivr.net/hex
+            - https://repo.hex.pm
+            - https://builds.hex.pm
 
     - name: "APT update"
       run: apt update -y

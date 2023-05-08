@@ -185,6 +185,10 @@ jobs:
       with:
         otp-version: ${{ matrix.otp }}
         elixir-version: ${{ matrix.elixir_version }}
+        hexpm-mirrors: |
+            - https://cdn.jsdelivr.net/hex
+            - https://repo.hex.pm
+            - https://builds.hex.pm
 
     - name: "Add i386 architecture"
       if: matrix.arch == 'i386'

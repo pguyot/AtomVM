@@ -32,6 +32,10 @@ jobs:
       with:
         otp-version: 23.0
         elixir-version: 1.9
+        hexpm-mirrors: |
+            - https://cdn.jsdelivr.net/hex
+            - https://repo.hex.pm
+            - https://builds.hex.pm
 
     - name: "Install run-clang-format"
       run: |
