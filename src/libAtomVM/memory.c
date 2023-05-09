@@ -43,7 +43,7 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
 enum MemoryGCResult memory_init_heap(Heap *heap, size_t size)
 {
     HeapFragment *fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + size * sizeof(term));
-    if (UNLIKELY(fragment == NULL)) {
+    if (IS_NULL_PTR(fragment)) {
         return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
     memory_init_heap_root_fragment(heap, fragment, size);
