@@ -28,13 +28,15 @@ extern "C" {
 #include "term_typedef.h"
 #include "utils.h"
 
+// #define DEBUG_HEAP_ALLOC
+
 #include <stdint.h>
+#ifdef DEBUG_HEAP_ALLOC
 #include <stdio.h>
+#endif
 
 #define HEAP_NEED_GC_SHRINK_THRESHOLD_COEFF 64
 #define MIN_FREE_SPACE_SIZE 16
-
-// #define DEBUG_HEAP_ALLOC
 
 #ifndef TYPEDEF_CONTEXT
 #define TYPEDEF_CONTEXT
