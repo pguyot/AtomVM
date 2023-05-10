@@ -125,7 +125,7 @@ void context_destroy(Context *ctx)
         scheduler_cancel_timeout(ctx);
     }
 
-    memory_deinit_heap(&ctx->heap);
+    memory_destroy_heap(&ctx->heap);
     // Platform data is freed here to allow drivers to use the
     // globalcontext_get_process_lock lock to protect this pointer
     // Typically, another thread or an interrupt would call

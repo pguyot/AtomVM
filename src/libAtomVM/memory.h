@@ -99,10 +99,10 @@ typedef struct Heap Heap;
     Heap name;                            \
     memory_init_heap_root_fragment(&name, (HeapFragment *) &(name##__root__), size);
 
-#define END_WITH_STACK_HEAP(name)                     \
-    memory_sweep_mso_list(name.root->mso_list);       \
-    if (name.root->next) {                            \
-        memory_deinit_heap_fragment(name.root->next); \
+#define END_WITH_STACK_HEAP(name)                      \
+    memory_sweep_mso_list(name.root->mso_list);        \
+    if (name.root->next) {                             \
+        memory_destroy_heap_fragment(name.root->next); \
     }
 
 // mso_list is the first term for message storage
@@ -127,11 +127,11 @@ void memory_init_heap_root_fragment(Heap *heap, HeapFragment *root, size_t size)
 enum MemoryGCResult memory_init_heap(Heap *heap, size_t size) MUST_CHECK;
 
 /**
- * @brief Deinitialize a chain of heap fragments.
+ * @brief Destroy a chain of heap fragments.
  *
- * @param fragment fragment to deinitialize.
+ * @param fragment fragment to destroy.
  */
-static inline void memory_deinit_heap_fragment(HeapFragment *fragment)
+static inline void memory_destroy_heap_fragment(HeapFragment *fragment)
 {
     while (fragment->next) {
         HeapFragment *next = fragment->next;
@@ -142,11 +142,11 @@ static inline void memory_deinit_heap_fragment(HeapFragment *fragment)
 }
 
 /**
- * @brief Deinitialize a root heap.
+ * @brief Destroy a root heap.
  */
-static inline void memory_deinit_heap(Heap *heap)
+static inline void memory_destroy_heap(Heap *heap)
 {
-    memory_deinit_heap_fragment(heap->root);
+    memory_destroy_heap_fragment(heap->root);
 }
 
 /**

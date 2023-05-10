@@ -193,7 +193,7 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
     memory_sweep_mso_list(old_mso_list);
     ctx->heap.root->mso_list = new_mso_list;
 
-    memory_deinit_heap_fragment(old_root_fragment);
+    memory_destroy_heap_fragment(old_root_fragment);
 
     return MEMORY_GC_OK;
 }

@@ -41,16 +41,26 @@ void mailbox_init(Mailbox *mbx)
 // Convert a mailbox message (struct Message or struct TermSignal) to a heap
 // fragment (HeapFragment) so it can be owned by the recipient.
 // We assert this layout mapping is correct.
-_Static_assert(offsetof(struct Message, base) + offsetof(struct MailboxMessage, next) == offsetof(HeapFragment, next) ? 1 : 0, "Message.base.next doesn't match HeapFragment.next");
-_Static_assert(offsetof(struct Message, base) + offsetof(struct MailboxMessage, type) == offsetof(HeapFragment, heap_end) ? 1 : 0, "Message.base.type doesn't match HeapFragment.heap_end");
-_Static_assert(offsetof(struct Message, message) == offsetof(HeapFragment, storage) ? 1 : 0, "Message.message doesn't match HeapFragment.storage[0]");
-_Static_assert(offsetof(struct Message, heap_end) == offsetof(HeapFragment, storage[1]) ? 1 : 0, "Message.heap_end doesn't match HeapFragment.storage[1]");
-_Static_assert(sizeof(struct Message) == sizeof(HeapFragment) + 2 * sizeof(term) ? 1 : 0, "sizeof(Message) doesn't match sizeof(HeapFragment) + 2 terms");
-_Static_assert(offsetof(struct TermSignal, base) + offsetof(struct MailboxMessage, next) == offsetof(HeapFragment, next) ? 1 : 0, "TermSignal.base.next doesn't match HeapFragment.next");
-_Static_assert(offsetof(struct TermSignal, base) + offsetof(struct MailboxMessage, type) == offsetof(HeapFragment, heap_end) ? 1 : 0, "TermSignal.base.type doesn't match HeapFragment.heap_end");
-_Static_assert(offsetof(struct TermSignal, signal_term) == offsetof(HeapFragment, storage) ? 1 : 0, "TermSignal.signal_term doesn't match HeapFragment.storage[0]");
-_Static_assert(offsetof(struct TermSignal, heap_end) == offsetof(HeapFragment, storage[1]) ? 1 : 0, "TermSignal.heap_end doesn't match HeapFragment.storage[1]");
-_Static_assert(sizeof(struct TermSignal) == sizeof(HeapFragment) + 2 * sizeof(term) ? 1 : 0, "sizeof(TermSignal) doesn't match sizeof(HeapFragment) + 2 terms");
+_Static_assert(offsetof(struct Message, base) + offsetof(struct MailboxMessage, next) == offsetof(HeapFragment, next) ? 1 : 0,
+    "Message.base.next doesn't match HeapFragment.next");
+_Static_assert(offsetof(struct Message, base) + offsetof(struct MailboxMessage, type) == offsetof(HeapFragment, heap_end) ? 1 : 0,
+    "Message.base.type doesn't match HeapFragment.heap_end");
+_Static_assert(offsetof(struct Message, message) == offsetof(HeapFragment, storage) ? 1 : 0,
+    "Message.message doesn't match HeapFragment.storage[0]");
+_Static_assert(offsetof(struct Message, heap_end) == offsetof(HeapFragment, storage[1]) ? 1 : 0,
+    "Message.heap_end doesn't match HeapFragment.storage[1]");
+_Static_assert(sizeof(struct Message) == sizeof(HeapFragment) + 2 * sizeof(term) ? 1 : 0,
+    "sizeof(Message) doesn't match sizeof(HeapFragment) + 2 terms");
+_Static_assert(offsetof(struct TermSignal, base) + offsetof(struct MailboxMessage, next) == offsetof(HeapFragment, next) ? 1 : 0,
+    "TermSignal.base.next doesn't match HeapFragment.next");
+_Static_assert(offsetof(struct TermSignal, base) + offsetof(struct MailboxMessage, type) == offsetof(HeapFragment, heap_end) ? 1 : 0,
+    "TermSignal.base.type doesn't match HeapFragment.heap_end");
+_Static_assert(offsetof(struct TermSignal, signal_term) == offsetof(HeapFragment, storage) ? 1 : 0,
+    "TermSignal.signal_term doesn't match HeapFragment.storage[0]");
+_Static_assert(offsetof(struct TermSignal, heap_end) == offsetof(HeapFragment, storage[1]) ? 1 : 0,
+    "TermSignal.heap_end doesn't match HeapFragment.storage[1]");
+_Static_assert(sizeof(struct TermSignal) == sizeof(HeapFragment) + 2 * sizeof(term) ? 1 : 0,
+    "sizeof(TermSignal) doesn't match sizeof(HeapFragment) + 2 terms");
 
 HeapFragment *mailbox_message_to_heap_fragment(void *m, term *heap_end)
 {

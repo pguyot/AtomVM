@@ -724,7 +724,7 @@ static EventListener *active_recv_callback(GlobalContext *glb, EventListener *ba
         term msgs[3] = { TCP_ATOM, term_from_local_process_id(ctx->process_id), packet };
         term msg = port_heap_create_tuple_n(&heap, 3, msgs);
         port_send_message_nolock(glb, pid, msg);
-        memory_deinit_heap(&heap);
+        memory_destroy_heap(&heap);
     }
     globalcontext_get_process_unlock(glb, ctx);
     free(buf);
@@ -798,7 +798,7 @@ static EventListener *passive_recv_callback(GlobalContext *glb, EventListener *b
         term payload = port_heap_create_ok_tuple(&heap, packet);
         term reply = port_heap_create_reply(&heap, ref, payload);
         port_send_message_nolock(glb, pid, reply);
-        memory_deinit_heap(&heap);
+        memory_destroy_heap(&heap);
     }
     socket_data->passive_listener = NULL;
     globalcontext_get_process_unlock(glb, ctx);
@@ -863,7 +863,7 @@ static EventListener *active_recvfrom_callback(GlobalContext *glb, EventListener
         term msgs[5] = { UDP_ATOM, term_from_local_process_id(ctx->process_id), addr, port, packet };
         term msg = port_heap_create_tuple_n(&heap, 5, msgs);
         port_send_message_nolock(glb, pid, msg);
-        memory_deinit_heap(&heap);
+        memory_destroy_heap(&heap);
     }
     globalcontext_get_process_unlock(glb, ctx);
     free(buf);
@@ -931,7 +931,7 @@ static EventListener *passive_recvfrom_callback(GlobalContext *glb, EventListene
         term payload = port_heap_create_ok_tuple(&heap, addr_port_packet);
         term reply = port_heap_create_reply(&heap, ref, payload);
         port_send_message_nolock(glb, pid, reply);
-        memory_deinit_heap(&heap);
+        memory_destroy_heap(&heap);
     }
     socket_data->passive_listener = NULL;
     globalcontext_get_process_unlock(glb, ctx);
