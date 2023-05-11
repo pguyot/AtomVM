@@ -1277,8 +1277,12 @@ static void do_controlling_process(Context *ctx, term msg)
     }
 }
 
+size_t heap_caps_get_free_size(uint32_t);
+size_t refc_binary_total_size(Context *ctx);
+
 static NativeHandlerResult socket_consume_mailbox(Context *ctx)
 {
+printf("free heap size = %zu, total refc size = %zu\n", heap_caps_get_free_size(1 << 2), refc_binary_total_size(ctx));
     TRACE("START socket_consume_mailbox\n");
     GlobalContext *glb = ctx->global;
 
