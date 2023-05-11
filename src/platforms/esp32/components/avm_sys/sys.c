@@ -24,6 +24,7 @@
 #include "avmpack.h"
 #include "defaultatoms.h"
 #include "globalcontext.h"
+#include "otp_socket.h"
 #include "scheduler.h"
 #include "utils.h"
 
@@ -231,6 +232,8 @@ void sys_init_platform(GlobalContext *glb)
         AVM_ABORT();
     }
 #endif
+
+    otp_socket_init(glb);
 }
 
 void sys_free_platform(GlobalContext *glb)
