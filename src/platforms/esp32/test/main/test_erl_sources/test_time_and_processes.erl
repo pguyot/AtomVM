@@ -19,49 +19,29 @@
 %
 
 -module(test_time_and_processes).
--export([start/0, proc1/2, proc2/2]).
+-export([start/0, wait/2]).
 
 -define(INTERVAL_1, 50).
 -define(INTERVAL_2, 10).
 
 start() ->
-    Ref1 = erlang:make_ref(),
-    Ref2 = erlang:make_ref(),
     T1 = erlang:system_time(millisecond),
-    Pid1 = spawn(?MODULE, proc1, [self(), Ref1]),
-    Pid2 = spawn(?MODULE, proc2, [self(), Ref2]),
+    Pid1 = spawn(?MODULE, wait, [self(), ?INTERVAL_1]),
+    Pid2 = spawn(?MODULE, wait, [self(), ?INTERVAL_2]),
     receive
-        {foo2, Pid2, [Ref2]} -> ok
+        {done, Pid2} -> ok
     end,
     T2 = erlang:system_time(millisecond),
     receive
-        {foo1, Pid1, [Ref1]} -> ok
+        {done, Pid1} -> ok
     end,
     T3 = erlang:system_time(millisecond),
-    eval_time(T3 - T1, ?INTERVAL_1, 2) +
-        eval_time(T2 - T1, ?INTERVAL_2, 4).
+    true = T3 - T1 >= ?INTERVAL_1,
+    true = T2 - T1 >= ?INTERVAL_2,
+    ok.
 
-eval_time(I, Interval, _Num) when I < Interval ->
-    0;
-eval_time(_I, _Interval, Num) ->
-    Num.
-
-proc1(Pid, RRef) ->
-    erlang:display(foo1),
-    R = erlang:make_ref(),
+wait(Pid, Interval) ->
     receive
-        R -> unreachable
-    after ?INTERVAL_1 ->
-        Pid ! {foo1, self(), [RRef]}
-    end,
-    bar.
-
-proc2(Pid, RRef) ->
-    erlang:display(foo2),
-    R = erlang:make_ref(),
-    receive
-        R -> unreachable
-    after ?INTERVAL_2 ->
-        Pid ! {foo2, self(), [RRef]}
-    end,
-    bar.
+    after Interval ->
+        Pid ! {done, self()}
+    end.

@@ -176,7 +176,7 @@ term avm_test_case(const char *test_module)
 TEST_CASE("test_time_and_processes", "[test_run]")
 {
     term ret_value = avm_test_case("test_time_and_processes.beam");
-    TEST_ASSERT(term_to_int(ret_value) == 6);
+    TEST_ASSERT(ret_value == OK_ATOM);
 }
 
 static volatile bool network_got_ip = false;
