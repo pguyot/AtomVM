@@ -27,25 +27,27 @@ start() ->
     MemorySize = erlang:process_info(self(), memory),
     true = erlang:garbage_collect(),
     NewHeapSize = erlang:process_info(self(), heap_size),
+    erlang:display({new_heap_size, NewHeapSize, heap_size, HeapSize}),
     ok =
         case NewHeapSize < HeapSize of
             true -> ok;
-            _ -> fail
+            _ -> {fail, new_heap_size, NewHeapSize, heap_size, HeapSize}
         end,
     NewMemorySize = erlang:process_info(self(), memory),
+    erlang:display({new_memory_size, NewMemorySize, memory_size, MemorySize}),
     ok =
         case NewMemorySize < MemorySize of
             true -> ok;
-            _ -> fail
+            _ -> {fail, new_memory_size, NewMemorySize, memory_size, MemorySize}
         end,
     0.
 
 make_a_big_heap() ->
-    LargeBlob = create_string(1024, []),
+    LargeBlob = create_blob(512, []),
     HeapSize = erlang:process_info(self(), heap_size),
     {HeapSize, length(LargeBlob)}.
 
-create_string(0, Accum) ->
+create_blob(0, Accum) ->
     Accum;
-create_string(Len, Accum) ->
-    create_string(Len - 1, [Len rem 256 | Accum]).
+create_blob(Len, Accum) ->
+    create_blob(Len - 1, [{Len rem 256} | Accum]).
