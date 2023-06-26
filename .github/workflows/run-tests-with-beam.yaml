@@ -22,112 +22,84 @@ on:
 
 jobs:
   run-tests:
-    runs-on: ${{ matrix.os }}
+    runs-on: "ubuntu-22.04"
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
-        - os: "ubuntu-20.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "21"
+        - otp: "25"
+          mode: setup_beam
 
-        - os: "ubuntu-20.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "22"
+        - otp: "26"
+          mode: setup_beam
 
-        - os: "ubuntu-20.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "23"
+        - otp: "26.0.1"
+          mode: setup_beam
 
-        - os: "ubuntu-22.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "24"
+        - mode: git
+          otp: "26.0.1"
 
-        - os: "ubuntu-22.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "25"
+        - mode: archive
+          otp: "26.0.1"
 
-        - os: "ubuntu-22.04"
-          test_erlang_opts: "-s prime_smp"
-          otp: "26"
+        - container: "erlang:25"
 
-        - os: "macos-latest"
-          otp: "23"
-          path_prefix: "/usr/local/opt/erlang@23/bin:"
-          cmake_opts: "-DOPENSSL_ROOT_DIR=/usr/local/opt/openssl"
+        - container: "erlang:26"
 
-        - os: "macos-latest"
-          otp: "24"
-          path_prefix: "/usr/local/opt/erlang@24/bin:"
-          cmake_opts: "-DOPENSSL_ROOT_DIR=/usr/local/opt/openssl"
+        - container: "erlang:26.0.1"
 
-        - os: "macos-latest"
-          otp: "25"
-          path_prefix: "/usr/local/opt/erlang@25/bin:"
-          cmake_opts: "-DOPENSSL_ROOT_DIR=/usr/local/opt/openssl"
     steps:
     # Setup
     - name: "Checkout repo"
       uses: actions/checkout@v3
-      with:
-        submodules: 'recursive'
 
-    - uses: erlef/setup-beam@v1
-      if: runner.os == 'Linux'
+    - name: "Install using setup-beam"
+      uses: erlef/setup-beam@v1
+      if: matrix.mode == 'setup_beam'
       with:
         otp-version: ${{ matrix.otp }}
 
-    - name: "Install deps (Linux)"
-      if: runner.os == 'Linux'
+    - name: "Fetch source using erlang/otp git repo"
+      if: matrix.mode == 'git'
       run: |
-        sudo apt update -y
-        sudo apt install -y cmake gperf zlib1g-dev ninja-build
+        set -eux
+        git clone https://github.com/erlang/otp.git
+        cd otp
+        git checkout OTP-${{ matrix.otp }}
 
-    - name: "Install deps (macOS)"
-      if: runner.os == 'macOS'
-      run: brew install gperf erlang@${{ matrix.otp }} ninja
-
-    # Build
-    - name: "Build: create build dir"
-      run: mkdir build
-
-    - uses: actions/cache@v3
-      id: cache
-      with:
-        path: 'build/tests/**/*.beam'
-        key: ${{ matrix.otp }}-${{ hashFiles('**/run-tests-with-beam.yaml', 'tests/**/*.erl') }}
-
-    - name: "Build: run cmake"
-      working-directory: build
+    - name: "Fetch source using archive"
+      if: matrix.mode == 'archive'
       run: |
-        export PATH="${{ matrix.path_prefix }}$PATH"
-        cmake -G Ninja ${{ matrix.cmake_opts }} ..
+        set -eux
+        wget https://github.com/erlang/otp/archive/OTP-${{ matrix.otp }}.tar.gz
+        tar xzf OTP-${{ matrix.otp }}.tar.gz
+        mv otp-OTP-${{ matrix.otp }} otp
 
-    - name: "Touch files to benefit from cache"
-      working-directory: build
+    - name: "Build from source"
+      if: matrix.mode == 'git' || matrix.mode == 'archive'
       run: |
-        # git clone will use more recent timestamps than cached beam files
-        # touch them so we can benefit from the cache and avoid costly beam file rebuild.
-        find . -name '*.beam' -exec touch {} \;
+        set -eux
+        cd otp
+        export PIE_CFLAGS=-fpie
+        export PIE_LDFLAGS=-pie
+        ./otp_build autoconf
+        ./configure --with-ssl --enable-dirty-schedulers
+        make -j
+        make -j release
 
-    - name: "Build: run ninja"
-      working-directory: build
-      run: |
-        export PATH="${{ matrix.path_prefix }}$PATH"
-        ninja
-
-    # Test
-    - name: "Test: test-erlang with BEAM"
+    - name: "Test compile module and test it"
       timeout-minutes: 10
-      working-directory: build
       run: |
-        export PATH="${{ matrix.path_prefix }}$PATH"
-        ./tests/test-erlang -b ${{ matrix.test_erlang_opts }}
-
-    # Test
-    - name: "Test: estdlib/ with BEAM"
-      timeout-minutes: 10
-      working-directory: build
-      run: |
-        export PATH="${{ matrix.path_prefix }}$PATH"
-        erl -pa tests/libs/estdlib/ -pa tests/libs/estdlib/beams/ -pa libs/etest/src/beams -s tests -s init stop -noshell
+        set -eux
+        test -e otp/bin && export PATH=${PWD}/otp/bin:${PATH}
+        which erl
+        which erlc
+        erl -version
+        erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
+        erlc tests/erlang_tests/test_gc.erl
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
