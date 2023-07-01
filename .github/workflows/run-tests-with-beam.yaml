@@ -61,6 +61,8 @@ jobs:
 
         - container: "erlang:26.0.1"
 
+        - container: "hexpm/erlang:26.0.1-ubuntu-jammy-20230126"
+
     steps:
     # Setup
     - name: "Checkout repo"
