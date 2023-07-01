@@ -52,6 +52,9 @@ jobs:
         - mode: archive
           otp: "26.0.1"
 
+        - mode: hexpm_scripts
+          otp: "26.0.1"
+
         - container: "erlang:25"
 
         - container: "erlang:26"
@@ -102,6 +105,29 @@ jobs:
         ./configure --with-ssl --enable-dirty-schedulers
         make -j
         make -j release
+
+    - name: "Build OTP using hexpm scripts"
+      if: matrix.mode == 'hexpm_scripts'
+      run: |
+        set -eux
+        mkdir -p hexpm/otp
+        cd hexpm/otp
+        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/otp.sh
+        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/otp-ubuntu-22.04.dockerfile
+        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/build_otp_ubuntu.sh
+
+        # We don't aws or fastly
+        sed -i -E -e 's|^aws|#aws|g' -e 's|^fastly|#fastly|g' otp.sh
+        cd ..
+        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/utils.sh
+        export SCRIPT_DIR=`pwd`
+
+        cd ..
+        bash ${SCRIPT_DIR}/otp/otp.sh OTP-${{ matrix.otp }} ${{ matrix.otp }} ubuntu-22.04
+
+        tar xzf OTP-${{ matrix.otp }}.tar.gz
+        mv OTP-${{ matrix.otp }} otp
+        sh otp/Install -minimal `pwd`/otp
 
     - name: "Test compile module and test it"
       timeout-minutes: 10
