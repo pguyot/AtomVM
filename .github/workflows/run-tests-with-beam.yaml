@@ -37,6 +37,15 @@ jobs:
         - otp: "26.0.1"
           mode: setup_beam
 
+        - otp: "25"
+          mode: setup_beam_283c56d
+
+        - otp: "26"
+          mode: setup_beam_283c56d
+
+        - otp: "26.0.1"
+          mode: setup_beam_283c56d
+
         - mode: git
           otp: "26.0.1"
 
@@ -57,6 +66,12 @@ jobs:
     - name: "Install using setup-beam"
       uses: erlef/setup-beam@v1
       if: matrix.mode == 'setup_beam'
+      with:
+        otp-version: ${{ matrix.otp }}
+
+    - name: "Install using setup-beam 283c56d"
+      uses: paulo-ferraz-oliveira/setup-beam@283c56d6575950553c935bbb019fa1dad0e818be
+      if: matrix.mode == 'setup_beam_283c56d'
       with:
         otp-version: ${{ matrix.otp }}
 
