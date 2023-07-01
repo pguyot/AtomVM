@@ -22,14 +22,23 @@
 -export([start/0]).
 
 start() ->
+    erlang:display({?MODULE, ?LINE}),
     {ok, TCPClientAddr} = test_tcp_client(true, binary),
+    erlang:display({?MODULE, ?LINE}),
     {ok, TCPClientAddr} = test_tcp_client(true, list),
+    erlang:display({?MODULE, ?LINE}),
     {ok, TCPClientAddr} = test_tcp_client(false, binary),
+    erlang:display({?MODULE, ?LINE}),
     {ok, TCPClientAddr} = test_tcp_client(false, list),
+    erlang:display({?MODULE, ?LINE}),
     {ok, UDPAddr} = test_udp(true, 2023),
+    erlang:display({?MODULE, ?LINE}),
     {ok, UDPAddr} = test_udp(false, 2024),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_tcp_server(true, 10080),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_tcp_server(false, 10081),
+    erlang:display({?MODULE, ?LINE}),
     0.
 
 test_tcp_client(Active, BinaryOpt) ->
