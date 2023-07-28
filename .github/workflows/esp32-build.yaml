@@ -84,6 +84,7 @@ jobs:
             pytest-embedded-qemu==1.2.5
 
     - name: Patch esp-idf to fix race condition that affects qemu under heavy load
+      working-directory: ./src/platforms/esp32/test/
       if: ${{ matrix.idf-version }} = '4.4.5'
       run: |
         set -e
@@ -92,12 +93,14 @@ jobs:
         patch -p1 < $PATCH
 
     - name: Build ESP32 tests using idf.py
+      working-directory: ./src/platforms/esp32/test/
       run: |
         set -e
         . $IDF_PATH/export.sh
         idf.py build
 
     - name: Run ESP32 tests using qemu
+      working-directory: ./src/platforms/esp32/test/
       timeout-minutes: 10
       run: |
         set -e
