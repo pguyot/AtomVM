@@ -63,7 +63,7 @@ jobs:
             libglib2.0-0 libpixman-1-0
 
     - name: Install qemu binary from espressif/qemu
-      if: ${{ matrix.idf-version }} != '5.1'
+      if: matrix.idf-version != '5.1'
       run: |
         set -eu
         QEMU_VER=esp-develop-20220919
@@ -85,7 +85,7 @@ jobs:
 
     - name: Patch esp-idf to fix race condition that affects qemu under heavy load
       working-directory: ./src/platforms/esp32/test/
-      if: ${{ matrix.idf-version }} = '4.4.5'
+      if: matrix.idf-version == '4.4.5'
       run: |
         set -e
         PATCH=$PWD/esp_ipc_isr.patch
