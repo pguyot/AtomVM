@@ -73,7 +73,10 @@ the_erase(_X) ->
     "0".
 
 test_get() ->
-    undefined = put({any_term}, 42),
-    42 = get({any_term}), % bif
-    42 = apply(erlang, list_to_atom("get"), [{any_term}]), % nif
+    undefined = put({any_term}, bif),
+    bif = get({any_term}),
+    bif = apply(erlang, list_to_atom("put), [{any_term}, nif]),
+    nif = apply(erlang, list_to_atom("get"), [{any_term}]),
+    nif = apply(erlang, list_to_atom("erase"), [{any_term}]),
+    undefined = erase({any_term}),
     ok.
