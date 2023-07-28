@@ -128,8 +128,11 @@ term avm_test_case(const char *test_module)
     GlobalContext *glb = globalcontext_new();
     TEST_ASSERT(glb != NULL);
 
+    ESP_LOGI(TAG, "before port driver init all");
     port_driver_init_all(glb);
+    ESP_LOGI(TAG, "before nif collection init all");
     nif_collection_init_all(glb);
+    ESP_LOGI(TAG, "after nif collection init all");
 
     TEST_ASSERT(avmpack_is_valid(main_avm, size) != 0);
 
