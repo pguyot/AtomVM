@@ -20,7 +20,7 @@
 
 -module(test_min_max_guard).
 
-export([test/0, test_guard/4]).
+-export([test/0, test_guard/4]).
 
 test() ->
     ok = test_guard(min, 2, 1, 2),
