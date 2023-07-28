@@ -364,3 +364,34 @@ memory(_Type) ->
 -spec monotonic_time(Unit :: time_unit()) -> integer().
 monotonic_time(_Unit) ->
     throw(nif_error).
+
+%%-----------------------------------------------------------------------------
+%% @param   Key    key in the process dictionary
+%% @returns value associated with this key or undefined
+%% @doc     Return a value associated with a given key in the process dictionary
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get(Key :: any()) -> any().
+get(_Key) ->
+    throw(nif_error).
+
+%%-----------------------------------------------------------------------------
+%% @param   Key    key to add to the process dictionary
+%% @param   Value  value to store in the process dictionary
+%% @returns the previous value associated with this key or undefined
+%% @doc     Store a value with a given key in the process dictionary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec put(Key :: any(), Value :: any()) -> any().
+put(_Key, _Value) ->
+    throw(nif_error).
+
+%%-----------------------------------------------------------------------------
+%% @param   Key    key to erase from the process dictionary
+%% @returns the previous value associated with this key or undefined
+%% @doc     Erase a key from the process dictionary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec erase(Key :: any()) -> any().
+erase(_Key) ->
+    throw(nif_error).

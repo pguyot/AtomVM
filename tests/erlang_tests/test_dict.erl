@@ -41,6 +41,7 @@ start() ->
     _ = stringize(111222),
     _ = stringize(333222),
     "undefined" = erlang:atom_to_list(the_erase(6)),
+    ok = test_get(),
     W.
 
 put_int(N) ->
@@ -70,3 +71,9 @@ the_erase(N) when is_integer(N) ->
     erase(N);
 the_erase(_X) ->
     "0".
+
+test_get() ->
+    undefined = put({any_term}, 42),
+    42 = get({any_term}), % bif
+    42 = apply(erlang, list_to_atom("get"), [{any_term}]), % nif
+    ok.

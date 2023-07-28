@@ -133,6 +133,7 @@ static term nif_erts_debug_flat_size(Context *ctx, int argc, term argv[]);
 static term nif_erlang_process_flag(Context *ctx, int argc, term argv[]);
 static term nif_erlang_processes(Context *ctx, int argc, term argv[]);
 static term nif_erlang_process_info(Context *ctx, int argc, term argv[]);
+static term nif_erlang_get_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_put_2(Context *ctx, int argc, term argv[]);
 static term nif_erlang_system_info(Context *ctx, int argc, term argv[]);
 static term nif_erlang_system_flag(Context *ctx, int argc, term argv[]);
@@ -518,6 +519,12 @@ static const struct Nif process_info_nif =
 {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_process_info
+};
+
+static const struct Nif get_nif =
+{
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_erlang_get_1
 };
 
 static const struct Nif put_nif =
@@ -3145,6 +3152,13 @@ static term nif_erlang_make_fun_3(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     return term_make_function_reference(module_term, function_term, arity_term, &ctx->heap);
+}
+
+static term nif_erlang_get_1(Cobtext *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    return bif_erlang_get_1(ctx, argv[0]);
 }
 
 static term nif_erlang_put_2(Context *ctx, int argc, term argv[])
