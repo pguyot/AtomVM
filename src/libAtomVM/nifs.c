@@ -3154,7 +3154,7 @@ static term nif_erlang_make_fun_3(Context *ctx, int argc, term argv[])
     return term_make_function_reference(module_term, function_term, arity_term, &ctx->heap);
 }
 
-static term nif_erlang_get_1(Cobtext *ctx, int argc, term argv[])
+static term nif_erlang_get_1(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
 
