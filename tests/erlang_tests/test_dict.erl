@@ -75,7 +75,7 @@ the_erase(_X) ->
 test_get() ->
     undefined = put({any_term}, bif),
     bif = get({any_term}),
-    bif = apply(erlang, list_to_atom("put), [{any_term}, nif]),
+    bif = apply(erlang, list_to_atom("put"), [{any_term}, nif]),
     nif = apply(erlang, list_to_atom("get"), [{any_term}]),
     nif = apply(erlang, list_to_atom("erase"), [{any_term}]),
     undefined = erase({any_term}),
