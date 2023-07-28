@@ -60,7 +60,8 @@ jobs:
         apt update
         DEBIAN_FRONTEND=noninteractive apt install -y -q \
             doxygen erlang-base \
-            libglib2.0-0 libpixman-1-0
+            libglib2.0-0 libpixman-1-0 \
+            gcc g++ zlib1g-dev
 
     - name: Install qemu binary from espressif/qemu
       if: matrix.idf-version != '5.1'
