@@ -1717,6 +1717,8 @@ schedule_in:
                             break;
                         }
                         case BIFFunctionType: {
+                            // Support compilers < OTP26 that generate CALL_EXT
+                            // for min/2 and max/2
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
@@ -1729,8 +1731,10 @@ schedule_in:
                                     ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
                                     break;
                                 default:
-                                    fprintf(stderr, "Invalid arity %i for bif\n", arity);
+                                    fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
                             }
+
+                            break;
                         }
                         default: {
                             fprintf(stderr, "Invalid function type %i at index: %" PRIu32 "\n", func->type, index);
@@ -1809,6 +1813,8 @@ schedule_in:
                             break;
                         }
                         case BIFFunctionType: {
+                            // Support compilers < OTP26 that generate CALL_EXT
+                            // for min/2 and max/2
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
@@ -1821,10 +1827,12 @@ schedule_in:
                                     ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
                                     break;
                                 default:
-                                    fprintf(stderr, "Invalid arity %i for bif\n", arity);
+                                    fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
                             }
 
                             DO_RETURN();
+
+                            break;
                         }
                         default: {
                             fprintf(stderr, "Invalid function type %i at index: %" PRIu32 "\n", func->type, index);
