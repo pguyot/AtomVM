@@ -27,6 +27,7 @@ start() ->
     ok = test_guard(max, 2, 1, 1),
     ok = test_without_guard(min, 2, 1, 2),
     ok = test_without_guard(max, 2, 1, 1),
+    ok = test_tail(),
     0.
 
 -ifdef(OTP_RELEASE).
@@ -59,3 +60,18 @@ test_without_guard(max, X, Y, Z) ->
     end;
 test_without_guard(_Op, _X, _Y, _Z) ->
     fail.
+
+test_tail() ->
+    1 = tail_min(infinity, [5, 4, 3, 2, 1]),
+    5 = tail_max(0, [1, 2, 3, 4, 5]),
+    ok.
+
+tail_min(X, [Y]) ->
+    min(X, Y);
+tail_min(X, [H | T]) ->
+    tail_min(min(X, H), T).
+
+tail_max(X, [Y]) ->
+    max(X, Y);
+tail_max(X, [H | T]) ->
+    tail_max(max(X, H), T).
