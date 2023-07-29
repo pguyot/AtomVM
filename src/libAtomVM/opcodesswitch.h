@@ -1813,7 +1813,7 @@ schedule_in:
                             break;
                         }
                         case BIFFunctionType: {
-                            // Support compilers < OTP26 that generate CALL_EXT_TAIL
+                            // Support compilers < OTP26 that generate CALL_EXT_LAST
                             // for min/2 and max/2
                             // These are safe regarding otp issue #7152
                             ctx->cp = ctx->e[n_words];
@@ -3500,7 +3500,7 @@ wait_timeout_trap_handler:
                             break;
                         }
                         case BIFFunctionType: {
-                            // Support compilers < OTP26 that generate CALL_EXT
+                            // Support compilers < OTP26 that generate CALL_EXT_ONLY
                             // for min/2 and max/2
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
