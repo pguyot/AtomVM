@@ -1719,7 +1719,6 @@ schedule_in:
                         case BIFFunctionType: {
                             // Support compilers < OTP26 that generate CALL_EXT
                             // for min/2 and max/2
-                            fprintf(stderr, "OP_CALL_EXT\n");
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
@@ -1768,7 +1767,6 @@ schedule_in:
                     }
 
                     TRACE_CALL_EXT(ctx, mod, "call_ext_last", index, arity);
-fprintf(stderr, "call_ext_last -- index = %d, arity = %d, n_words = %d\n", (int) index, (int) arity, (int) n_words);
 
                     const struct ExportedFunction *func = module_resolve_function(mod, index);
                     if (IS_NULL_PTR(func)) {
@@ -1818,7 +1816,6 @@ fprintf(stderr, "call_ext_last -- index = %d, arity = %d, n_words = %d\n", (int)
                             // Support compilers < OTP26 that generate CALL_EXT_TAIL
                             // for min/2 and max/2
                             // These are safe regarding otp issue #7152
-                            fprintf(stderr, "OP_CALL_EXT_LAST\n");
                             ctx->cp = ctx->e[n_words];
                             ctx->e += (n_words + 1);
 
@@ -3505,7 +3502,6 @@ wait_timeout_trap_handler:
                         case BIFFunctionType: {
                             // Support compilers < OTP26 that generate CALL_EXT
                             // for min/2 and max/2
-                            fprintf(stderr, "OP_CALL_EXT_ONLY\n");
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
