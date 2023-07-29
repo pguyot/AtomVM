@@ -1853,7 +1853,7 @@ schedule_in:
                 USED_BY_TRACE(dreg);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     BifImpl0 func = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif0_ptr;
                     DEBUG_FAIL_NULL(func);
                     term ret = func(ctx);
@@ -1887,7 +1887,7 @@ schedule_in:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     BifImpl1 func = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif1_ptr;
                     DEBUG_FAIL_NULL(func);
                     term ret = func(ctx, arg1);
@@ -1927,7 +1927,7 @@ schedule_in:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     BifImpl2 func = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif2_ptr;
                     DEBUG_FAIL_NULL(func);
                     term ret = func(ctx, arg1, arg2);
@@ -5327,7 +5327,7 @@ wait_timeout_trap_handler:
                 #ifdef IMPL_EXECUTE_LOOP
                     TRACE("gc_bif1/5 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, T_DEST_REG(dreg_type, dreg));
 
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl1 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif1_ptr;
                     term ret = func(ctx, live, arg1);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
@@ -5372,7 +5372,7 @@ wait_timeout_trap_handler:
                 #ifdef IMPL_EXECUTE_LOOP
                     TRACE("gc_bif2/6 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, T_DEST_REG(dreg_type, dreg));
 
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl2 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif2_ptr;
                     term ret = func(ctx, live, arg1, arg2);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
@@ -5447,7 +5447,7 @@ wait_timeout_trap_handler:
                 #ifdef IMPL_EXECUTE_LOOP
                     TRACE("gc_bif3/7 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, arg3=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, arg3, T_DEST_REG(dreg_type, dreg));
 
-                    struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                    const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl3 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif3_ptr;
                     term ret = func(ctx, live, arg1, arg2, arg3);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
