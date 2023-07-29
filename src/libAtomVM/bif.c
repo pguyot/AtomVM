@@ -1440,11 +1440,6 @@ term bif_erlang_min_2(Context *ctx, term arg1, term arg2)
     if (UNLIKELY(r == TermCompareMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);       
     }
-    fprintf(stderr, "bif min(");
-    term_display(stderr, arg1, ctx);
-    fprintf(stderr, ", ");
-    term_display(stderr, arg2, ctx);
-    fprintf(stderr, ")\n");
     return r == TermLessThan ? arg1 : arg2;
 }
 
@@ -1454,10 +1449,5 @@ term bif_erlang_max_2(Context *ctx, term arg1, term arg2)
     if (UNLIKELY(r == TermCompareMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);       
     }
-    fprintf(stderr, "bif max(");
-    term_display(stderr, arg1, ctx);
-    fprintf(stderr, ", ");
-    term_display(stderr, arg2, ctx);
-    fprintf(stderr, ")\n");
     return r == TermGreaterThan ? arg1 : arg2;
 }
