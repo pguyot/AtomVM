@@ -1719,6 +1719,7 @@ schedule_in:
                         case BIFFunctionType: {
                             // Support compilers < OTP26 that generate CALL_EXT
                             // for min/2 and max/2
+                            fprintf(stderr, "OP_CALL_EXT\n");
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
@@ -1816,6 +1817,7 @@ schedule_in:
                             // Support compilers < OTP26 that generate CALL_EXT_TAIL
                             // for min/2 and max/2
                             // These are safe regarding otp issue #7152
+                            fprintf(stderr, "OP_CALL_EXT_LAST\n");
                             ctx->cp = ctx->e[n_words];
                             ctx->e += (n_words + 1);
 
