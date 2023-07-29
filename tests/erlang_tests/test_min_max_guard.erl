@@ -67,11 +67,13 @@ test_tail() ->
     ok.
 
 tail_min(X, [Y]) ->
+    erlang:display({?MODULE, ?LINE}),
     min(X, Y);
 tail_min(X, [H | T]) ->
     tail_min(min(X, H), T).
 
 tail_max(X, [Y]) ->
+    erlang:display({?MODULE, ?LINE}),
     max(X, Y);
 tail_max(X, [H | T]) ->
     tail_max(max(X, H), T).

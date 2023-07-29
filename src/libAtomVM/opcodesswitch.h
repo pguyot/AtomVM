@@ -1719,7 +1719,7 @@ schedule_in:
                         case BIFFunctionType: {
                             // Support compilers < OTP26 that generate CALL_EXT
                             // for min/2 and max/2
-                            fprintf(stderr, "OP_CALL_EXT_BIF -- %i", (int) arity);
+                            fprintf(stderr, "OP_CALL_EXT_BIF -- %i\n", (int) arity);
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
@@ -1816,7 +1816,7 @@ schedule_in:
                         case BIFFunctionType: {
                             // Support compilers < OTP26 that generate CALL_EXT
                             // for min/2 and max/2
-                            fprintf(stderr, "OP_CALL_EXT_LAST_BIF -- %i", (int) arity);
+                            fprintf(stderr, "OP_CALL_EXT_LAST_BIF -- %i\n", (int) arity);
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
