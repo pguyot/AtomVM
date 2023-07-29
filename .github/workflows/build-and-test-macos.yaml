@@ -70,6 +70,7 @@ jobs:
       timeout-minutes: 10
       working-directory: build
       run: |
+        export PATH="/usr/local/opt/erlang@${{ matrix.otp }}/bin:$PATH"
         erlc +S ../tests/erlang_tests/test_min_max_guard.erl
         cat test_min_max_guard.S
         ./tests/test-erlang test_min_max_guard
