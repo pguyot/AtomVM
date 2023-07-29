@@ -36,7 +36,7 @@ test_guard(max, X, Y, Z) when max(X, Y) > Z ->
     ok;
 test_guard(_W, _X, _Y, _Z) ->
     fail.
--else().
+-else.
 test_guard(_W, _X, _Y, _Z) ->
     ok.
 -endif.
