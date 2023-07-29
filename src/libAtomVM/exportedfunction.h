@@ -65,7 +65,8 @@ struct ExportedFunction
 struct Bif
 {
     struct ExportedFunction base;
-    union {
+    union
+    {
         BifImpl0 bif0_ptr;
         BifImpl1 bif1_ptr;
         BifImpl2 bif2_ptr;
@@ -75,7 +76,8 @@ struct Bif
 struct GCBif
 {
     struct ExportedFunction base;
-    union {
+    union
+    {
         GCBifImpl1 gcbif1_ptr;
         GCBifImpl2 gcbif2_ptr;
         GCBifImpl3 gcbif3_ptr;

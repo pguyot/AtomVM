@@ -28,7 +28,8 @@ typedef struct BifNameAndPtr BifNameAndPtr;
 struct BifNameAndPtr
 {
   const char *name;
-  union {
+  union
+  {
     struct Bif bif;
     struct GCBif gcbif;
   };

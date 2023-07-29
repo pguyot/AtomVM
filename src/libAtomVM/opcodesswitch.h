@@ -1258,7 +1258,7 @@ static bool maybe_call_native(Context *ctx, AtomString module_name, AtomString f
     struct ExportedFunction *exported_bif = bif_registry_get_handler(module_name, function_name, arity);
     if (exported_bif) {
         if (exported_bif->type == GCBIFFunctionType) {
-            struct GCBif *gcbif = EXPORTED_FUNCTION_TO_GCBIF(exported_bif);
+            const struct GCBif *gcbif = EXPORTED_FUNCTION_TO_GCBIF(exported_bif);
             switch (arity) {
                 case 1: {
                     *return_value = gcbif->gcbif1_ptr(ctx, 0, ctx->x[0]);
@@ -1274,7 +1274,7 @@ static bool maybe_call_native(Context *ctx, AtomString module_name, AtomString f
                 }
             }
         } else {
-            struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(exported_bif);
+            const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(exported_bif);
             switch (arity) {
                 case 0: {
                     *return_value = bif->bif0_ptr(ctx);
@@ -1720,13 +1720,13 @@ schedule_in:
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
-                                    ctx->x[0] = bif->bif0_ptr();
+                                    ctx->x[0] = bif->bif0_ptr(ctx);
                                     break;
                                 case 1:
-                                    ctx->x[0] = bif->bif1_ptr(ctx->x[0]);
+                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(ctx->x[0], ctx->x[1]);
+                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %i for bif\n", arity);
@@ -1812,13 +1812,13 @@ schedule_in:
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
-                                    ctx->x[0] = bif->bif0_ptr();
+                                    ctx->x[0] = bif->bif0_ptr(ctx);
                                     break;
                                 case 1:
-                                    ctx->x[0] = bif->bif1_ptr(ctx->x[0]);
+                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(ctx->x[0], ctx->x[1]);
+                                    ctx->x[0] = bif->bif2_ptr(crx, ctx->x[0], ctx->x[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %i for bif\n", arity);
