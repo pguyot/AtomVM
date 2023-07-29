@@ -1255,7 +1255,7 @@ term make_fun(Context *ctx, const Module *mod, int fun_index)
 static bool maybe_call_native(Context *ctx, AtomString module_name, AtomString function_name, int arity,
     term *return_value)
 {
-    struct ExportedFunction *exported_bif = bif_registry_get_handler(module_name, function_name, arity);
+    const struct ExportedFunction *exported_bif = bif_registry_get_handler(module_name, function_name, arity);
     if (exported_bif) {
         if (exported_bif->type == GCBIFFunctionType) {
             const struct GCBif *gcbif = EXPORTED_FUNCTION_TO_GCBIF(exported_bif);

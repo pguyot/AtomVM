@@ -39,7 +39,7 @@ extern "C" {
 
 #define MAX_BIF_NAME_LEN 260
 
-struct ExportedFunction *bif_registry_get_handler(AtomString module, AtomString function, int arity);
+const struct ExportedFunction *bif_registry_get_handler(AtomString module, AtomString function, int arity);
 
 term bif_erlang_self_0(Context *ctx);
 term bif_erlang_byte_size_1(Context *ctx, int live, term arg1);

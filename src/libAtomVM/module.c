@@ -115,7 +115,7 @@ static enum ModuleLoadResult module_build_imported_functions_table(Module *this_
         AtomString function_atom = module_get_atom_string_by_id(this_module, local_function_atom_index);
         uint32_t arity = READ_32_ALIGNED(table_data + i * 12 + 8 + 12);
 
-        struct ExportedFunction *bif = bif_registry_get_handler(module_atom, function_atom, arity);
+        const struct ExportedFunction *bif = bif_registry_get_handler(module_atom, function_atom, arity);
 
         if (bif) {
             this_module->imported_funcs[i] = bif;

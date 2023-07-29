@@ -49,7 +49,7 @@
 #define INT64_MIN_AS_FLOAT (1.0 * INT64_MIN)
 #define INT64_MAX_AS_FLOAT (1.0 * INT64_MAX)
 
-struct ExportedFunction *bif_registry_get_handler(AtomString module, AtomString function, int arity)
+const struct ExportedFunction *bif_registry_get_handler(AtomString module, AtomString function, int arity)
 {
     char bifname[MAX_BIF_NAME_LEN];
 
