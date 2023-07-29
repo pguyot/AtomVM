@@ -59,7 +59,7 @@ struct ExportedFunction *bif_registry_get_handler(AtomString module, AtomString 
         return NULL;
     }
 
-    return &nameAndPtr->bif.bif.base;
+    return &nameAndPtr->bif.base;
 }
 
 term bif_erlang_self_0(Context *ctx)

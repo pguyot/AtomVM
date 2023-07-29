@@ -1818,7 +1818,7 @@ schedule_in:
                                     ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(crx, ctx->x[0], ctx->x[1]);
+                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %i for bif\n", arity);
