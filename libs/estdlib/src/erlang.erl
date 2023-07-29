@@ -315,23 +315,23 @@ map_is_key(_Key, _Map) ->
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
 %% @end
 %%-----------------------------------------------------------------------------
--spec min(A :: any(), B :: any()) -> any().
-min(A, B) when A < B -> A;
-min(_A, B) -> B.
+-spec min(A :: any(), B :: any()) -> A | B.
+min(_A, B) ->
+    throw(nif_error).
 
 %%-----------------------------------------------------------------------------
 %% @param   A   any term
 %% @param   B   any term
 %% @returns `A' if `A > B'; `B', otherwise.
-%% @doc     Return the minimum value of two terms
+%% @doc     Return the maximum value of two terms
 %%
 %% Terms are compared using `>' and follow the ordering principles defined in
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
 %% @end
 %%-----------------------------------------------------------------------------
--spec max(A :: any(), B :: any()) -> any().
-max(A, B) when A > B -> A;
-max(_A, B) -> B.
+-spec max(A :: any(), B :: any()) -> A | B.
+max(_A, B) ->
+    throw(nif_error).
 
 %%-----------------------------------------------------------------------------
 %% @param   Type the type of memory to request

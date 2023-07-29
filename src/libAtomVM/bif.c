@@ -1446,3 +1446,21 @@ term bif_erlang_get_1(Context *ctx, term arg1)
 
     return value;
 }
+
+term bif_erlang_min_2(Context *ctx, term arg1, term arg2)
+{
+    TermCompareResult r = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+    if (UNLIKELY(r == TermCompareMemoryAllocFail)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);       
+    }
+    return r == TermLessThan ? arg1 : arg2;
+}
+
+term bif_erlang_max_2(Context *ctx, term arg1, term arg2)
+{
+    TermCompareResult r = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+    if (UNLIKELY(r == TermCompareMemoryAllocFail)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);       
+    }
+    return r == TermGreaterThan ? arg1 : arg2;
+}

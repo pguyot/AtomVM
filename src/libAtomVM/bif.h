@@ -108,6 +108,9 @@ term bif_erlang_greater_than_or_equal_2(Context *ctx, term arg1, term arg2);
 
 term bif_erlang_get_1(Context *ctx, term arg1);
 
+term bif_erlang_min_2(Context *ctx, term arg1, term arg2);
+term bif_erlang_max_2(Context *ctx, term arg1, term arg2);
+
 #ifdef __cplusplus
 }
 #endif

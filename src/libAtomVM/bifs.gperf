@@ -85,3 +85,5 @@ erlang:element/2, bif_erlang_element_2, false
 erlang:tuple_size/1, bif_erlang_tuple_size_1, false
 erlang:map_size/1, bif_erlang_map_size_1, true
 erlang:map_get/2, bif_erlang_map_get_2, false
+erlang:min/2, bif_erlang_min_2, false
+erlang:max/2, bif_erlang_max_2, false
