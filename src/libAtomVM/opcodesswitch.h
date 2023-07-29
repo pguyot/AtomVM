@@ -1768,6 +1768,7 @@ schedule_in:
                     }
 
                     TRACE_CALL_EXT(ctx, mod, "call_ext_last", index, arity);
+fprintf(stderr, "call_ext_last -- index = %d, arity = %d, n_words = %d\n", (int) index, (int) arity, (int) n_words);
 
                     const struct ExportedFunction *func = module_resolve_function(mod, index);
                     if (IS_NULL_PTR(func)) {
