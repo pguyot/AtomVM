@@ -67,11 +67,12 @@ test_tail() ->
     ok.
 
 tail_min(X, [Y]) ->
-    min(X, Y);
+    min(X, Y);  % OP_CALL_EXT_ONLY
 tail_min(X, [H | T]) ->
     tail_min(min(X, H), T).
 
-tail_max(X, [Y]) ->
-    max(X, Y);
+tail_max(X, [Y, Z]) ->
+    M1 = max(Y, Z),
+    max(X, M1);  % OP_CALL_EXT_LAST
 tail_max(X, [H | T]) ->
     tail_max(max(X, H), T).
