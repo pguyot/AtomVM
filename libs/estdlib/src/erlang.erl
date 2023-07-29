@@ -313,11 +313,15 @@ map_is_key(_Key, _Map) ->
 %%
 %% Terms are compared using `<' and follow the ordering principles defined in
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
+%%
+%% OTP26+ compilers allow this function in guards. They replace calls to this
+%% function with a bif call, however, following BEAM, we need to keep erlang
+%% implementation for code compiled with earlier compilers.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec min(A :: any(), B :: any()) -> any().
-min(_A, _B) ->
-    throw(bif_error).
+min(A, B) when A < B -> A;
+min(_A, B) -> B.
 
 %%-----------------------------------------------------------------------------
 %% @param   A   any term
@@ -327,11 +331,15 @@ min(_A, _B) ->
 %%
 %% Terms are compared using `>' and follow the ordering principles defined in
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
+%%
+%% OTP26+ compilers allow this function in guards. They replace calls to this
+%% function with a bif call, however, following BEAM, we need to keep erlang
+%% implementation for code compiled with earlier compilers.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec max(A :: any(), B :: any()) -> any().
-max(_A, _B) ->
-    throw(bif_error).
+max(A, B) when A > B -> A;
+max(_A, B) -> B.
 
 %%-----------------------------------------------------------------------------
 %% @param   Type the type of memory to request
