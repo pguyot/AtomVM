@@ -113,7 +113,7 @@ struct Module
     struct ModuleFilename *filenames;
     struct ListHead line_ref_offsets;
 
-    struct ExportedFunction **imported_funcs;
+    const struct ExportedFunction **imported_funcs;
 
     void **labels;
 

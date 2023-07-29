@@ -102,7 +102,7 @@ static enum ModuleLoadResult module_build_imported_functions_table(Module *this_
 {
     int functions_count = READ_32_ALIGNED(table_data + 8);
 
-    this_module->imported_funcs = calloc(functions_count, sizeof(ExportedFunction *));
+    this_module->imported_funcs = calloc(functions_count, sizeof(struct ExportedFunction *));
     if (IS_NULL_PTR(this_module->imported_funcs)) {
         fprintf(stderr, "Cannot allocate memory while loading module (line: %i).\n", __LINE__);
         return MODULE_ERROR_FAILED_ALLOCATION;
