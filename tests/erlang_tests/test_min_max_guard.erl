@@ -20,11 +20,13 @@
 
 -module(test_min_max_guard).
 
--export([start/0, test_guard/4]).
+-export([start/0, test_guard/4, test_without_guard/4]).
 
 start() ->
     ok = test_guard(min, 2, 1, 2),
     ok = test_guard(max, 2, 1, 1),
+    ok = test_without_guard(min, 2, 1, 2),
+    ok = test_without_guard(max, 2, 1, 1),
     0.
 
 -ifdef(OTP_RELEASE).
@@ -34,13 +36,26 @@ test_guard(min, X, Y, Z) when min(X, Y) < Z ->
     ok;
 test_guard(max, X, Y, Z) when max(X, Y) > Z ->
     ok;
-test_guard(_W, _X, _Y, _Z) ->
+test_guard(_Op, _X, _Y, _Z) ->
     fail.
 -else.
-test_guard(_W, _X, _Y, _Z) ->
+test_guard(_Op, _X, _Y, _Z) ->
     ok.
 -endif.
 -else.
-test_guard(_W, _X, _Y, _Z) ->
+test_guard(_Op, _X, _Y, _Z) ->
     ok.
 -endif.
+
+test_without_guard(min, X, Y, Z) ->
+    case min(X, Y) < Z of
+        true -> ok;
+        false -> fail
+    end;
+test_without_guard(max, X, Y, Z) ->
+    case max(X, Y) > Z of
+        true -> ok;
+        false -> fail
+    end;
+test_without_guard(_Op, _X, _Y, _Z) ->
+    fail.
