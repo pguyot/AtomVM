@@ -315,9 +315,9 @@ map_is_key(_Key, _Map) ->
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
 %% @end
 %%-----------------------------------------------------------------------------
--spec min(A :: any(), B :: any()) -> A | B.
-min(_A, B) ->
-    throw(nif_error).
+-spec min(A :: any(), B :: any()) -> any().
+min(A, B) when A < B -> A;
+min(_A, B) -> B.
 
 %%-----------------------------------------------------------------------------
 %% @param   A   any term
@@ -329,9 +329,9 @@ min(_A, B) ->
 %% https://www.erlang.org/doc/reference_manual/expressions.html#term-comparisons
 %% @end
 %%-----------------------------------------------------------------------------
--spec max(A :: any(), B :: any()) -> A | B.
-max(_A, B) ->
-    throw(nif_error).
+-spec max(A :: any(), B :: any()) -> any().
+max(A, B) when A > B -> A;
+max(_A, B) -> B.
 
 %%-----------------------------------------------------------------------------
 %% @param   Type the type of memory to request
