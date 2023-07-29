@@ -3502,6 +3502,29 @@ wait_timeout_trap_handler:
 
                             break;
                         }
+                        case BIFFunctionType: {
+                            // Support compilers < OTP26 that generate CALL_EXT
+                            // for min/2 and max/2
+                            fprintf(stderr, "OP_CALL_EXT_ONLY\n");
+                            const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
+                            switch (arity) {
+                                case 0:
+                                    ctx->x[0] = bif->bif0_ptr(ctx);
+                                    break;
+                                case 1:
+                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
+                                    break;
+                                case 2:
+                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
+                                    break;
+                                default:
+                                    fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
+                            }
+
+                            DO_RETURN();
+
+                            break;
+                        }
                         default: {
                             AVM_ABORT();
                         }
