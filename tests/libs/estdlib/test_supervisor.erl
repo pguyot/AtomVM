@@ -45,6 +45,13 @@ test_basic_supervisor() ->
             ok
         end,
     ok = gen_server:call(Pid3, {stop, normal}),
+    ok =
+        receive
+            Unexpected ->
+                {unexpected, ?MODULE, ?LINE, Unexpected}
+        after 100 ->
+            ok
+        end,
     %   receive {'DOWN', MonitorRef2, process, Pid3, normal} -> ok end,
     no_restart =
         receive
