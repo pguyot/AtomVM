@@ -122,7 +122,6 @@ void context_destroy(Context *ctx)
     // Ensure process is not registered
     globalcontext_maybe_unregister_process_id(ctx->global, ctx->process_id);
 
-
     // Any other process released our mailbox, so we can clear it.
     mailbox_destroy(&ctx->mailbox, &ctx->heap);
 
