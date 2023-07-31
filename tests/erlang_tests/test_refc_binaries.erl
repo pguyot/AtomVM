@@ -115,6 +115,8 @@ test_send() ->
     PidHeapSize1 = get_heap_size(Pid),
     ?VERIFY(PidHeapSize0 < PidHeapSize1),
     ?VERIFY(PidHeapSize1 < 1024),
+    erlang:display({?MODULE, ?LINE, memory_binary_size, MemoryBinarySize}),
+    erlang:display({?MODULE, ?LINE, erlang_memory_binary, erlang:memory(binary)}),
     ?VERIFY(MemoryBinarySize + 1024 =< erlang:memory(binary)),
     %%
     %% Make sure we can get what we sent
