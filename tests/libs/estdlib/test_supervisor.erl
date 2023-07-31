@@ -37,6 +37,13 @@ test_basic_supervisor() ->
     %   receive {'DOWN', MonitorRef1, process, Pid2, abnormal} -> ok end,
     Pid3 = get_and_test_server(),
     %   MonitorRef2 = erlang:monitor(process, Pid3),
+    ok =
+        receive
+            Unexpected ->
+                {unexpected, ?MODULE, ?LINE, Unexpected}
+        after 100 ->
+            ok
+        end,
     ok = gen_server:call(Pid3, {stop, normal}),
     %   receive {'DOWN', MonitorRef2, process, Pid3, normal} -> ok end,
     no_restart =
@@ -81,6 +88,13 @@ init({test_supervisor_order, Parent}) ->
     {ok, {{one_for_one, 10000, 3600}, ChildSpecs}}.
 
 test_supervisor_order() ->
+    ok =
+        receive
+            Msg0 ->
+                {unexpected, ?MODULE, ?LINE, Msg0}
+        after 100 ->
+            ok
+        end,
     supervisor:start_link(?MODULE, {test_supervisor_order, self()}),
     ready_1 =
         receive
