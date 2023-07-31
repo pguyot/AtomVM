@@ -47,8 +47,8 @@ test_basic_supervisor() ->
     ok = gen_server:call(Pid3, {stop, normal}),
     ok =
         receive
-            Unexpected ->
-                {unexpected, ?MODULE, ?LINE, Unexpected}
+            Unexpected1 ->
+                {unexpected, ?MODULE, ?LINE, Unexpected1}
         after 100 ->
             ok
         end,
