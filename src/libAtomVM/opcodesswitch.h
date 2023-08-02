@@ -3650,7 +3650,7 @@ wait_timeout_trap_handler:
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("raise/2\n");
-                    UNUSED(stacktrace)()
+                    UNUSED(stacktrace);
                     UNUSED(exc_value);
                     NEXT_INSTRUCTION(next_off);
                 #endif

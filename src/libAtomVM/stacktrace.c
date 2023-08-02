@@ -38,7 +38,7 @@ term stacktrace_build(Context *ctx, term *stack_info)
     return UNDEFINED_ATOM;
 }
 
-term stacktrace_exception_class(term *stack_info)
+term stacktrace_exception_class(term stack_info)
 {
     return stack_info;
 }
