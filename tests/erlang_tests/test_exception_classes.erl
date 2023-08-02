@@ -26,6 +26,7 @@ start() ->
     ok = test_exit(),
     ok = test_throw(),
     ok = test_raise(),
+    ok = test_inner_exit(),
     0.
 
 test_exit() ->
@@ -49,5 +50,17 @@ test_raise() ->
         raise(foo)
     catch
         error:foo -> ok;
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
+
+test_inner_exit() ->
+    try
+        try
+            exit(foo)
+        catch
+            error:foo -> {unexpected, ?LINE}
+        end
+    catch
+        exit:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
     end.
