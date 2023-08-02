@@ -25,10 +25,13 @@
 start() ->
     ok = test_exit(),
     ok = test_throw(),
-    ok = test_raise(),
+    ok = test_error(),
     ok = test_inner_exit(),
     ok = test_after_catch_throw(),
     ok = test_after_throw(),
+    ok = test_raise_error(),
+    ok = test_raise_exit(),
+    ok = test_raise_badarg(),
     0.
 
 test_exit() ->
@@ -47,9 +50,9 @@ test_throw() ->
         C:V -> {unexpected, ?LINE, C, V}
     end.
 
-test_raise() ->
+test_error() ->
     try
-        raise(foo)
+        error(foo)
     catch
         error:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
@@ -94,4 +97,27 @@ test_after_throw() ->
         throw:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
     end.
-     
+
+test_raise_error() ->
+    try
+        raise(error, foo, [])
+    catch
+        error:foo -> ok;
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
+
+test_raise_exit() ->
+    try
+        raise(exit, foo, [])
+    catch
+        exit:foo -> ok;
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
+
+test_raise_badarg() ->
+    try
+        badarg = raise(bar, foo, []),
+        ok
+    catch
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
