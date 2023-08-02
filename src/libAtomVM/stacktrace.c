@@ -160,7 +160,7 @@ term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term e
     free(modules);
 
     // {num_frames, num_aux_terms, filename_lens, num_mods, [{module, offset}, ...]}
-    size_t requested_size = TUPLE_SIZE(5) + num_frames * (2 + TUPLE_SIZE(2));
+    size_t requested_size = TUPLE_SIZE(6) + num_frames * (2 + TUPLE_SIZE(2));
     if (UNLIKELY(memory_ensure_free(ctx, requested_size) != MEMORY_GC_OK)) {
         fprintf(stderr, "WARNING: Unable to allocate heap space for raw stacktrace\n");
         return OUT_OF_MEMORY_ATOM;
