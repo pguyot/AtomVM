@@ -3660,7 +3660,7 @@ wait_timeout_trap_handler:
                     ctx->x[0] = stacktrace_exception_class(stacktrace);
                     ctx->x[1] = exc_value;
                     ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ctx->x[0]);
-printf("OP_RAISE -- exc_class = ")
+printf("OP_RAISE -- exc_class = ");
 term_display(stdout, ctx->x[0], ctx);
 printf(", val = ");
 term_display(stdout, ctx->x[1], ctx);
