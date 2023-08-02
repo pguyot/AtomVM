@@ -27,6 +27,8 @@ start() ->
     ok = test_throw(),
     ok = test_raise(),
     ok = test_inner_exit(),
+    ok = test_after_catch_throw(),
+    ok = test_after_throw(),
     0.
 
 test_exit() ->
@@ -64,3 +66,32 @@ test_inner_exit() ->
         exit:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
     end.
+
+test_after_catch_throw() ->
+    try
+        try
+            exit(foo)
+        after
+            try
+                throw(foo)
+            catch
+                throw:foo -> ok
+            end
+        end
+    catch
+        exit:foo -> ok;
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
+
+test_after_throw() ->
+    try
+        try
+            exit(foo)
+        after
+            throw(foo)
+        end
+    catch
+        throw:foo -> ok;
+        C:V -> {unexpected, ?LINE, C, V}
+    end.
+     
