@@ -100,7 +100,7 @@ test_after_throw() ->
 
 test_raise_error() ->
     try
-        raise(error, foo, [])
+        erlang:raise(error, foo, [])
     catch
         error:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
@@ -108,7 +108,7 @@ test_raise_error() ->
 
 test_raise_exit() ->
     try
-        raise(exit, foo, [])
+        erlang:raise(exit, foo, [])
     catch
         exit:foo -> ok;
         C:V -> {unexpected, ?LINE, C, V}
@@ -116,7 +116,7 @@ test_raise_exit() ->
 
 test_raise_badarg() ->
     try
-        badarg = raise(bar, foo, []),
+        badarg = erlang:raise(bar, foo, []),
         ok
     catch
         C:V -> {unexpected, ?LINE, C, V}
