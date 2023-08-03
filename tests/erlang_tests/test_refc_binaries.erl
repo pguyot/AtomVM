@@ -90,6 +90,8 @@ test_refc_binaries() ->
     MemoryBinarySize = erlang:memory(binary),
     String = create_string(1024),
     Bins = [create_binary(String) || _ <- [x, x, x]],
+    erlang:display({?MODULE, ?LINE, memory_binary_size, MemoryBinarySize}),
+    erlang:display({?MODULE, ?LINE, erlang_memory_binary, erlang:memory(binary)}),
     ?VERIFY(MemoryBinarySize + (1024 * 3) =< erlang:memory(binary)),
 
     MemoryBinarySize1 = erlang:memory(binary),
