@@ -92,7 +92,7 @@ typedef union
 #define SET_ERROR(error_type_atom)   \
     ctx->x[0] = ERROR_ATOM;                                        \
     ctx->x[1] = error_type_atom;                                   \
-    ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ERROR_ATOM);                \
+    ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ERROR_ATOM);    \
 
 // Override nifs.h RAISE_ERROR macro
 #ifdef RAISE_ERROR
