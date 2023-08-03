@@ -31,10 +31,15 @@
 
 test() ->
     ok = test_call(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_cast(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_info(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_timeout(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_start_link(),
+    erlang:display({?MODULE, ?LINE}),
     ok.
 
 test_call() ->
@@ -73,19 +78,29 @@ test_info() ->
 
 test_timeout() ->
     {ok, Pid} = gen_statem:start(?MODULE, [], []),
+    erlang:display({?MODULE, ?LINE}),
     ok = gen_statem:call(Pid, {go_to_jail, 250}),
+    erlang:display({?MODULE, ?LINE}),
     no = gen_statem:call(Pid, are_you_free),
+    erlang:display({?MODULE, ?LINE}),
     timer:sleep(500),
     yes = gen_statem:call(Pid, are_you_free),
+    erlang:display({?MODULE, ?LINE}),
 
     ok = gen_statem:call(Pid, {go_to_jail, 250}),
+    erlang:display({?MODULE, ?LINE}),
     no = gen_statem:call(Pid, are_you_free),
+    erlang:display({?MODULE, ?LINE}),
     ok = gen_statem:cast(Pid, escape),
+    erlang:display({?MODULE, ?LINE}),
     yes = gen_statem:call(Pid, are_you_free),
+    erlang:display({?MODULE, ?LINE}),
     timer:sleep(500),
     0 = gen_statem:call(Pid, get_num_spurious_timeouts),
 
+    erlang:display({?MODULE, ?LINE}),
     gen_statem:stop(Pid),
+    erlang:display({?MODULE, ?LINE}),
     ok.
 
 test_start_link() ->
