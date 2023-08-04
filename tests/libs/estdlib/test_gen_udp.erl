@@ -44,14 +44,10 @@ test_send_receive_active(SpawnControllingProcess, Mode) ->
         NumReceived = count_received(Mode),
         case SpawnControllingProcess of
             true ->
-                case SpawnControllingProcess of
-                    true -> Self ! {done, NumReceived};
-                    _ -> ok
-                end;
+                Self ! {done, NumReceived};
             false ->
-                ok
-        end,
-        NumReceived
+                NumReceived
+        end
     end,
 
     case SpawnControllingProcess of
@@ -78,9 +74,10 @@ test_send_receive_active(SpawnControllingProcess, Mode) ->
             false ->
                 F()
         end,
-    Sender ! stop,
 
-    ?ASSERT_TRUE((0 < NumReceived) and (NumReceived =< NumToSend)),
+    erlang:display({?MODULE, num_received, NumReceived, num_to_send, NumToSend, spawn, SpawnControllingProcess, mode, Mode}),
+    ?ASSERT_TRUE((0 < NumReceived)),
+    ?ASSERT_TRUE((NumReceived =< NumToSend)),
     ok = gen_udp:close(Socket),
     ok.
 
@@ -90,11 +87,7 @@ make_messages(N) ->
     [<<"foo">> | make_messages(N - 1)].
 
 start_sender(Socket, Port, Msgs) ->
-    send(Socket, Port, Msgs),
-    receive
-        stop ->
-            ok
-    end.
+    send(Socket, Port, Msgs).
 
 send(_Socket, _Port, []) ->
     ok;
@@ -114,5 +107,5 @@ count_received0(Mode, I) ->
         Other ->
             erlang:display({unexpected, Other}),
             count_received0(Mode, I)
-    after 500 -> I
+    after 400 -> I
     end.
