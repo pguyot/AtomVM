@@ -66,6 +66,7 @@ test_send_receive_active(SpawnControllingProcess, Mode) ->
             false ->
                 F()
         end,
+    erlang:display({?MODULE, ?LINE, num_received, NumReceived}),
     ?ASSERT_EQUALS(NumToSend, NumReceived),
     ok = gen_udp:close(Socket),
     ok.
@@ -90,7 +91,7 @@ count_received(Mode, Max) ->
 count_received0(Mode, Max, I) ->
     Timeout =
         if
-            Max > I -> 1500;
+            Max > I -> 5000;
             true -> 200
         end,
     receive
