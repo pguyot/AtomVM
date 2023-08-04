@@ -26,9 +26,13 @@
 
 test() ->
     ok = test_echo_server(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_echo_server(true),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_listen_connect_parameters(),
+    erlang:display({?MODULE, ?LINE}),
     ok = test_tcp_double_close(),
+    erlang:display({?MODULE, ?LINE}),
     ok.
 
 test_echo_server() ->
