@@ -240,7 +240,6 @@ run_test(Fun) ->
     end.
 
 execute(Pid, Fun) ->
-    erlang:garbage_collect(),
     Result =
         try
             Fun(),
@@ -249,6 +248,7 @@ execute(Pid, Fun) ->
             _:Error ->
                 {error, Error}
         end,
+    erlang:garbage_collect(),
     Pid ! Result.
 
 id(X) -> X.
