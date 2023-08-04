@@ -29,6 +29,7 @@ test() ->
     ok = test_basic_file(),
     ok = test_fifo_select(HasSelect),
     ok = test_gc(HasSelect),
+    ok = test_crash_no_leak(HasSelect),
     ok.
 
 test_basic_file() ->
@@ -179,3 +180,34 @@ gc_loop(Path, File) ->
         {Caller, quit} ->
             Caller ! {self(), quit}
     end.
+
+% Test is based on the fact that `erlang:memory(binary)` count resources.
+test_crash_no_leak(false) ->
+    false;
+test_crash_no_leak(true) ->
+    Before = erlang:memory(binary),
+    Path = "/tmp/atomvm.tmp." ++ integer_to_list(erlang:system_time(millisecond)),
+    Pid = spawn(fun() -> crash_leak(Path) end),
+    Ref = monitor(process, Pid),
+    ok =
+        receive
+            {'DOWN', Ref, process, Pid, _} -> ok
+        after 5000 -> timeout
+        end,
+    After = erlang:memory(binary),
+    0 = After - Before,
+    ok.
+
+crash_leak(Path) ->
+    ok = setup_and_forget(Path),
+    % GC will decrease ref count to resource
+    % but counter is still 1 because of select
+    erlang:garbage_collect(),
+    % We don't really need to crash here
+    % the test consists in not calling select_stop
+    ok.
+
+setup_and_forget(Path) ->
+    {ok, Fd} = atomvm:posix_open(Path, [o_rdwr, o_creat], 8#644),
+    ok = atomvm:posix_select_write(Fd, self(), undefined),
+    ok.
