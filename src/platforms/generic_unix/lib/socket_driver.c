@@ -661,6 +661,7 @@ term socket_driver_do_sendto(Context *ctx, term dest_address, term dest_port, te
         return port_create_sys_error_tuple(ctx, SENDTO_ATOM, errno);
     } else {
         TRACE("socket_driver_do_sendto: sent data with len: %li, to: %i, port: %i\n", len, ntohl(addr.sin_addr.s_addr), ntohs(addr.sin_port));
+        printf("socket_driver_do_sendto: sent data with len: %li, to: %i, port: %i\n", len, ntohl(addr.sin_addr.s_addr), ntohs(addr.sin_port));
         term sent_atom = term_from_int32(sent_data);
         return port_create_ok_tuple(ctx, sent_atom);
     }

@@ -25,10 +25,15 @@
 -include("etest.hrl").
 
 test() ->
+    io:format("~s:~B\n", [?MODULE, ?LINE]),
     ok = test_send_receive_active(false, binary),
+    io:format("~s:~B\n", [?MODULE, ?LINE]),
     ok = test_send_receive_active(true, binary),
+    io:format("~s:~B\n", [?MODULE, ?LINE]),
     ok = test_send_receive_active(false, list),
+    io:format("~s:~B\n", [?MODULE, ?LINE]),
     ok = test_send_receive_active(true, list),
+    io:format("~s:~B\n", [?MODULE, ?LINE]),
     ok.
 
 test_send_receive_active(SpawnControllingProcess, Mode) ->
@@ -102,5 +107,8 @@ count_received0(Mode, Max, I) ->
         Other ->
             erlang:display({unexpected, Other}),
             count_received0(Mode, Max, I)
-    after Timeout -> I
+    after
+        Timeout ->
+            io:format("~s:~B -- Timeout = ~B, result = ~B\n", [?MODULE, ?LINE, Timeout, I]),
+            I
     end.
