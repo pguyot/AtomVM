@@ -34,38 +34,26 @@ test() ->
 test_send_receive_active(SpawnControllingProcess, Mode) ->
     {ok, Socket} = gen_udp:open(0, [{active, true}, Mode]),
     {ok, Port} = inet:port(Socket),
-
+    NumToSend = 10,
     Self = self(),
     F = fun() ->
-        case SpawnControllingProcess of
-            true -> Self ! ready;
-            _ -> ok
-        end,
-        NumReceived = count_received(Mode),
+        NumReceived = count_received(Mode, NumToSend),
         case SpawnControllingProcess of
             true ->
-                case SpawnControllingProcess of
-                    true -> Self ! {done, NumReceived};
-                    _ -> ok
-                end;
-            false ->
-                ok
-        end,
-        NumReceived
+                Self ! {done, NumReceived};
+            _ ->
+                NumReceived
+        end
     end,
 
     case SpawnControllingProcess of
         true ->
             Pid = spawn(F),
-            gen_udp:controlling_process(Socket, Pid),
-            receive
-                ready -> ok
-            end;
+            gen_udp:controlling_process(Socket, Pid);
         false ->
             ok
     end,
 
-    NumToSend = 10,
     Sender = erlang:spawn(?MODULE, start_sender, [Socket, Port, make_messages(NumToSend)]),
 
     NumReceived =
@@ -78,9 +66,7 @@ test_send_receive_active(SpawnControllingProcess, Mode) ->
             false ->
                 F()
         end,
-    Sender ! stop,
-
-    ?ASSERT_TRUE((0 < NumReceived) and (NumReceived =< NumToSend)),
+    ?ASSERT_EQUALS(NumToSend, NumReceived),
     ok = gen_udp:close(Socket),
     ok.
 
@@ -90,11 +76,7 @@ make_messages(N) ->
     [<<"foo">> | make_messages(N - 1)].
 
 start_sender(Socket, Port, Msgs) ->
-    send(Socket, Port, Msgs),
-    receive
-        stop ->
-            ok
-    end.
+    send(Socket, Port, Msgs).
 
 send(_Socket, _Port, []) ->
     ok;
@@ -102,17 +84,22 @@ send(Socket, Port, [Msg | Rest]) ->
     gen_udp:send(Socket, {127, 0, 0, 1}, Port, Msg),
     send(Socket, Port, Rest).
 
-count_received(Mode) ->
-    count_received0(Mode, 0).
+count_received(Mode, Max) ->
+    count_received0(Mode, Max, 0).
 
-count_received0(Mode, I) ->
+count_received0(Mode, Max, I) ->
+    Timeout =
+        if
+            Max > I -> 1500;
+            true -> 200
+        end,
     receive
         {udp, _Pid, _Address, _Port, <<"foo">>} when Mode =:= binary ->
-            count_received0(Mode, I + 1);
+            count_received0(Mode, Max, I + 1);
         {udp, _Pid, _Address, _Port, "foo"} when Mode =:= list ->
-            count_received0(Mode, I + 1);
+            count_received0(Mode, Max, I + 1);
         Other ->
             erlang:display({unexpected, Other}),
-            count_received0(Mode, I)
-    after 500 -> I
+            count_received0(Mode, Max, I)
+    after Timeout -> I
     end.
