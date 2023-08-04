@@ -120,6 +120,7 @@ assert_failure(F, E) ->
 %% @private
 run_test(Test) ->
     try
+        io:format("~p\n", [Test]),
         Result = Test:test(),
         case erlang:system_info(machine) of
             "BEAM" ->
