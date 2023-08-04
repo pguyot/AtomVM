@@ -97,7 +97,7 @@ test_fifo_select(_HasSelect) ->
             end,
         ok = atomvm:posix_select_stop(RdFd),
         {ok, <<" World">>} = atomvm:posix_read(RdFd, 10),
-        Parent ! {self(), world},
+        Parent ! {self(), world}
     end),
     ok =
         receive
