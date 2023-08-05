@@ -214,6 +214,11 @@ test_crash_no_leak(true) ->
             {'DOWN', Ref, process, Pid, _} -> ok
         after 5000 -> timeout
         end,
+    % Make sure sys_poll_events is called so selected resource is
+    % properly disposed.
+    receive
+    after 50 -> ok
+    end,
     After = erlang:memory(binary),
     0 = After - Before,
     ok = atomvm:posix_unlink(Path),
