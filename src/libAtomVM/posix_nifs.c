@@ -419,17 +419,20 @@ static term nif_atomvm_posix_select(Context *ctx, term argv[], enum ErlNifSelect
         if (UNLIKELY(enif_demonitor_process(env, fd_obj, &fd_obj->selecting_process_monitor) != 0)) {
             RAISE_ERROR(BADARG_ATOM);
         }
+        fd_obj->selecting_process_id = INVALID_PROCESS_ID;
     }
-
-    if (UNLIKELY(enif_select(env, fd_obj->fd, mode, fd_obj, &process_pid, select_ref_term) < 0)) {
-        RAISE_ERROR(BADARG_ATOM);
-    }
+    // Monitor first as select is less likely to fail and it's less expensive to demonitor
+    // if select fails than to stop select if monitor fails
     if (fd_obj->selecting_process_id != process_pid) {
-        fd_obj->selecting_process_id = process_pid;
         if (UNLIKELY(enif_monitor_process(env, fd_obj, &process_pid, &fd_obj->selecting_process_monitor) != 0)) {
-            enif_select(env, fd_obj->fd, ERL_NIF_SELECT_STOP, fd_obj, NULL, term_nil());
             RAISE_ERROR(BADARG_ATOM);
         }
+        fd_obj->selecting_process_id = process_pid;
+    }
+    if (UNLIKELY(enif_select(env, fd_obj->fd, mode, fd_obj, &process_pid, select_ref_term) < 0)) {
+        enif_demonitor_process(env, fd_obj, &fd_obj->selecting_process_monitor);
+        fd_obj->selecting_process_id = INVALID_PROCESS_ID;
+        RAISE_ERROR(BADARG_ATOM);
     }
 
     return OK_ATOM;
