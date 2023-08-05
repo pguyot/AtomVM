@@ -239,6 +239,8 @@ test_select_with_gone_process(true) ->
     Before = erlang:memory(binary),
     Path = "/tmp/atomvm.tmp." ++ integer_to_list(erlang:system_time(millisecond)),
     test_select_with_gone_process0(Path),
+    % Give a chance to dispose the failed select resource
+    receive after 50 -> ok end,
     erlang:garbage_collect(),
     After = erlang:memory(binary),
     0 = After - Before,
