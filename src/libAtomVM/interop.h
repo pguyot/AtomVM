@@ -35,6 +35,14 @@ typedef enum
     InteropBadArg
 } InteropFunctionResult;
 
+enum UnicodeConversionResult
+{
+    UnicodeOk = InteropOk,
+    UnicodeMemoryAllocFail = InteropMemoryAllocFail,
+    UnicodeError = InteropBadArg,
+    UnicodeIncompleteTransform
+};
+
 /**
  * An idiomatic macro for marking an AtomStringIntPair table entry as a
  * interop_atom_term_select_int default.
@@ -63,8 +71,27 @@ term interop_proplist_get_value_default(term list, term key, term default_value)
 term interop_map_get_value(GlobalContext *glb, term map, term key);
 term interop_map_get_value_default(GlobalContext *glb, term map, term key, term default_value);
 
-NO_DISCARD InteropFunctionResult interop_iolist_size(term t, size_t *size);
-NO_DISCARD InteropFunctionResult interop_write_iolist(term t, char *p);
+enum CharDataEncoding
+{
+    Latin1Encoding,
+    UTF8Encoding
+};
+
+NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes(term t, size_t *size, uint8_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap);
+
+static inline NO_DISCARD InteropFunctionResult interop_iolist_size(term t, size_t *size)
+{
+    enum UnicodeConversionResult result = interop_chardata_to_bytes(t, size, NULL, NULL, NULL, Latin1Encoding, Latin1Encoding, NULL);
+    return result == UnicodeIncompleteTransform ? InteropBadArg : (InteropFunctionResult) result;
+}
+
+static inline NO_DISCARD InteropFunctionResult interop_write_iolist(term t, char *p)
+{
+    enum UnicodeConversionResult result = interop_chardata_to_bytes(t, NULL, (uint8_t *) p, NULL, NULL, Latin1Encoding, Latin1Encoding, NULL);
+    return result == UnicodeIncompleteTransform ? InteropBadArg : (InteropFunctionResult) result;
+}
+
+NO_DISCARD enum UnicodeConversionResult interop_chardata_to_list(term t, size_t *size, uint32_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, Heap *heap);
 
 /**
  * @brief Finds on a table the first matching atom string.
