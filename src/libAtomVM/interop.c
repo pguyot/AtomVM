@@ -180,12 +180,106 @@ term interop_proplist_get_value_default(term list, term key, term default_value)
     return default_value;
 }
 
-<<<<<<< HEAD
-inline InteropFunctionResult interop_iolist_fold(term t, interop_iolist_fold_fun fold_fun, void *accum)
+inline InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold_fun fold_fun, interop_chardata_rest_fun rest_fun, void *accum)
 {
     if (term_is_binary(t)) {
         return fold_fun(t, accum);
-=======
+    }
+
+    if (UNLIKELY(!term_is_list(t))) {
+        return InteropBadArg;
+    }
+
+    struct TempStack temp_stack;
+    if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
+        return InteropMemoryAllocFail;
+    }
+
+    if (UNLIKELY(temp_stack_push(&temp_stack, t) != TempStackOk)) {
+        temp_stack_destroy(&temp_stack);
+        return InteropMemoryAllocFail;
+    }
+
+    while (!temp_stack_is_empty(&temp_stack)) {
+        if (term_is_integer(t) || term_is_binary(t)) {
+            InteropFunctionResult result = fold_fun(t, accum);
+            if (UNLIKELY(result != InteropOk)) {
+                if (rest_fun) {
+                    do {
+                        t = temp_stack_pop(&temp_stack);
+                        rest_fun(t, accum);
+                    } while (!temp_stack_is_empty(&temp_stack));
+                }
+                temp_stack_destroy(&temp_stack);
+                return result;
+            } else {
+                t = temp_stack_pop(&temp_stack);
+            }
+
+        } else if (term_is_nil(t)) {
+            t = temp_stack_pop(&temp_stack);
+
+        } else if (term_is_nonempty_list(t)) {
+            if (UNLIKELY(temp_stack_push(&temp_stack, term_get_list_tail(t)) != TempStackOk)) {
+                temp_stack_destroy(&temp_stack);
+                return InteropMemoryAllocFail;
+            }
+            t = term_get_list_head(t);
+
+        } else {
+            if (rest_fun) {
+                rest_fun(t, accum);
+                do {
+                    t = temp_stack_pop(&temp_stack);
+                    rest_fun(t, accum);
+                } while (!temp_stack_is_empty(&temp_stack));
+            }
+            temp_stack_destroy(&temp_stack);
+            return InteropBadArg;
+        }
+    }
+
+    temp_stack_destroy(&temp_stack);
+
+    return InteropOk;
+}
+
+static inline InteropFunctionResult size_fold_fun(term t, void *accum)
+{
+    size_t *size = (size_t *) accum;
+    if (term_is_integer(t)) {
+        *size += 1;
+    } else if (term_is_binary(t)) {
+        *size += term_binary_size(t);
+    }
+    return InteropOk;
+}
+
+InteropFunctionResult interop_iolist_size(term t, size_t *size)
+{
+    *size = 0;
+    return interop_chardata_fold(t, size_fold_fun, NULL, size);
+}
+
+static inline InteropFunctionResult write_string_fold_fun(term t, void *accum)
+{
+    char **p = (char **) accum;
+    if (term_is_integer(t)) {
+        **p = term_to_int(t);
+        (*p)++;
+    } else if (term_is_binary(t)) {
+        int len = term_binary_size(t);
+        memcpy(*p, term_binary_data(t), len);
+        *p += len;
+    }
+    return InteropOk;
+}
+
+InteropFunctionResult interop_write_iolist(term t, char *p)
+{
+    return interop_chardata_fold(t, write_string_fold_fun, NULL, (void *) &p);
+}
+
 static enum UnicodeConversionResult interop_binary_conversion(term t, uint8_t *output, size_t *output_len, size_t *rest_crsr, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding)
 {
     size_t len = term_binary_size(t);
@@ -248,213 +342,169 @@ static enum UnicodeConversionResult interop_binary_conversion(term t, uint8_t *o
     return UnicodeOk;
 }
 
-static term compute_rest(term t, size_t temp_stack_size, struct TempStack *temp_stack, Heap *heap)
-{
-    term rest_list = t;
-    while (temp_stack_size) {
-        t = temp_stack_pop(temp_stack);
-        temp_stack_size--;
-        rest_list = term_list_prepend(rest_list, t, heap);
-    }
-    return rest_list;
-}
+struct CharDataToBytesSizeAcc {
+    enum CharDataEncoding in_encoding;
+    enum CharDataEncoding to_encoding;
+    size_t size;
+    size_t rest_size;
+    bool incomplete_transform;
+};
 
-enum UnicodeConversionResult interop_chardata_to_bytes(term t, size_t *size, uint8_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap)
+static InteropFunctionResult chardata_to_bytes_size_fold(term t, void *accum)
 {
+    struct CharDataToBytesSizeAcc *acc = (struct CharDataToBytesSizeAcc *) accum;
     if (term_is_binary(t)) {
         size_t bin_size;
         size_t rest_crsr;
-        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, output, &bin_size, &rest_crsr, in_encoding, out_encoding);
-        if (size) {
-            *size = bin_size;
+        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, NULL, &bin_size, &rest_crsr, in_encoding, out_encoding);
+        acc->size += bin_size;
+        if (UNLIKELY(conv_result != UnicodeOk)) {
+            acc->rest_size = term_sub_binary_heap_size(t, term_binary_size(t) - rest_crsr);
+            if (conv_result == UnicodeIncompleteTransform) {
+                acc->incomplete_transform = true;
+            }
+            return InteropBadArg;
         }
-        if (LIKELY(conv_result == UnicodeOk)) {
-            return UnicodeOk;
+        return InteropOk;
+    }
+    if (term_is_integer(t)) {
+        avm_int_t c = term_to_int(t);
+        if (c < 0) {
+            return InteropBadArg;
         }
-        if (rest_size) {
-            *rest_size = term_sub_binary_heap_size(t, term_binary_size(t) - rest_crsr);
+        switch (out_encoding) {
+            case Latin1Encoding: {
+                if (c > 255) {
+                    return InteropBadArg;
+                }
+                acc->size++;
+            } break;
+            case UTF8Encoding: {
+                size_t char_size;
+                if (UNLIKELY(!bitstring_utf8_encode(c, NULL, &char_size))) {
+                    return InteropBadArg;
+                }
+                acc->size += char_size;
+            } break;
         }
-        if (rest) {
-            *rest = term_alloc_sub_binary(t, rest_crsr, term_binary_size(t) - rest_crsr, heap);
-        }
-        return conv_result;
->>>>>>> 729a11a2 (Add missing unicode module)
+        return InteropOk;
     }
-
-    if (UNLIKELY(!term_is_list(t))) {
-        return UnicodeError;
-    }
-
-<<<<<<< HEAD
-=======
-    unsigned long acc = 0;
-    size_t temp_stack_size = 0;
-
->>>>>>> 729a11a2 (Add missing unicode module)
-    struct TempStack temp_stack;
-    if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
-        return UnicodeMemoryAllocFail;
-    }
-
-    if (UNLIKELY(temp_stack_push(&temp_stack, t) != TempStackOk)) {
-        temp_stack_destroy(&temp_stack);
-        return UnicodeMemoryAllocFail;
-    }
-
-    while (!temp_stack_is_empty(&temp_stack)) {
-<<<<<<< HEAD
-        if (term_is_integer(t) || term_is_binary(t)) {
-            InteropFunctionResult result = fold_fun(t, accum);
-            if (UNLIKELY(result != InteropOk)) {
-                temp_stack_destroy(&temp_stack);
-                return result;
-            } else {
-                t = temp_stack_pop(&temp_stack);
-            }
-=======
-        // If it's a string, input encoding is always unicode
-        if (term_is_integer(t)) {
-            avm_int_t c = term_to_int(t);
-            if (c < 0) {
-                if (size) {
-                    *size = acc;
-                }
-                if (rest_size) {
-                    *rest_size = temp_stack_size * CONS_SIZE;
-                }
-                if (rest) {
-                    *rest = compute_rest(t, temp_stack_size, &temp_stack, heap);
-                }
-                temp_stack_destroy(&temp_stack);
-                return UnicodeError;
-            }
-            switch (out_encoding) {
-                case Latin1Encoding:
-                    if (c > 255) {
-                        if (size) {
-                            *size = acc;
-                        }
-                        if (rest_size) {
-                            *rest_size = temp_stack_size * CONS_SIZE;
-                        }
-                        if (rest) {
-                            *rest = compute_rest(t, temp_stack_size, &temp_stack, heap);
-                        }
-                        temp_stack_destroy(&temp_stack);
-                        return UnicodeError;
-                    }
-                    acc++;
-                    if (output) {
-                        *output++ = c;
-                    }
-                    break;
-                case UTF8Encoding: {
-                    size_t char_size;
-                    if (UNLIKELY(!bitstring_utf8_encode(c, output, &char_size))) {
-                        if (size) {
-                            *size = acc;
-                        }
-                        if (rest_size) {
-                            *rest_size = temp_stack_size * CONS_SIZE;
-                        }
-                        if (rest) {
-                            *rest = compute_rest(t, temp_stack_size, &temp_stack, heap);
-                        }
-                        temp_stack_destroy(&temp_stack);
-                        return UnicodeError;
-                    }
-                    acc += char_size;
-                    if (output) {
-                        output += char_size;
-                    }
-                } break;
-            }
-            t = temp_stack_pop(&temp_stack);
-            temp_stack_size--;
->>>>>>> 729a11a2 (Add missing unicode module)
-
-        } else if (term_is_nil(t)) {
-            t = temp_stack_pop(&temp_stack);
-            temp_stack_size--;
-
-        } else if (term_is_nonempty_list(t)) {
-            if (UNLIKELY(temp_stack_push(&temp_stack, term_get_list_tail(t)) != TempStackOk)) {
-                temp_stack_destroy(&temp_stack);
-                return UnicodeMemoryAllocFail;
-            }
-            t = term_get_list_head(t);
-            temp_stack_size++;
-
-<<<<<<< HEAD
-=======
-        } else if (term_is_binary(t)) {
-            size_t bin_size;
-            size_t rest_crsr;
-            enum UnicodeConversionResult conv_result = interop_binary_conversion(t, output, &bin_size, &rest_crsr, in_encoding, out_encoding);
-            acc += bin_size;
-            if (UNLIKELY(conv_result != UnicodeOk)) {
-                if (size) {
-                    *size = acc;
-                }
-                if (rest_size) {
-                    *rest_size = temp_stack_size * CONS_SIZE + term_sub_binary_heap_size(t, term_binary_size(t) - rest_crsr);
-                }
-                if (rest) {
-                    *rest = compute_rest(term_alloc_sub_binary(t, rest_crsr, term_binary_size(t) - rest_crsr, heap), temp_stack_size, &temp_stack, heap);
-                }
-                if (conv_result == UnicodeIncompleteTransform) {
-                    while (!temp_stack_is_empty(&temp_stack)) {
-                        t = temp_stack_pop(&temp_stack);
-                        if (!term_is_nil(t)) {
-                            conv_result = UnicodeError;
-                            break;
-                        }
-                    }
-                }
-                temp_stack_destroy(&temp_stack);
-                return conv_result;
-            }
-            if (output) {
-                output += bin_size;
-            }
-            t = temp_stack_pop(&temp_stack);
-            temp_stack_size--;
-
->>>>>>> 729a11a2 (Add missing unicode module)
-        } else {
-            if (size) {
-                *size = acc;
-            }
-            if (rest_size) {
-                *rest_size = temp_stack_size * CONS_SIZE;
-            }
-            if (rest) {
-                *rest = compute_rest(t, temp_stack_size, &temp_stack, heap);
-            }
-
-            temp_stack_destroy(&temp_stack);
-            return UnicodeError;
-        }
-    }
-
-    temp_stack_destroy(&temp_stack);
-
-<<<<<<< HEAD
-    return InteropOk;
+    return InteropBadArg;
 }
 
-static inline InteropFunctionResult size_fold_fun(term t, void *accum)
+static void chardata_to_bytes_size_rest_fun(term t, void *accum)
 {
-    size_t *size = (size_t *) accum;
-    if (term_is_integer(t)) {
-        *size += 1;
-    } else if (term_is_binary(t)) {
-        *size += term_binary_size(t);
-=======
-    if (size) {
-        *size = acc;
+    struct CharDataToBytesSizeAcc *acc = (struct CharDataToBytesSizeAcc *) accum;
+    if (!term_is_nil(t)) {
+        acc->incomplete_transform = false;
     }
-    return UnicodeOk;
+    acc->rest_size += CONS_SIZE;
+}
+
+enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, uint8_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap)
+{
+    struct CharDataToBytesSizeAcc acc = {
+        .in_encoding = in_encoding,
+        .out_encoding = out_encoding,
+        .size = 0,
+        .rest_size = 0,
+        .incomplete_transform = false
+    }
+    InteropFunctionResult res = interop_chardata_fold(t, chardata_to_bytes_size_fold, chardata_to_bytes_size_rest_fun, &acc);
+    if (UNLIKELY(res == InteropMemoryAllocFail)) {
+        return UnicodeMemoryAllocFail;
+    }
+    *size = acc.size;
+    if (rest_size) {
+        *rest_size = acc.rest_size;
+    }
+    if (acc.incomplete_transform) {
+        return UnicodeIncompleteTransform;
+    }
+    return res == InteropOk ? UnicodeOk : UnicodeError;
+}
+
+struct CharDataToBytesAcc {
+    enum CharDataEncoding in_encoding;
+    enum CharDataEncoding to_encoding;
+    uint8_t *output;
+    term *rest;
+    Heap *heap;
+    bool incomplete_transform;
+};
+
+static InteropFunctionResult chardata_to_bytes_fold(term t, void *accum)
+{
+    struct CharDataToBytesAcc *acc = (struct CharDataToBytesAcc *) accum;
+    if (term_is_binary(t)) {
+        size_t bin_size;
+        size_t rest_crsr;
+        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, acc->output, &bin_size, &rest_crsr, in_encoding, out_encoding);
+        acc->output += bin_size;
+        if (UNLIKELY(conv_result != UnicodeOk)) {
+            if (acc->rest) {
+                *acc->rest = term_alloc_sub_binary(t, rest_crsr, term_binary_size(t) - rest_crsr, acc->heap);
+            }
+            if (conv_result == UnicodeIncompleteTransform) {
+                acc->incomplete_transform = true;
+            }
+            return InteropBadArg;
+        }
+        return InteropOk;
+    }
+    if (term_is_integer(t)) {
+        avm_int_t c = term_to_int(t);
+        if (c < 0) {
+            return InteropBadArg;
+        }
+        switch (out_encoding) {
+            case Latin1Encoding: {
+                if (c > 255) {
+                    return InteropBadArg;
+                }
+                *acc->output++ = (uint8_t) c;
+            } break;
+            case UTF8Encoding: {
+                size_t char_size;
+                if (UNLIKELY(!bitstring_utf8_encode(c, output, &char_size))) {
+                    return InteropBadArg;
+                }
+                acc->output += char_size;
+            } break;
+        }
+        return InteropOk;
+    }
+    return InteropBadArg;
+}
+
+static void chardata_to_bytes_rest_fun(term t, void *accum)
+{
+    struct CharDataToBytesSizeAcc *acc = (struct CharDataToBytesSizeAcc *) accum;
+    if (!term_is_nil(t)) {
+        acc->incomplete_transform = false;
+    }
+    if (acc->rest) {
+        *acc->rest = term_list_prepend(*acc->rest, t, acc->heap);
+    }
+}
+
+enum UnicodeConversionResult interop_chardata_to_bytes(term t, uint8_t *output, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap)
+{
+    struct CharDataToBytesAcc acc = {
+        .in_encoding = in_encoding,
+        .out_encoding = out_encoding,
+        .output = output,
+        .rest = rest,
+        .heap = heap
+    };
+    InteropFunctionResult res = interop_chardata_fold(t, chardata_to_bytes_fold, chardata_to_bytes_rest_fun, &acc);
+    if (UNLIKELY(res == InteropMemoryAllocFail)) {
+        return UnicodeMemoryAllocFail;
+    }
+    if (acc.incomplete_transform) {
+        return UnicodeIncompleteTransform;
+    }
+    return res == InteropOk ? UnicodeOk : UnicodeError;
 }
 
 static enum UnicodeConversionResult interop_binary_to_list(term t, uint32_t *output, size_t *output_len, size_t *rest_crsr, enum CharDataEncoding in_encoding)
@@ -528,31 +578,10 @@ enum UnicodeConversionResult interop_chardata_to_list(term t, size_t *size, uint
     if (UNLIKELY(temp_stack_push(&temp_stack, t) != TempStackOk)) {
         temp_stack_destroy(&temp_stack);
         return UnicodeMemoryAllocFail;
->>>>>>> 729a11a2 (Add missing unicode module)
     }
     return InteropOk;
 }
 
-<<<<<<< HEAD
-InteropFunctionResult interop_iolist_size(term t, size_t *size)
-{
-    *size = 0;
-    return interop_iolist_fold(t, size_fold_fun, size);
-}
-
-static inline InteropFunctionResult write_string_fold_fun(term t, void *accum)
-{
-    char **p = (char **) accum;
-    if (term_is_integer(t)) {
-        **p = term_to_int(t);
-        (*p)++;
-    } else if (term_is_binary(t)) {
-        int len = term_binary_size(t);
-        memcpy(*p, term_binary_data(t), len);
-        *p += len;
-    }
-    return InteropOk;
-=======
     while (!temp_stack_is_empty(&temp_stack)) {
         // If it's a string, input encoding is always unicode
         if (term_is_integer(t)) {
@@ -644,12 +673,6 @@ static inline InteropFunctionResult write_string_fold_fun(term t, void *accum)
         *size = acc;
     }
     return UnicodeOk;
->>>>>>> 729a11a2 (Add missing unicode module)
-}
-
-InteropFunctionResult interop_write_iolist(term t, char *p)
-{
-    return interop_iolist_fold(t, write_string_fold_fun, (void *) &p);
 }
 
 term interop_map_get_value(GlobalContext *glb, term map, term key)

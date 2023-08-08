@@ -4297,7 +4297,7 @@ static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]
     }
     size_t len;
     size_t rest_size;
-    enum UnicodeConversionResult conv_result = interop_chardata_to_bytes(argv[0], &len, NULL, &rest_size, NULL, in_encoding, out_encoding, &ctx->heap);
+    enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &len, &rest_size, in_encoding, out_encoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
@@ -4311,7 +4311,7 @@ static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]
     term result = term_create_uninitialized_binary(len, &ctx->heap, ctx->global);
     uint8_t *binary_data = (uint8_t *) term_binary_data(result);
     term rest;
-    conv_result = interop_chardata_to_bytes(argv[0], NULL, binary_data, NULL, &rest, in_encoding, out_encoding, &ctx->heap);
+    conv_result = interop_chardata_to_bytes(argv[0], binary_data, &rest, in_encoding, out_encoding, &ctx->heap);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }

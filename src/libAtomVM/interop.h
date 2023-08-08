@@ -61,7 +61,8 @@ typedef struct
     int i_val;
 } AtomStringIntPair;
 
-typedef InteropFunctionResult (*interop_iolist_fold_fun)(term t, void *accum);
+typedef InteropFunctionResult (*interop_chardata_fold_fun)(term t, void *accum);
+typedef void (*interop_chardata_rest_fun)(term t, void *accum);
 
 char *interop_term_to_string(term t, int *ok);
 char *interop_binary_to_string(term binary);
@@ -73,33 +74,19 @@ term interop_proplist_get_value_default(term list, term key, term default_value)
 term interop_map_get_value(GlobalContext *glb, term map, term key);
 term interop_map_get_value_default(GlobalContext *glb, term map, term key, term default_value);
 
-<<<<<<< HEAD
 NO_DISCARD InteropFunctionResult interop_iolist_size(term t, size_t *size);
 NO_DISCARD InteropFunctionResult interop_write_iolist(term t, char *p);
-NO_DISCARD InteropFunctionResult interop_iolist_fold(term t, interop_iolist_fold_fun fold_fun, void *accum);
-=======
+NO_DISCARD InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold_fun fold_fun, interop_chardata_rest_fun rest_fun, void *accum);
+
 enum CharDataEncoding
 {
     Latin1Encoding,
     UTF8Encoding
 };
 
-NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes(term t, size_t *size, uint8_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap);
-
-static inline NO_DISCARD InteropFunctionResult interop_iolist_size(term t, size_t *size)
-{
-    enum UnicodeConversionResult result = interop_chardata_to_bytes(t, size, NULL, NULL, NULL, Latin1Encoding, Latin1Encoding, NULL);
-    return result == UnicodeIncompleteTransform ? InteropBadArg : (InteropFunctionResult) result;
-}
-
-static inline NO_DISCARD InteropFunctionResult interop_write_iolist(term t, char *p)
-{
-    enum UnicodeConversionResult result = interop_chardata_to_bytes(t, NULL, (uint8_t *) p, NULL, NULL, Latin1Encoding, Latin1Encoding, NULL);
-    return result == UnicodeIncompleteTransform ? InteropBadArg : (InteropFunctionResult) result;
-}
-
+NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, size_t *rest_size, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding);
+NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes(term t, uint8_t *output, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap);
 NO_DISCARD enum UnicodeConversionResult interop_chardata_to_list(term t, size_t *size, uint32_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, Heap *heap);
->>>>>>> 729a11a2 (Add missing unicode module)
 
 /**
  * @brief Finds on a table the first matching atom string.
