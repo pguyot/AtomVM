@@ -344,7 +344,7 @@ static enum UnicodeConversionResult interop_binary_conversion(term t, uint8_t *o
 
 struct CharDataToBytesSizeAcc {
     enum CharDataEncoding in_encoding;
-    enum CharDataEncoding to_encoding;
+    enum CharDataEncoding out_encoding;
     size_t size;
     size_t rest_size;
     bool incomplete_transform;
@@ -356,7 +356,7 @@ static InteropFunctionResult chardata_to_bytes_size_fold(term t, void *accum)
     if (term_is_binary(t)) {
         size_t bin_size;
         size_t rest_crsr;
-        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, NULL, &bin_size, &rest_crsr, in_encoding, out_encoding);
+        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, NULL, &bin_size, &rest_crsr, acc->in_encoding, acc->out_encoding);
         acc->size += bin_size;
         if (UNLIKELY(conv_result != UnicodeOk)) {
             acc->rest_size = term_sub_binary_heap_size(t, term_binary_size(t) - rest_crsr);
@@ -372,7 +372,7 @@ static InteropFunctionResult chardata_to_bytes_size_fold(term t, void *accum)
         if (c < 0) {
             return InteropBadArg;
         }
-        switch (out_encoding) {
+        switch (acc->out_encoding) {
             case Latin1Encoding: {
                 if (c > 255) {
                     return InteropBadArg;
@@ -401,7 +401,7 @@ static void chardata_to_bytes_size_rest_fun(term t, void *accum)
     acc->rest_size += CONS_SIZE;
 }
 
-enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, uint8_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap)
+enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, size_t *rest_size, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding)
 {
     struct CharDataToBytesSizeAcc acc = {
         .in_encoding = in_encoding,
@@ -409,7 +409,7 @@ enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size
         .size = 0,
         .rest_size = 0,
         .incomplete_transform = false
-    }
+    };
     InteropFunctionResult res = interop_chardata_fold(t, chardata_to_bytes_size_fold, chardata_to_bytes_size_rest_fun, &acc);
     if (UNLIKELY(res == InteropMemoryAllocFail)) {
         return UnicodeMemoryAllocFail;
@@ -426,7 +426,7 @@ enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size
 
 struct CharDataToBytesAcc {
     enum CharDataEncoding in_encoding;
-    enum CharDataEncoding to_encoding;
+    enum CharDataEncoding out_encoding;
     uint8_t *output;
     term *rest;
     Heap *heap;
@@ -439,7 +439,7 @@ static InteropFunctionResult chardata_to_bytes_fold(term t, void *accum)
     if (term_is_binary(t)) {
         size_t bin_size;
         size_t rest_crsr;
-        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, acc->output, &bin_size, &rest_crsr, in_encoding, out_encoding);
+        enum UnicodeConversionResult conv_result = interop_binary_conversion(t, acc->output, &bin_size, &rest_crsr, acc->in_encoding, acc->out_encoding);
         acc->output += bin_size;
         if (UNLIKELY(conv_result != UnicodeOk)) {
             if (acc->rest) {
@@ -457,7 +457,7 @@ static InteropFunctionResult chardata_to_bytes_fold(term t, void *accum)
         if (c < 0) {
             return InteropBadArg;
         }
-        switch (out_encoding) {
+        switch (acc->out_encoding) {
             case Latin1Encoding: {
                 if (c > 255) {
                     return InteropBadArg;
