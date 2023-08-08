@@ -311,7 +311,7 @@ static enum UnicodeConversionResult interop_binary_conversion(term t, uint8_t *o
                 result += sizeof(uint32_t);
                 if (output) {
                     *((uint32_t *) output) = input[input_index];
-                    output += sizeof(uint_32_t);
+                    output += sizeof(uint32_t);
                 }
             }
         }
@@ -491,8 +491,8 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
                 }
                 acc->output += char_size;
             } break;
-            case UCS4NativeEncoding {
-                ((uint32_t *)acc->output) = c;
+            case UCS4NativeEncoding: {
+                *((uint32_t *)acc->output) = c;
                 acc->output += sizeof(uint32_t);
             } break;
         }
