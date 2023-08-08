@@ -4238,13 +4238,14 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
             RAISE_ERROR(BADARG_ATOM);
         }
     }
-    size_t len;
+    size_t size;
     size_t rest_size;
-    enum UnicodeConversionResult conv_result = interop_chardata_to_list(argv[0], &len, NULL, &rest_size, NULL, in_encoding, &ctx->heap);
+    enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &size, &rest_size, in_encoding, UTF32NativeEncoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    uint32_t *chars = malloc(sizeof(uint32_t) * len);
+    size_t len = size / sizeof(uint32_t);
+    uint32_t *chars = malloc(size);
     if (IS_NULL_PTR(chars)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
@@ -4257,7 +4258,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term rest;
-    conv_result = interop_chardata_to_list(argv[0], NULL, chars, NULL, &rest, in_encoding, &ctx->heap);
+    conv_result = interop_chardata_to_bytes(argv[0], (uint8_t *) chars, &rest, in_encoding, UTF32NativeEncoding, &ctx->heap);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         free(chars);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);

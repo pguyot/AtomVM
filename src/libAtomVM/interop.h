@@ -81,12 +81,12 @@ NO_DISCARD InteropFunctionResult interop_chardata_fold(term t, interop_chardata_
 enum CharDataEncoding
 {
     Latin1Encoding,
-    UTF8Encoding
+    UTF8Encoding,
+    UCS4NativeEncoding // Only available for output for characters_to_list
 };
 
 NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, size_t *rest_size, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding);
 NO_DISCARD enum UnicodeConversionResult interop_chardata_to_bytes(term t, uint8_t *output, term *rest, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding, Heap *heap);
-NO_DISCARD enum UnicodeConversionResult interop_chardata_to_list(term t, size_t *size, uint32_t *output, size_t *rest_size, term *rest, enum CharDataEncoding in_encoding, Heap *heap);
 
 /**
  * @brief Finds on a table the first matching atom string.
