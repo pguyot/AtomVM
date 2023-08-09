@@ -4240,7 +4240,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
     }
     size_t size;
     size_t rest_size;
-    enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &size, &rest_size, in_encoding, UTF32NativeEncoding);
+    enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &size, &rest_size, in_encoding, UCS4NativeEncoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
@@ -4258,7 +4258,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term rest;
-    conv_result = interop_chardata_to_bytes(argv[0], (uint8_t *) chars, &rest, in_encoding, UTF32NativeEncoding, &ctx->heap);
+    conv_result = interop_chardata_to_bytes(argv[0], (uint8_t *) chars, &rest, in_encoding, UCS4NativeEncoding, &ctx->heap);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         free(chars);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
