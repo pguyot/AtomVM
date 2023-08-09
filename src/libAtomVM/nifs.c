@@ -4238,12 +4238,14 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
             RAISE_ERROR(BADARG_ATOM);
         }
     }
+printf("characters to list, in_encoding = %d\n", (int) in_encoding);
     size_t size;
     size_t rest_size;
     enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &size, &rest_size, in_encoding, UCS4NativeEncoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
+printf("after byte_size : size = %d, rest_size = %d\n", size, size_t rest_size);
     size_t len = size / sizeof(uint32_t);
     uint32_t *chars = malloc(size);
     if (IS_NULL_PTR(chars)) {
@@ -4259,6 +4261,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
     }
     term rest;
     conv_result = interop_chardata_to_bytes(argv[0], (uint8_t *) chars, &rest, in_encoding, UCS4NativeEncoding, &ctx->heap);
+printf("after bytes\n");
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         free(chars);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -4296,12 +4299,14 @@ static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]
             }
         }
     }
+printf("characters to binary, in_encoding = %d, out_encoding = %d\n", (int) in_encoding, (int) out_encoding);
     size_t len;
     size_t rest_size;
     enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &len, &rest_size, in_encoding, out_encoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
+printf("after bytes : size = %d, rest_size = %d\n", size, size_t rest_size);
     size_t needed_terms = term_binary_data_size_in_terms(len);
     if (UNLIKELY(conv_result == UnicodeError || conv_result == UnicodeIncompleteTransform)) {
         needed_terms += TUPLE_SIZE(3) + rest_size;
@@ -4313,6 +4318,7 @@ static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]
     uint8_t *binary_data = (uint8_t *) term_binary_data(result);
     term rest;
     conv_result = interop_chardata_to_bytes(argv[0], binary_data, &rest, in_encoding, out_encoding, &ctx->heap);
+printf("after bytes\n");
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }

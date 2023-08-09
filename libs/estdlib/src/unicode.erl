@@ -62,10 +62,10 @@
 %% If conversion fails, the function returns a tuple with three elements:
 %%
 %% <ul>
-%% <li>First element is `error' or `incomplete'. `incomplete' means the conversion
-%% failed because of an incomplete unicode transform at the very end of data.
-%% <li>Second element is what has been converted so far.
-%% <li>Third element is the remaining data to be converted, for debugging purposes.
+%% <li>First element is `error' or `incomplete'. `incomplete' means the conversion</li>
+%% failed because of an incomplete unicode transform at the very end of data.</li>
+%% <li>Second element is what has been converted so far.</li>
+%% <li>Third element is the remaining data to be converted, for debugging purposes.</li>
 %% </ul>
 %%
 %% Remaining data can differ with what Erlang/OTP returns.
