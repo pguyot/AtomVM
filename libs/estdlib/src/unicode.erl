@@ -58,17 +58,12 @@
 ]).
 
 %% @doc Convert UTF-8 data to a list of Unicode characters.
-%%
-%% If conversion fails, the function returns a tuple with three elements:
-%%
+%% <p>If conversion fails, the function returns a tuple with three elements:</p>
 %% <ul>
-%% <li>First element is `error' or `incomplete'. `incomplete' means the conversion</li>
-%% failed because of an incomplete unicode transform at the very end of data.</li>
-%% <li>Second element is what has been converted so far.</li>
-%% <li>Third element is the remaining data to be converted, for debugging purposes.</li>
+%%     <li>First element is <code>error</code> or <code>incomplete</code>. <code>incomplete</code> means the conversion failed because of an incomplete unicode transform at the very end of data.</li>
+%%     <li>Second element is what has been converted so far.</li>
+%%     <li>Third element is the remaining data to be converted, for debugging purposes. This remaining data can differ with what Erlang/OTP returns.</li>
 %% </ul>
-%%
-%% Remaining data can differ with what Erlang/OTP returns.
 %% @param Data data to convert to Unicode
 %% @return a list of characters or a tuple if conversion failed.
 -spec characters_to_list(Data :: chardata() | latin1_chardata()) ->
@@ -112,19 +107,14 @@ characters_to_binary(_Data, _InEncoding) ->
     erlang:nif_error(undefined).
 
 %% @doc Convert character data in a given encoding to a binary in a given encoding.
-%%
-%% If conversion fails, the function returns a tuple with three elements:
-%%
+%% <p>If conversion fails, the function returns a tuple with three elements:</p>
 %% <ul>
-%% <li>First element is `error' or `incomplete'. `incomplete' means the conversion</li>
-%% failed because of an incomplete unicode transform at the very end of data.</li>
-%% <li>Second element is what has been converted so far.</li>
-%% <li>Third element is the remaining data to be converted, for debugging purposes.</li>
+%%     <li>First element is <code>error</code> or <code>incomplete</code>. <code>incomplete</code> means the conversion failed because of an incomplete unicode transform at the very end of data.</li>
+%%     <li>Second element is what has been converted so far.</li>
+%%     <li>Third element is the remaining data to be converted, for debugging purposes. This remaining data can differ with what Erlang/OTP returns.</li>
 %% </ul>
-%%
-%% Remaining data can differ with what Erlang/OTP returns.
-%% Also, Erlang/OTP's implementation may error with `badarg' for parameters
-%% for which this function merely returns an error tuple.
+%% <p>Also, Erlang/OTP's implementation may error with <code>badarg</code> for parameters
+%% for which this function merely returns an error tuple.</p>
 %% @param Data data to convert to UTF8
 %% @param InEncoding encoding of input data
 %% @param InEncoding output encoding
