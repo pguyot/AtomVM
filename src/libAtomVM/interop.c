@@ -205,12 +205,13 @@ inline InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold
             InteropFunctionResult result = fold_fun(t, accum);
             if (UNLIKELY(result != InteropOk)) {
                 if (rest_fun) {
-                    do {
-                        t = temp_stack_pop(&temp_stack);
-printf("calling rest_fun -- t = %p, term_is_nil(t) = %d, term_is_integer(t) = %d, term_is_binary(t) =%d\n", (void *) t, term_is_nil(t), term_is_integer(t), term_is_binary(t));
+                    // we don't pass failed element, fold_fun handles it
+                    t = temp_stack_pop(&temp_stack);
+                    while (!temp_stack_is_empty(&temp_stack)) {
                         rest_fun(t, accum);
-                    } while (!temp_stack_is_empty(&temp_stack));
+                        t = temp_stack_pop(&temp_stack);
                 }
+                // we don't process last element either which is the original list
                 temp_stack_destroy(&temp_stack);
                 return result;
             } else {
@@ -229,11 +230,11 @@ printf("calling rest_fun -- t = %p, term_is_nil(t) = %d, term_is_integer(t) = %d
 
         } else {
             if (rest_fun) {
-                rest_fun(t, accum);
-                do {
-                    t = temp_stack_pop(&temp_stack);
+                while (!temp_stack_is_empty(&temp_stack)) {
                     rest_fun(t, accum);
-                } while (!temp_stack_is_empty(&temp_stack));
+                    t = temp_stack_pop(&temp_stack);
+                }
+                // we don't process last element which was the passed term
             }
             temp_stack_destroy(&temp_stack);
             return InteropBadArg;
