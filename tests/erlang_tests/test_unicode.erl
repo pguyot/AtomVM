@@ -23,18 +23,13 @@
 -export([start/0]).
 
 start() ->
-erlang:display({?MODULE, ?LINE}),
-    ok = test_decode_latin1(),
-erlang:display({?MODULE, ?LINE}),
-    ok = test_decode_utf8(),
-erlang:display({?MODULE, ?LINE}),
-    ok = test_encode_latin1(),
-erlang:display({?MODULE, ?LINE}),
-    ok = test_encode_utf8(),
-erlang:display({?MODULE, ?LINE}),
+    ok = test_to_list_latin1(),
+    ok = test_to_list_utf8(),
+    ok = test_to_binary_latin1(),
+    ok = test_to_binary_utf8(),
     0.
 
-test_decode_latin1() ->
+test_to_list_latin1() ->
     "hello" = unicode:characters_to_list(<<"hello">>, latin1),
     "hello" = unicode:characters_to_list("hello", latin1),
     "hé" = unicode:characters_to_list(<<"hé">>, latin1),
@@ -44,9 +39,11 @@ test_decode_latin1() ->
     {error, "fooh", [[-1 | "ello"], "bar"]} = unicode:characters_to_list(
         ["foo", [$h, -1 | "ello"], "bar"], latin1
     ),
+    Self = self(),
+    {error, "h", [Self]} = unicode:characters_to_list([$h, Self], latin1),
     ok.
 
-test_decode_utf8() ->
+test_to_list_utf8() ->
     "hello" = unicode:characters_to_list(<<"hello">>),
     "hello" = unicode:characters_to_list("hello", utf8),
     "hé" = unicode:characters_to_list(<<"hé"/utf8>>),
@@ -71,7 +68,7 @@ test_decode_utf8() ->
     {error, "fooh", Expected2} = unicode:characters_to_list(["foo", [<<"hé">>, ["bar"], "foobar"]]),
     ok.
 
-test_encode_latin1() ->
+test_to_binary_latin1() ->
     <<"hello">> = unicode:characters_to_binary("hello", latin1, latin1),
     <<"hello">> = unicode:characters_to_binary(<<"hello">>, latin1, latin1),
     <<"hé">> = unicode:characters_to_binary("hé", latin1, latin1),
@@ -109,9 +106,11 @@ test_encode_latin1() ->
     {error, <<"fooh">>, Expected3} = unicode:characters_to_binary(
         ["foo", [$h, 2000 | "ello"], "bar"], latin1, latin1
     ),
+    Self = self(),
+    {error, <<"h">>, [Self]} = unicode:characters_to_binary([$h, Self], latin1, latin1),
     ok.
 
-test_encode_utf8() ->
+test_to_binary_utf8() ->
     <<"hello">> = unicode:characters_to_binary("hello", utf8, utf8),
     <<"hello">> = unicode:characters_to_binary(<<"hello">>, utf8, utf8),
     <<"hé"/utf8>> = unicode:characters_to_binary("hé", latin1, utf8),

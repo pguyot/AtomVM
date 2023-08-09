@@ -4238,14 +4238,12 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
             RAISE_ERROR(BADARG_ATOM);
         }
     }
-printf("characters to list, in_encoding = %d\n", (int) in_encoding);
     size_t size;
     size_t rest_size;
     enum UnicodeConversionResult conv_result = interop_chardata_to_bytes_size(argv[0], &size, &rest_size, in_encoding, UCS4NativeEncoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-printf("after byte_size : size = %d, rest_size = %d\n", size, rest_size);
     size_t len = size / sizeof(uint32_t);
     uint32_t *chars = malloc(size);
     if (IS_NULL_PTR(chars)) {
@@ -4261,7 +4259,6 @@ printf("after byte_size : size = %d, rest_size = %d\n", size, rest_size);
     }
     term rest;
     conv_result = interop_chardata_to_bytes(argv[0], (uint8_t *) chars, &rest, in_encoding, UCS4NativeEncoding, &ctx->heap);
-printf("after bytes\n");
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         free(chars);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
