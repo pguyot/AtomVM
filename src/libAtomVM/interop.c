@@ -364,7 +364,8 @@ static enum UnicodeConversionResult interop_binary_conversion(term t, uint8_t *o
     return UnicodeOk;
 }
 
-struct CharDataToBytesSizeAcc {
+struct CharDataToBytesSizeAcc
+{
     enum CharDataEncoding in_encoding;
     enum CharDataEncoding out_encoding;
     size_t size;
@@ -447,7 +448,8 @@ enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size
     return res == InteropOk ? UnicodeOk : UnicodeError;
 }
 
-struct CharDataToBytesAcc {
+struct CharDataToBytesAcc
+{
     enum CharDataEncoding in_encoding;
     enum CharDataEncoding out_encoding;
     uint8_t *output;
@@ -504,7 +506,7 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
                 acc->output += char_size;
             } break;
             case UCS4NativeEncoding: {
-                *((uint32_t *)acc->output) = c;
+                *((uint32_t *) acc->output) = c;
                 acc->output += sizeof(uint32_t);
             } break;
         }
