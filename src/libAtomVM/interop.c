@@ -370,6 +370,7 @@ struct CharDataToBytesSizeAcc
     enum CharDataEncoding out_encoding;
     size_t size;
     size_t rest_size;
+    bool badarg;
     bool incomplete_transform;
 };
 
@@ -413,6 +414,7 @@ static InteropFunctionResult chardata_to_bytes_size_fold_fun(term t, void *accum
         }
         return InteropOk;
     }
+    acc->badarg = true;
     return InteropBadArg;
 }
 
@@ -432,11 +434,15 @@ enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size
         .out_encoding = out_encoding,
         .size = 0,
         .rest_size = 0,
+        .badarg = false,
         .incomplete_transform = false
     };
     InteropFunctionResult res = interop_chardata_fold(t, chardata_to_bytes_size_fold_fun, chardata_to_bytes_size_rest_fun, &acc);
     if (UNLIKELY(res == InteropMemoryAllocFail)) {
         return UnicodeMemoryAllocFail;
+    }
+    if (acc.badarg) {
+        return UnicodeBadArg;
     }
     *size = acc.size;
     if (rest_size) {
@@ -455,6 +461,7 @@ struct CharDataToBytesAcc
     uint8_t *output;
     term *rest;
     Heap *heap;
+    bool badarg;
     bool incomplete_transform;
 };
 
@@ -512,6 +519,7 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
         }
         return InteropOk;
     }
+    acc->badarg = true;
     return InteropBadArg;
 }
 
@@ -533,11 +541,16 @@ enum UnicodeConversionResult interop_chardata_to_bytes(term t, uint8_t *output, 
         .out_encoding = out_encoding,
         .output = output,
         .rest = rest,
-        .heap = heap
+        .heap = heap,
+        .badarg = false,
+        .incomplete_transform = false
     };
     InteropFunctionResult res = interop_chardata_fold(t, chardata_to_bytes_fold_fun, chardata_to_bytes_rest_fun, &acc);
     if (UNLIKELY(res == InteropMemoryAllocFail)) {
         return UnicodeMemoryAllocFail;
+    }
+    if (acc.badarg) {
+        return UnicodeBadArg;
     }
     if (acc.incomplete_transform) {
         return UnicodeIncompleteTransform;

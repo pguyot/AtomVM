@@ -39,7 +39,8 @@ enum UnicodeConversionResult
 {
     UnicodeOk = InteropOk,
     UnicodeMemoryAllocFail = InteropMemoryAllocFail,
-    UnicodeError = InteropBadArg,
+    UnicodeBadArg = InteropBadArg,
+    UnicodeError,
     UnicodeIncompleteTransform
 };
 
