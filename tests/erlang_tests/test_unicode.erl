@@ -39,11 +39,13 @@ test_to_list_latin1() ->
     {error, "fooh", [[-1 | "ello"], "bar"]} = unicode:characters_to_list(
         ["foo", [$h, -1 | "ello"], "bar"], latin1
     ),
-    ok = try
-        unicode:characters_to_list([$h, self()], latin1),
-        fail
-    catch error:badarg -> ok
-    end,
+    ok =
+        try
+            unicode:characters_to_list([$h, self()], latin1),
+            fail
+        catch
+            error:badarg -> ok
+        end,
     ok.
 
 test_to_list_utf8() ->
@@ -109,11 +111,13 @@ test_to_binary_latin1() ->
     {error, <<"fooh">>, Expected3} = unicode:characters_to_binary(
         ["foo", [$h, 2000 | "ello"], "bar"], latin1, latin1
     ),
-    ok = try
-        unicode:characters_to_binary([$h, self()], latin1, latin1),
-        fail
-    catch error:badarg -> ok
-    end,
+    ok =
+        try
+            unicode:characters_to_binary([$h, self()], latin1, latin1),
+            fail
+        catch
+            error:badarg -> ok
+        end,
     ok.
 
 test_to_binary_utf8() ->

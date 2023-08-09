@@ -483,7 +483,7 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
             }
             return InteropBadArg;
         }
-    } else { /* term_is_integer(t) */ {
+    } else /* term_is_integer(t) */ {
         avm_int_t c = term_to_int(t);
         if (c < 0) {
             if (acc->rest) {
