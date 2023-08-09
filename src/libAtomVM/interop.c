@@ -252,7 +252,7 @@ static inline InteropFunctionResult size_fold_fun(term t, void *accum)
     size_t *size = (size_t *) accum;
     if (term_is_integer(t)) {
         *size += 1;
-    } else if (term_is_binary(t)) {
+    } else /* term_is_binary(t) */ {
         *size += term_binary_size(t);
     }
     return InteropOk;
@@ -270,7 +270,7 @@ static inline InteropFunctionResult write_string_fold_fun(term t, void *accum)
     if (term_is_integer(t)) {
         **p = term_to_int(t);
         (*p)++;
-    } else if (term_is_binary(t)) {
+    } else /* term_is_binary(t) */ {
         int len = term_binary_size(t);
         memcpy(*p, term_binary_data(t), len);
         *p += len;
@@ -387,9 +387,7 @@ static InteropFunctionResult chardata_to_bytes_size_fold_fun(term t, void *accum
             acc->incomplete_transform = conv_result == UnicodeIncompleteTransform;
             return InteropBadArg;
         }
-        return InteropOk;
-    }
-    if (term_is_integer(t)) {
+    } else /* term_is_integer(t) */ {
         avm_int_t c = term_to_int(t);
         if (c < 0) {
             return InteropBadArg;
@@ -412,19 +410,22 @@ static InteropFunctionResult chardata_to_bytes_size_fold_fun(term t, void *accum
                 acc->size += sizeof(uint32_t);
             } break;
         }
-        return InteropOk;
     }
-    acc->badarg = true;
-    return InteropBadArg;
+    return InteropOk;
 }
 
 static void chardata_to_bytes_size_rest_fun(term t, void *accum)
 {
     struct CharDataToBytesSizeAcc *acc = (struct CharDataToBytesSizeAcc *) accum;
-    if (!term_is_nil(t)) {
-        acc->incomplete_transform = false;
+    if (!term_is_binary(t) && !term_is_integer(t) && !term_is_list(t)) {
+        acc->badarg = true;
     }
-    acc->rest_size += CONS_SIZE;
+    if (!acc->badarg) {
+        if (!term_is_nil(t)) {
+            acc->incomplete_transform = false;
+        }
+        acc->rest_size += CONS_SIZE;
+    }
 }
 
 enum UnicodeConversionResult interop_chardata_to_bytes_size(term t, size_t *size, size_t *rest_size, enum CharDataEncoding in_encoding, enum CharDataEncoding out_encoding)
@@ -482,9 +483,7 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
             }
             return InteropBadArg;
         }
-        return InteropOk;
-    }
-    if (term_is_integer(t)) {
+    } else { /* term_is_integer(t) */ {
         avm_int_t c = term_to_int(t);
         if (c < 0) {
             if (acc->rest) {
@@ -517,20 +516,23 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
                 acc->output += sizeof(uint32_t);
             } break;
         }
-        return InteropOk;
     }
-    acc->badarg = true;
-    return InteropBadArg;
+    return InteropOk;
 }
 
 static void chardata_to_bytes_rest_fun(term t, void *accum)
 {
     struct CharDataToBytesAcc *acc = (struct CharDataToBytesAcc *) accum;
-    if (!term_is_nil(t)) {
-        acc->incomplete_transform = false;
+    if (!term_is_binary(t) && !term_is_integer(t) && !term_is_list(t)) {
+        acc->badarg = true;
     }
-    if (acc->rest) {
-        *acc->rest = term_list_prepend(*acc->rest, t, acc->heap);
+    if (!acc->badarg) {
+        if (!term_is_nil(t)) {
+            acc->incomplete_transform = false;
+        }
+        if (acc->rest) {
+            *acc->rest = term_list_prepend(*acc->rest, t, acc->heap);
+        }
     }
 }
 
