@@ -207,7 +207,6 @@ inline InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold
                 if (rest_fun) {
                     do {
                         t = temp_stack_pop(&temp_stack);
-                        term_display(stdout, t, ctx);
                         rest_fun(t, accum);
                     } while (!temp_stack_is_empty(&temp_stack));
                 }
@@ -476,11 +475,17 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
     if (term_is_integer(t)) {
         avm_int_t c = term_to_int(t);
         if (c < 0) {
+            if (acc->rest) {
+                *acc->rest = t;
+            }
             return InteropBadArg;
         }
         switch (acc->out_encoding) {
             case Latin1Encoding: {
                 if (c > 255) {
+                    if (acc->rest) {
+                        *acc->rest = t;
+                    }
                     return InteropBadArg;
                 }
                 *acc->output++ = (uint8_t) c;
@@ -488,6 +493,9 @@ static InteropFunctionResult chardata_to_bytes_fold_fun(term t, void *accum)
             case UTF8Encoding: {
                 size_t char_size;
                 if (UNLIKELY(!bitstring_utf8_encode(c, acc->output, &char_size))) {
+                    if (acc->rest) {
+                        *acc->rest = t;
+                    }
                     return InteropBadArg;
                 }
                 acc->output += char_size;
