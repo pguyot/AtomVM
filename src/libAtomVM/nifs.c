@@ -4245,7 +4245,7 @@ printf("characters to list, in_encoding = %d\n", (int) in_encoding);
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-printf("after byte_size : size = %d, rest_size = %d\n", size, size_t rest_size);
+printf("after byte_size : size = %d, rest_size = %d\n", size, rest_size);
     size_t len = size / sizeof(uint32_t);
     uint32_t *chars = malloc(size);
     if (IS_NULL_PTR(chars)) {
@@ -4306,7 +4306,7 @@ printf("characters to binary, in_encoding = %d, out_encoding = %d\n", (int) in_e
     if (UNLIKELY(conv_result == UnicodeMemoryAllocFail)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-printf("after bytes : size = %d, rest_size = %d\n", size, size_t rest_size);
+printf("after bytes : size = %d, rest_size = %d\n", len, rest_size);
     size_t needed_terms = term_binary_data_size_in_terms(len);
     if (UNLIKELY(conv_result == UnicodeError || conv_result == UnicodeIncompleteTransform)) {
         needed_terms += TUPLE_SIZE(3) + rest_size;
