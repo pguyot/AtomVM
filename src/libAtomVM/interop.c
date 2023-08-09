@@ -207,6 +207,7 @@ inline InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold
                 if (rest_fun) {
                     do {
                         t = temp_stack_pop(&temp_stack);
+                        term_display(stdout, t, ctx);
                         rest_fun(t, accum);
                     } while (!temp_stack_is_empty(&temp_stack));
                 }
