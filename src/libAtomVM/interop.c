@@ -210,6 +210,7 @@ inline InteropFunctionResult interop_chardata_fold(term t, interop_chardata_fold
                     while (!temp_stack_is_empty(&temp_stack)) {
                         rest_fun(t, accum);
                         t = temp_stack_pop(&temp_stack);
+                    }m
                 }
                 // we don't process last element either which is the original list
                 temp_stack_destroy(&temp_stack);
