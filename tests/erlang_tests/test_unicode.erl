@@ -23,10 +23,15 @@
 -export([start/0]).
 
 start() ->
+erlang:display({?MODULE, ?LINE}),
     ok = test_decode_latin1(),
+erlang:display({?MODULE, ?LINE}),
     ok = test_decode_utf8(),
+erlang:display({?MODULE, ?LINE}),
     ok = test_encode_latin1(),
+erlang:display({?MODULE, ?LINE}),
     ok = test_encode_utf8(),
+erlang:display({?MODULE, ?LINE}),
     0.
 
 test_decode_latin1() ->
