@@ -4257,6 +4257,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
         needed_terms += rest_size + TUPLE_SIZE(3);
     }
     if (UNLIKELY(conv_result == UnicodeBadArg)) {
+        free(chars);
         RAISE_ERROR(BADARG_ATOM);
     }
     if (UNLIKELY(memory_ensure_free(ctx, needed_terms) != MEMORY_GC_OK)) {
@@ -4274,6 +4275,7 @@ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[])
     for (size_t index_list = len; index_list > 0; index_list--) {
         result = term_list_prepend(term_from_int(*crsr--), result, &ctx->heap);
     }
+    free(chars);
     if (LIKELY(conv_result == UnicodeOk)) {
         return result;
     }
