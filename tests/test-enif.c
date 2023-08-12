@@ -25,6 +25,7 @@
 #include "erl_nif.h"
 #include "erl_nif_priv.h"
 #include "globalcontext.h"
+#include "scheduler.h"
 #include "utils.h"
 
 static uint32_t cb_read_resource = 0;
