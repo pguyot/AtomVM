@@ -79,6 +79,7 @@
     open_port/2,
     system_time/1,
     group_leader/0,
+    group_leader/2,
     process_flag/2,
     get_module_info/1,
     get_module_info/2,
@@ -831,6 +832,17 @@ system_time(_Unit) ->
 %%-----------------------------------------------------------------------------
 -spec group_leader() -> pid().
 group_leader() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Leader  pid of process to set as leader
+%% @param   Pid     pid of process to set a Leader
+%% @returns `true'
+%% @doc Set the group leader for a given process.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec group_leader(Leader :: pid(), Pid :: pid()) -> true.
+group_leader(_Leader, _Pid) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
