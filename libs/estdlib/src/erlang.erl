@@ -85,7 +85,10 @@
     get_module_info/2,
     processes/0,
     binary_to_term/1,
-    term_to_binary/1
+    term_to_binary/1,
+    timestamp/0,
+    universaltime/0,
+    localtime/0
 ]).
 
 -export_type([
@@ -924,4 +927,30 @@ binary_to_term(_Binary) ->
 %%-----------------------------------------------------------------------------
 -spec term_to_binary(Term :: any()) -> binary().
 term_to_binary(_Term) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns A tuple representing the current timestamp.
+%% @doc Return the timestamp in `{MegaSec, Sec, MicroSec}` format.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec timestamp() -> erlang:timestamp().
+timestamp() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns A tuple representing the current universal time.
+%% @doc Return the current time and day for UTC.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec universaltime() -> calendar:datetime().
+universaltime() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns A tuple representing the current local time.
+%% @doc Return the current time and day for system local timezone.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec localtime() ->
     erlang:nif_error(undefined).
