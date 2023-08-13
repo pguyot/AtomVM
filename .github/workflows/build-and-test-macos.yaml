@@ -65,6 +65,12 @@ jobs:
         export PATH="/usr/local/opt/erlang@${{ matrix.otp }}/bin:$PATH"
         ninja
 
+    - name: Run dialyzer on erlang examples
+      working-directory: build
+      run: |
+        export PATH="/usr/local/opt/erlang@${{ matrix.otp }}/bin:$PATH"
+        dialyzer --plt libs/atomvm.plt -r examples/erlang
+
     # Test
     - name: "Test: test-erlang"
       timeout-minutes: 10
