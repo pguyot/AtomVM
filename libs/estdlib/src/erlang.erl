@@ -92,7 +92,8 @@
 ]).
 
 -export_type([
-    time_unit/0
+    time_unit/0,
+    timestamp/0
 ]).
 
 %%
@@ -104,6 +105,7 @@
 
 -type mem_type() :: binary().
 -type time_unit() :: second | millisecond | microsecond.
+-type timestamp() :: {MegaSecs :: non_neg_integer(), Secs :: non_neg_integer(), MicroSecs :: non_neg_integer}.
 
 %%-----------------------------------------------------------------------------
 %% @param   Time time in milliseconds after which to send the timeout message.
@@ -931,7 +933,11 @@ term_to_binary(_Term) ->
 
 %%-----------------------------------------------------------------------------
 %% @returns A tuple representing the current timestamp.
-%% @doc Return the timestamp in `{MegaSec, Sec, MicroSec}` format.
+%% @see monotonic_time/1
+%% @see system_time/1
+%% @doc Return the timestamp in `{MegaSec, Sec, MicroSec}' format.
+%% This the old format returned by `erlang:now/0'. Please note that the latter
+%% which is deprecated in Erlang/OTP is not implemented by AtomVM.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec timestamp() -> erlang:timestamp().
@@ -940,6 +946,7 @@ timestamp() ->
 
 %%-----------------------------------------------------------------------------
 %% @returns A tuple representing the current universal time.
+%% @see localtime/0
 %% @doc Return the current time and day for UTC.
 %% @end
 %%-----------------------------------------------------------------------------
@@ -949,6 +956,7 @@ universaltime() ->
 
 %%-----------------------------------------------------------------------------
 %% @returns A tuple representing the current local time.
+%% @see universaltime/0
 %% @doc Return the current time and day for system local timezone.
 %% @end
 %%-----------------------------------------------------------------------------
