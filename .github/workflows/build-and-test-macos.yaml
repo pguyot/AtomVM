@@ -69,7 +69,7 @@ jobs:
       working-directory: build
       run: |
         export PATH="/usr/local/opt/erlang@${{ matrix.otp }}/bin:$PATH"
-        dialyzer --plt libs/atomvm.plt -r examples/erlang
+        dialyzer --plt libs/atomvmlib.plt -r examples/erlang
 
     # Test
     - name: "Test: test-erlang"
