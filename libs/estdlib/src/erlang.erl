@@ -105,7 +105,9 @@
 
 -type mem_type() :: binary().
 -type time_unit() :: second | millisecond | microsecond.
--type timestamp() :: {MegaSecs :: non_neg_integer(), Secs :: non_neg_integer(), MicroSecs :: non_neg_integer}.
+-type timestamp() :: {
+    MegaSecs :: non_neg_integer(), Secs :: non_neg_integer(), MicroSecs :: non_neg_integer
+}.
 
 %%-----------------------------------------------------------------------------
 %% @param   Time time in milliseconds after which to send the timeout message.
@@ -960,5 +962,6 @@ universaltime() ->
 %% @doc Return the current time and day for system local timezone.
 %% @end
 %%-----------------------------------------------------------------------------
--spec localtime() ->
+-spec localtime() -> calendar:datetime().
+localtime() ->
     erlang:nif_error(undefined).
