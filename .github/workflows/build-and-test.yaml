@@ -28,54 +28,7 @@ jobs:
       fail-fast: false
 
       matrix:
-        exclude:
-        # Ubuntu 22.04 with setup-beam only has OTP >= 24.2
-        - os: "ubuntu-22.04"
-          otp: "21"
-        - os: "ubuntu-22.04"
-          otp: "22"
-        - os: "ubuntu-22.04"
-          otp: "23"
-
-        # Ubuntu 20.04 has gcc from 7 to 10 ("gcc" is gcc-9)
-        # Ubuntu 22.04 has gcc from 9 to 12 ("gcc" is gcc-11)
-        # Ubuntu 20.04 has clang 10 and 12 to  ("clang" is 10)
-        # Ubuntu 22.04 has clang from 12 to 14 ("clang" is 14)
-        # We want to test every compiler but don't need to test every OS
-        # and we favor later Ubuntu 22.04 + defaults
-        - os: "ubuntu-22.04"
-          cc: "gcc-7"
-        - os: "ubuntu-22.04"
-          cc: "gcc-8"
-        - os: "ubuntu-20.04"
-          cc: "gcc-10"
-        - os: "ubuntu-20.04"
-          cc: "gcc-11"
-        - os: "ubuntu-20.04"
-          cc: "gcc-12"
-        - os: "ubuntu-22.04"
-          cc: "clang-10"
-        - os: "ubuntu-22.04"
-          cc: "clang-11"
-#       - os: "ubuntu-20.04"
-#         cc: "clang-12"
-#       - os: "ubuntu-20.04"
-#         cc: "clang-13"
-#       - os: "ubuntu-20.04"
-#         cc: "clang-14"
-
         include:
-#       - cc: "clang-12"
-#         cxx: "clang++-12"
-#         compiler_pkgs: "clang-12"
-#       - cc: "clang-13"
-#         cxx: "clang++-13"
-#         compiler_pkgs: "clang-13"
-#       - cc: "clang-14"
-#         cxx: "clang++-14"
-#         compiler_pkgs: "clang-14"
-
-        # Additional default compiler builds
         - os: "ubuntu-20.04"
           cc: "cc"
           cxx: "c++"
@@ -83,15 +36,6 @@ jobs:
           cflags: ""
           elixir_version: "1.14"
 
-#       - os: "ubuntu-22.04"
-#         cc: "clang-14"
-#         cxx: "clang++-14"
-#         otp: "24"
-#         cflags: "-Os"
-#         elixir_version: "1.14"
-#         compiler_pkgs: "clang-14"
-
-        # Additional 32 bits build
         - os: "ubuntu-20.04"
           cc: "gcc-10"
           cxx: "g++-10"
