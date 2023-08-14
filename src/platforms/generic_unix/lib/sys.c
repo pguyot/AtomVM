@@ -193,8 +193,8 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
         } else {
             listeners_new_count = listeners_poll_count;
         }
-        size_t new_size = sizeof(struct pollfd) * (poll_count + select_events_new_count + listeners_new_count);
-        fds = realloc(fds, new_size);
+        size_t nb_fds = poll_count + select_events_new_count + listeners_new_count;
+        fds = realloc(fds, sizeof(struct pollfd) * nb_fds);
         platform->fds = fds;
 
 #ifndef AVM_NO_SMP
@@ -226,10 +226,15 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
         }
 
         struct ListHead *select_events = synclist_rdlock(&glb->select_events);
-        // We put listeners first
+        // We put select events next
         LIST_FOR_EACH (item, select_events) {
             struct SelectEvent *select_event = GET_LIST_ENTRY(item, struct SelectEvent, head);
             if (select_event->read || select_event->write) {
+                if (fd_index == nb_fds) {
+                    // more select events were added
+                    nb_fds++;
+                    fds = (struct pollfd *) realloc(fds, sizeof(struct pollfd) * nb_fds);
+                }
                 fds[fd_index].fd = select_event->event;
                 fds[fd_index].events = (select_event->read ? POLLIN : 0) | (select_event->write ? POLLOUT : 0);
                 fds[fd_index].revents = 0;
