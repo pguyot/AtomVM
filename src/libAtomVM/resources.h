@@ -102,7 +102,7 @@ bool select_event_notify(ErlNifEvent event, bool is_read, bool is_write, GlobalC
  * events marked for close.
  * @details Convenience function that can be called by `sys_poll_events` and
  * iterates on events to be closed and count them.
- * @param select_events list of events, rw locked
+ * @param select_events list of events, with a write lock
  * @param read on output number of events with read = 1, can be NULL
  * @param write on output number of events with write = 1, can be NULL
  * @param either on output number of events with either read = 1 or write = 1, can be NULL
