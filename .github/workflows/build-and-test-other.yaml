@@ -70,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ["arm32v5", "arm32v7", "arm64v8"]
+        arch: ["arm32v5", "arm32v7"]
 
         include:
         - arch: "arm32v5"
@@ -96,11 +96,6 @@ jobs:
           platform: "arm/v7"
           tag: "bullseye"
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork"
-
-        - arch: "arm64v8"
-          platform: "arm64/v8"
-          tag: "bullseye"
-          cflags: "-O2"
 
         # It looks like we don't really support big-endian
         # - arch: "powerpc"
