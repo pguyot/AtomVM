@@ -195,6 +195,9 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
         }
 
         fds = realloc(fds, sizeof(struct pollfd) * (poll_count + select_events_new_count + listeners_new_count));
+        if (fds == NULL) {
+            printf("fds is NULL -- select_events_new_count = %d\n", select_events_new_count);
+        }
         platform->fds = fds;
 
 #ifndef AVM_NO_SMP
