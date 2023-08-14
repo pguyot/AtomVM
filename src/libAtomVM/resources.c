@@ -266,7 +266,7 @@ static inline void select_event_destroy(struct SelectEvent *select_event, Global
     free((void *) select_event);
 }
 
-void select_event_count_and_destroy_closed(struct ListHead *select_events, size_t *read, size_t *write, size_t *either)
+void select_event_count_and_destroy_closed(struct ListHead *select_events, size_t *read, size_t *write, size_t *either, GlobalContext *global)
 {
     size_t read_count = 0;
     size_t write_count = 0;

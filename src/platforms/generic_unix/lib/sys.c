@@ -119,7 +119,7 @@ static inline void sys_poll_events_with_kqueue(GlobalContext *glb, int timeout_m
     if (select_events_poll_count < 0) {
         size_t either;
         struct ListHead *select_events = synclist_wrlock(&global->select_events);
-        select_event_count_and_destroy_closed(select_events, NULL, NULL, &either);
+        select_event_count_and_destroy_closed(select_events, NULL, NULL, &either, glb);
         synclist_unlock(&glb->select_events);
         select_events_poll_count = either;
         platform->select_events_poll_count = either;
@@ -173,10 +173,10 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
     int fd_index;
     if (listeners_poll_count < 0 || select_events_poll_count < 0) {
         // Means it is dirty and should be rebuilt.
-        struct ListHead *select_events = synclist_wrlock(&global->select_events);
+        struct ListHead *select_events = synclist_wrlock(&glb->select_events);
         size_t select_events_new_count;
         if (select_events_poll_count < 0) {
-            select_event_count_and_destroy_closed(select_events, NULL, NULL, &select_events_new_count);
+            select_event_count_and_destroy_closed(select_events, NULL, NULL, &select_events_new_count, glb);
         } else {
             select_events_new_count = select_events_poll_count;
         }
