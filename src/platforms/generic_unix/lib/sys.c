@@ -194,7 +194,7 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
             listeners_new_count = listeners_poll_count;
         }
         size_t new_size = sizeof(struct pollfd) * (poll_count + select_events_new_count + listeners_new_count);
-fprintf(stderr, "realloc, fds = %p poll_count = %d, select_events_new_count = %zu, listeners_new_count = %zu, new size = %zu\n", fds, poll_count, select_events_new_count, listeners_new_count);
+fprintf(stderr, "realloc, fds = %p poll_count = %d, select_events_new_count = %zu, listeners_new_count = %zu, new size = %zu\n", fds, poll_count, select_events_new_count, listeners_new_count, new_size);
         fds = realloc(fds, new_size);
 fprintf(stderr, "realloc => fds = %p\n", fds);
         platform->fds = fds;
