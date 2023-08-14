@@ -233,6 +233,7 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
                 if (fd_index == nb_fds) {
                     // more select events were added
                     nb_fds++;
+                    select_events_new_count++;
                     fds = (struct pollfd *) realloc(fds, sizeof(struct pollfd) * nb_fds);
                 }
                 fds[fd_index].fd = select_event->event;
