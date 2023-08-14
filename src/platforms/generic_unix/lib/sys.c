@@ -118,7 +118,9 @@ static inline void sys_poll_events_with_kqueue(GlobalContext *glb, int timeout_m
     int select_events_poll_count = platform->select_events_poll_count;
     if (select_events_poll_count < 0) {
         size_t either;
-        select_event_count_and_destroy_closed(NULL, NULL, &either, glb);
+        struct ListHead *select_events = synclist_wrlock(&global->select_events);
+        select_event_count_and_destroy_closed(select_events, NULL, NULL, &either);
+        synclist_unlock(&glb->select_events);
         select_events_poll_count = either;
         platform->select_events_poll_count = either;
     }
@@ -171,9 +173,10 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
     int fd_index;
     if (listeners_poll_count < 0 || select_events_poll_count < 0) {
         // Means it is dirty and should be rebuilt.
+        struct ListHead *select_events = synclist_wrlock(&global->select_events);
         size_t select_events_new_count;
         if (select_events_poll_count < 0) {
-            select_event_count_and_destroy_closed(NULL, NULL, &select_events_new_count, glb);
+            select_event_count_and_destroy_closed(select_events, NULL, NULL, &select_events_new_count);
         } else {
             select_events_new_count = select_events_poll_count;
         }
@@ -225,17 +228,10 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
             synclist_unlock(&glb->listeners);
         }
 
-        struct ListHead *select_events = synclist_rdlock(&glb->select_events);
         // We put select events next
         LIST_FOR_EACH (item, select_events) {
             struct SelectEvent *select_event = GET_LIST_ENTRY(item, struct SelectEvent, head);
             if (select_event->read || select_event->write) {
-                if (fd_index == nb_fds) {
-                    // more select events were added
-                    nb_fds++;
-                    select_events_new_count++;
-                    fds = (struct pollfd *) realloc(fds, sizeof(struct pollfd) * nb_fds);
-                }
                 fds[fd_index].fd = select_event->event;
                 fds[fd_index].events = (select_event->read ? POLLIN : 0) | (select_event->write ? POLLOUT : 0);
                 fds[fd_index].revents = 0;
