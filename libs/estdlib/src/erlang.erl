@@ -74,6 +74,8 @@
     whereis/1,
     spawn/1,
     spawn/3,
+    spawn_link/1,
+    spawn_link/3,
     spawn_opt/2,
     spawn_opt/4,
     link/1,
@@ -83,6 +85,8 @@
     monitor/2,
     demonitor/1,
     demonitor/2,
+    exit/1,
+    exit/2,
     open_port/2,
     system_time/1,
     group_leader/0,
@@ -193,12 +197,18 @@ send_after(Time, Dest, Msg) ->
 %%      <li><b>stack_size</b> the number of words used in the stack (integer)</li>
 %%      <li><b>message_queue_len</b> the number of messages enqueued for the process (integer)</li>
 %%      <li><b>memory</b> the estimated total number of bytes in use by the process (integer)</li>
+%%      <li><b>links</b> the list of linked processes</li>
 %% </ul>
 %% Specifying an unsupported term or atom raises a bad_arg error.
 %%
 %% @end
 %%-----------------------------------------------------------------------------
--spec process_info(Pid :: pid(), Key :: atom()) -> term().
+-spec process_info
+    (Pid :: pid(), heap_size) -> {heap_size, non_neg_integer()};
+    (Pid :: pid(), stack_size) -> {stack_size, non_neg_integer()};
+    (Pid :: pid(), message_queue_len) -> {message_queue_len, non_neg_integer()};
+    (Pid :: pid(), memory) -> {memory, non_neg_integer()};
+    (Pid :: pid(), links) -> {links, [pid()]}.
 process_info(_Pid, _Key) ->
     erlang:nif_error(undefined).
 
@@ -768,8 +778,8 @@ whereis(_Name) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec spawn(Function :: function()) -> pid().
-spawn(_Name) ->
-    erlang:nif_error(undefined).
+spawn(Function) ->
+    erlang:spawn_opt(Function, []).
 
 %%-----------------------------------------------------------------------------
 %% @param   Module      module of the function to create a process from
@@ -780,8 +790,31 @@ spawn(_Name) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec spawn(Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
-spawn(_Module, _Function, _Args) ->
-    erlang:nif_error(undefined).
+spawn(Module, Function, Args) ->
+    erlang:spawn_opt(Module, Function, Args, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Function    function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process and link it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Function :: function()) -> pid().
+spawn_link(Function) ->
+    erlang:spawn_opt(Function, [link]).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process by calling exported Function from Module with Args
+%% and link it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
+spawn_link(Module, Function, Args) ->
+    erlang:spawn_opt(Module, Function, Args, [link]).
 
 -type spawn_option() ::
     {min_heap_size, pos_integer()}
@@ -796,7 +829,7 @@ spawn(_Module, _Function, _Args) ->
 %% @doc     Create a new process.
 %% @end
 %%-----------------------------------------------------------------------------
--spec spawn_opt(Function :: function(), Options :: [{max_heap_size, integer()}]) ->
+-spec spawn_opt(Function :: function(), Options :: [spawn_option()]) ->
     pid() | {pid(), reference()}.
 spawn_opt(_Name, _Options) ->
     erlang:nif_error(undefined).
@@ -896,6 +929,53 @@ demonitor(_Monitor) ->
 %%-----------------------------------------------------------------------------
 -spec demonitor(Monitor :: reference(), Options :: [demonitor_option()]) -> boolean().
 demonitor(_Monitor, _Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Reason  reason for exit
+%% @doc     Raises an exception of class `exit' with reason `Reason'.
+%% The exception can be caught. If it is not, the process exits.
+%% If the exception is not caught the signal is sent to linked processes.
+%% In this case, if `Reason' is `kill', it is not transformed into `killed' and
+%% linked processes can trap it (unlike `exit/2').
+%% @end
+%%-----------------------------------------------------------------------------
+-spec exit(Reason :: any()) -> no_return().
+exit(_Reason) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Process target process
+%% @param   Reason  reason for exit
+%% @returns `true'
+%% @doc     Send an exit signal to target process.
+%% The consequences of the exit signal depends on `Reason', on whether
+%% `Process' is self() or another process and whether target process is
+%% trapping exit.
+%% If `Reason' is not `kill' nor `normal':
+%% <ul>
+%%     <li>If target process is not trapping exits, it exits with `Reason'</li>
+%%     <li>If traget process is trapping exits, it receives a message
+%%         ``{'EXIT', From, Reason}'' where `From' is the caller of `exit/2'.</li>
+%% </ul>
+%% If `Reason' is `kill', the target process exits with `Reason' changed to
+%% `killed'.
+%% If `Reason' is `normal' and `Process' is not `self()':
+%% <ul>
+%%     <li>If target process is not trapping exits, nothing happens.</li>
+%%     <li>If traget process is trapping exits, it receives a message
+%%         ``{'EXIT', From, normal}'' where `From' is the caller of `exit/2'.</li>
+%% </ul>
+%% If `Reason' is `normal' and `Process' is `self()':
+%% <ul>
+%%     <li>If target process is not trapping exits, it exits with `normal'.</li>
+%%     <li>If traget process is trapping exits, it receives a message
+%%         ``{'EXIT', From, normal}'' where `From' is the caller of `exit/2'.</li>
+%% </ul>
+%% @end
+%%-----------------------------------------------------------------------------
+-spec exit(Process :: pid(), Reason :: any()) -> true.
+exit(_Process, _Reason) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
