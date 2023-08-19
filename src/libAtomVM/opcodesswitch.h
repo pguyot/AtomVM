@@ -80,19 +80,11 @@
 #define COMPACT_11BITS_VALUE 0x8
 #define COMPACT_NBITS_VALUE 0x18
 
-typedef int dreg_t;
-
-typedef union
-{
-    term **ptr;
-    int reg_type;
-} dreg_type_t;
-
 #ifdef IMPL_EXECUTE_LOOP
 #define SET_ERROR(error_type_atom)   \
-    ctx->x[0] = ERROR_ATOM;                                        \
-    ctx->x[1] = error_type_atom;                                   \
-    ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ERROR_ATOM);    \
+    x_regs[0] = ERROR_ATOM;                                        \
+    x_regs[1] = error_type_atom;                                   \
+    x_regs[2] = stacktrace_create_raw(ctx, mod, i, ERROR_ATOM);    \
 
 // Override nifs.h RAISE_ERROR macro
 #ifdef RAISE_ERROR
@@ -109,8 +101,25 @@ typedef union
 
 #ifdef IMPL_CODE_LOADER
 
-#define T_DEST_REG(dreg_type, dreg) \
-    reg_type_c((dreg_type).reg_type), ((dreg))
+#ifdef ENABLE_TRACE
+typedef struct
+{
+    int reg_type;
+    int index;
+} dreg_t;
+
+typedef dreg_t dreg_unsafe_t;
+
+#define T_DEST_REG(dreg) \
+    reg_type_c((dreg).reg_type), (int) ((dreg).index)
+
+#define T_DEST_REG_UNSAFE(dreg) T_DEST_REG(dreg)
+#else
+
+typedef struct {} dreg_t;
+typedef dreg_t dreg_unsafe_t;
+
+#endif
 
 #define DECODE_COMPACT_TERM(dest_term, code_chunk, base_index, off)                     \
 {                                                                                       \
@@ -232,25 +241,55 @@ typedef union
     off++;                                                                              \
 }
 
-#define DECODE_DEST_REGISTER(dreg, dreg_type, code_chunk, base_index, off)                          \
+#ifdef ENABLE_TRACE
+
+#define DECODE_DEST_REGISTER(dreg, code_chunk, base_index, off)                                     \
 {                                                                                                   \
     uint8_t first_byte = code_chunk[(base_index) + (off)];                                          \
     uint8_t reg_type = first_byte & 0xF;                                                            \
-    (dreg_type).reg_type = reg_type;                                                                \
+    (dreg).reg_type = reg_type;                                                                     \
     switch (reg_type) {                                                                             \
         case COMPACT_XREG:                                                                          \
         case COMPACT_YREG:                                                                          \
-            (dreg) = code_chunk[(base_index) + (off)] >> 4;                                         \
+            (dreg).index = code_chunk[(base_index) + (off)] >> 4;                                   \
             off += 1;                                                                               \
             break;                                                                                  \
         case COMPACT_LARGE_YREG:                                                                    \
-            (dreg) = (((first_byte & 0xE0) << 3) | code_chunk[(base_index) + (off) + 1]);           \
+            (dreg).index = (((first_byte & 0xE0) << 3) | code_chunk[(base_index) + (off) + 1]);     \
             off += 2;                                                                               \
             break;                                                                                  \
         default:                                                                                    \
             AVM_ABORT();                                                                            \
     }                                                                                               \
 }
+
+#define DECODE_DEST_REGISTER_UNSAFE(dreg, code_chunk, base_index, off)                              \
+    DECODE_DEST_REGISTER(dreg, code_chunk, base_index, off)
+
+#else
+
+#define DECODE_DEST_REGISTER(dreg, code_chunk, base_index, off)                                     \
+{                                                                                                   \
+    UNUSED(dreg);                                                                                   \
+    uint8_t first_byte = code_chunk[(base_index) + (off)];                                          \
+    uint8_t reg_type = first_byte & 0xF;                                                            \
+    switch (reg_type) {                                                                             \
+        case COMPACT_XREG:                                                                          \
+        case COMPACT_YREG:                                                                          \
+            off += 1;                                                                               \
+            break;                                                                                  \
+        case COMPACT_LARGE_YREG:                                                                    \
+            off += 2;                                                                               \
+            break;                                                                                  \
+        default:                                                                                    \
+            AVM_ABORT();                                                                            \
+    }                                                                                               \
+}
+
+#define DECODE_DEST_REGISTER_UNSAFE(dreg, code_chunk, base_index, off)                              \
+    DECODE_DEST_REGISTER(dreg, code_chunk, base_index, off)
+
+#endif
 
 #define DECODE_FP_REGISTER(freg, code_chunk, base_index, off)                                       \
 {                                                                                                   \
@@ -413,8 +452,19 @@ typedef union
 
 #ifdef IMPL_EXECUTE_LOOP
 
-#define T_DEST_REG(dreg_type, dreg) \
-    (*dreg_type.ptr == ctx->x) ? 'x' : 'y', (dreg)
+typedef term * dreg_t;
+typedef struct
+{
+    term *base;
+    int index;
+} dreg_unsafe_t;
+
+#define T_DEST_REG(dreg) \
+    ((dreg) >= x_regs && (dreg) < x_regs + MAX_REG) ? 'x' : 'y', \
+    (int) (((dreg) >= x_regs && (dreg) < x_regs + MAX_REG) ? ((dreg) - x_regs) : ((dreg) - ctx->e))
+
+#define T_DEST_REG_UNSAFE(dreg_unsafe) \
+    ((dreg).base == x_regs) ? 'x' : 'y', ((dreg).index)
 
 #define DECODE_COMPACT_TERM(dest_term, code_chunk, base_index, off)                                                     \
 {                                                                                                                       \
@@ -456,7 +506,7 @@ typedef union
             break;                                                                                                      \
                                                                                                                         \
         case COMPACT_XREG:                                                                                              \
-            dest_term = ctx->x[first_byte >> 4];                                                                        \
+            dest_term = x_regs[first_byte >> 4];                                                                        \
             off += 1;                                                                                                   \
             break;                                                                                                      \
                                                                                                                         \
@@ -489,7 +539,7 @@ typedef union
                 case COMPACT_EXTENDED_TYPED_REGISTER: {                                                                 \
                     uint8_t reg_byte = code_chunk[(base_index) + (off) + 1];                                            \
                     if ((reg_byte & 0x0F) == COMPACT_XREG) {                                                            \
-                        dest_term = ctx->x[reg_byte >> 4];                                                              \
+                        dest_term = x_regs[reg_byte >> 4];                                                              \
                     } else {                                                                                            \
                         dest_term = ctx->e[reg_byte >> 4];                                                              \
                     }                                                                                                   \
@@ -551,13 +601,24 @@ typedef union
     }                                                                                                                   \
 }
 
-#define READ_DEST_REGISTER(dreg_type, dreg) \
-    *(*((dreg_type).ptr) + (dreg));
+#define READ_DEST_REGISTER(dreg) *(dreg)
+
+#define READ_DEST_REGISTER_UNSAFE(dreg_unsafe) \
+    ((dreg_unsafe).base == x_regs ? x_regs[(dreg_unsafe).index] : ctx->e[(dreg_unsafe).index])
 
 
-#define WRITE_REGISTER(dreg_type, dreg, value)                                                      \
-{                                                                                                   \
-    *(*((dreg_type).ptr) + (dreg)) = value;                                                         \
+#define WRITE_REGISTER(dreg, value)                                                     \
+{                                                                                       \
+    *dreg = value;                                                                      \
+}
+
+#define WRITE_REGISTER_UNSAFE(dreg_unsafe, value)                                       \
+{                                                                                       \
+    if ((dreg_unsafe).base == x_regs) {                                                 \
+        x_regs[(dreg_unsafe).index] = value;                                            \
+    } else {                                                                            \
+        ctx->e[(dreg_unsafe).index] = value;                                            \
+    }                                                                                   \
 }
 
 #define DECODE_EXTENDED_LIST_TAG(code_chunk, base_index, off)                           \
@@ -565,26 +626,53 @@ typedef union
     off++;                                                                              \
 }
 
-#define DECODE_DEST_REGISTER(dreg, dreg_type, code_chunk, base_index, off)                                      \
+#define DECODE_DEST_REGISTER(dreg, code_chunk, base_index, off)                                                 \
 {                                                                                                               \
     uint8_t first_byte = code_chunk[(base_index) + (off)];                                                      \
     uint8_t reg_type = first_byte & 0xF;                                                                        \
     uint8_t reg_index = (first_byte >> 4);                                                                      \
     switch (reg_type) {                                                                                         \
         case COMPACT_XREG:                                                                                      \
-            (dreg_type).ptr = &x_regs;                                                                          \
-            (dreg) = reg_index;                                                                                 \
+            (dreg) = x_regs + reg_index;                                                                        \
             off++;                                                                                              \
             break;                                                                                              \
         case COMPACT_YREG:                                                                                      \
-            (dreg_type).ptr = &ctx->e;                                                                          \
-            (dreg) = reg_index;                                                                                 \
+            (dreg) = ctx->e + reg_index;                                                                        \
             off++;                                                                                              \
             break;                                                                                              \
         case COMPACT_LARGE_YREG:                                                                                \
             if (LIKELY((first_byte & COMPACT_LARGE_IMM_MASK) == COMPACT_11BITS_VALUE)) {                        \
-                (dreg_type).ptr = &ctx->e;                                                                      \
-                (dreg) = (((first_byte & 0xE0) << 3) | code_chunk[(base_index) + (off) + 1]);                   \
+                (dreg) = ctx->e + (((first_byte & 0xE0) << 3) | code_chunk[(base_index) + (off) + 1]);          \
+                off += 2;                                                                                       \
+            } else {                                                                                            \
+                VM_ABORT();                                                                                     \
+            }                                                                                                   \
+            break;                                                                                              \
+        default:                                                                                                \
+            VM_ABORT();                                                                                         \
+    }                                                                                                           \
+}
+
+#define DECODE_DEST_REGISTER_UNSAFE(dreg_unsafe, code_chunk, base_index, off)                                   \
+{                                                                                                               \
+    uint8_t first_byte = code_chunk[(base_index) + (off)];                                                      \
+    uint8_t reg_type = first_byte & 0xF;                                                                        \
+    uint8_t reg_index = (first_byte >> 4);                                                                      \
+    switch (reg_type) {                                                                                         \
+        case COMPACT_XREG:                                                                                      \
+            (dreg_unsafe).base = x_regs;                                                                        \
+            (dreg_unsafe).index = reg_index;                                                                    \
+            off++;                                                                                              \
+            break;                                                                                              \
+        case COMPACT_YREG:                                                                                      \
+            (dreg_unsafe).base = ctx->e;                                                                        \
+            (dreg_unsafe).index = reg_index;                                                                    \
+            off++;                                                                                              \
+            break;                                                                                              \
+        case COMPACT_LARGE_YREG:                                                                                \
+            if (LIKELY((first_byte & COMPACT_LARGE_IMM_MASK) == COMPACT_11BITS_VALUE)) {                        \
+                (dreg_unsafe).base = ctx->e;                                                                    \
+                (dreg_unsafe).index = (((first_byte & 0xE0) << 3) | code_chunk[(base_index) + (off) + 1]);      \
                 off += 2;                                                                                       \
             } else {                                                                                            \
                 VM_ABORT();                                                                                     \
@@ -813,7 +901,7 @@ typedef union
     (((uint8_t *) (instruction_pointer)) - code)
 
 #define HANDLE_ERROR()                                         \
-    ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ctx->x[0]); \
+    x_regs[2] = stacktrace_create_raw(ctx, mod, i, x_regs[0]); \
     goto handle_error;
 
 #define VERIFY_IS_INTEGER(t, opcode_name)                  \
@@ -860,10 +948,10 @@ typedef union
         AtomString function_name = globalcontext_atomstring_from_term(mod->global, index_or_function); \
         struct Nif *nif = (struct Nif *) nifs_get(module_name, function_name, fun_arity); \
         if (!IS_NULL_PTR(nif)) {                                        \
-            term return_value = nif->nif_ptr(ctx, fun_arity, ctx->x);   \
+            term return_value = nif->nif_ptr(ctx, fun_arity, x_regs);   \
             NEXT_INSTRUCTION(next_off);                                 \
             PROCESS_MAYBE_TRAP_RETURN_VALUE(return_value);              \
-            ctx->x[0] = return_value;                                   \
+            x_regs[0] = return_value;                                   \
             if (ctx->heap.root->next) {                                 \
                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) { \
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);                    \
@@ -892,7 +980,7 @@ typedef union
         RAISE_ERROR(BADARITY_ATOM);                                     \
     }                                                                   \
     for (uint32_t i = 0; i < n_freeze; i++) {                           \
-        ctx->x[i + fun_arity] = boxed_value[i + 3];                     \
+        x_regs[i + fun_arity] = boxed_value[i + 3];                     \
     }                                                                   \
     NEXT_INSTRUCTION(next_off);                                         \
     ctx->cp = module_address(mod->module_index, i);                     \
@@ -1703,9 +1791,9 @@ schedule_in:
                     switch (func->type) {
                         case NIFFunctionType: {
                             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
-                            term return_value = nif->nif_ptr(ctx, arity, ctx->x);
+                            term return_value = nif->nif_ptr(ctx, arity, x_regs);
                             PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_I(return_value, orig_i);
-                            ctx->x[0] = return_value;
+                            x_regs[0] = return_value;
                             if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -1729,13 +1817,13 @@ schedule_in:
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
-                                    ctx->x[0] = bif->bif0_ptr(ctx);
+                                    x_regs[0] = bif->bif0_ptr(ctx);
                                     break;
                                 case 1:
-                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
+                                    x_regs[0] = bif->bif1_ptr(ctx, x_regs[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
+                                    x_regs[0] = bif->bif2_ptr(ctx, x_regs[0], x_regs[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
@@ -1783,9 +1871,9 @@ schedule_in:
                     switch (func->type) {
                         case NIFFunctionType: {
                             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
-                            term return_value = nif->nif_ptr(ctx, arity, ctx->x);
+                            term return_value = nif->nif_ptr(ctx, arity, x_regs);
                             PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value);
-                            ctx->x[0] = return_value;
+                            x_regs[0] = return_value;
 
                             // We deallocate after (instead of before) as a
                             // workaround for issue
@@ -1829,13 +1917,13 @@ schedule_in:
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
-                                    ctx->x[0] = bif->bif0_ptr(ctx);
+                                    x_regs[0] = bif->bif0_ptr(ctx);
                                     break;
                                 case 1:
-                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
+                                    x_regs[0] = bif->bif1_ptr(ctx, x_regs[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
+                                    x_regs[0] = bif->bif2_ptr(ctx, x_regs[0], x_regs[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
@@ -1864,10 +1952,9 @@ schedule_in:
                 uint32_t bif;
                 DECODE_LITERAL(bif, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("bif0/2 bif=%i, dreg=%c%i\n", bif, T_DEST_REG(dreg_type, dreg));
+                TRACE("bif0/2 bif=%i, dreg=%c%i\n", bif, T_DEST_REG(dreg));
                 USED_BY_TRACE(bif);
                 USED_BY_TRACE(dreg);
 
@@ -1877,7 +1964,7 @@ schedule_in:
                     DEBUG_FAIL_NULL(func);
                     term ret = func(ctx);
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -1894,10 +1981,9 @@ schedule_in:
                 term arg1;
                 DECODE_COMPACT_TERM(arg1, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("bif1/2 bif=%i, fail=%i, dreg=%c%i\n", bif, fail_label, T_DEST_REG(dreg_type, dreg));
+                TRACE("bif1/2 bif=%i, fail=%i, dreg=%c%i\n", bif, fail_label, T_DEST_REG(dreg));
                 USED_BY_TRACE(bif);
                 USED_BY_TRACE(dreg);
 
@@ -1914,7 +2000,7 @@ schedule_in:
                         HANDLE_ERROR();
                     }
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -1933,10 +2019,9 @@ schedule_in:
                 term arg2;
                 DECODE_COMPACT_TERM(arg2, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("bif2/2 bif=%i, fail=%i, dreg=%c%i\n", bif, fail_label, T_DEST_REG(dreg_type, dreg));
+                TRACE("bif2/2 bif=%i, fail=%i, dreg=%c%i\n", bif, fail_label, T_DEST_REG(dreg));
                 USED_BY_TRACE(bif);
                 USED_BY_TRACE(dreg);
 
@@ -1954,7 +2039,7 @@ schedule_in:
                         HANDLE_ERROR();
                     }
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -2207,12 +2292,12 @@ schedule_in:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    int local_process_id = term_to_local_process_id(ctx->x[0]);
+                    int local_process_id = term_to_local_process_id(x_regs[0]);
                     TRACE("send/0 target_pid=%i\n", local_process_id);
-                    TRACE_SEND(ctx, ctx->x[0], ctx->x[1]);
-                    globalcontext_send_message(ctx->global, local_process_id, ctx->x[1]);
+                    TRACE_SEND(ctx, x_regs[0], x_regs[1]);
+                    globalcontext_send_message(ctx->global, local_process_id, x_regs[1]);
 
-                    ctx->x[0] = ctx->x[1];
+                    x_regs[0] = x_regs[1];
                 #endif
 
                 NEXT_INSTRUCTION(1);
@@ -2256,10 +2341,9 @@ schedule_in:
                 uint32_t label;
                 DECODE_LABEL(label, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("loop_rec/2, dreg=%c%i\n", T_DEST_REG(dreg_type, dreg));
+                TRACE("loop_rec/2, dreg=%c%i\n", T_DEST_REG(dreg));
                 USED_BY_TRACE(dreg);
 
                 #ifdef IMPL_EXECUTE_LOOP
@@ -2271,7 +2355,7 @@ schedule_in:
                     if (mailbox_peek(ctx, &ret)) {
                         TRACE_RECEIVE(ctx, ret);
 
-                        WRITE_REGISTER(dreg_type, dreg, ret);
+                        WRITE_REGISTER(dreg, ret);
                         NEXT_INSTRUCTION(next_off);
                     } else {
                         JUMP_TO_ADDRESS(mod->labels[label]);
@@ -3125,13 +3209,12 @@ wait_timeout_trap_handler:
                 term src_value;
                 DECODE_COMPACT_TERM(src_value, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("move/2 %lx, %c%i\n", src_value, T_DEST_REG(dreg_type, dreg));
+                    TRACE("move/2 %lx, %c%i\n", src_value, T_DEST_REG(dreg));
 
-                    WRITE_REGISTER(dreg_type, dreg, src_value);
+                    WRITE_REGISTER(dreg, src_value);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -3148,20 +3231,18 @@ wait_timeout_trap_handler:
                 term src_value;
                 DECODE_COMPACT_TERM(src_value, code, i, next_off)
                 dreg_t head_dreg;
-                dreg_type_t head_dreg_type;
-                DECODE_DEST_REGISTER(head_dreg, head_dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(head_dreg, code, i, next_off);
                 dreg_t tail_dreg;
-                dreg_type_t tail_dreg_type;
-                DECODE_DEST_REGISTER(tail_dreg, tail_dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(tail_dreg, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("get_list/3 %lx, %c%i, %c%i\n", src_value, T_DEST_REG(head_dreg_type, head_dreg), T_DEST_REG(tail_dreg_type, tail_dreg));
+                    TRACE("get_list/3 %lx, %c%i, %c%i\n", src_value, T_DEST_REG(head_dreg), T_DEST_REG(tail_dreg));
 
                     term head = term_get_list_head(src_value);
                     term tail = term_get_list_tail(src_value);
 
-                    WRITE_REGISTER(head_dreg_type, head_dreg, head);
-                    WRITE_REGISTER(tail_dreg_type, tail_dreg, tail);
+                    WRITE_REGISTER(head_dreg, head);
+                    WRITE_REGISTER(tail_dreg, tail);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -3180,10 +3261,9 @@ wait_timeout_trap_handler:
                 uint32_t element;
                 DECODE_LITERAL(element, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("get_tuple_element/2, element=%i, dest=%c%i\n", element, T_DEST_REG(dreg_type, dreg));
+                TRACE("get_tuple_element/2, element=%i, dest=%c%i\n", element, T_DEST_REG(dreg));
                 USED_BY_TRACE(element);
 
                 #ifdef IMPL_EXECUTE_LOOP
@@ -3192,7 +3272,7 @@ wait_timeout_trap_handler:
                     }
 
                     term t = term_get_tuple_element(src_value, element);
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -3238,13 +3318,13 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(head, code, i, next_off);
                 term tail;
                 DECODE_COMPACT_TERM(tail, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
 #ifdef IMPL_EXECUTE_LOOP
                 term *list_elem = term_list_alloc(&ctx->heap);
 #endif
+
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("put_list/3\n");
@@ -3253,9 +3333,9 @@ wait_timeout_trap_handler:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("put_list/3 dreg=%c%i\n", T_DEST_REG(dreg_type, dreg));
+                    TRACE("put_list/3 dreg=%c%i\n", T_DEST_REG(dreg));
                     term t = term_list_init_prepend(list_elem, head, tail);
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3266,16 +3346,19 @@ wait_timeout_trap_handler:
                 int next_off = 1;
                 uint32_t size;
                 DECODE_LITERAL(size, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-
-                TRACE("put_tuple/2 size=%u, dest=%c%i\n", (unsigned) size, T_DEST_REG(dreg_type, dreg));
-                USED_BY_TRACE(dreg);
 
                 #ifdef IMPL_EXECUTE_LOOP
                     term t = term_alloc_tuple(size, &ctx->heap);
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                #endif
+
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                TRACE("put_tuple/2 size=%u, dest=%c%i\n", (unsigned) size, T_DEST_REG(dreg));
+                USED_BY_TRACE(dreg);
+                
+                #ifdef IMPL_EXECUTE_LOOP
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 for (uint32_t j = 0; j < size; j++) {
@@ -3339,8 +3422,8 @@ wait_timeout_trap_handler:
                 TRACE("if_end/0\n");
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    ctx->x[0] = ERROR_ATOM;
-                    ctx->x[1] = IF_CLAUSE_ATOM;
+                    x_regs[0] = ERROR_ATOM;
+                    x_regs[1] = IF_CLAUSE_ATOM;
 
                     RAISE_ERROR(IF_CLAUSE_ATOM);
                 #endif
@@ -3400,7 +3483,7 @@ wait_timeout_trap_handler:
                         SCHEDULE_NEXT(mod, INSTRUCTION_POINTER());
                     }
 
-                    term fun = ctx->x[args_count];
+                    term fun = x_regs[args_count];
                     if (UNLIKELY(!term_is_function(fun))) {
                         // We can gc as we are raising
                         if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -3408,7 +3491,7 @@ wait_timeout_trap_handler:
                         }
                         term new_error_tuple = term_alloc_tuple(2, &ctx->heap);
                         term_put_tuple_element(new_error_tuple, 0, BADFUN_ATOM);
-                        term_put_tuple_element(new_error_tuple, 1, ctx->x[args_count]);
+                        term_put_tuple_element(new_error_tuple, 1, x_regs[args_count]);
                         RAISE_ERROR(new_error_tuple);
                     }
 
@@ -3480,9 +3563,9 @@ wait_timeout_trap_handler:
                     switch (func->type) {
                         case NIFFunctionType: {
                             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
-                            term return_value = nif->nif_ptr(ctx, arity, ctx->x);
+                            term return_value = nif->nif_ptr(ctx, arity, x_regs);
                             PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value);
-                            ctx->x[0] = return_value;
+                            x_regs[0] = return_value;
 
                             if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
@@ -3513,13 +3596,13 @@ wait_timeout_trap_handler:
                             const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(func);
                             switch (arity) {
                                 case 0:
-                                    ctx->x[0] = bif->bif0_ptr(ctx);
+                                    x_regs[0] = bif->bif0_ptr(ctx);
                                     break;
                                 case 1:
-                                    ctx->x[0] = bif->bif1_ptr(ctx, ctx->x[0]);
+                                    x_regs[0] = bif->bif1_ptr(ctx, x_regs[0]);
                                     break;
                                 case 2:
-                                    ctx->x[0] = bif->bif2_ptr(ctx, ctx->x[0], ctx->x[1]);
+                                    x_regs[0] = bif->bif2_ptr(ctx, x_regs[0], x_regs[1]);
                                     break;
                                 default:
                                     fprintf(stderr, "Invalid arity %" PRIu32 " for bif\n", arity);
@@ -3549,7 +3632,7 @@ wait_timeout_trap_handler:
                     if (term_is_invalid_term(f)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     } else {
-                        ctx->x[0] = f;
+                        x_regs[0] = f;
                     }
                 #endif
 
@@ -3560,17 +3643,16 @@ wait_timeout_trap_handler:
             case OP_TRY: {
                 int next_off = 1;
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 uint32_t label;
                 DECODE_LABEL(label, code, i, next_off)
 
-                TRACE("try/2, label=%i, reg=%c%i\n", label, T_DEST_REG(dreg_type, dreg));
+                TRACE("try/2, label=%i, reg=%c%i\n", label, T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
                     term catch_term = term_from_catch_label(mod->module_index, label);
                     //TODO: here just write to y registers is enough
-                    WRITE_REGISTER(dreg_type, dreg, catch_term);
+                    WRITE_REGISTER(dreg, catch_term);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3580,14 +3662,13 @@ wait_timeout_trap_handler:
             case OP_TRY_END: {
                 int next_off = 1;
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("try_end/1, reg=%c%i\n", T_DEST_REG(dreg_type, dreg));
+                TRACE("try_end/1, reg=%c%i\n", T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
                     //TODO: here just write to y registers is enough
-                    WRITE_REGISTER(dreg_type, dreg, term_nil());
+                    WRITE_REGISTER(dreg, term_nil());
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3597,14 +3678,13 @@ wait_timeout_trap_handler:
             case OP_TRY_CASE: {
                 int next_off = 1;
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("try_case/1, reg=%c%i\n", T_DEST_REG(dreg_type, dreg));
+                TRACE("try_case/1, reg=%c%i\n", T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
                     // clears the catch value on stack
-                    WRITE_REGISTER(dreg_type, dreg, term_nil());
+                    WRITE_REGISTER(dreg, term_nil());
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3658,9 +3738,9 @@ wait_timeout_trap_handler:
 
                 #ifdef IMPL_EXECUTE_LOOP
                     TRACE("raise/2 stacktrace=0x%lx exc_value=0x%lx\n", stacktrace, exc_value);
-                    ctx->x[0] = stacktrace_exception_class(stacktrace);
-                    ctx->x[1] = exc_value;
-                    ctx->x[2] = stacktrace_create_raw(ctx, mod, i, ctx->x[0]);
+                    x_regs[0] = stacktrace_exception_class(stacktrace);
+                    x_regs[1] = exc_value;
+                    x_regs[2] = stacktrace_create_raw(ctx, mod, i, x_regs[0]);
                     goto handle_error;
                 #endif
 
@@ -3670,17 +3750,16 @@ wait_timeout_trap_handler:
             case OP_CATCH: {
                 int next_off = 1;
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 uint32_t label;
                 DECODE_LABEL(label, code, i, next_off)
 
-                TRACE("catch/2, label=%i, reg=%c%i\n", label, T_DEST_REG(dreg_type, dreg));
+                TRACE("catch/2, label=%i, reg=%c%i\n", label, T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
                     term catch_term = term_from_catch_label(mod->module_index, label);
                     // TODO: here just write to y registers is enough
-                    WRITE_REGISTER(dreg_type, dreg, catch_term);
+                    WRITE_REGISTER(dreg, catch_term);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3690,33 +3769,32 @@ wait_timeout_trap_handler:
             case OP_CATCH_END: {
                 int next_off = 1;
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
-                TRACE("catch_end/1, reg=%c%i\n", T_DEST_REG(dreg_type, dreg));
+                TRACE("catch_end/1, reg=%c%i\n", T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
                     // TODO: here just write to y registers is enough
-                    WRITE_REGISTER(dreg_type, dreg, term_nil());
+                    WRITE_REGISTER(dreg, term_nil());
                     // C.f. https://www.erlang.org/doc/reference_manual/expressions.html#catch-and-throw
-                    switch (term_to_atom_index(ctx->x[0])) {
+                    switch (term_to_atom_index(x_regs[0])) {
                         case THROW_ATOM_INDEX:
-                            ctx->x[0] = ctx->x[1];
+                            x_regs[0] = x_regs[1];
                             break;
 
                         case ERROR_ATOM_INDEX: {
-                            ctx->x[2] = stacktrace_build(ctx, &ctx->x[2]);
+                            x_regs[2] = stacktrace_build(ctx, &x_regs[2]);
                             // MEMORY_CAN_SHRINK because catch_end is classified as gc in beam_ssa_codegen.erl
                             if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2) * 2, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
                             term reason_tuple = term_alloc_tuple(2, &ctx->heap);
-                            term_put_tuple_element(reason_tuple, 0, ctx->x[1]);
-                            term_put_tuple_element(reason_tuple, 1, ctx->x[2]);
+                            term_put_tuple_element(reason_tuple, 0, x_regs[1]);
+                            term_put_tuple_element(reason_tuple, 1, x_regs[2]);
                             term exit_tuple = term_alloc_tuple(2, &ctx->heap);
                             term_put_tuple_element(exit_tuple, 0, EXIT_ATOM);
                             term_put_tuple_element(exit_tuple, 1, reason_tuple);
-                            ctx->x[0] = exit_tuple;
+                            x_regs[0] = exit_tuple;
 
                             break;
                         }
@@ -3727,8 +3805,8 @@ wait_timeout_trap_handler:
                             }
                             term exit_tuple = term_alloc_tuple(2, &ctx->heap);
                             term_put_tuple_element(exit_tuple, 0, EXIT_ATOM);
-                            term_put_tuple_element(exit_tuple, 1, ctx->x[1]);
-                            ctx->x[0] = exit_tuple;
+                            term_put_tuple_element(exit_tuple, 1, x_regs[1]);
+                            x_regs[0] = exit_tuple;
 
                             break;
                         }
@@ -3749,8 +3827,7 @@ wait_timeout_trap_handler:
                 uint32_t unit;
                 DECODE_LITERAL(unit, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_add/5\n");
@@ -3762,9 +3839,9 @@ wait_timeout_trap_handler:
                     avm_int_t src1_val = term_to_int(src1);
                     avm_int_t src2_val = term_to_int(src2);
 
-                    TRACE("bs_add/5, fail=%i src1=%li src2=%li unit=%u dreg=%c%i\n", fail, src1_val, src2_val, (unsigned) unit, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_add/5, fail=%i src1=%li src2=%li unit=%u dreg=%c%i\n", fail, src1_val, src2_val, (unsigned) unit, T_DEST_REG(dreg));
 
-                    WRITE_REGISTER(dreg_type, dreg, term_from_int((src1_val + src2_val) * unit));
+                    WRITE_REGISTER(dreg, term_from_int((src1_val + src2_val) * unit));
                 #endif
                 NEXT_INSTRUCTION(next_off);
                 break;
@@ -3784,9 +3861,6 @@ wait_timeout_trap_handler:
                 term flags;
                 UNUSED(flags);
                 DECODE_COMPACT_TERM(flags, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_init2/6\n");
@@ -3796,8 +3870,6 @@ wait_timeout_trap_handler:
                     VERIFY_IS_INTEGER(size, "bs_init2");
                     avm_int_t size_val = term_to_int(size);
 
-                    TRACE("bs_init2/6, fail=%u size=%li words=%u regs=%u dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) words, (unsigned) regs, T_DEST_REG(dreg_type, dreg));
-
                     if (UNLIKELY(memory_ensure_free_opt(ctx, words + term_binary_heap_size(size_val), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -3805,8 +3877,14 @@ wait_timeout_trap_handler:
 
                     ctx->bs = t;
                     ctx->bs_offset = 0;
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("bs_init2/6, fail=%u size=%li words=%u regs=%u dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) words, (unsigned) regs, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3825,9 +3903,6 @@ wait_timeout_trap_handler:
                 DECODE_LITERAL(regs, code, i, next_off)
                 uint32_t flags_value;
                 DECODE_LITERAL(flags_value, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_init_bits/6\n");
@@ -3845,8 +3920,6 @@ wait_timeout_trap_handler:
                         RAISE_ERROR(UNSUPPORTED_ATOM);
                     }
 
-                    TRACE("bs_init_bits/6, fail=%i size=%li words=%i regs=%i dreg=%c%i\n", fail, size_val, words, regs, T_DEST_REG(dreg_type, dreg));
-
                     if (UNLIKELY(memory_ensure_free_opt(ctx, words + term_binary_heap_size(size_val / 8), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -3854,8 +3927,14 @@ wait_timeout_trap_handler:
 
                     ctx->bs = t;
                     ctx->bs_offset = 0;
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("bs_init_bits/6, fail=%i size=%li words=%i regs=%i dreg=%c%i\n", fail, size_val, words, regs, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3869,20 +3948,19 @@ wait_timeout_trap_handler:
                 term src;
                 DECODE_COMPACT_TERM(src, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_utf8_size/3");
                 #endif
                 #ifdef IMPL_EXECUTE_LOOP
                     VERIFY_IS_INTEGER(src, "bs_utf8_size/3");
                     avm_int_t src_value = term_to_int(src);
-                    TRACE("bs_utf8_size/3 fail=%i src=0x%lx dreg=%c%i\n", fail, (long) src_value, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_utf8_size/3 fail=%i src=0x%lx dreg=%c%i\n", fail, (long) src_value, T_DEST_REG(dreg));
                     size_t utf8_size;
                     if (UNLIKELY(!bitstring_utf8_size(src_value, &utf8_size))) {
                         RAISE_ERROR(BADARG_ATOM);
                     }
-                    WRITE_REGISTER(dreg_type, dreg, term_from_int(utf8_size));
+                    WRITE_REGISTER(dreg, term_from_int(utf8_size));
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -3939,8 +4017,7 @@ wait_timeout_trap_handler:
                 term arg3;
                 DECODE_COMPACT_TERM(arg3, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_get_utf8/5\n");
@@ -3948,7 +4025,7 @@ wait_timeout_trap_handler:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_get_utf8/5, fail=%i src=0x%lx arg2=0x%lx arg3=0x%lx dreg=%c%i\n", fail, src, arg2, arg3, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_get_utf8/5, fail=%i src=0x%lx arg2=0x%lx arg3=0x%lx dreg=%c%i\n", fail, src, arg2, arg3, T_DEST_REG(dreg));
 
                     VERIFY_IS_MATCH_STATE(src, "bs_get_utf8");
 
@@ -3963,7 +4040,7 @@ wait_timeout_trap_handler:
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term_set_match_state_offset(src, offset_bits + (out_size * 8));
-                        WRITE_REGISTER(dreg_type, dreg, term_from_int(val));
+                        WRITE_REGISTER(dreg, term_from_int(val));
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -4017,20 +4094,19 @@ wait_timeout_trap_handler:
                 term src;
                 DECODE_COMPACT_TERM(src, code, i, next_off)
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_utf16_size/3");
                 #endif
                 #ifdef IMPL_EXECUTE_LOOP
                     VERIFY_IS_INTEGER(src, "bs_utf16_size/3");
                     avm_int_t src_value = term_to_int(src);
-                    TRACE("bs_utf16_size/3 fail=%i src=0x%lx dreg=%c%i\n", fail, (long) src_value, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_utf16_size/3 fail=%i src=0x%lx dreg=%c%i\n", fail, (long) src_value, T_DEST_REG(dreg));
                     size_t utf16_size;
                     if (UNLIKELY(!bitstring_utf16_size(src_value, &utf16_size))) {
                         RAISE_ERROR(BADARG_ATOM);
                     }
-                    WRITE_REGISTER(dreg_type, dreg, term_from_int(utf16_size));
+                    WRITE_REGISTER(dreg, term_from_int(utf16_size));
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -4087,8 +4163,7 @@ wait_timeout_trap_handler:
                 term flags;
                 DECODE_LITERAL(flags, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_get_utf16/5\n");
@@ -4096,7 +4171,7 @@ wait_timeout_trap_handler:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_get_utf16/5, fail=%i src=0x%lx arg2=0x%lx flags=0x%lx dreg=%c%i\n", fail, src, arg2, flags, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_get_utf16/5, fail=%i src=0x%lx arg2=0x%lx flags=0x%lx dreg=%c%i\n", fail, src, arg2, flags, T_DEST_REG(dreg));
 
                     VERIFY_IS_MATCH_STATE(src, "bs_get_utf16");
 
@@ -4111,7 +4186,7 @@ wait_timeout_trap_handler:
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term_set_match_state_offset(src, offset_bits + (out_size * 8));
-                        WRITE_REGISTER(dreg_type, dreg, term_from_int(val));
+                        WRITE_REGISTER(dreg, term_from_int(val));
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -4207,8 +4282,7 @@ wait_timeout_trap_handler:
                 term flags;
                 DECODE_LITERAL(flags, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_get_utf32/5\n");
@@ -4216,7 +4290,7 @@ wait_timeout_trap_handler:
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_get_utf32/5, fail=%i src=0x%lx arg2=0x%lx flags=0x%lx dreg=%c%i\n", fail, src, arg2, flags, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_get_utf32/5, fail=%i src=0x%lx arg2=0x%lx flags=0x%lx dreg=%c%i\n", fail, src, arg2, flags, T_DEST_REG(dreg));
 
                     VERIFY_IS_MATCH_STATE(src, "bs_get_utf32");
 
@@ -4230,7 +4304,7 @@ wait_timeout_trap_handler:
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term_set_match_state_offset(src, offset_bits + 32);
-                        WRITE_REGISTER(dreg_type, dreg, term_from_int(val));
+                        WRITE_REGISTER(dreg, term_from_int(val));
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -4289,7 +4363,7 @@ wait_timeout_trap_handler:
 
                     ctx->bs = t;
                     ctx->bs_offset = 0;
-                    ctx->x[0] = t;
+                    x_regs[0] = t;
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -4318,9 +4392,6 @@ wait_timeout_trap_handler:
                 term flags;
                 UNUSED(flags);
                 DECODE_COMPACT_TERM(flags, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_append/8\n");
@@ -4342,13 +4413,18 @@ wait_timeout_trap_handler:
                         RAISE_ERROR(UNSUPPORTED_ATOM);
                     }
 
-                    TRACE("bs_append/8, fail=%u size=%li unit=%u src=0x%lx dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg_type, dreg));
-
                     size_t src_size = term_binary_size(src);
                     // TODO: further investigate extra_val
                     if (UNLIKELY(memory_ensure_free_opt(ctx, src_size + term_binary_heap_size(size_val / 8) + extra_val, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
+                #endif
+
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+                
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("bs_append/8, fail=%u size=%li unit=%u src=0x%lx dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg));
                     DECODE_COMPACT_TERM(src, code, i, src_off)
                     term t = term_create_empty_binary(src_size + size_val / 8, &ctx->heap, ctx->global);
                     memcpy((void *) term_binary_data(t), (void *) term_binary_data(src), src_size);
@@ -4356,7 +4432,7 @@ wait_timeout_trap_handler:
                     ctx->bs = t;
                     ctx->bs_offset = src_size * 8;
 
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -4379,9 +4455,6 @@ wait_timeout_trap_handler:
                 term flags;
                 UNUSED(flags);
                 DECODE_COMPACT_TERM(flags, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_private_append/6\n");
@@ -4398,8 +4471,6 @@ wait_timeout_trap_handler:
                     }
                     // TODO: further investigate unit.
                     // We currently do not support unaligned binaries, unit seems to be equal to 1 binary comprehensions
-                    TRACE("bs_private_append/6, fail=%u size=%li unit=%u src=0x%lx dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg_type, dreg));
-
                     size_t src_size = term_binary_size(src);
                     if (UNLIKELY(memory_ensure_free_opt(ctx, src_size + term_binary_heap_size(size_val / 8), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -4410,8 +4481,14 @@ wait_timeout_trap_handler:
 
                     ctx->bs = t;
                     ctx->bs_offset = src_size * 8;
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("bs_private_append/6, fail=%u size=%li unit=%u src=0x%lx dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -4566,10 +4643,6 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(arg2, code, i, next_off);
                 term slots_term;
                 DECODE_COMPACT_TERM(slots_term, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-
                 #ifdef IMPL_EXECUTE_LOOP
                     int slots = term_to_int(slots_term);
 
@@ -4581,19 +4654,22 @@ wait_timeout_trap_handler:
                     DECODE_COMPACT_TERM(src, code, i, next_off_back);
                 #endif
 
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_start_match2/5\n");
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_start_match2/5, fail=%i src=0x%lx arg2=0x%lx arg3=0x%lx dreg=%c%i\n", fail, src, arg2, slots_term, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_start_match2/5, fail=%i src=0x%lx arg2=0x%lx arg3=0x%lx dreg=%c%i\n", fail, src, arg2, slots_term, T_DEST_REG(dreg));
                     if (!(term_is_binary(src) || term_is_match_state(src))) {
-                        WRITE_REGISTER(dreg_type, dreg, src);
+                        WRITE_REGISTER(dreg, src);
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term match_state = term_alloc_bin_match_state(src, slots, &ctx->heap);
 
-                        WRITE_REGISTER(dreg_type, dreg, match_state);
+                        WRITE_REGISTER(dreg, match_state);
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -4620,22 +4696,21 @@ wait_timeout_trap_handler:
                 term live;
                 DECODE_COMPACT_TERM(live, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_start_match3/4\n");
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_start_match3/4, fail=%i src=0x%lx live=0x%lx dreg=%c%i\n", fail, src, live, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_start_match3/4, fail=%i src=0x%lx live=0x%lx dreg=%c%i\n", fail, src, live, T_DEST_REG(dreg));
                     if (!(term_is_binary(src) || term_is_match_state(src))) {
-                        WRITE_REGISTER(dreg_type, dreg, src);
+                        WRITE_REGISTER(dreg, src);
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term match_state = term_alloc_bin_match_state(src, 0, &ctx->heap);
 
-                        WRITE_REGISTER(dreg_type, dreg, match_state);
+                        WRITE_REGISTER(dreg, match_state);
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -4651,8 +4726,7 @@ wait_timeout_trap_handler:
                 term src;
                 DECODE_COMPACT_TERM(src, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 term live;
                 DECODE_COMPACT_TERM(live, code, i, next_off);
 
@@ -4663,12 +4737,12 @@ wait_timeout_trap_handler:
                 #ifdef IMPL_EXECUTE_LOOP
                     VERIFY_IS_MATCH_STATE(src, "bs_get_position");
 
-                    TRACE("bs_get_position/3 src=0x%lx dreg=%c%i live=0x%lx \n", src, T_DEST_REG(dreg_type, dreg), live);
+                    TRACE("bs_get_position/3 src=0x%lx dreg=%c%i live=0x%lx \n", src, T_DEST_REG(dreg), live);
 
                     avm_int_t offset = term_get_match_state_offset(src);
                     term offset_term = term_from_int(offset);
 
-                    WRITE_REGISTER(dreg_type, dreg, offset_term);
+                    WRITE_REGISTER(dreg, offset_term);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -4682,9 +4756,8 @@ wait_timeout_trap_handler:
                     int src_off = next_off;
                 #endif
                 DECODE_COMPACT_TERM(src, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
                 term live;
                 DECODE_COMPACT_TERM(live, code, i, next_off);
 
@@ -4698,10 +4771,10 @@ wait_timeout_trap_handler:
                     avm_int_t bs_offset = term_get_match_state_offset(src);
                     term bs_bin = term_get_match_state_binary(src);
 
-                    TRACE("bs_get_tail/3 src=0x%lx dreg=%c%i live=0x%lx \n", src, T_DEST_REG(dreg_type, dreg), live);
+                    TRACE("bs_get_tail/3 src=0x%lx dreg=%c%i live=0x%lx \n", src, T_DEST_REG_UNSAFE(dreg), live);
                     if (bs_offset == 0) {
 
-                        WRITE_REGISTER(dreg_type, dreg, bs_bin);
+                        WRITE_REGISTER_UNSAFE(dreg, bs_bin);
 
                     } else {
                         if (bs_offset % 8 != 0) {
@@ -4720,7 +4793,7 @@ wait_timeout_trap_handler:
                             DECODE_COMPACT_TERM(src, code, i, src_off);
                             bs_bin = term_get_match_state_binary(src);
                             term t = term_maybe_create_sub_binary(bs_bin, start_pos, new_bin_size, &ctx->heap, ctx->global);
-                            WRITE_REGISTER(dreg_type, dreg, t);
+                            WRITE_REGISTER_UNSAFE(dreg, t);
 
                         }
                     }
@@ -4998,9 +5071,6 @@ wait_timeout_trap_handler:
                 DECODE_LITERAL(unit, code, i, next_off);
                 uint32_t flags_value;
                 DECODE_LITERAL(flags_value, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_get_integer2/7\n");
@@ -5029,8 +5099,13 @@ wait_timeout_trap_handler:
                         if (UNLIKELY(term_is_invalid_term(t))) {
                             HANDLE_ERROR();
                         }
+                #endif
 
-                        WRITE_REGISTER(dreg_type, dreg, t);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                        WRITE_REGISTER(dreg, t);
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -5057,9 +5132,6 @@ wait_timeout_trap_handler:
                 DECODE_LITERAL(unit, code, i, next_off);
                 uint32_t flags_value;
                 DECODE_LITERAL(flags_value, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_get_binary2/7\n");
@@ -5095,27 +5167,32 @@ wait_timeout_trap_handler:
 
                     TRACE("bs_get_binary2/7, fail=%u src=%p unit=%u\n", (unsigned) fail, (void *) bs_bin, (unsigned) unit);
 
-                if ((unsigned int) (bs_offset / unit + size_val) > term_binary_size(bs_bin)) {
-                    TRACE("bs_get_binary2: insufficient capacity\n");
-                    JUMP_TO_ADDRESS(mod->labels[fail]);
-                } else {
-                    term_set_match_state_offset(src, bs_offset + size_val * unit);
+                    if ((unsigned int) (bs_offset / unit + size_val) > term_binary_size(bs_bin)) {
+                        TRACE("bs_get_binary2: insufficient capacity -- bs_offset = %d, size_val = %d\n", (int) bs_offset, (int) size_val);
+                        JUMP_TO_ADDRESS(mod->labels[fail]);
+                    } else {
+                        term_set_match_state_offset(src, bs_offset + size_val * unit);
 
-                    size_t heap_size = term_sub_binary_heap_size(bs_bin, size_val);
-                    if (UNLIKELY(memory_ensure_free_opt(ctx, heap_size, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                    }
-                    // re-compute src
-                    DECODE_COMPACT_TERM(src, code, i, src_offset);
-                    bs_bin = term_get_match_state_binary(src);
-
-                    term t = term_maybe_create_sub_binary(bs_bin, bs_offset / unit, size_val, &ctx->heap, ctx->global);
-
-                    WRITE_REGISTER(dreg_type, dreg, t);
-                    NEXT_INSTRUCTION(next_off);
-                }
-
+                        size_t heap_size = term_sub_binary_heap_size(bs_bin, size_val);
+                        if (UNLIKELY(memory_ensure_free_opt(ctx, heap_size, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+                        }
                 #endif
+
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                        // re-compute src
+                        DECODE_COMPACT_TERM(src, code, i, src_offset);
+                        bs_bin = term_get_match_state_binary(src);
+
+                        term t = term_maybe_create_sub_binary(bs_bin, bs_offset / unit, size_val, &ctx->heap, ctx->global);
+                        WRITE_REGISTER(dreg, t);
+                        NEXT_INSTRUCTION(next_off);
+                    }
+                #endif
+
                 #ifdef IMPL_CODE_LOADER
                     NEXT_INSTRUCTION(next_off);
                 #endif
@@ -5123,22 +5200,19 @@ wait_timeout_trap_handler:
             }
 
             case OP_BS_CONTEXT_TO_BINARY: {
-                int next_off = 1;
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-
                 // Do not check if dreg is a binary or not
                 // In case it is not a binary or a match state, dreg will not be changed.
+                int next_off = 1;
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_context_to_binary/1\n");
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_context_to_binary/1, dreg=%c%i\n", T_DEST_REG(dreg_type, dreg));
-
-                    term src = READ_DEST_REGISTER(dreg_type, dreg);
+                    TRACE("bs_context_to_binary/1, dreg=%c%i\n", T_DEST_REG_UNSAFE(dreg));
+                    term src = READ_DEST_REGISTER_UNSAFE(dreg);
                     term bin;
                     if (term_is_match_state(src)) {
                         avm_int_t offset = term_get_match_state_offset(src);
@@ -5152,15 +5226,16 @@ wait_timeout_trap_handler:
                                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
                             // src might be invalid after a GC
-                            src = READ_DEST_REGISTER(dreg_type, dreg);
+                            src = READ_DEST_REGISTER_UNSAFE(dreg);
                             src_bin = term_get_match_state_binary(src);
                             bin = term_maybe_create_sub_binary(src_bin, offset / 8, len, &ctx->heap, ctx->global);
                         }
                     } else {
                         bin = src;
                     }
-                    WRITE_REGISTER(dreg_type, dreg, bin);
+                    WRITE_REGISTER_UNSAFE(dreg, bin);
                 #endif
+
 
                 NEXT_INSTRUCTION(next_off);
                 break;
@@ -5171,8 +5246,8 @@ wait_timeout_trap_handler:
                 uint32_t arity;
                 DECODE_LITERAL(arity, code, i, next_off)
 #ifdef IMPL_EXECUTE_LOOP
-                term module = ctx->x[arity];
-                term function = ctx->x[arity + 1];
+                term module = x_regs[arity];
+                term function = x_regs[arity + 1];
                 TRACE("apply/1, module=%lu, function=%lu arity=%i\n", module, function, arity);
 
                 remaining_reductions--;
@@ -5196,7 +5271,7 @@ wait_timeout_trap_handler:
                 term native_return;
                 if (maybe_call_native(ctx, module_name, function_name, arity, &native_return)) {
                     PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_I(native_return, orig_i);
-                    ctx->x[0] = native_return;
+                    x_regs[0] = native_return;
 
                 } else {
                     Module *target_module = globalcontext_get_module(ctx->global, module_name);
@@ -5229,8 +5304,8 @@ wait_timeout_trap_handler:
                 uint32_t n_words;
                 DECODE_LITERAL(n_words, code, i, next_off);
 #ifdef IMPL_EXECUTE_LOOP
-                term module = ctx->x[arity];
-                term function = ctx->x[arity + 1];
+                term module = x_regs[arity];
+                term function = x_regs[arity + 1];
                 TRACE("apply_last/1, module=%lu, function=%lu arity=%i deallocate=%i\n", module, function, arity, n_words);
 
                 remaining_reductions--;
@@ -5253,7 +5328,7 @@ wait_timeout_trap_handler:
                 term native_return;
                 if (maybe_call_native(ctx, module_name, function_name, arity, &native_return)) {
                     PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(native_return);
-                    ctx->x[0] = native_return;
+                    x_regs[0] = native_return;
                     DO_RETURN();
 
                 } else {
@@ -5368,21 +5443,22 @@ wait_timeout_trap_handler:
                 DECODE_LITERAL(bif, code, i, next_off); //s?
                 term arg1;
                 DECODE_COMPACT_TERM(arg1, code, i, next_off)
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("gc_bif1/5 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, T_DEST_REG(dreg_type, dreg));
-
                     const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl1 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif1_ptr;
                     term ret = func(ctx, live, arg1);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
                         HANDLE_ERROR();
                     }
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("gc_bif1/5 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -5413,21 +5489,22 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(arg1, code, i, next_off);
                 term arg2;
                 DECODE_COMPACT_TERM(arg2, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("gc_bif2/6 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, T_DEST_REG(dreg_type, dreg));
-
                     const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl2 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif2_ptr;
                     term ret = func(ctx, live, arg1, arg2);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
                         HANDLE_ERROR();
                     }
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("gc_bif2/6 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -5488,21 +5565,22 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(arg2, code, i, next_off);
                 term arg3;
                 DECODE_COMPACT_TERM(arg3, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("gc_bif3/7 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, arg3=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, arg3, T_DEST_REG(dreg_type, dreg));
-
                     const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
                     GCBifImpl3 func = EXPORTED_FUNCTION_TO_GCBIF(exported_bif)->gcbif3_ptr;
                     term ret = func(ctx, live, arg1, arg2, arg3);
                     if (UNLIKELY(term_is_invalid_term(ret))) {
                         HANDLE_ERROR();
                     }
+                #endif
 
-                    WRITE_REGISTER(dreg_type, dreg, ret);
+                dreg_t dreg;
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
+
+                #ifdef IMPL_EXECUTE_LOOP
+                    TRACE("gc_bif3/7 fail_lbl=%i, live=%i, bif=%i, arg1=0x%lx, arg2=0x%lx, arg3=0x%lx, dest=%c%i\n", f_label, live, bif, arg1, arg2, arg3, T_DEST_REG(dreg));
+                    WRITE_REGISTER(dreg, ret);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -5598,13 +5676,12 @@ wait_timeout_trap_handler:
                     int src_offset = next_off;
                 #endif
                 DECODE_COMPACT_TERM(src, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
                 uint32_t live;
                 DECODE_LITERAL(live, code, i, next_off);
 
-                TRACE("put_map_assoc/5: label: %i src: 0x%lx dest=%c%i live: %i\n", label, src, T_DEST_REG(dreg_type, dreg), live);
+                TRACE("put_map_assoc/5: label: %i src: 0x%lx dest=%c%i live: %i\n", label, src, T_DEST_REG_UNSAFE(dreg), live);
 
                 DECODE_EXTENDED_LIST_TAG(code, i, next_off);
                 uint32_t list_len;
@@ -5717,7 +5794,7 @@ wait_timeout_trap_handler:
                     }
                     free(kv);
 
-                    WRITE_REGISTER(dreg_type, dreg, map);
+                    WRITE_REGISTER_UNSAFE(dreg, map);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -5734,13 +5811,12 @@ wait_timeout_trap_handler:
                     int src_offset = next_off;
                 #endif
                 DECODE_COMPACT_TERM(src, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
                 uint32_t live;
                 DECODE_LITERAL(live, code, i, next_off);
 
-                TRACE("put_map_exact/5: label: %i src: 0x%lx dest=%c%i live: %i\n", label, src, T_DEST_REG(dreg_type, dreg), live);
+                TRACE("put_map_exact/5: label: %i src: 0x%lx dest=%c%i live: %i\n", label, src, T_DEST_REG_UNSAFE(dreg), live);
                 DECODE_EXTENDED_LIST_TAG(code, i, next_off);
                 uint32_t list_len;
                 DECODE_LITERAL(list_len, code, i, next_off);
@@ -5796,7 +5872,7 @@ wait_timeout_trap_handler:
                         }
                         term_set_map_assoc(map, pos, key, value);
                     }
-                    WRITE_REGISTER(dreg_type, dreg, map);
+                    WRITE_REGISTER_UNSAFE(dreg, map);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -5889,8 +5965,7 @@ wait_timeout_trap_handler:
                     term key;
                     DECODE_COMPACT_TERM(key, code, i, next_off);
                     dreg_t dreg;
-                    dreg_type_t dreg_type;
-                    DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                    DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                     #ifdef IMPL_EXECUTE_LOOP
                         int pos = term_find_map_pos(src, key, ctx->global);
@@ -5901,7 +5976,7 @@ wait_timeout_trap_handler:
                             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                         } else {
                             term value = term_get_map_value(src, pos);
-                            WRITE_REGISTER(dreg_type, dreg, value);
+                            WRITE_REGISTER(dreg, value);
                         }
                     #endif
                 }
@@ -5964,20 +6039,18 @@ wait_timeout_trap_handler:
                     int freg;
                     DECODE_FP_REGISTER(freg, code, i, next_off);
                     dreg_t dreg;
-                    dreg_type_t dreg_type;
-                    DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                    DECODE_DEST_REGISTER(dreg, code, i, next_off);
                     #ifdef IMPL_EXECUTE_LOOP
-                        TRACE("fmove/2 fp%i, %c%i\n", freg, T_DEST_REG(dreg_type, dreg));
+                        TRACE("fmove/2 fp%i, %c%i\n", freg, T_DEST_REG(dreg));
                         // Space should be available on heap as compiler added an allocate opcode
                         context_ensure_fpregs(ctx);
                         term float_value = term_from_float(ctx->fr[freg], &ctx->heap);
-                        WRITE_REGISTER(dreg_type, dreg, float_value);
+                        WRITE_REGISTER(dreg, float_value);
                     #endif
                     #ifdef IMPL_CODE_LOADER
                         TRACE("fmove/2\n");
                         UNUSED(freg)
                         UNUSED(dreg)
-                        UNUSED(dreg_type)
                     #endif
                 } else {
                     term src_value;
@@ -6213,7 +6286,7 @@ wait_timeout_trap_handler:
 
                 #ifdef IMPL_EXECUTE_LOOP
 
-                    ctx->x[0] = stacktrace_build(ctx, &ctx->x[0]);
+                    x_regs[0] = stacktrace_build(ctx, &x_regs[0]);
 
                 #endif
 
@@ -6228,15 +6301,14 @@ wait_timeout_trap_handler:
                 term src_value;
                 DECODE_COMPACT_TERM(src_value, code, i, next_off)
                 dreg_t head_dreg;
-                dreg_type_t head_dreg_type;
-                DECODE_DEST_REGISTER(head_dreg, head_dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(head_dreg, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("get_hd/2 %lx, %c%i\n", src_value, T_DEST_REG(head_dreg_type, head_dreg));
+                    TRACE("get_hd/2 %lx, %c%i\n", src_value, T_DEST_REG(head_dreg));
 
                     term head = term_get_list_head(src_value);
 
-                    WRITE_REGISTER(head_dreg_type, head_dreg, head);
+                    WRITE_REGISTER(head_dreg, head);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -6253,15 +6325,14 @@ wait_timeout_trap_handler:
                 term src_value;
                 DECODE_COMPACT_TERM(src_value, code, i, next_off)
                 dreg_t tail_dreg;
-                dreg_type_t tail_dreg_type;
-                DECODE_DEST_REGISTER(tail_dreg, tail_dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(tail_dreg, code, i, next_off);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("get_tl/2 %lx, %c%i\n", src_value, T_DEST_REG(tail_dreg_type, tail_dreg));
+                    TRACE("get_tl/2 %lx, %c%i\n", src_value, T_DEST_REG(tail_dreg));
 
                     term tail = term_get_list_tail(src_value);
 
-                    WRITE_REGISTER(tail_dreg_type, tail_dreg, tail);
+                    WRITE_REGISTER(tail_dreg, tail);
                 #endif
 
                 #ifdef IMPL_CODE_LOADER
@@ -6277,9 +6348,8 @@ wait_timeout_trap_handler:
 #ifdef ENABLE_OTP22
             case OP_PUT_TUPLE2: {
                 int next_off = 1;
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
                 DECODE_EXTENDED_LIST_TAG(code, i, next_off);
                 uint32_t size;
                 DECODE_LITERAL(size, code, i, next_off)
@@ -6309,7 +6379,7 @@ wait_timeout_trap_handler:
                 }
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                    WRITE_REGISTER_UNSAFE(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -6321,20 +6391,18 @@ wait_timeout_trap_handler:
             case OP_SWAP: {
                 int next_off = 1;
                 dreg_t reg_a;
-                dreg_type_t reg_a_type;
-                DECODE_DEST_REGISTER(reg_a, reg_a_type, code, i, next_off);
+                DECODE_DEST_REGISTER(reg_a, code, i, next_off);
                 dreg_t reg_b;
-                dreg_type_t reg_b_type;
-                DECODE_DEST_REGISTER(reg_b, reg_b_type, code, i, next_off);
+                DECODE_DEST_REGISTER(reg_b, code, i, next_off);
 
-                TRACE("swap/2 a=%c%i, b=%c%i\n", T_DEST_REG(reg_a_type, reg_a), T_DEST_REG(reg_b_type, reg_b));
+                TRACE("swap/2 a=%c%i, b=%c%i\n", T_DEST_REG(reg_a), T_DEST_REG(reg_b));
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    term a = READ_DEST_REGISTER(reg_a_type, reg_a);
-                    term b = READ_DEST_REGISTER(reg_b_type, reg_b);
+                    term a = READ_DEST_REGISTER(reg_a);
+                    term b = READ_DEST_REGISTER(reg_b);
 
-                    WRITE_REGISTER(reg_a_type, reg_a, b);
-                    WRITE_REGISTER(reg_b_type, reg_b, a);
+                    WRITE_REGISTER(reg_a, b);
+                    WRITE_REGISTER(reg_b, a);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -6359,23 +6427,22 @@ wait_timeout_trap_handler:
                 term src;
                 DECODE_COMPACT_TERM(src, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_start_match4/4\n");
                 #endif
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    TRACE("bs_start_match4/4, fail=%u live=%u src=%p dreg=%c%i\n", (unsigned) fail, (unsigned) live, (void *) src, T_DEST_REG(dreg_type, dreg));
+                    TRACE("bs_start_match4/4, fail=%u live=%u src=%p dreg=%c%i\n", (unsigned) fail, (unsigned) live, (void *) src, T_DEST_REG(dreg));
 
                     if (!(term_is_binary(src) || term_is_match_state(src))) {
-                        WRITE_REGISTER(dreg_type, dreg, src);
+                        WRITE_REGISTER(dreg, src);
                         i = POINTER_TO_II(mod->labels[fail]);
                     } else {
                         term match_state = term_alloc_bin_match_state(src, 0, &ctx->heap);
 
-                        WRITE_REGISTER(dreg_type, dreg, match_state);
+                        WRITE_REGISTER(dreg, match_state);
                         NEXT_INSTRUCTION(next_off);
                     }
                 #endif
@@ -6393,12 +6460,11 @@ wait_timeout_trap_handler:
                 uint32_t fun_index;
                 DECODE_LITERAL(fun_index, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 DECODE_EXTENDED_LIST_TAG(code, i, next_off);
                 uint32_t numfree;
                 DECODE_LITERAL(numfree, code, i, next_off)
-                TRACE("make_fun3/3, fun_index=%i dreg=%c%i numfree=%i\n", fun_index, T_DEST_REG(dreg_type, dreg), numfree);
+                TRACE("make_fun3/3, fun_index=%i dreg=%c%i numfree=%i\n", fun_index, T_DEST_REG(dreg), numfree);
 
                 #ifdef IMPL_EXECUTE_LOOP
                     size_t size = numfree + BOXED_FUN_SIZE;
@@ -6419,7 +6485,7 @@ wait_timeout_trap_handler:
 
                 #ifdef IMPL_EXECUTE_LOOP
                     term fun = ((term) boxed_func) | TERM_BOXED_VALUE_TAG;
-                    WRITE_REGISTER(dreg_type, dreg, fun);
+                    WRITE_REGISTER(dreg, fun);
                 #endif
                 NEXT_INSTRUCTION(next_off);
                 break;
@@ -6444,12 +6510,10 @@ wait_timeout_trap_handler:
             case OP_RECV_MARKER_BIND: {
                 int next_off = 1;
                 dreg_t reg_a;
-                dreg_type_t reg_a_type;
-                DECODE_DEST_REGISTER(reg_a, reg_a_type, code, i, next_off);
+                DECODE_DEST_REGISTER(reg_a, code, i, next_off);
                 dreg_t reg_b;
-                dreg_type_t reg_b_type;
-                DECODE_DEST_REGISTER(reg_b, reg_b_type, code, i, next_off);
-                TRACE("recv_marker_bind/2: reg1=%c%i reg2=%c%i\n", T_DEST_REG(reg_a_type, reg_a), T_DEST_REG(reg_b_type, reg_b));
+                DECODE_DEST_REGISTER(reg_b, code, i, next_off);
+                TRACE("recv_marker_bind/2: reg1=%c%i reg2=%c%i\n", T_DEST_REG(reg_a), T_DEST_REG(reg_b));
                 NEXT_INSTRUCTION(next_off);
                 break;
             }
@@ -6457,9 +6521,8 @@ wait_timeout_trap_handler:
             case OP_RECV_MARKER_CLEAR: {
                 int next_off = 1;
                 dreg_t reg_a;
-                dreg_type_t reg_a_type;
-                DECODE_DEST_REGISTER(reg_a, reg_a_type, code, i, next_off);
-                TRACE("recv_marker_clean/1: reg1=%c%i\n", T_DEST_REG(reg_a_type, reg_a));
+                DECODE_DEST_REGISTER(reg_a, code, i, next_off);
+                TRACE("recv_marker_clean/1: reg1=%c%i\n", T_DEST_REG(reg_a));
                 NEXT_INSTRUCTION(next_off);
                 break;
             }
@@ -6467,12 +6530,11 @@ wait_timeout_trap_handler:
             case OP_RECV_MARKER_RESERVE: {
                 int next_off = 1;
                 dreg_t reg_a;
-                dreg_type_t reg_a_type;
-                DECODE_DEST_REGISTER(reg_a, reg_a_type, code, i, next_off);
-                TRACE("recv_marker_reserve/1: reg1=%c%i\n", T_DEST_REG(reg_a_type, reg_a));
+                DECODE_DEST_REGISTER(reg_a, code, i, next_off);
+                TRACE("recv_marker_reserve/1: reg1=%c%i\n", T_DEST_REG(reg_a));
 #ifdef IMPL_EXECUTE_LOOP
                 // Clear register to avoid any issue with GC
-                WRITE_REGISTER(reg_a_type, reg_a, term_nil());
+                WRITE_REGISTER(reg_a, term_nil());
 #endif
                 NEXT_INSTRUCTION(next_off);
                 break;
@@ -6481,9 +6543,8 @@ wait_timeout_trap_handler:
             case OP_RECV_MARKER_USE: {
                 int next_off = 1;
                 dreg_t reg_a;
-                dreg_type_t reg_a_type;
-                DECODE_DEST_REGISTER(reg_a, reg_a_type, code, i, next_off);
-                TRACE("recv_marker_use/1: reg1=%c%i\n", T_DEST_REG(reg_a_type, reg_a));
+                DECODE_DEST_REGISTER(reg_a, code, i, next_off);
+                TRACE("recv_marker_use/1: reg1=%c%i\n", T_DEST_REG(reg_a));
                 NEXT_INSTRUCTION(next_off);
                 break;
             }
@@ -6500,10 +6561,9 @@ wait_timeout_trap_handler:
                 DECODE_LITERAL(live, code, i, next_off);
                 uint32_t unit;
                 DECODE_LITERAL(unit, code, i, next_off);
-                dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-                TRACE("bs_create_bin/6 fail=%i, alloc=%i live=%i unit=%i dreg=%c%i\n", fail, alloc, live, unit, T_DEST_REG(dreg_type, dreg));
+                dreg_unsafe_t dreg;
+                DECODE_DEST_REGISTER_UNSAFE(dreg, code, i, next_off);
+                TRACE("bs_create_bin/6 fail=%i, alloc=%i live=%i unit=%i dreg=%c%i\n", fail, alloc, live, unit, T_DEST_REG_UNSAFE(dreg));
                 DECODE_EXTENDED_LIST_TAG(code, i, next_off);
                 uint32_t list_len;
                 DECODE_LITERAL(list_len, code, i, next_off);
@@ -6751,7 +6811,7 @@ wait_timeout_trap_handler:
                         }
                         offset += segment_size;
                     }
-                    WRITE_REGISTER(dreg_type, dreg, t);
+                    WRITE_REGISTER_UNSAFE(dreg, t);
                 #endif
 
                 NEXT_INSTRUCTION(next_off);
@@ -6841,8 +6901,7 @@ wait_timeout_trap_handler:
                 term src;
                 DECODE_COMPACT_TERM(src, code, i, next_off);
                 dreg_t dreg;
-                dreg_type_t dreg_type;
-                DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
+                DECODE_DEST_REGISTER(dreg, code, i, next_off);
                 #ifdef IMPL_EXECUTE_LOOP
                     if (UNLIKELY(!term_is_tuple(src) || (size != term_get_tuple_arity(src)))) {
                         fprintf(stderr, "update_record/5 !term_is_tuple(src) or size doesn't match\n");
@@ -6880,9 +6939,9 @@ wait_timeout_trap_handler:
                 }
                 #ifdef IMPL_EXECUTE_LOOP
                     if (reuse) {
-                        WRITE_REGISTER(dreg_type, dreg, src);
+                        WRITE_REGISTER(dreg, src);
                     } else {
-                        WRITE_REGISTER(dreg_type, dreg, dst);
+                        WRITE_REGISTER(dreg, dst);
                     }
                 #endif
 
@@ -6971,10 +7030,6 @@ wait_timeout_trap_handler:
                             int unit;
                             DECODE_LITERAL(unit, code, i, next_off);
                             j++;
-                            dreg_t dreg;
-                            dreg_type_t dreg_type;
-                            DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-                            j++;
                             #ifdef IMPL_EXECUTE_LOOP
                                 // context_clean_registers(ctx, live); // TODO: check if needed
                                 VERIFY_IS_INTEGER(size, "bs_match/3");
@@ -6990,7 +7045,12 @@ wait_timeout_trap_handler:
                                 if (UNLIKELY(term_is_invalid_term(t))) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                 }
-                                WRITE_REGISTER(dreg_type, dreg, t);
+                            #endif
+                            dreg_t dreg;
+                            DECODE_DEST_REGISTER(dreg, code, i, next_off);
+                            j++;
+                            #ifdef IMPL_EXECUTE_LOOP
+                                WRITE_REGISTER(dreg, t);
                                 bs_offset += increment;
                             #endif
                             break;
@@ -7013,10 +7073,6 @@ wait_timeout_trap_handler:
                             int unit;
                             DECODE_LITERAL(unit, code, i, next_off);
                             j++;
-                            dreg_t dreg;
-                            dreg_type_t dreg_type;
-                            DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
-                            j++;
                             #ifdef IMPL_EXECUTE_LOOP
                                 // context_clean_registers(ctx, live); // TODO: check if needed
                                 int matched_bits = size * unit;
@@ -7037,7 +7093,12 @@ wait_timeout_trap_handler:
                                 DECODE_COMPACT_TERM(match_state, code, i, temp);
                                 bs_bin = term_get_match_state_binary(match_state);
                                 term t = term_maybe_create_sub_binary(bs_bin, bs_offset / 8, matched_bits / 8, &ctx->heap, ctx->global);
-                                WRITE_REGISTER(dreg_type, dreg, t);
+                            #endif
+                            dreg_t dreg;
+                            DECODE_DEST_REGISTER(dreg, code, i, next_off);
+                            j++;
+                            #ifdef IMPL_EXECUTE_LOOP
+                                WRITE_REGISTER(dreg, t);
                                 bs_offset += matched_bits;
                             #endif
                             break;
@@ -7049,10 +7110,6 @@ wait_timeout_trap_handler:
                             j++;
                             int unit;
                             DECODE_LITERAL(unit, code, i, next_off);
-                            j++;
-                            dreg_t dreg;
-                            dreg_type_t dreg_type;
-                            DECODE_DEST_REGISTER(dreg, dreg_type, code, i, next_off);
                             j++;
                             #ifdef IMPL_EXECUTE_LOOP
                                 // context_clean_registers(ctx, live); // TODO: check if needed
@@ -7071,7 +7128,12 @@ wait_timeout_trap_handler:
                                 DECODE_COMPACT_TERM(match_state, code, i, temp);
                                 bs_bin = term_get_match_state_binary(match_state);
                                 term t = term_maybe_create_sub_binary(bs_bin, bs_offset / 8, tail_bits / 8, &ctx->heap, ctx->global);
-                                WRITE_REGISTER(dreg_type, dreg, t);
+                            #endif
+                            dreg_t dreg;
+                            DECODE_DEST_REGISTER(dreg, code, i, next_off);
+                            j++;
+                            #ifdef IMPL_EXECUTE_LOOP
+                                WRITE_REGISTER(dreg, t);
                                 bs_offset = total_bits;
                             #endif
                             break;
@@ -7150,8 +7212,8 @@ bs_match_jump_to_fail:
 
 #ifdef IMPL_EXECUTE_LOOP
 do_abort:
-        ctx->x[0] = ERROR_ATOM;
-        ctx->x[1] = VM_ABORT_ATOM;
+        x_regs[0] = ERROR_ATOM;
+        x_regs[1] = VM_ABORT_ATOM;
 
 handle_error:
         {
@@ -7168,10 +7230,10 @@ handle_error:
             dump(ctx);
         }
 
-        if (ctx->x[0] == LOWERCASE_EXIT_ATOM) {
-            ctx->exit_reason = ctx->x[1];
+        if (x_regs[0] == LOWERCASE_EXIT_ATOM) {
+            ctx->exit_reason = x_regs[1];
         } else {
-            bool throw = ctx->x[0] == THROW_ATOM;
+            bool throw = x_regs[0] == THROW_ATOM;
 
             int exit_reason_tuple_size = (throw ? TUPLE_SIZE(2) : 0) + TUPLE_SIZE(2);
             if (memory_ensure_free_opt(ctx, exit_reason_tuple_size, MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
@@ -7181,10 +7243,10 @@ handle_error:
                 if (throw) {
                     error_term = term_alloc_tuple(2, &ctx->heap);
                     term_put_tuple_element(error_term, 0, NOCATCH_ATOM);
-                    term_put_tuple_element(error_term, 1, ctx->x[1]);
+                    term_put_tuple_element(error_term, 1, x_regs[1]);
                 } else {
                     // error
-                    error_term = ctx->x[1];
+                    error_term = x_regs[1];
                 }
 
                 term exit_reason_tuple = term_alloc_tuple(2, &ctx->heap);
