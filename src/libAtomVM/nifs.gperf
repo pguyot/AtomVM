@@ -49,6 +49,7 @@ erlang:erase/1, &erase_nif
 erlang:error/1, &error_nif
 erlang:error/2, &error_nif
 erlang:exit/1, &exit_nif
+erlang:exit/2, &exit_nif
 erlang:display/1, &display_nif
 erlang:float_to_binary/1, &float_to_binary_nif
 erlang:float_to_binary/2, &float_to_binary_nif
@@ -81,8 +82,6 @@ erlang:register/2, &register_nif
 erlang:unregister/1, &unregister_nif
 erlang:send/2, &send_nif
 erlang:setelement/3, &setelement_nif
-erlang:spawn/1, &spawn_fun_nif
-erlang:spawn/3, &spawn_nif
 erlang:spawn_opt/2, &spawn_fun_opt_nif
 erlang:spawn_opt/4, &spawn_opt_nif
 erlang:system_info/1, &system_info_nif
