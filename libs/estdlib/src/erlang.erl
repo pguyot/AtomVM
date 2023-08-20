@@ -193,7 +193,8 @@ send_after(Time, Dest, Msg) ->
 %%
 %% The following keys are supported:
 %% <ul>
-%%      <li><b>heap_size</b> the number of words used in the heap (integer)</li>
+%%      <li><b>heap_size</b> the number of words used in the heap (integer), including the stack but excluding fragments</li>
+%%      <li><b>total_heap_size</b> the number of words used in the heap (integer) including fragments</li>
 %%      <li><b>stack_size</b> the number of words used in the stack (integer)</li>
 %%      <li><b>message_queue_len</b> the number of messages enqueued for the process (integer)</li>
 %%      <li><b>memory</b> the estimated total number of bytes in use by the process (integer)</li>
@@ -205,6 +206,7 @@ send_after(Time, Dest, Msg) ->
 %%-----------------------------------------------------------------------------
 -spec process_info
     (Pid :: pid(), heap_size) -> {heap_size, non_neg_integer()};
+    (Pid :: pid(), total_heap_size) -> {total_heap_size, non_neg_integer()};
     (Pid :: pid(), stack_size) -> {stack_size, non_neg_integer()};
     (Pid :: pid(), message_queue_len) -> {message_queue_len, non_neg_integer()};
     (Pid :: pid(), memory) -> {memory, non_neg_integer()};
@@ -816,9 +818,15 @@ spawn_link(Function) ->
 spawn_link(Module, Function, Args) ->
     erlang:spawn_opt(Module, Function, Args, [link]).
 
+-type heap_growth_strategy() ::
+    bounded_free
+    | minimum
+    | fibonacci.
+
 -type spawn_option() ::
     {min_heap_size, pos_integer()}
     | {max_heap_size, pos_integer()}
+    | {heap_growth, heap_growth_strategy()}
     | link
     | monitor.
 
