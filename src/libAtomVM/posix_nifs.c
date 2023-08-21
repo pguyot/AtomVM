@@ -265,7 +265,9 @@ static term nif_atomvm_posix_open(Context *ctx, int argc, term argv[])
             free(path);
             RAISE_ERROR(BADARG_ATOM);
         }
-        int mode = term_to_int(mode_term);
+        // POSIX says effect of bits other than file permissions is unspecified
+        // defined, so we'll happily cast
+        mode_t mode = (mode_t) term_to_int(mode_term);
         fd = open(path, posix_flags, mode);
     } else {
         fd = open(path, posix_flags);
@@ -335,7 +337,7 @@ static term nif_atomvm_posix_read(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     term count_term = argv[1];
     VALIDATE_VALUE(count_term, term_is_integer);
-    int count = term_to_int(count_term);
+    avm_int_t count = term_to_int(count_term);
 
     void *fd_obj_ptr;
     if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], glb->posix_fd_resource_type, &fd_obj_ptr))) {
@@ -346,7 +348,7 @@ static term nif_atomvm_posix_read(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term bin_term = term_create_uninitialized_binary(count, &ctx->heap, glb);
-    int res = read(fd_obj->fd, (void *) term_binary_data(bin_term), count);
+    ssize_t res = read(fd_obj->fd, (void *) term_binary_data(bin_term), count);
     if (UNLIKELY(res < 0)) {
         // Return an error.
         if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -384,7 +386,7 @@ static term nif_atomvm_posix_write(Context *ctx, int argc, term argv[])
     const char *data = term_binary_data(data_term);
     unsigned long n = term_binary_size(data_term);
     term result;
-    int res = write(fd_obj->fd, data, n);
+    ssize_t res = write(fd_obj->fd, data, n);
     if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
@@ -480,7 +482,9 @@ static term nif_atomvm_posix_mkfifo(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    int mode = term_to_int(mode_term);
+    // POSIX says effects of bits other than file permissions are implementation
+    // defined, so we'll happily cast
+    mode_t mode = (mode_t) term_to_int(mode_term);
 
     term result;
     int res = mkfifo(path, mode);
