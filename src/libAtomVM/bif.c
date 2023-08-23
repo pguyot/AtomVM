@@ -249,6 +249,7 @@ term bif_erlang_map_size_1(Context *ctx, int live, term arg1)
     UNUSED(live);
 
     if (!UNLIKELY(term_is_map(arg1))) {
+        // We don't need to preserve registers as we're raising
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 1, &arg1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -265,6 +266,7 @@ term bif_erlang_map_size_1(Context *ctx, int live, term arg1)
 term bif_erlang_map_get_2(Context *ctx, term arg1, term arg2)
 {
     if (!UNLIKELY(term_is_map(arg2))) {
+        // We don't need to preserve registers as we're raising
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 1, &arg2, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -277,6 +279,7 @@ term bif_erlang_map_get_2(Context *ctx, term arg1, term arg2)
 
     int pos = term_find_map_pos(arg2, arg1, ctx->global);
     if (pos == TERM_MAP_NOT_FOUND) {
+        // We don't need to preserve registers as we're raising
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 1, &arg1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -291,9 +294,9 @@ term bif_erlang_map_get_2(Context *ctx, term arg1, term arg2)
     return term_get_map_value(arg2, pos);
 }
 
-static inline term make_boxed_int(Context *ctx, avm_int_t value)
+static inline term make_boxed_int(Context *ctx, uint32_t live, avm_int_t value)
 {
-    if (UNLIKELY(memory_ensure_free_opt(ctx, BOXED_INT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
@@ -301,9 +304,9 @@ static inline term make_boxed_int(Context *ctx, avm_int_t value)
 }
 
 #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-static inline term make_boxed_int64(Context *ctx, avm_int64_t value)
+static inline term make_boxed_int64(Context *ctx, uint32_t live, avm_int64_t value)
 {
-    if (UNLIKELY(memory_ensure_free_opt(ctx, BOXED_INT64_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT64_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
@@ -311,10 +314,10 @@ static inline term make_boxed_int64(Context *ctx, avm_int64_t value)
 }
 #endif
 
-static inline term make_maybe_boxed_int(Context *ctx, avm_int_t value)
+static inline term make_maybe_boxed_int(Context *ctx, uint32_t live, avm_int_t value)
 {
     if ((value < MIN_NOT_BOXED_INT) || (value > MAX_NOT_BOXED_INT)) {
-        return make_boxed_int(ctx, value);
+        return make_boxed_int(ctx, live, value);
 
     } else {
         return term_from_int(value);
@@ -322,13 +325,13 @@ static inline term make_maybe_boxed_int(Context *ctx, avm_int_t value)
 }
 
 #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-static inline term make_maybe_boxed_int64(Context *ctx, avm_int64_t value)
+static inline term make_maybe_boxed_int64(Context *ctx, uint32_t live, avm_int64_t value)
 {
     if ((value < AVM_INT_MIN) || (value > AVM_INT_MAX)) {
-        return make_boxed_int64(ctx, value);
+        return make_boxed_int64(ctx, live, value);
 
     } else if ((value < MIN_NOT_BOXED_INT) || (value > MAX_NOT_BOXED_INT)) {
-        return make_boxed_int(ctx, value);
+        return make_boxed_int(ctx, live, value);
 
     } else {
         return term_from_int(value);
@@ -336,15 +339,15 @@ static inline term make_maybe_boxed_int64(Context *ctx, avm_int64_t value)
 }
 #endif
 
-static term add_overflow_helper(Context *ctx, term arg1, term arg2)
+static term add_overflow_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     avm_int_t val1 = term_to_int(arg1);
     avm_int_t val2 = term_to_int(arg2);
 
-    return make_boxed_int(ctx, val1 + val2);
+    return make_boxed_int(ctx, live, val1 + val2);
 }
 
-static term add_boxed_helper(Context *ctx, term arg1, term arg2)
+static term add_boxed_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     int use_float = 0;
     int size = 0;
@@ -374,7 +377,7 @@ static term add_boxed_helper(Context *ctx, term arg1, term arg2)
             RAISE_ERROR(BADARITH_ATOM);
         }
 
-        if (UNLIKELY(memory_ensure_free_opt(ctx, FLOAT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, FLOAT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return term_from_float(fresult, &ctx->heap);
@@ -394,7 +397,7 @@ static term add_boxed_helper(Context *ctx, term arg1, term arg2)
             if (BUILTIN_ADD_OVERFLOW_INT(val1, val2, &res)) {
                 #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
                     avm_int64_t res64 = (avm_int64_t) val1 + (avm_int64_t) val2;
-                    return make_boxed_int64(ctx, res64);
+                    return make_boxed_int64(ctx, live, res64);
 
                 #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                     TRACE("overflow: arg1: " AVM_INT64_FMT ", arg2: " AVM_INT64_FMT "\n", arg1, arg2);
@@ -404,7 +407,7 @@ static term add_boxed_helper(Context *ctx, term arg1, term arg2)
                 #endif
             }
 
-            return make_maybe_boxed_int(ctx, res);
+            return make_maybe_boxed_int(ctx, live, res);
         }
 
     #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
@@ -419,7 +422,7 @@ static term add_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(OVERFLOW_ATOM);
             }
 
-            return make_maybe_boxed_int64(ctx, res);
+            return make_maybe_boxed_int64(ctx, live, res);
         }
     #endif
 
@@ -438,22 +441,22 @@ term bif_erlang_add_2(Context *ctx, int live, term arg1, term arg2)
         if (!BUILTIN_ADD_OVERFLOW((avm_int_t) (arg1 & ~TERM_INTEGER_TAG), (avm_int_t) (arg2 & ~TERM_INTEGER_TAG), &res)) {
             return res | TERM_INTEGER_TAG;
         } else {
-            return add_overflow_helper(ctx, arg1, arg2);
+            return add_overflow_helper(ctx, live, arg1, arg2);
         }
     } else {
-        return add_boxed_helper(ctx, arg1, arg2);
+        return add_boxed_helper(ctx, live, arg1, arg2);
     }
 }
 
-static term sub_overflow_helper(Context *ctx, term arg1, term arg2)
+static term sub_overflow_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     avm_int_t val1 = term_to_int(arg1);
     avm_int_t val2 = term_to_int(arg2);
 
-    return make_boxed_int(ctx, val1 - val2);
+    return make_boxed_int(ctx, live, val1 - val2);
 }
 
-static term sub_boxed_helper(Context *ctx, term arg1, term arg2)
+static term sub_boxed_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     int use_float = 0;
     int size = 0;
@@ -482,7 +485,7 @@ static term sub_boxed_helper(Context *ctx, term arg1, term arg2)
         if (UNLIKELY(!isfinite(fresult))) {
             RAISE_ERROR(BADARITH_ATOM);
         }
-        if (UNLIKELY(memory_ensure_free_opt(ctx, FLOAT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, FLOAT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return term_from_float(fresult, &ctx->heap);
@@ -502,7 +505,7 @@ static term sub_boxed_helper(Context *ctx, term arg1, term arg2)
             if (BUILTIN_SUB_OVERFLOW_INT(val1, val2, &res)) {
                 #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
                     avm_int64_t res64 = (avm_int64_t) val1 - (avm_int64_t) val2;
-                    return make_boxed_int64(ctx, res64);
+                    return make_boxed_int64(ctx, live, res64);
 
                 #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                     TRACE("overflow: arg1: " AVM_INT64_FMT ", arg2: " AVM_INT64_FMT "\n", arg1, arg2);
@@ -512,7 +515,7 @@ static term sub_boxed_helper(Context *ctx, term arg1, term arg2)
                 #endif
             }
 
-            return make_maybe_boxed_int(ctx, res);
+            return make_maybe_boxed_int(ctx, live, res);
         }
 
     #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
@@ -527,7 +530,7 @@ static term sub_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(OVERFLOW_ATOM);
             }
 
-            return make_maybe_boxed_int64(ctx, res);
+            return make_maybe_boxed_int64(ctx, live, res);
         }
     #endif
 
@@ -546,14 +549,14 @@ term bif_erlang_sub_2(Context *ctx, int live, term arg1, term arg2)
         if (!BUILTIN_SUB_OVERFLOW((avm_int_t) (arg1 & ~TERM_INTEGER_TAG), (avm_int_t) (arg2 & ~TERM_INTEGER_TAG), &res)) {
             return res | TERM_INTEGER_TAG;
         } else {
-            return sub_overflow_helper(ctx, arg1, arg2);
+            return sub_overflow_helper(ctx, live, arg1, arg2);
         }
     } else {
-        return sub_boxed_helper(ctx, arg1, arg2);
+        return sub_boxed_helper(ctx, live, arg1, arg2);
     }
 }
 
-static term mul_overflow_helper(Context *ctx, term arg1, term arg2)
+static term mul_overflow_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     avm_int_t val1 = term_to_int(arg1);
     avm_int_t val2 = term_to_int(arg2);
@@ -564,11 +567,11 @@ static term mul_overflow_helper(Context *ctx, term arg1, term arg2)
 #endif
 
     if (!BUILTIN_MUL_OVERFLOW_INT(val1, val2, &res)) {
-        return make_boxed_int(ctx, res);
+        return make_boxed_int(ctx, live, res);
 
 #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
     } else if (!BUILTIN_MUL_OVERFLOW_INT64((avm_int64_t) val1, (avm_int64_t) val2, &res64)) {
-        return make_boxed_int64(ctx, res64);
+        return make_boxed_int64(ctx, live, res64);
 #endif
 
     } else {
@@ -576,7 +579,7 @@ static term mul_overflow_helper(Context *ctx, term arg1, term arg2)
     }
 }
 
-static term mul_boxed_helper(Context *ctx, term arg1, term arg2)
+static term mul_boxed_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     int use_float = 0;
     int size = 0;
@@ -605,7 +608,7 @@ static term mul_boxed_helper(Context *ctx, term arg1, term arg2)
         if (UNLIKELY(!isfinite(fresult))) {
             RAISE_ERROR(BADARITH_ATOM);
         }
-        if (UNLIKELY(memory_ensure_free_opt(ctx, FLOAT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, FLOAT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return term_from_float(fresult, &ctx->heap);
@@ -625,7 +628,7 @@ static term mul_boxed_helper(Context *ctx, term arg1, term arg2)
             if (BUILTIN_MUL_OVERFLOW_INT(val1, val2, &res)) {
                 #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
                     avm_int64_t res64 = (avm_int64_t) val1 * (avm_int64_t) val2;
-                    return make_boxed_int64(ctx, res64);
+                    return make_boxed_int64(ctx, live, res64);
 
                 #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                     TRACE("overflow: arg1: " AVM_INT64_FMT ", arg2: " AVM_INT64_FMT "\n", arg1, arg2);
@@ -635,7 +638,7 @@ static term mul_boxed_helper(Context *ctx, term arg1, term arg2)
                 #endif
             }
 
-            return make_maybe_boxed_int(ctx, res);
+            return make_maybe_boxed_int(ctx, live, res);
         }
 
     #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
@@ -650,7 +653,7 @@ static term mul_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(OVERFLOW_ATOM);
             }
 
-            return make_maybe_boxed_int64(ctx, res);
+            return make_maybe_boxed_int64(ctx, live, res);
         }
     #endif
 
@@ -670,14 +673,14 @@ term bif_erlang_mul_2(Context *ctx, int live, term arg1, term arg2)
         if (!BUILTIN_MUL_OVERFLOW(a, b, &res)) {
             return res | TERM_INTEGER_TAG;
         } else {
-            return mul_overflow_helper(ctx, arg1, arg2);
+            return mul_overflow_helper(ctx, live, arg1, arg2);
         }
     } else {
-        return mul_boxed_helper(ctx, arg1, arg2);
+        return mul_boxed_helper(ctx, live, arg1, arg2);
     }
 }
 
-static term div_boxed_helper(Context *ctx, term arg1, term arg2)
+static term div_boxed_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     int size = 0;
     if (term_is_boxed_integer(arg1)) {
@@ -707,7 +710,7 @@ static term div_boxed_helper(Context *ctx, term arg1, term arg2)
 
             } else if (UNLIKELY((val2 == -1) && (val1 == AVM_INT_MIN))) {
                 #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
-                    return make_boxed_int64(ctx, -((avm_int64_t) AVM_INT_MIN));
+                    return make_boxed_int64(ctx, live, -((avm_int64_t) AVM_INT_MIN));
 
                 #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                     TRACE("overflow: arg1: 0x%lx, arg2: 0x%lx\n", arg1, arg2);
@@ -715,7 +718,7 @@ static term div_boxed_helper(Context *ctx, term arg1, term arg2)
                 #endif
 
             } else {
-                return make_maybe_boxed_int(ctx, val1 / val2);
+                return make_maybe_boxed_int(ctx, live, val1 / val2);
             }
         }
 
@@ -732,7 +735,7 @@ static term div_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(OVERFLOW_ATOM);
 
             } else {
-                return make_maybe_boxed_int64(ctx, val1 / val2);
+                return make_maybe_boxed_int64(ctx, live, val1 / val2);
             }
         }
         #endif
@@ -751,7 +754,7 @@ term bif_erlang_div_2(Context *ctx, int live, term arg1, term arg2)
         if (operand_b != 0) {
             avm_int_t res = term_to_int(arg1) / operand_b;
             if (UNLIKELY(res == -MIN_NOT_BOXED_INT)) {
-                return make_boxed_int(ctx, -MIN_NOT_BOXED_INT);
+                return make_boxed_int(ctx, live, -MIN_NOT_BOXED_INT);
 
             } else {
                 return term_from_int(res);
@@ -761,11 +764,11 @@ term bif_erlang_div_2(Context *ctx, int live, term arg1, term arg2)
         }
 
     } else {
-        return div_boxed_helper(ctx, arg1, arg2);
+        return div_boxed_helper(ctx, live, arg1, arg2);
     }
 }
 
-static term neg_boxed_helper(Context *ctx, term arg1)
+static term neg_boxed_helper(Context *ctx, uint32_t live, term arg1)
 {
     if (term_is_float(arg1)) {
         avm_float_t farg1 = term_conv_to_float(arg1);
@@ -773,7 +776,7 @@ static term neg_boxed_helper(Context *ctx, term arg1)
         if (UNLIKELY(!isfinite(fresult))) {
             RAISE_ERROR(BADARITH_ATOM);
         }
-        if (UNLIKELY(memory_ensure_free_opt(ctx, FLOAT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, FLOAT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return term_from_float(fresult, &ctx->heap);
@@ -793,7 +796,7 @@ static term neg_boxed_helper(Context *ctx, term arg1)
 
                     case AVM_INT_MIN:
                         #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
-                            return make_boxed_int64(ctx, -((avm_int64_t) val));
+                            return make_boxed_int64(ctx, live, -((avm_int64_t) val));
 
                         #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                             TRACE("overflow: val: " AVM_INT_FMT "\n", val);
@@ -804,7 +807,7 @@ static term neg_boxed_helper(Context *ctx, term arg1)
                         #endif
 
                     default:
-                        return make_boxed_int(ctx, -val);
+                        return make_boxed_int(ctx, live, -val);
                 }
             }
 
@@ -817,7 +820,7 @@ static term neg_boxed_helper(Context *ctx, term arg1)
                     RAISE_ERROR(OVERFLOW_ATOM);
 
                 } else {
-                    return make_boxed_int64(ctx, -val);
+                    return make_boxed_int64(ctx, live, -val);
                 }
             }
             #endif
@@ -837,16 +840,16 @@ term bif_erlang_neg_1(Context *ctx, int live, term arg1)
     if (LIKELY(term_is_integer(arg1))) {
         avm_int_t int_val = term_to_int(arg1);
         if (UNLIKELY(int_val == MIN_NOT_BOXED_INT)) {
-            return make_boxed_int(ctx, -MIN_NOT_BOXED_INT);
+            return make_boxed_int(ctx, live, -MIN_NOT_BOXED_INT);
         } else {
             return term_from_int(-int_val);
         }
     } else {
-        return neg_boxed_helper(ctx, arg1);
+        return neg_boxed_helper(ctx, live, arg1);
     }
 }
 
-static term abs_boxed_helper(Context *ctx, term arg1)
+static term abs_boxed_helper(Context *ctx, uint32_t live, term arg1)
 {
     if (term_is_float(arg1)) {
         avm_float_t farg1 = term_conv_to_float(arg1);
@@ -860,7 +863,7 @@ static term abs_boxed_helper(Context *ctx, term arg1)
         if (UNLIKELY(!isfinite(fresult))) {
             RAISE_ERROR(BADARITH_ATOM);
         }
-        if (UNLIKELY(memory_ensure_free_opt(ctx, FLOAT_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, FLOAT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return term_from_float(fresult, &ctx->heap);
@@ -880,7 +883,7 @@ static term abs_boxed_helper(Context *ctx, term arg1)
 
                 if (val == AVM_INT_MIN) {
                     #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
-                        return make_boxed_int64(ctx, -((avm_int64_t) val));
+                        return make_boxed_int64(ctx, live, -((avm_int64_t) val));
 
                     #elif BOXED_TERMS_REQUIRED_FOR_INT64 == 1
                         TRACE("overflow: val: " AVM_INT_FMT "\n", val);
@@ -891,7 +894,7 @@ static term abs_boxed_helper(Context *ctx, term arg1)
                     #endif
 
                 } else {
-                    return make_boxed_int(ctx, -val);
+                    return make_boxed_int(ctx, live, -val);
                 }
             }
 
@@ -907,7 +910,7 @@ static term abs_boxed_helper(Context *ctx, term arg1)
                     RAISE_ERROR(OVERFLOW_ATOM);
 
                 } else {
-                    return make_boxed_int64(ctx, -val);
+                    return make_boxed_int64(ctx, live, -val);
                 }
             }
             #endif
@@ -929,7 +932,7 @@ term bif_erlang_abs_1(Context *ctx, int live, term arg1)
 
         if (int_val < 0) {
             if (UNLIKELY(int_val == MIN_NOT_BOXED_INT)) {
-                return make_boxed_int(ctx, -MIN_NOT_BOXED_INT);
+                return make_boxed_int(ctx, live, -MIN_NOT_BOXED_INT);
             } else {
                 return term_from_int(-int_val);
             }
@@ -938,11 +941,11 @@ term bif_erlang_abs_1(Context *ctx, int live, term arg1)
         }
 
     } else {
-        return abs_boxed_helper(ctx, arg1);
+        return abs_boxed_helper(ctx, live, arg1);
     }
 }
 
-static term rem_boxed_helper(Context *ctx, term arg1, term arg2)
+static term rem_boxed_helper(Context *ctx, uint32_t live, term arg1, term arg2)
 {
     int size = 0;
     if (term_is_boxed_integer(arg1)) {
@@ -971,7 +974,7 @@ static term rem_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(BADARITH_ATOM);
             }
 
-            return make_maybe_boxed_int(ctx, val1 % val2);
+            return make_maybe_boxed_int(ctx, live, val1 % val2);
         }
 
         #if BOXED_TERMS_REQUIRED_FOR_INT64 == 2
@@ -983,7 +986,7 @@ static term rem_boxed_helper(Context *ctx, term arg1, term arg2)
                 RAISE_ERROR(BADARITH_ATOM);
             }
 
-            return make_maybe_boxed_int64(ctx, val1 % val2);
+            return make_maybe_boxed_int64(ctx, live, val1 % val2);
         }
         #endif
 
@@ -1006,7 +1009,7 @@ term bif_erlang_rem_2(Context *ctx, int live, term arg1, term arg2)
         }
 
     } else {
-        return rem_boxed_helper(ctx, arg1, arg2);
+        return rem_boxed_helper(ctx, live, arg1, arg2);
     }
 }
 
@@ -1028,9 +1031,9 @@ term bif_erlang_ceil_1(Context *ctx, int live, term arg1)
         #endif
 
         #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-            return make_maybe_boxed_int64(ctx, result);
+            return make_maybe_boxed_int64(ctx, live, result);
         #else
-            return make_maybe_boxed_int(ctx, result);
+            return make_maybe_boxed_int(ctx, live, result);
         #endif
     }
 
@@ -1060,9 +1063,9 @@ term bif_erlang_floor_1(Context *ctx, int live, term arg1)
         #endif
 
         #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-            return make_maybe_boxed_int64(ctx, result);
+            return make_maybe_boxed_int64(ctx, live, result);
         #else
-            return make_maybe_boxed_int(ctx, result);
+            return make_maybe_boxed_int(ctx, live, result);
         #endif
     }
 
@@ -1092,9 +1095,9 @@ term bif_erlang_round_1(Context *ctx, int live, term arg1)
         #endif
 
         #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-            return make_maybe_boxed_int64(ctx, result);
+            return make_maybe_boxed_int64(ctx, live, result);
         #else
-            return make_maybe_boxed_int(ctx, result);
+            return make_maybe_boxed_int(ctx, live, result);
         #endif
     }
 
@@ -1124,9 +1127,9 @@ term bif_erlang_trunc_1(Context *ctx, int live, term arg1)
         #endif
 
         #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-            return make_maybe_boxed_int64(ctx, result);
+            return make_maybe_boxed_int64(ctx, live, result);
         #else
-            return make_maybe_boxed_int(ctx, result);
+            return make_maybe_boxed_int(ctx, live, result);
         #endif
     }
 
@@ -1153,9 +1156,9 @@ static inline term bitwise_helper(Context *ctx, int live, term arg1, term arg2, 
     int64_t result = op(a, b);
 
     #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-        return make_maybe_boxed_int64(ctx, result);
+        return make_maybe_boxed_int64(ctx, live, result);
     #else
-        return make_maybe_boxed_int(ctx, result);
+        return make_maybe_boxed_int(ctx, live, result);
     #endif
 }
 
@@ -1216,9 +1219,9 @@ static inline term bitshift_helper(Context *ctx, int live, term arg1, term arg2,
     int64_t result = op(a, b);
 
     #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
-        return make_maybe_boxed_int64(ctx, result);
+        return make_maybe_boxed_int64(ctx, live, result);
     #else
-        return make_maybe_boxed_int(ctx, result);
+        return make_maybe_boxed_int(ctx, live, result);
     #endif
 }
 
