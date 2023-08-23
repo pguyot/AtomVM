@@ -37,6 +37,9 @@ jobs:
         - otp: "26.0.1"
           mode: setup_beam
 
+        - otp: "26.0.2"
+          mode: setup_beam
+
         - otp: "25"
           mode: setup_beam_283c56d
 
@@ -46,14 +49,26 @@ jobs:
         - otp: "26.0.1"
           mode: setup_beam_283c56d
 
+        - otp: "26.0.2"
+          mode: setup_beam_283c56d
+
         - mode: git
           otp: "26.0.1"
+
+        - mode: git
+          otp: "26.0.2"
 
         - mode: archive
           otp: "26.0.1"
 
+        - mode: archive
+          otp: "26.0.2"
+
         - mode: hexpm_scripts
           otp: "26.0.1"
+
+        - mode: hexpm_scripts
+          otp: "26.0.2"
 
         - container: "erlang:25"
 
@@ -61,7 +76,11 @@ jobs:
 
         - container: "erlang:26.0.1"
 
+        - container: "erlang:26.0.2"
+
         - container: "hexpm/erlang:26.0.1-ubuntu-jammy-20230126"
+
+        - container: "hexpm/erlang:26.0.2-ubuntu-jammy-20230126"
 
     steps:
     # Setup
