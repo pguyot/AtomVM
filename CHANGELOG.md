@@ -67,7 +67,9 @@ functions that default to `?ATOMVM_NVS_NS` are deprecated now).
 - Added support for `crypto:hash/2` (ESP32 and generic_unix with openssl)
 - Added lists:usort/1,2
 - Added erlang:spawn_link/1,3
+- Added erlang:exit/2
 - Added links to process_info/2
+- Added many missing documentation and specifications for available nifs
 
 ### Fixed
 - Fixed issue with formatting integers with io:format() on STM32 platform
@@ -77,6 +79,8 @@ functions that default to `?ATOMVM_NVS_NS` are deprecated now).
 - Fixed numerous bugs in memory allocations that could crash the VM
 - Fixed SNTP support that had been broken in IDF 4.x builds
 - Fixed `erlang:send/2` not sending to registered name
+- Fixed incorrect exit reason for exceptions of class exit
+- Fixed several incorrect type specifications
 
 ### Breaking Changes
 
