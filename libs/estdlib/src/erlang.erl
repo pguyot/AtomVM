@@ -74,6 +74,8 @@
     whereis/1,
     spawn/1,
     spawn/3,
+    spawn_link/1,
+    spawn_link/3,
     spawn_opt/2,
     spawn_opt/4,
     link/1,
@@ -774,8 +776,8 @@ whereis(_Name) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec spawn(Function :: function()) -> pid().
-spawn(_Name) ->
-    erlang:nif_error(undefined).
+spawn(Function) ->
+    erlang:spawn_opt(Function, []).
 
 %%-----------------------------------------------------------------------------
 %% @param   Module      module of the function to create a process from
@@ -786,8 +788,31 @@ spawn(_Name) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec spawn(Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
-spawn(_Module, _Function, _Args) ->
-    erlang:nif_error(undefined).
+spawn(Module, Function, Args) ->
+    erlang:spawn_opt(Module, Function, Args, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Function    function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process and link it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Function :: function()) -> pid().
+spawn_link(Function) ->
+    erlang:spawn_opt(Function, [link]).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process by calling exported Function from Module with Args
+%% and link it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
+spawn_link(Module, Function, Args) ->
+    erlang:spawn_opt(Module, Function, Args, [link]).
 
 -type spawn_option() ::
     {min_heap_size, pos_integer()}
@@ -802,7 +827,7 @@ spawn(_Module, _Function, _Args) ->
 %% @doc     Create a new process.
 %% @end
 %%-----------------------------------------------------------------------------
--spec spawn_opt(Function :: function(), Options :: [{max_heap_size, integer()}]) ->
+-spec spawn_opt(Function :: function(), Options :: [spawn_option()]) ->
     pid() | {pid(), reference()}.
 spawn_opt(_Name, _Options) ->
     erlang:nif_error(undefined).
