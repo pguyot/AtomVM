@@ -26,7 +26,12 @@
 -module(etest).
 
 -export([test/1]).
--export([assert_match/2, assert_equals/2, assert_true/1, assert_failure/1, assert_failure/2]).
+-export([
+    assert_match/2,
+    assert_equals/2,
+    assert_true/1,
+    assert_exception/1, assert_exception/2, assert_exception/3
+]).
 
 %%-----------------------------------------------------------------------------
 %% @param   Tests a list of test modules
@@ -85,11 +90,11 @@ assert_true(_) -> fail.
 
 %%-----------------------------------------------------------------------------
 %% @param   F a function to evaluate
-%% @returns ok if evaluating F results in Error being thrown; fail, otherwise
+%% @returns ok if evaluating F results in Error being raised; fail, otherwise
 %% @end
 %%-----------------------------------------------------------------------------
--spec assert_failure(fun()) -> ok | fail.
-assert_failure(F) ->
+-spec assert_exception(fun()) -> ok | fail.
+assert_exception(F) ->
     try
         F(),
         fail
@@ -99,18 +104,36 @@ assert_failure(F) ->
 
 %%-----------------------------------------------------------------------------
 %% @param   F a function to evaluate
-%% @returns ok if evaluating F results in Error being thrown; fail, otherwise
+%% @param   Class expected exception class
+%% @returns ok if evaluating F results in an exception of class Class being
+%% raised; fail, otherwise
 %% @end
 %%-----------------------------------------------------------------------------
--spec assert_failure(fun(), Error :: atom()) -> ok | fail.
-assert_failure(F, E) ->
+-spec assert_exception(fun(), Class :: throw | error | exit) -> ok | fail.
+assert_exception(F, Class) ->
     try
         F(),
         fail
     catch
-        %% TODO implement opcode 108 (raise/2)
-        _:E ->
-            id(E),
+        Class:_ ->
+            ok
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   F a function to evaluate
+%% @param   Class expected exception class
+%% @param   E expected exception value
+%% @returns ok if evaluating F results in an exception of class Class and of
+%% value E being raised; fail, otherwise
+%% @end
+%%-----------------------------------------------------------------------------
+-spec assert_exception(fun(), Class :: throw | error | exit, E :: any()) -> ok | fail.
+assert_exception(F, Class, E) ->
+    try
+        F(),
+        fail
+    catch
+        Class:E ->
             ok
     end.
 
@@ -179,5 +202,3 @@ check_results([{_Test, ok} | T]) ->
     check_results(T);
 check_results([Failure | _T]) ->
     {fail, Failure}.
-
-id(X) -> X.
