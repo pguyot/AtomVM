@@ -188,7 +188,7 @@ jobs:
       run: |
         set -eux
         test -e otp/bin && export PATH=${PWD}/otp/bin:${PATH}
-        test -e /opt/hostedtoolcache/otp-source/bin && export PATH=${PWD}/otp/bin:${PATH}
+        test -e /opt/hostedtoolcache/otp-source/bin && export PATH=/opt/hostedtoolcache/otp-source/bin:${PATH}
         which erl
         which erlc
         erl=`which erl`
