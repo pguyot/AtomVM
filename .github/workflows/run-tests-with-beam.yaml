@@ -73,6 +73,15 @@ jobs:
         - mode: git.different_pwd
           otp: "26.0.2"
 
+        - mode: git.different_pwd
+          otp: "25.0"
+
+        - mode: git.different_pwd_no_path
+          otp: "26.0.2"
+
+        - mode: git.different_pwd_no_path
+          otp: "25.0"
+
         - mode: archive
           otp: "26.0.1"
 
@@ -83,6 +92,9 @@ jobs:
           otp: "26.0.2"
 
         - mode: archive.different_pwd
+          otp: "26.0.2"
+
+        - mode: archive.different_pwd_no_path
           otp: "26.0.2"
 
         - mode: hexpm_scripts
@@ -174,7 +186,7 @@ jobs:
         ./Install -minimal $install_dir
 
     - name: "Fetch source using erlang/otp git repo"
-      if: matrix.mode == 'git' || matrix.mode == 'git.prefix' || matrix.mode == 'git.different_pwd'
+      if: matrix.mode == 'git' || matrix.mode == 'git.prefix' || matrix.mode == 'git.different_pwd' || matrix.mode == 'git.different_pwd_no_path'
       run: |
         set -eux
         git clone https://github.com/erlang/otp.git
@@ -182,7 +194,7 @@ jobs:
         git checkout OTP-${{ matrix.otp }}
 
     - name: "Fetch source using archive"
-      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix' || matrix.mode == 'archive.different_pwd'
+      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix' || matrix.mode == 'archive.different_pwd' || matrix.mode == 'archive.different_pwd_no_path'
       run: |
         set -eux
         wget https://github.com/erlang/otp/archive/OTP-${{ matrix.otp }}.tar.gz
@@ -216,6 +228,21 @@ jobs:
 
     - name: "Build from source and install with another prefix"
       if: matrix.mode == 'git.different_pwd' || matrix.mode == 'archive.different_pwd'
+      run: |
+        set -eux
+        cd otp
+        export PIE_CFLAGS=-fpie
+        export PIE_LDFLAGS=-pie
+        ./configure --with-ssl --enable-dirty-schedulers
+        make -j
+        make -j release
+        ls release
+        export PATH=$PWD/release/x86_64-pc-linux-gnu/bin:$PATH
+        cd release/x86_64-pc-linux-gnu
+        ./Install -minimal $PWD
+
+    - name: "Build from source and install with another prefix without setting PATH"
+      if: matrix.mode == 'git.different_pwd_no_path' || matrix.mode == 'archive.different_pwd_no_path'
       run: |
         set -eux
         cd otp
