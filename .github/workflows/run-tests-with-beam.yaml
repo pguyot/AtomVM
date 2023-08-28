@@ -113,10 +113,8 @@ jobs:
       run: |
         set -eux
         wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
-        mkdir otp
-        cd otp
-        tar xzf ../OTP-${{ matrix.otp }}.tar.gz
-        find .
+        tar xzf OTP-${{ matrix.otp }}.tar.gz
+        mv OTP-${{ matrix.otp }} otp
 
     - name: "Fetch source using erlang/otp git repo"
       if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
