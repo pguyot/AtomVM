@@ -41,7 +41,10 @@ jobs:
           mode: setup_beam
 
         - otp: "26.0.2"
-          mode: setup_beam_run_install
+          mode: setup_beam_run_install_tc
+
+        - otp: "26.0.2"
+          mode: setup_beam_run_install_otp
 
         - otp: "25"
           mode: setup_beam_283c56d
@@ -101,18 +104,31 @@ jobs:
 
     - name: "Install using setup-beam"
       uses: erlef/setup-beam@v1
-      if: matrix.mode == 'setup_beam' || matrix.mode == 'setup_beam_run_install'
+      if: matrix.mode == 'setup_beam' || matrix.mode == 'setup_beam_run_install_tc'  || matrix.mode == 'setup_beam_run_install_otp'
       with:
         otp-version: ${{ matrix.otp }}
 
     - name: "Reinstall with OTP command"
-      if: matrix.mode == 'setup_beam_run_install'
+      if: matrix.mode == 'setup_beam_run_install_tc'
       run: |
+        set -eux
         erl=`which erl`
         installed_path=`dirname $erl`
         installed_path=`dirname $installed_path`
         cd $installed_path
         ./Install -minimal $installed_path
+
+    - name: "Reinstall with OTP command"
+      if: matrix.mode == 'setup_beam_run_install_otp'
+      run: |
+        set -eux
+        erl=`which erl`
+        mkdir otp
+        target_path=`pwd`/otp
+        installed_path=`dirname $erl`
+        installed_path=`dirname $installed_path`
+        cd $installed_path
+        ./Install -minimal $target_path
 
     - name: "Install using setup-beam 283c56d"
       uses: paulo-ferraz-oliveira/setup-beam@283c56d6575950553c935bbb019fa1dad0e818be
