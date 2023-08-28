@@ -76,6 +76,9 @@ jobs:
         - mode: hexpm_scripts
           otp: "26.0.2"
 
+        - mode: hexpm_builds_dl
+          otp: "26.0.2"
+
         - container: "erlang:25"
 
         - container: "erlang:26"
@@ -104,6 +107,16 @@ jobs:
       if: matrix.mode == 'setup_beam_283c56d'
       with:
         otp-version: ${{ matrix.otp }}
+
+    - name: "Install using hex.pm build"
+      if: matrix.mode == 'hexpm_builds_dl'
+      run: |
+        set -eux
+        wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
+        mkdir otp
+        cd otp
+        tar xzf ../OTP-${{ matrix.otp }}.tar.gz
+        find .
 
     - name: "Fetch source using erlang/otp git repo"
       if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
