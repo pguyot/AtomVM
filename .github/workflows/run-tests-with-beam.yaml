@@ -70,6 +70,9 @@ jobs:
         - mode: git.prefix
           otp: "26.0.2"
 
+        - mode: git.different_pwd
+          otp: "26.0.2"
+
         - mode: archive
           otp: "26.0.1"
 
@@ -171,7 +174,7 @@ jobs:
         ./Install -minimal $install_dir
 
     - name: "Fetch source using erlang/otp git repo"
-      if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
+      if: matrix.mode == 'git' || matrix.mode == 'git.prefix' || matrix.mode == 'git.different_pwd'
       run: |
         set -eux
         git clone https://github.com/erlang/otp.git
@@ -212,7 +215,7 @@ jobs:
         make -j install
 
     - name: "Build from source and install with another prefix"
-      if: matrix.mode == 'archive.different_pwd'
+      if: matrix.mode == 'git.different_pwd' || matrix.mode == 'archive.different_pwd'
       run: |
         set -eux
         cd otp
