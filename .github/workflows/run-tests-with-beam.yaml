@@ -29,14 +29,29 @@ jobs:
       matrix:
         include:
         - checkout: "OTP-25.0"
-        - checkout: "OTP-25.3.2.5"
-        - checkout: "OTP-26.0"
-        - checkout: "maint"
         - checkout: "OTP-26.0-rc1"
-        - checkout: 104dc8355dd52651cf4eed0b32022309a34e649d
+        # Wed Feb 15 10:09:32 2023 +0100
+        - checkout: 127026003180a834e9fa5d5919c824a184faeb92
+        # Tue Jan 31 19:36:13 2023 +0100
         - checkout: 197801a62c1782bf18a294b21a709f1cf2ca2633
-        - checkout: fe65f7a032627c476c55c528c192cdcddbb3240f
-
+        # Mon Feb 6 07:18:19 2023 +0100
+        - checkout: e5e21c3964488d6dfa6551d6673bc757781980a6
+        # Tue Feb 7 09:47:41 2023 +0100
+        - checkout: ccb87145accc45f5177708b664e160fdef256425
+        # Wed Feb 8 07:28:49 2023 +0800
+        - checkout: 00cfb44f8535752ca25f32ac8d12e094adc04323
+        # Thu Feb 9 09:13:02 2023 +0100
+        - checkout: a1d3c6b6ead794291078e3da635161cb6e3aebcb
+        # Fri Feb 10 03:08:11 2023 +0100
+        - checkout: f36b268b1cc80c96aee2e64d6174fd50479c5dc3
+        # Sat Feb 11 09:46:52 2023 +0100
+        - checkout: c21b6f080845db2afdc52ae0a5d920a0d2078bd3
+        # Mon Feb 13 08:59:34 2023 +0100
+        - checkout: 7c4d38c31213698e92a37d3c5ffaecc03342571d
+        # Tue Feb 14 08:43:31 2023 +0100
+        - checkout: bad27f1cdb7cf3534490dcec17b4e4a49754e4ce
+        # Wed Feb 15 02:44:39 2023 -0500
+        - checkout: d47fc50422d050612e447d4439b27a01c29f46ce
     steps:
     # Setup
     - name: "Checkout repo"
