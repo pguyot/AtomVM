@@ -58,10 +58,16 @@ jobs:
         - mode: git
           otp: "26.0.2"
 
+        - mode: git.prefix
+          otp: "26.0.2"
+
         - mode: archive
           otp: "26.0.1"
 
         - mode: archive
+          otp: "26.0.2"
+
+        - mode: archive.prefix
           otp: "26.0.2"
 
         - mode: hexpm_scripts
@@ -100,7 +106,7 @@ jobs:
         otp-version: ${{ matrix.otp }}
 
     - name: "Fetch source using erlang/otp git repo"
-      if: matrix.mode == 'git'
+      if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
       run: |
         set -eux
         git clone https://github.com/erlang/otp.git
@@ -108,7 +114,7 @@ jobs:
         git checkout OTP-${{ matrix.otp }}
 
     - name: "Fetch source using archive"
-      if: matrix.mode == 'archive'
+      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix'
       run: |
         set -eux
         wget https://github.com/erlang/otp/archive/OTP-${{ matrix.otp }}.tar.gz
@@ -124,6 +130,19 @@ jobs:
         export PIE_LDFLAGS=-pie
         ./otp_build autoconf
         ./configure --with-ssl --enable-dirty-schedulers
+        make -j
+        make -j release
+
+    - name: "Build from source and copy to /opt/hostedtoolcache/"
+      if: matrix.mode == 'git.prefix' || matrix.mode == 'archive.prefix'
+      run: |
+        set -eux
+        cd otp
+        export PIE_CFLAGS=-fpie
+        export PIE_LDFLAGS=-pie
+        ./otp_build autoconf
+        mkdir -p /opt/hostedtoolcache/otp-source
+        ./configure --with-ssl --enable-dirty-schedulers --prefix=/opt/hostedtoolcache/otp-source
         make -j
         make -j release
 
@@ -155,8 +174,13 @@ jobs:
       run: |
         set -eux
         test -e otp/bin && export PATH=${PWD}/otp/bin:${PATH}
+        test -e /opt/hostedtoolcache/otp-source/bin && export PATH=${PWD}/otp/bin:${PATH}
         which erl
         which erlc
+        erl=`which erl`
+        installed_path=`dirname $erl`
+        installed_path=`dirname $installed_path`
+        find $installed_path -name beam.smp -exec md5sum \{\} \;
         erl -version
         erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
         erlc tests/erlang_tests/test_gc.erl
