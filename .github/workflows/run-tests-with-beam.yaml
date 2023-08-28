@@ -28,206 +28,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - otp: "25"
-          mode: setup_beam
-
-        - otp: "26"
-          mode: setup_beam
-
-        - otp: "26.0.1"
-          mode: setup_beam
-
-        - otp: "26.0.2"
-          mode: setup_beam
-
-        - otp: "26.0.2"
-          mode: setup_beam_run_install_tc
-
-        - otp: "26.0.2"
-          mode: setup_beam_run_install_otp
-
-        - otp: "25"
-          mode: setup_beam_283c56d
-
-        - otp: "26"
-          mode: setup_beam_283c56d
-
-        - otp: "26.0.1"
-          mode: setup_beam_283c56d
-
-        - otp: "26.0.2"
-          mode: setup_beam_283c56d
-
-        - mode: setup_beam@atomvm/AtomVM/otp-26.0.2-issue/hex
-          otp: "26.0.2"
-
-        - mode: git
-          otp: "26.0.1"
-
-        - mode: git
-          otp: "26.0.2"
-
-        - mode: git.prefix
-          otp: "26.0.2"
-
-        - mode: git.different_pwd
-          otp: "26.0.2"
-
-        - mode: git.different_pwd
-          otp: "25.0"
-
-        - mode: git.different_pwd_no_path
-          otp: "26.0.2"
-
-        - mode: git.different_pwd_no_path
-          otp: "25.0"
-
-        - mode: archive
-          otp: "26.0.1"
-
-        - mode: archive
-          otp: "26.0.2"
-
-        - mode: archive.prefix
-          otp: "26.0.2"
-
-        - mode: archive.different_pwd
-          otp: "26.0.2"
-
-        - mode: archive.different_pwd_no_path
-          otp: "26.0.2"
-
-        - mode: hexpm_scripts
-          otp: "26.0.1"
-
-        - mode: hexpm_scripts
-          otp: "26.0.2"
-
-        - mode: hexpm_builds_dl
-          otp: "26.0.2"
-
-        - container: "erlang:25"
-
-        - container: "erlang:26"
-
-        - container: "erlang:26.0.1"
-
-        - container: "erlang:26.0.2"
-
-        - container: "hexpm/erlang:26.0.1-ubuntu-jammy-20230126"
-
-        - container: "hexpm/erlang:26.0.2-ubuntu-jammy-20230126"
+        - checkout: "OTP-25.0"
+        - checkout: "OTP-25.3.2.5"
+        - checkout: "OTP-26.0"
+        - checkout: "maint"
+        - checkout: "OTP-26.0-rc1"
+        - checkout: 104dc8355dd52651cf4eed0b32022309a34e649d
+        - checkout: 197801a62c1782bf18a294b21a709f1cf2ca2633
+        - checkout: fe65f7a032627c476c55c528c192cdcddbb3240f
 
     steps:
     # Setup
     - name: "Checkout repo"
       uses: actions/checkout@v3
 
-    - name: "Install using setup-beam"
-      uses: erlef/setup-beam@v1
-      if: matrix.mode == 'setup_beam' || matrix.mode == 'setup_beam_run_install_tc'  || matrix.mode == 'setup_beam_run_install_otp'
-      with:
-        otp-version: ${{ matrix.otp }}
-
-    - name: "Reinstall with OTP command"
-      if: matrix.mode == 'setup_beam_run_install_tc'
-      run: |
-        set -eux
-        erl=`which erl`
-        installed_path=`dirname $erl`
-        installed_path=`dirname $installed_path`
-        cd $installed_path
-        ./Install -minimal $installed_path
-
-    - name: "Reinstall with OTP command"
-      if: matrix.mode == 'setup_beam_run_install_otp'
-      run: |
-        set -eux
-        erl=`which erl`
-        mkdir otp
-        target_path=`pwd`/otp
-        installed_path=`dirname $erl`
-        installed_path=`dirname $installed_path`
-        cd $installed_path
-        ./Install -minimal $target_path
-
-    - name: "Install using setup-beam 283c56d"
-      uses: paulo-ferraz-oliveira/setup-beam@283c56d6575950553c935bbb019fa1dad0e818be
-      if: matrix.mode == 'setup_beam_283c56d'
-      with:
-        otp-version: ${{ matrix.otp }}
-
-    - name: "Install using hex.pm build"
-      if: matrix.mode == 'hexpm_builds_dl'
-      run: |
-        set -eux
-        wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
-        tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mv OTP-${{ matrix.otp }} otp
-        install_dir=`pwd`/otp
-        cd otp
-        ./Install -minimal $install_dir
-
-    - name: "Install using setup-beam atomvm/AtomVM/otp-26.0.2-issue/hex"
-      uses: paulo-ferraz-oliveira/setup-beam@atomvm/AtomVM/otp-26.0.2-issue/hex
-      if: matrix.mode == 'setup_beam@atomvm/AtomVM/otp-26.0.2-issue/hex'
-      with:
-        otp-version: ${{ matrix.otp }}
-
-    - name: "Install using hex.pm build"
-      if: matrix.mode == 'hexpm_builds_dl'
-      run: |
-        set -eux
-        wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
-        tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mv OTP-${{ matrix.otp }} otp
-        install_dir=`pwd`/otp
-        cd otp
-        ./Install -minimal $install_dir
-
     - name: "Fetch source using erlang/otp git repo"
-      if: matrix.mode == 'git' || matrix.mode == 'git.prefix' || matrix.mode == 'git.different_pwd' || matrix.mode == 'git.different_pwd_no_path'
       run: |
         set -eux
         git clone https://github.com/erlang/otp.git
         cd otp
-        git checkout OTP-${{ matrix.otp }}
-
-    - name: "Fetch source using archive"
-      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix' || matrix.mode == 'archive.different_pwd' || matrix.mode == 'archive.different_pwd_no_path'
-      run: |
-        set -eux
-        wget https://github.com/erlang/otp/archive/OTP-${{ matrix.otp }}.tar.gz
-        tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mv otp-OTP-${{ matrix.otp }} otp
-
-    - name: "Build from source"
-      if: matrix.mode == 'git' || matrix.mode == 'archive'
-      run: |
-        set -eux
-        cd otp
-        export PIE_CFLAGS=-fpie
-        export PIE_LDFLAGS=-pie
-        ./otp_build autoconf
-        ./configure --with-ssl --enable-dirty-schedulers
-        make -j
-        make -j release
-
-    - name: "Build from source and install to /opt/hostedtoolcache/"
-      if: matrix.mode == 'git.prefix' || matrix.mode == 'archive.prefix'
-      run: |
-        set -eux
-        cd otp
-        export PIE_CFLAGS=-fpie
-        export PIE_LDFLAGS=-pie
-        ./otp_build autoconf
-        mkdir -p /opt/hostedtoolcache/otp-source
-        ./configure --with-ssl --enable-dirty-schedulers --prefix=/opt/hostedtoolcache/otp-source
-        make -j
-        make -j install
+        git checkout ${{ matrix.checkout }}
 
     - name: "Build from source and install with another prefix"
-      if: matrix.mode == 'git.different_pwd' || matrix.mode == 'archive.different_pwd'
       run: |
         set -eux
         cd otp
@@ -236,48 +58,8 @@ jobs:
         ./configure --with-ssl --enable-dirty-schedulers
         make -j
         make -j release
-        ls release
-        export PATH=$PWD/release/x86_64-pc-linux-gnu/bin:$PATH
         cd release/x86_64-pc-linux-gnu
         ./Install -minimal $PWD
-
-    - name: "Build from source and install with another prefix without setting PATH"
-      if: matrix.mode == 'git.different_pwd_no_path' || matrix.mode == 'archive.different_pwd_no_path'
-      run: |
-        set -eux
-        cd otp
-        export PIE_CFLAGS=-fpie
-        export PIE_LDFLAGS=-pie
-        ./configure --with-ssl --enable-dirty-schedulers
-        make -j
-        make -j release
-        ls release
-        export PATH=$PWD/release/x86_64-pc-linux-gnu/bin:$PATH
-        cd release/x86_64-pc-linux-gnu
-        ./Install -minimal $PWD
-
-    - name: "Build OTP using hexpm scripts"
-      if: matrix.mode == 'hexpm_scripts'
-      run: |
-        set -eux
-        mkdir -p hexpm/otp
-        cd hexpm/otp
-        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/otp.sh
-        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/otp-ubuntu-22.04.dockerfile
-        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/otp/build_otp_ubuntu.sh
-
-        # We don't aws or fastly
-        sed -i -E -e 's|^aws|#aws|g' -e 's|^fastly|#fastly|g' otp.sh
-        cd ..
-        wget https://raw.githubusercontent.com/hexpm/bob/main/priv/scripts/utils.sh
-        export SCRIPT_DIR=`pwd`
-
-        cd ..
-        bash ${SCRIPT_DIR}/otp/otp.sh OTP-${{ matrix.otp }} ${{ matrix.otp }} ubuntu-22.04
-
-        tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mv OTP-${{ matrix.otp }} otp
-        sh otp/Install -minimal `pwd`/otp
 
     - name: "Test compile module and test it"
       timeout-minutes: 10
