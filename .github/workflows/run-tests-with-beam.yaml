@@ -58,6 +58,9 @@ jobs:
         - otp: "26.0.2"
           mode: setup_beam_283c56d
 
+        - mode: setup_beam@atomvm/AtomVM/otp-26.0.2-issue/hex
+          otp: "26.0.2"
+
         - mode: git
           otp: "26.0.1"
 
@@ -74,6 +77,9 @@ jobs:
           otp: "26.0.2"
 
         - mode: archive.prefix
+          otp: "26.0.2"
+
+        - mode: archive.different_pwd
           otp: "26.0.2"
 
         - mode: hexpm_scripts
@@ -147,6 +153,23 @@ jobs:
         cd otp
         ./Install -minimal $install_dir
 
+    - name: "Install using setup-beam atomvm/AtomVM/otp-26.0.2-issue/hex"
+      uses: paulo-ferraz-oliveira/setup-beam@atomvm/AtomVM/otp-26.0.2-issue/hex
+      if: matrix.mode == 'setup_beam@atomvm/AtomVM/otp-26.0.2-issue/hex'
+      with:
+        otp-version: ${{ matrix.otp }}
+
+    - name: "Install using hex.pm build"
+      if: matrix.mode == 'hexpm_builds_dl'
+      run: |
+        set -eux
+        wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
+        tar xzf OTP-${{ matrix.otp }}.tar.gz
+        mv OTP-${{ matrix.otp }} otp
+        install_dir=`pwd`/otp
+        cd otp
+        ./Install -minimal $install_dir
+
     - name: "Fetch source using erlang/otp git repo"
       if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
       run: |
@@ -156,7 +179,7 @@ jobs:
         git checkout OTP-${{ matrix.otp }}
 
     - name: "Fetch source using archive"
-      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix'
+      if: matrix.mode == 'archive' || matrix.mode == 'archive.prefix' || matrix.mode == 'archive.different_pwd'
       run: |
         set -eux
         wget https://github.com/erlang/otp/archive/OTP-${{ matrix.otp }}.tar.gz
@@ -188,6 +211,21 @@ jobs:
         make -j
         make -j install
 
+    - name: "Build from source and install with another prefix"
+      if: matrix.mode == 'archive.different_pwd'
+      run: |
+        set -eux
+        cd otp
+        export PIE_CFLAGS=-fpie
+        export PIE_LDFLAGS=-pie
+        ./configure --with-ssl --enable-dirty-schedulers
+        make -j
+        make -j release
+        ls release
+        export PATH=$PWD/release/x86_64-pc-linux-gnu/bin:$PATH
+        cd release/x86_64-pc-linux-gnu
+        ./Install -minimal $PWD
+
     - name: "Build OTP using hexpm scripts"
       if: matrix.mode == 'hexpm_scripts'
       run: |
@@ -217,6 +255,7 @@ jobs:
         set -eux
         test -e otp/bin && export PATH=${PWD}/otp/bin:${PATH}
         test -e /opt/hostedtoolcache/otp-source/bin && export PATH=/opt/hostedtoolcache/otp-source/bin:${PATH}
+        test -e otp/release/x86_64-pc-linux-gnu/bin && export PATH=${PWD}/otp/release/x86_64-pc-linux-gnu/bin:${PATH}
         which erl
         which erlc
         erl=`which erl`
