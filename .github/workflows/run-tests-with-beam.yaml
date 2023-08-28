@@ -114,7 +114,10 @@ jobs:
         set -eux
         wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
         tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mv OTP-${{ matrix.otp }} otp
+        mkdir otp
+        install_dir=`pwd`/otp
+        cd OTP-${{ matrix.otp }}
+        ./Install -minimal $install_dir
 
     - name: "Fetch source using erlang/otp git repo"
       if: matrix.mode == 'git' || matrix.mode == 'git.prefix'
@@ -155,7 +158,7 @@ jobs:
         mkdir -p /opt/hostedtoolcache/otp-source
         ./configure --with-ssl --enable-dirty-schedulers --prefix=/opt/hostedtoolcache/otp-source
         make -j
-        make RELEASE_ROOT=/opt/hostedtoolcache/otp-source -j release
+        make -j install
 
     - name: "Build OTP using hexpm scripts"
       if: matrix.mode == 'hexpm_scripts'
