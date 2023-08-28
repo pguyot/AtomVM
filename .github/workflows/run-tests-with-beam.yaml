@@ -146,7 +146,7 @@ jobs:
         make -j
         make -j release
 
-    - name: "Build from source and copy to /opt/hostedtoolcache/"
+    - name: "Build from source and install to /opt/hostedtoolcache/"
       if: matrix.mode == 'git.prefix' || matrix.mode == 'archive.prefix'
       run: |
         set -eux
@@ -157,7 +157,7 @@ jobs:
         mkdir -p /opt/hostedtoolcache/otp-source
         ./configure --with-ssl --enable-dirty-schedulers --prefix=/opt/hostedtoolcache/otp-source
         make -j
-        make -j release
+        make RELEASE_ROOT=/opt/hostedtoolcache/otp-source -j release
 
     - name: "Build OTP using hexpm scripts"
       if: matrix.mode == 'hexpm_scripts'
