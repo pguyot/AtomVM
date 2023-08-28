@@ -114,9 +114,9 @@ jobs:
         set -eux
         wget https://repo.hex.pm/builds/otp/ubuntu-22.04/OTP-${{ matrix.otp }}.tar.gz
         tar xzf OTP-${{ matrix.otp }}.tar.gz
-        mkdir otp
+        mv OTP-${{ matrix.otp }} otp
         install_dir=`pwd`/otp
-        cd OTP-${{ matrix.otp }}
+        cd otp
         ./Install -minimal $install_dir
 
     - name: "Fetch source using erlang/otp git repo"
