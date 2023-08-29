@@ -27,15 +27,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-        - checkout: "OTP-25.0"
-        - checkout: "OTP-26.0-rc1"
+        minimal: ["-minimal", ""]
+        checkout:
+        - "OTP-25.0"
+        - "OTP-26.0-rc1"
         # Wed Feb 15 02:44:39 2023 -0500
-        - checkout: d47fc50422d050612e447d4439b27a01c29f46ce
+        - d47fc50422d050612e447d4439b27a01c29f46ce
         # Wed Feb 15 10:09:32 2023 +0100
-        - checkout: 127026003180a834e9fa5d5919c824a184faeb92
-        - checkout: dc132c20447a4780fc9dc7f449b00523876e0f97
-        - checkout: 2b397d7e5580480dc32fa9751db95f4b89ff029e
+        - 127026003180a834e9fa5d5919c824a184faeb92
+        - dc132c20447a4780fc9dc7f449b00523876e0f97
+        - 2b397d7e5580480dc32fa9751db95f4b89ff029e
     steps:
     # Setup
     - name: "Checkout repo"
@@ -58,7 +59,7 @@ jobs:
         make -j
         make -j release
         cd release/x86_64-pc-linux-gnu
-        ./Install -minimal $PWD
+        ./Install ${{ matrix.minimal}} $PWD
 
     - name: "Test compile module and test it"
       timeout-minutes: 10
