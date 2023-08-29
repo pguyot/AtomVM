@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        minimal: ["-minimal", ""]
+        install_opt: ["-minimal", "-sasl", "make_install_prefix", "make_install"]
         checkout:
         - "OTP-25.0"
         - "OTP-26.0-rc1"
@@ -49,24 +49,37 @@ jobs:
         cd otp
         git checkout ${{ matrix.checkout }}
 
-    - name: "Build from source and install with another prefix"
+    - name: "Build from source and install"
       run: |
         set -eux
         cd otp
         export PIE_CFLAGS=-fpie
         export PIE_LDFLAGS=-pie
-        ./configure --with-ssl --enable-dirty-schedulers
-        make -j
-        make -j release
-        cd release/x86_64-pc-linux-gnu
-        ./Install ${{ matrix.minimal}} $PWD
+        if [ "${{ matrix.install_opt}}" = "make_install_prefix" ]; then
+            ./configure --with-ssl --enable-dirty-schedulers --prefix=../otp_install
+            mkdir ../otp_install
+            make -j
+            make -j install
+            cat ../otp_install/lib/erlang/releases/RELEASES || echo "not found"
+        elif [ "${{ matrix.install_opt}}" = "make_install" ]; then
+            ./configure --with-ssl --enable-dirty-schedulers
+            make -j
+            make -j install
+            cat /usr/local/lib/erlang/releases/RELEASES || echo "not found"
+        else
+            ./configure --with-ssl --enable-dirty-schedulers
+            make -j
+            make -j release
+            cd release/x86_64-pc-linux-gnu
+            ./Install ${{ matrix.install_opt}} $PWD
+            cat lib/erlang/releases/RELEASES || echo "not found"
+        fi
 
     - name: "Test compile module and test it"
       timeout-minutes: 10
       run: |
         set -eux
-        test -e otp/bin && export PATH=${PWD}/otp/bin:${PATH}
-        test -e /opt/hostedtoolcache/otp-source/bin && export PATH=/opt/hostedtoolcache/otp-source/bin:${PATH}
+        test -e otp_install/bin && export PATH=${PWD}/otp_install/bin:${PATH}
         test -e otp/release/x86_64-pc-linux-gnu/bin && export PATH=${PWD}/otp/release/x86_64-pc-linux-gnu/bin:${PATH}
         which erl
         which erlc
