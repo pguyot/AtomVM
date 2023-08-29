@@ -60,19 +60,34 @@ jobs:
             mkdir ../otp_install
             make -j
             make -j install
-            cat ../otp_install/lib/erlang/releases/RELEASES || echo "not found"
         elif [ "${{ matrix.install_opt}}" = "make_install" ]; then
             ./configure --with-ssl --enable-dirty-schedulers
             make -j
-            make -j install
-            cat /usr/local/lib/erlang/releases/RELEASES || echo "not found"
+            sudo make -j install
         else
             ./configure --with-ssl --enable-dirty-schedulers
             make -j
             make -j release
             cd release/x86_64-pc-linux-gnu
             ./Install ${{ matrix.install_opt}} $PWD
-            cat lib/erlang/releases/RELEASES || echo "not found"
+            test -e releases/26 && grep erts-14.0.2 releases/26/installed_application_versions && (
+            cat releases/*/installed_application_versions
+            cat << EOF > installed_application_versions.diff
+        --- /opt/erlang/erlang-master-minimal/releases/26/installed_application_versions	2023-08-29 07:56:36
+        +++ /opt/erlang/erlang-master/lib/erlang/releases/26/installed_application_versions	2023-08-29 07:58:02
+        @@ -1,3 +1,4 @@
+        +erts-14.0.2
+         stdlib-5.0.2
+         sasl-4.2.1
+         kernel-9.0.2
+        @@ -34,4 +35,3 @@
+         dialyzer-5.1
+         ftp-1.2
+         tftp-1.1
+        -erts-14.0.2
+        EOF
+            patch -p3 < installed_application_versions.diff
+            )
         fi
 
     - name: "Test compile module and test it"
