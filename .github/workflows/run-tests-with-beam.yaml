@@ -27,7 +27,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        install_method: ["./Install", "make install"]
         erts_position_in_versions: ["default", "top", "bottom"]
         install_option: ["-minimal", "-sasl"]
         installation_prefix: ["default", "specified"]
@@ -40,13 +39,6 @@ jobs:
         - 127026003180a834e9fa5d5919c824a184faeb92
         - dc132c20447a4780fc9dc7f449b00523876e0f97
         - 2b397d7e5580480dc32fa9751db95f4b89ff029e
-
-        exclude:
-        - install_method: "./Install"
-          installation_prefix: "specified"
-
-        - install_method: "make install"
-          install_option: "-sasl"
     steps:
     # Setup
     - name: "Checkout repo"
@@ -81,48 +73,50 @@ jobs:
         export PIE_LDFLAGS=-pie
         make -j
 
-    - name: "Install"
+    - name: "Install with ./Install"
       run: |
         set -eux
         cd otp
         export PIE_CFLAGS=-fpie
         export PIE_LDFLAGS=-pie
-        if [ "${{ matrix.install_method }}" = "./Install" ]; then
-            make -j release
-            cd release/x86_64-pc-linux-gnu
-            ./Install ${{ matrix.install_option}} $PWD
-        else
-            sudo make -j install
-        fi
+        make -j release
+        cd release/x86_64-pc-linux-gnu
+        ./Install ${{ matrix.install_option}} $PWD
+
+    - name: "Install with make install"
+      run: |
+        set -eux
+        cd otp
+        export PIE_CFLAGS=-fpie
+        export PIE_LDFLAGS=-pie
+        sudo make -j install
 
     - name: "Verify and patch installed_application_versions"
       run: |
         set -eux
-        if [ "${{ matrix.install_method }}" = "./Install" ]; then
-            versions_file=`find otp/release/x86_64-pc-linux-gnu/releases -name installed_application_versions`
-        elif [ "${{ matrix.installation_prefix }}" = "specified" ]; then
-            versions_file=`find otp_install/lib/erlang/releases -name installed_application_versions`
+        versions_file1=`find otp/release/x86_64-pc-linux-gnu/releases -name installed_application_versions`
+        if [ "${{ matrix.installation_prefix }}" = "specified" ]; then
+            versions_file2=`find otp_install/lib/erlang/releases -name installed_application_versions`
         else
-            versions_file=`find /usr/local/lib/erlang/releases -name installed_application_versions`
+            versions_file2=`find /usr/local/lib/erlang/releases -name installed_application_versions`
         fi
-        echo $versions_file
-        erts_line=`grep -n erts $versions_file | cut -d : -f 1`
-        echo "erts is at line $erts_line"
-        if [ "${{ matrix.erts_position_in_versions }}" = "top" -a $erts_line -ne 1 ]; then
-            sudo sed -i '$!H;1h;$!d;G' $versions_file
-        elif [ "${{ matrix.erts_position_in_versions }}" = "bottom" -a $erts_line -eq 1 ]; then
-            sudo sed -i '1h;1d;$G' $versions_file
-        fi
-        new_erts_line=`grep -n erts $versions_file | cut -d : -f 1`
-        echo "after modification, erts is at line $new_erts_line"
+        for versions_file in $versions_file1 $versions_file2 ; do
+            echo $versions_file
+            erts_line=`grep -n erts $versions_file | cut -d : -f 1`
+            echo "erts is at line $erts_line"
+            if [ "${{ matrix.erts_position_in_versions }}" = "top" -a $erts_line -ne 1 ]; then
+                sudo sed -i '$!H;1h;$!d;G' $versions_file
+            elif [ "${{ matrix.erts_position_in_versions }}" = "bottom" -a $erts_line -eq 1 ]; then
+                sudo sed -i '1h;1d;$G' $versions_file
+            fi
+            new_erts_line=`grep -n erts $versions_file | cut -d : -f 1`
+            echo "after modification, erts is at line $new_erts_line"
+        done
 
-    - name: "Test compile module and test it"
-      timeout-minutes: 10
+    - name: "Compile module"
       run: |
         set -eux
-        if [ "${{ matrix.install_method }}" = "./Install" ]; then
-            PATH=${PWD}/otp/release/x86_64-pc-linux-gnu/bin:${PATH}
-        elif [ "${{ matrix.installation_prefix }}" = "specified" ]; then
+        if [ "${{ matrix.installation_prefix }}" = "specified" ]; then
             PATH=${PWD}/otp_install/bin:${PATH}
         fi
         which erl
@@ -134,6 +128,56 @@ jobs:
         erl -version
         erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
         erlc tests/erlang_tests/test_gc.erl
+
+    - name: "Compare installations"
+      run: |
+        if [ "${{ matrix.installation_prefix }}" = "specified" ]; then
+            diff -ru otp_install/lib/erlang otp/release/x86_64-pc-linux-gnu/ || true
+        else
+            diff -ru /usr/local/lib/erlang otp/release/x86_64-pc-linux-gnu/ || true
+        fi
+
+    - name: "Run test on installed prefix"
+      run: |
+        set -eux
+        if [ "${{ matrix.installation_prefix }}" = "specified" ]; then
+            PATH=${PWD}/otp_install/bin:${PATH}
+        fi
+        which erl
+        erl -version
+        erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+
+    - name: "Run test directly from lib/erlang/bin"
+      if: success() || failure()
+      run: |
+        set -eux
+        if [ "${{ matrix.installation_prefix }}" = "specified" ]; then
+            PATH=${PWD}/otp_install/lib/erlang/bin:${PATH}
+        else
+            PATH=/usr/local/lib/erlang/bin:${PATH}
+        fi
+        which erl
+        erl -version
+        erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+
+    - name: "Run test directly from ./Install installation"
+      if: success() || failure()
+      run: |
+        set -eux
+        PATH=${PWD}/otp/release/x86_64-pc-linux-gnu/bin:${PATH}
+        which erl
+        erl -version
+        erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
         erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
         erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
         erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
