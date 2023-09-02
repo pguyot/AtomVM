@@ -30,6 +30,7 @@ jobs:
         erts_position_in_versions: ["default", "top", "bottom"]
         install_option: ["-minimal", "-sasl"]
         installation_prefix: ["default", "specified"]
+        erl_opt: ["", "-init_debug"]
         checkout:
         - "OTP-25.0"
         - "OTP-26.0-rc1"
@@ -146,11 +147,11 @@ jobs:
         which erl
         erl -version
         erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
 
     - name: "Run test directly from lib/erlang/bin"
       if: success() || failure()
@@ -164,11 +165,11 @@ jobs:
         which erl
         erl -version
         erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
 
     - name: "Run test directly from ./Install installation"
       if: success() || failure()
@@ -178,8 +179,8 @@ jobs:
         which erl
         erl -version
         erl -eval 'io:format("~s", [erlang:system_info(system_version)]), init:stop().' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
-        erl -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), test_gc:start(), erlang:halt(0).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = 0, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
+        erl ${{ matrix.erl_opt }} -pa . -eval 'erlang:process_flag(trap_exit, false), R = test_gc:start(), S = if R =:= 0 -> 0; true -> io:format("Expected ~B, got ~p~n", [0, R]), 1 end, erlang:halt(S).' -noshell
