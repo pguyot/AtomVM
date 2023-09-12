@@ -406,6 +406,10 @@ typedef dreg_t dreg_gc_safe_t;
         AVM_ABORT();                                                                                    \
     }                                                                                                   \
     DECODE_VALUE32(reg, decode_pc);                                                                     \
+    if (reg > MAX_REG) {                                                                                \
+        fprintf(stderr, "Register index %d > MAX_REG = %d\n", reg, MAX_REG);                            \
+        AVM_ABORT();                                                                                    \
+    }                                                                                                   \
 }
 
 #define DECODE_YREG(reg, decode_pc)                                                                     \
@@ -665,11 +669,21 @@ typedef struct
     }                                                                                                           \
 }
 
+// MAX_REG is enforced at decode time
+#if MAX_REG <= 16
+#define DECODE_FP_REGISTER(freg, decode_pc)                                                         \
+{                                                                                                   \
+    (decode_pc)++;                                                                                  \
+    uint8_t first_byte = *(decode_pc)++;                                                            \
+    freg = first_byte >> 4;                                                                         \
+}
+#else
 #define DECODE_FP_REGISTER(freg, decode_pc)                                                         \
 {                                                                                                   \
     (decode_pc)++;                                                                                  \
     DECODE_LITERAL(freg, decode_pc);                                                                \
 }
+#endif
 
 #define DECODE_VALUE(val, decode_pc)                                                                \
 {                                                                                                   \
@@ -713,8 +727,18 @@ typedef struct
 #define DECODE_INTEGER(integer, decode_pc) \
     DECODE_VALUE(integer, decode_pc)
 
+// MAX_REG is enforced at decode time
+#if MAX_REG <= 16
+#define DECODE_XREG(reg, decode_pc)                                                                 \
+{                                                                                                   \
+    uint8_t first_byte = *(decode_pc)++;                                                            \
+    reg = first_byte >> 4;                                                                          \
+    off++;                                                                                          \
+}
+#else
 #define DECODE_XREG(reg, decode_pc) \
     DECODE_VALUE(reg, decode_pc)
+#endif
 
 #define DECODE_YREG(reg, decode_pc) \
     DECODE_VALUE(reg, decode_pc)
