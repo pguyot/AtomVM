@@ -132,6 +132,11 @@ it can be enabled with `-DENABLE_REALLOC_GC=On`.
 - Fix crash on macOS due to missing call to `psa_crypto_init` for TLS 1.3
 - Fix crypto test on rp2040
 
+## [0.7.0-alpha.0] - Unreleased
+
+### Added
+- Added a limited implementation of the OTP `ets` interface
+
 ## [0.6.0] - 2024-03-05
 
 ### Fixed

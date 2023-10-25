@@ -536,6 +536,7 @@ struct Test tests[] = {
 
     TEST_CASE(test_raw_raise),
 
+    TEST_CASE(test_ets),
     // TEST CRASHES HERE: TEST_CASE(memlimit),
 
     { NULL, 0, false, false }

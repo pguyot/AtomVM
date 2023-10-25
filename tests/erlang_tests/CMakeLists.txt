@@ -499,6 +499,7 @@ compile_erlang(test_utf8_atoms)
 compile_erlang(twentyone_param_function)
 compile_erlang(complex_list_match_xregs)
 compile_erlang(twentyone_param_fun)
+compile_erlang(test_ets)
 
 compile_erlang(test_fun_to_list)
 compile_erlang(maps_nifs)
@@ -974,4 +975,5 @@ add_custom_target(erlang_test_modules DEPENDS
     maps_nifs.beam
 
     test_raw_raise.beam
+    test_ets.beam
 )
