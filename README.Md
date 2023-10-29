@@ -106,3 +106,4 @@ of the [organization](https://github.com/atomvm) repositories.
 License
 -------
 This project is under the terms of the Apache 2.0 license.
+
