@@ -185,6 +185,9 @@ describe("emscripten HTML5 Events", () => {
     cy.get("#click-checkbox").click();
     cy.get("#input-field").click({ x: 2, y: 2 });
     cy.get("#event-1 td.event-type").should("contain", "click");
+    cy.get("#event-1 td.event-map").each(($ele) => {
+      cy.log($ele.text())
+    })
     cy.get("#event-1 td.event-map").should("contain", "target_x => 2");
     cy.get("#event-1 td.event-map").should("contain", "target_y => 2");
     cy.get("#event-1 td.event-user-data").should(
