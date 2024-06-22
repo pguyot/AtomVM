@@ -43,6 +43,7 @@ jobs:
         cd build_tests
         cmake ..
         make erlang_test_modules
+        make test_etest
         make test_estdlib
         make test_eavmlib
         make test_alisp
@@ -237,6 +238,7 @@ jobs:
         file ./tests/test-structs &&
         ./tests/test-structs &&
         file ./src/AtomVM &&
+        ./src/AtomVM tests/libs/etest/test_etest.avm &&
         ./src/AtomVM tests/libs/estdlib/test_estdlib.avm &&
         ./src/AtomVM tests/libs/eavmlib/test_eavmlib.avm &&
         ./src/AtomVM tests/libs/alisp/test_alisp.avm &&

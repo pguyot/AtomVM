@@ -61,6 +61,7 @@ jobs:
         cd build_tests
         cmake ..
         make erlang_test_modules
+        make test_etest
         make test_estdlib
         make test_eavmlib
         make test_alisp
@@ -173,6 +174,7 @@ jobs:
         cp ../build_tests/tests/erlang_tests/code_load/*.{avm,beam,hrl} tests/erlang_tests/code_load/ &&
         mkdir -p tests/erlang_tests/code_load/beams/ &&
         cp ../build_tests/tests/erlang_tests/code_load/beams/*.beam tests/erlang_tests/code_load/beams/ &&
+        cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
         cp ../build_tests/tests/libs/estdlib/*.avm tests/libs/estdlib/  &&
         cp ../build_tests/tests/libs/eavmlib/*.avm tests/libs/eavmlib/ &&
         cp ../build_tests/tests/libs/alisp/*.avm tests/libs/alisp/ &&
@@ -190,6 +192,7 @@ jobs:
         file ./tests/test-structs &&
         ./tests/test-structs &&
         file ./src/AtomVM &&
+        ./src/AtomVM tests/libs/etest/test_etest.avm &&
         ./src/AtomVM tests/libs/estdlib/test_estdlib.avm &&
         ./src/AtomVM tests/libs/eavmlib/test_eavmlib.avm &&
         ./src/AtomVM tests/libs/alisp/test_alisp.avm
