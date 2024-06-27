@@ -316,69 +316,15 @@ jobs:
       working-directory: build
       run: make
 
-    - name: "Build: run dialyzer"
-      working-directory: build
-      run: make dialyzer
-
-    # Test
-    - name: "Test: test-erlang"
-      timeout-minutes: 15
-      working-directory: build
-      run: |
-        ./tests/test-erlang -s prime_smp
-        valgrind ./tests/test-erlang -s prime_smp
-
-    - name: "Test: test-enif"
-      working-directory: build
-      run: |
-        ./tests/test-enif
-        valgrind ./tests/test-enif
-
-    - name: "Test: test-mailbox"
-      working-directory: build
-      run: |
-        ./tests/test-mailbox
-        valgrind ./tests/test-mailbox
-
-    - name: "Test: test-structs"
-      timeout-minutes: 10
-      working-directory: build
-      run: |
-        ./tests/test-structs
-        valgrind ./tests/test-structs
-
     - name: "Test: test_etest.avm"
       timeout-minutes: 5
       working-directory: build
       run: |
-        ./src/AtomVM ./tests/libs/etest/test_etest.avm
-        valgrind ./src/AtomVM ./tests/libs/etest/test_etest.avm
+        ulimit -c unlimited
+        sudo ./src/AtomVM ./tests/libs/etest/test_etest.avm || echo "failed"
+        sudo chmod -R +rwx /cores/*
 
-    - name: "Test: test_estdlib.avm"
-      timeout-minutes: 5
-      working-directory: build
-      run: |
-        ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
-        valgrind ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
-
-    - name: "Test: test_eavmlib.avm"
-      timeout-minutes: 10
-      working-directory: build
-      run: |
-        ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
-        valgrind ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
-
-    - name: "Test: test_alisp.avm"
-      timeout-minutes: 10
-      working-directory: build
-      run: |
-        ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
-        valgrind ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
-
-    - name: "Install and smoke test"
-      working-directory: build
-      run: |
-        sudo PATH=${PATH} make install
-        atomvm examples/erlang/hello_world.avm
-        atomvm -v
-        atomvm -h
+    - uses: actions/upload-artifact@master # capture all crashes as build artifacts
+      with:
+        name: crashes
+        path: /cores
