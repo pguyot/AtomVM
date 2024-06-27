@@ -321,6 +321,7 @@ jobs:
       working-directory: build
       run: |
         ulimit -c unlimited
+        sudo bash -c 'echo "/cores/core.%e.%t.%p" > /proc/sys/kernel/core_pattern'
         sudo ./src/AtomVM ./tests/libs/etest/test_etest.avm || echo "failed"
         sudo chmod -R +rwx /cores/*
 
