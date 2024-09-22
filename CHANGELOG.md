@@ -19,6 +19,7 @@ also non string parameters (e.g. `Enum.join([1, 2], ",")`
 `Enum.filter`
 - Add support for `is_bitstring/1` construct which is used in Elixir protocols runtime.
 - Support for `code:ensure_loaded/1`
+- Support for Elixir `List.Chars` protocol
 
 ### Changed
 
