@@ -21,6 +21,7 @@ also non string parameters (e.g. `Enum.join([1, 2], ",")`
 - Support for `code:ensure_loaded/1`
 - Support for Elixir `List.Chars` protocol
 - Support for `lists:last/1` and `lists:mapfoldl/3`
+- Support for `maps:merge_with/3`
 
 ### Changed
 
