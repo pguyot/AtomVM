@@ -76,7 +76,7 @@ The `src` directory is broken up into the core platform-independent AtomVM libra
 * [Generic UNIX](#building-for-generic-unix)
 * [ESP32](#building-for-esp32)
 * [STM32](#building-for-stm32)
-* [Raspberry Pi Pico](#building-for-raspberry-pi-pico) (rp2040)
+* [Raspberry Pi Pico and Pico 2](#building-for-raspberry-pi-pico) (rp2)
 * [WASM](#building-for-emscripten) (NodeJS or web)
 
 ## Building for Generic UNIX
@@ -732,7 +732,7 @@ If building for a different target USART may be configure as explained above in
 
 After your application has been tested (_and debugged_) and is ready to put into active use you may want to tune the build of AtomVM.  For instance disabling logging with `-DAVM_LOG_DISABLE=on` as a `cmake` configuration option may result in slightly better performance. This will have no affect on the console output of your application, just disable low level log messages from the AtomVM system. You may also want to enabling automatic reboot in the case that your application ever exits with a return other than `ok`. This can be enabled with the `cmake` option `-DAVM_CONFIG_REBOOT_ON_NOT_OK=on`.
 
-## Building for Raspberry Pi Pico
+## Building for Raspberry Pi Pico and Pico 2
 
 ### Pico Prerequisites
 
@@ -740,11 +740,12 @@ After your application has been tested (_and debugged_) and is ready to put into
 * `ninja`
 * `Erlang/OTP`
 * `Elixir` (optional)
+* A toolchain for the target (ARM or Risc-V)
 
 ### AtomVM build steps (Pico)
 
 ```shell
-$ cd src/platforms/rp2040/
+$ cd src/platforms/rp2/
 $ mkdir build
 $ cd build
 $ cmake .. -G Ninja
@@ -758,10 +759,35 @@ You may want to build with option `AVM_REBOOT_ON_NOT_OK` so Pico restarts on err
 ### AtomVM build steps (Pico-W)
 
 ```shell
-$ cd src/platforms/rp2040/
+$ cd src/platforms/rp2/
 $ mkdir build
 $ cd build
 $ cmake .. -G Ninja -DPICO_BOARD=pico_w
+$ ninja
+```
+
+```{tip}
+You may want to build with option `AVM_REBOOT_ON_NOT_OK` so Pico restarts on error.
+```
+
+### AtomVM build steps (Pico2)
+
+For ARM S platform (recommended) :
+```shell
+$ cd src/platforms/rp2/
+$ mkdir build
+$ cd build
+$ cmake .. -G Ninja -DPICO_BOARD=pico2
+$ ninja
+```
+
+For RISC-V platform (supported but slower) :
+
+```shell
+$ cd src/platforms/rp2/
+$ mkdir build
+$ cd build
+$ cmake .. -G Ninja -DPICO_BOARD=pico2 -DPICO_PLATFORM=rp2350-riscv
 $ ninja
 ```
 
@@ -791,11 +817,11 @@ $ ninja
 Tests for Pico/RP2040 are run on the desktop (or CI) using [rp2040js](https://github.com/wokwi/rp2040js).
 Running tests currently require nodejs 20.
 
-Change directory to the `src/platforms/rp2040/tests` directory under the AtomVM source tree root:
+Change directory to the `src/platforms/rp2/tests` directory under the AtomVM source tree root:
 
 ```shell
 $ cd <atomvm-source-tree-root>
-$ cd src/platforms/rp2040/tests
+$ cd src/platforms/rp2/tests
 $
 ```
 

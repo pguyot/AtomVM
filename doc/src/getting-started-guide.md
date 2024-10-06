@@ -261,23 +261,23 @@ For information about how to flash your application to your STM32, see the [Atom
 
 ## Getting Started on the Raspberry Pi Pico platform
 
-AtomVM supports deployment of the VM and applications onto the [Raspberry Pi Pico](https://www.raspberrypi.com/products/raspberry-pi-pico/) platform.  For information about supported boards, please refer to the AtomVM [Release Notes](./release-notes.md).
+AtomVM supports deployment of the VM and applications onto the [Raspberry Pi Pico and Pico 2](https://www.raspberrypi.com/products/raspberry-pi-pico/) platform.  For information about supported boards, please refer to the AtomVM [Release Notes](./release-notes.md).
 
-The following instructions show you how to install the AtomVM onto one of the [Raspberry Pi Pico](https://www.raspberrypi.com/products/raspberry-pi-pico/) boards.
+The following instructions show you how to install the AtomVM onto one of the [Raspberry Pi Pico and Pico 2](https://www.raspberrypi.com/products/raspberry-pi-pico/) boards.
 
-### Pico Requirements
+### Pico and Pico 2 Requirements
 
-Deployment of AtomVM on the Raspberry Pico platform requires the following components:
+Deployment of AtomVM on the Raspberry Pi Pico and Pico 2 platform requires the following components:
 
 * A computer running MacOS or Linux (Windows support is not currently supported);
-* A Raspberry Pico board with a USB/UART connector (typically part of a development board);
-* A USB cable capable of connecting the Raspberry Pico module or board to your development machine (laptop or PC);
+* A Raspberry Pi Pico or Pico 2 board with a USB/UART connector (typically part of a development board);
+* A USB cable capable of connecting the Raspberry Pi Pico module or board to your development machine (laptop or PC);
 * A serial console program, such as `minicom` or `screen`, so that you can view console output from your AtomVM application.
 * (recommended) For Erlang programs, [`rebar3`](https://rebar3.org);
 * (recommended) For Elixir programs, [`mix`](https://elixir-lang.org/getting-started/mix-otp/introduction-to-mix.html), which ships with the Elixir runtime;
 * (recommended) [`picotool`](https://github.com/raspberrypi/picotool), useful for resetting the device into `BOOTSEL` or `application` mode, optionally used by the `atomvm_rebar3_plugin` (if available in env $PATH) for disconnecting active `screen` sessions when attempting to flash when still connected.
 
-### Deploying the Pico AtomVM virtual machine
+### Deploying the Pico or Pico 2 AtomVM virtual machine
 
 The following methods can be used to deploy the AtomVM virtual machine to a Raspberry Pico device:
 
@@ -286,9 +286,9 @@ The following methods can be used to deploy the AtomVM virtual machine to a Rasp
 
 #### Flashing a binary image to Pico
 
-Flashing the Raspberry Pico using a pre-built binary image is by far the easiest path to getting started with development on the Raspberry Pico.  Binary images contain the virtual machine image and all of the necessary components to run your application.
+Flashing the Raspberry Pi Pico or Pico 2 using a pre-built binary image is by far the easiest path to getting started with development on this platform.  Binary images contain the virtual machine image and all of the necessary components to run your application.
 
-Download the latest [release image](https://github.com/atomvm/AtomVM/releases) for Raspberry Pico.
+Download the latest [release image](https://github.com/atomvm/AtomVM/releases) for Raspberry Pi Pico or Raspberry Pi Pico 2.
 
 This image will generally take the form:
 
@@ -296,7 +296,11 @@ This image will generally take the form:
 
 For example:
 
->`Atomvm-pico-v0.6.0.uf2`
+>`Atomvm-pico-v0.7.0.uf2`
+
+or
+
+>`Atomvm-pico2-v0.7.0.uf2`
 
 You will also find the sha256 hash for this file, which you should verify using the `sha256sum` command on your local operating system.
 
@@ -304,29 +308,29 @@ You will also need a copy of the AtomVM core libraries, which include all of the
 
 This library will generally take the form:
 
->`atomvmlib-<atomvm-version>.uf2`
+>`atomvmlib-<raspberry-pico-soc>-<atomvm-version>.uf2`
 
 For example:
 
->`atomvmlib-v0.6.0.uf2`
+>`atomvmlib-pico-v0.7.0.uf2`
 
 You will also find the sha256 hash for this file, which you should verify using the `sha256sum` command on your local operating system.
 
 To flash your Raspberry Pico, you will need to undertake a few steps that interact with your operating file system.
 
 ```{important}
-It is important that you downloads the `.uf2` versions of these files for the Raspberry Pico platform.
+It is important that you downloads the `.uf2` versions of these files for the Raspberry Pi Pico or Pico 2 platform. It is also important to download the Pico or the Pico2 files depending on your board.
 ```
 
-For each of the above files, you will start your Raspberry Pico in bootloader mode by pressing the `BOOTSEL` button on the Raspberry Pico dev board, while powering on the device.  Doing so will automatically boot the device and mount the Raspberry Pico on to your file system as a USB device.
+For each of the above files, you will start your Raspberry Pi Pico or Pico 2 in bootloader mode by pressing the `BOOTSEL` button on the board, while powering on the device.  Doing so will automatically boot the device and mount the Raspberry Pi Pico on to your file system as a USB device.
 
 You can then use normal operating system commands (such as `cp`, or even drag-and-drop) to copy the above files to the mounted USB volume.
 
 Note, however, that in general the USB device will auto-unmount after each file has been copied, so you will need to repeat the procedure for each of the above two files.
 
-On most Linux systems, the Raspberry Pico will be mounted at `/run/media/${USER}/RPI-RP2`.
+On most Linux systems, the Raspberry Pi Pico will be mounted at `/run/media/${USER}/RPI-RP2` and the Raspberry Pi Pico 2 will be mounted at `/run/media/${USER}/RP2350`.
 
-On macOS system, the Raspberry Pico will be mounted at `/Volumes/RPI-RP2`.
+On macOS system, the Raspberry Pi Pico will be mounted at `/Volumes/RPI-RP2` and the Raspberry Pi Pico 2 will be mounted at `/Volumes/RP2350`.
 
 For example:
 
@@ -338,7 +342,7 @@ total 16
 -rwxrwxrwx  1 joe  staff  241 Sep  5  2008 INDEX.HTM*
 -rwxrwxrwx  1 joe  staff   62 Sep  5  2008 INFO_UF2.TXT*
 
-$ cp ~/Downloads/AtomVM-pico-v0.6.0.uf2 /Volumes/RPI-RP2/.
+$ cp ~/Downloads/AtomVM-pico-v0.7.0.uf2 /Volumes/RPI-RP2/.
 ```
 
 ... at this point, the device will auto-unmount.
@@ -353,7 +357,7 @@ total 16
 -rwxrwxrwx  1 joe  staff  241 Sep  5  2008 INDEX.HTM*
 -rwxrwxrwx  1 joe  staff   62 Sep  5  2008 INFO_UF2.TXT*
 
-$ cp ~/Downloads/atomvmlib-v0.6.0.uf2 /Volumes/RPI-RP2/.
+$ cp ~/Downloads/atomvmlib-pico-v0.7.0.uf2 /Volumes/RPI-RP2/.
 ```
 
 ... and again, at this point, the device will auto-unmount.
@@ -388,7 +392,7 @@ When the AtomVM virtual machine starts, it will search for the first module that
 
 AtomVM applications can be written in Erlang or Elixir, or a combination of both.  The AtomVM community has provided tooling for both platforms, making deployment of AtomVM applications as seamless as possible.
 
-For information about how to flash your application to your Raspberry Pico, see the [AtomVM Tooling](./atomvm-tooling.md#raspberry-pico) chapter.
+For information about how to flash your application to your Raspberry Pi Pico, see the [AtomVM Tooling](./atomvm-tooling.md#raspberry-pico) chapter.
 
 ## Getting Started on the Generic UNIX platform
 

@@ -30,7 +30,7 @@ To use the [`atomvm_rebar3_plugin`](https://atomvm.github.io/atomvm_rebar3_plugi
 * For flashing to ESP32, the [`esptool`](https://github.com/espressif/esptool) program.
 * For flashing to STM32, `st-flash` via [stlink](https://github.com/stlink-org/stlink)
 * (optional) A serial console program such as [minicom](https://en.wikipedia.org/wiki/Minicom) or [screen](https://en.wikipedia.org/wiki/GNU_Screen), to view console output from a device.
-* (recommended) For rp2040, [`picotool`](https://github.com/raspberrypi/picotool) for software resets on Raspberry Pi Pico. (optionally used if found in PATH to disconnect active `screen` sessions, which normally prevent flashing)
+* (recommended) For rp2040 and rp2350, [`picotool`](https://github.com/raspberrypi/picotool) for software resets on Raspberry Pi Pico. (optionally used if found in PATH to disconnect active `screen` sessions, which normally prevent flashing)
 
 ### Erlang Example Program
 
@@ -210,9 +210,9 @@ You can now use a serial console program such as [minicom](https://en.wikipedia.
     INFO [74] AtomVM: Exited with return: ok
     INFO [78] AtomVM: AtomVM application terminated.  Going to sleep forever ...
 
-#### Raspberry Pico
+#### Raspberry Pi Pico and Pico 2
 
-To generate a Raspberry Pico uf2 file from an AtomVM AVM file and flash it to an rp2040 device, use the `pico_flash` target in the `atomvm` namespace.
+To generate a Raspberry Pi Pico uf2 file from an AtomVM AVM file and flash it to an Pico or Pico 2 device, use the `pico_flash` target in the `atomvm` namespace.
 
 For example:
 
