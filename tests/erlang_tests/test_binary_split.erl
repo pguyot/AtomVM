@@ -23,6 +23,7 @@
 -export([start/0, split_compare/3, split_compare/2, compare_bin/2, fail_split/1]).
 
 start() ->
+    ok = test_alloc(),
     split_compare(<<"Hello:World">>, <<"Hello">>, <<"World">>) +
         split_compare(<<"Hello:::World:">>, <<"Hello">>, <<"::World:">>) +
         split_compare(<<"Test:">>, <<"Test">>, <<>>) +
@@ -80,3 +81,43 @@ fail_split2(Bin) ->
         error:badarg -> 1;
         _:_ -> 4000
     end.
+
+test_alloc() ->
+    [A, B] = binary:split(<<"Hello world\r\n">>, <<"\r\n">>),
+    [A, C] = binary:split(<<"Hello world\r\n1">>, <<"\r\n">>),
+    [A, D] = binary:split(<<"Hello world\r\n12">>, <<"\r\n">>),
+    [A, E] = binary:split(<<"Hello world\r\n123">>, <<"\r\n">>),
+    [A, F] = binary:split(<<"Hello world\r\n1234">>, <<"\r\n">>),
+    [A, G] = binary:split(<<"Hello world\r\n12345">>, <<"\r\n">>),
+    [A, H] = binary:split(<<"Hello world\r\n123456">>, <<"\r\n">>),
+    [A, I] = binary:split(<<"Hello world\r\n1234567">>, <<"\r\n">>),
+    [A, J] = binary:split(<<"Hello world\r\n12345678">>, <<"\r\n">>),
+    [A, K] = binary:split(<<"Hello world\r\n123456789">>, <<"\r\n">>),
+    [A, L] = binary:split(<<"Hello world\r\n1234567890">>, <<"\r\n">>),
+    [A, M] = binary:split(<<"Hello world\r\n12345678901">>, <<"\r\n">>),
+    [A, N] = binary:split(<<"Hello world\r\n123456789012">>, <<"\r\n">>),
+    [A, O] = binary:split(<<"Hello world\r\n1234567890123">>, <<"\r\n">>),
+    [A, P] = binary:split(<<"Hello world\r\n12345678901234">>, <<"\r\n">>),
+    [A, Q] = binary:split(<<"Hello world\r\n123456789012345">>, <<"\r\n">>),
+    [A, R] = binary:split(<<"Hello world\r\n1234567890123456">>, <<"\r\n">>),
+    [A, S] = binary:split(<<"Hello world\r\n12345678901234567">>, <<"\r\n">>),
+    [A, T] = binary:split(<<"Hello world\r\n123456789012345678">>, <<"\r\n">>),
+    19 = length([byte_size(Bin) || Bin <- [B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T]]),
+    <<C:1/binary, $2>> = D,
+    <<D:2/binary, $3>> = E,
+    <<E:3/binary, $4>> = F,
+    <<F:4/binary, $5>> = G,
+    <<G:5/binary, $6>> = H,
+    <<H:6/binary, $7>> = I,
+    <<I:7/binary, $8>> = J,
+    <<J:8/binary, $9>> = K,
+    <<K:9/binary, $0>> = L,
+    <<L:10/binary, $1>> = M,
+    <<M:11/binary, $2>> = N,
+    <<N:12/binary, $3>> = O,
+    <<O:13/binary, $4>> = P,
+    <<P:14/binary, $5>> = Q,
+    <<Q:15/binary, $6>> = R,
+    <<R:16/binary, $7>> = S,
+    <<S:17/binary, $8>> = T,
+    ok.
