@@ -28,8 +28,10 @@
 #ifndef _TERM_H_
 #define _TERM_H_
 
+#if REQUIRES_SYS_STDINT_FOR_PRIU64
 #include <sys/_stdint.h>
 #include <inttypes.h>
+#endif
 
 #include <stdbool.h>
 #include <stdint.h>

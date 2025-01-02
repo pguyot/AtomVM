@@ -147,6 +147,33 @@ if (HAVE_PRAGMA_STDC_FENV_ACCESS)
     target_compile_definitions(libAtomVM PUBLIC HAVE_PRAGMA_STDC_FENV_ACCESS)
 endif()
 
+# workaround for gcc-arm-none-eabi package issue
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1067692
+check_c_source_compiles("
+    #include <inttypes.h>
+    #include <stdio.h>
+    int main() {
+        printf("%" PRIu64, (uint64_t) 42);
+        return 0;
+    }
+" PRIU64_WORKS)
+
+if (NOT PRIU64_WORKS)
+check_c_source_compiles("
+    #include <sys/_stdint.h>
+    #include <inttypes.h>
+    #include <stdio.h>
+    int main() {
+        printf("%" PRIu64, (uint64_t) 42);
+        return 0;
+    }
+" PRIU64_REQUIRES_WORKAROUND)
+
+if(PRIU64_REQUIRES_WORKAROUND)
+    target_compile_definitions(libAtomVM PUBLIC REQUIRES_SYS_STDINT_FOR_PRIU64)
+endif()
+endif()
+
 if(${CMAKE_C_FLAGS} MATCHES -DAVM_NO_SMP)
     message("SMP is disabled by CFLAGS environment")
     set(AVM_DISABLE_SMP ON)
