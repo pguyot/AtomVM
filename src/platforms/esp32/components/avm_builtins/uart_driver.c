@@ -419,6 +419,7 @@ static void uart_driver_do_close(Context *ctx, GenMessage gen_message)
     }
 
     free(uart_data);
+    ctx->platform_data = NULL;
 }
 
 static NativeHandlerResult uart_driver_consume_mailbox(Context *ctx)
