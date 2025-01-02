@@ -153,7 +153,7 @@ check_c_source_compiles("
     #include <inttypes.h>
     #include <stdio.h>
     int main() {
-        printf("%" PRIu64, (uint64_t) 42);
+        printf(\"%\" PRIu64, (uint64_t) 42);
         return 0;
     }
 " PRIU64_WORKS)
@@ -164,7 +164,7 @@ check_c_source_compiles("
     #include <inttypes.h>
     #include <stdio.h>
     int main() {
-        printf("%" PRIu64, (uint64_t) 42);
+        printf(\"%\" PRIu64, (uint64_t) 42);
         return 0;
     }
 " PRIU64_REQUIRES_WORKAROUND)
