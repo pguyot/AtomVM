@@ -28,6 +28,8 @@
 #ifndef _TERM_H_
 #define _TERM_H_
 
+#include <sys/types.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
