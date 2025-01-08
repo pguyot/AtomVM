@@ -140,19 +140,19 @@ names(Host) ->
                                         receive_names_loop(Socket, <<>>, []);
                                     {ok, Unexpected} ->
                                         {error, {unexpected, Unexpected}};
-                                    {error, _} = ErrRecv ->
-                                        ErrRecv
+                                    {error, Reason1} ->
+                                        {error, {?MODULE, ?LINE, Reason1}}
                                 end;
-                            {error, _} = ErrSend ->
-                                ErrSend
+                            {error, Reason2} ->
+                                {error, {?MODULE, ?LINE, Reason2}}
                         end,
                     ok = socket:close(Socket),
                     Result;
-                {error, _} = ErrConnect ->
-                    ErrConnect
+                {error, Reason3} ->
+                    {error, {?MODULE, ?LINE, Reason3}}
             end;
-        {error, _} = ErrGetAddr ->
-            ErrGetAddr
+        {error, Reason4} ->
+            {error, {?MODULE, ?LINE, Reason4}}
     end.
 
 receive_names_loop(Socket, AccBuffer, AccL) ->
@@ -160,7 +160,7 @@ receive_names_loop(Socket, AccBuffer, AccL) ->
         [AccBuffer] ->
             case socket:recv(Socket, 0, ?TIMEOUT) of
                 {error, closed} when AccBuffer =:= <<>> -> {ok, lists:reverse(AccL)};
-                {error, _} = ErrT -> ErrT;
+                {error, Reason} -> {error, {?MODULE, ?LINE, Reason}};
                 {ok, Data} -> receive_names_loop(Socket, <<Data/binary, AccBuffer/binary>>, AccL)
             end;
         [<<"name ", RestLine/binary>>, RestBuffer] ->
@@ -254,11 +254,11 @@ send_request(Socket, Request) ->
                     receive_alive2_x_resp(Socket);
                 {ok, <<?ALIVE2_RESP>>} ->
                     receive_alive2_resp(Socket);
-                {error, _} = ErrorRecv2 ->
-                    ErrorRecv2
+                {error, Reason2} ->
+                    {error, {?MODULE, ?LINE, Reason2}}
             end;
-        {error, _} = ErrorSend ->
-            ErrorSend
+        {error, Reason1} ->
+            {error, {?MODULE, ?LINE, Reason1}}
     end.
 
 receive_port2_resp(Socket) ->
@@ -285,32 +285,32 @@ receive_port2_resp(Socket) ->
                                                 highest_version = HighestVersion,
                                                 lowest_version = LowestVersion
                                             }};
-                                        {error, _} = ErrT1 ->
-                                            ErrT1
+                                        {error, Reason1} ->
+                                            {error, {?MODULE, ?LINE, Reason1}}
                                     end
                             end;
-                        {error, _} = ErrT2 ->
-                            ErrT2
+                        {error, Reason2} ->
+                            {error, {?MODULE, ?LINE, Reason2}}
                     end;
-                {error, _} = ErrT3 ->
-                    ErrT3
+                {error, Reason3} ->
+                    {error, {?MODULE, ?LINE, Reason3}}
             end;
         {ok, <<N>>} ->
             {error, N};
-        {error, _} = ErrT4 ->
-            ErrT4
+        {error, Reason4} ->
+            {error, {?MODULE, ?LINE, Reason4}}
     end.
 
 receive_alive2_x_resp(Socket) ->
     case socket:recv(Socket, 5, ?TIMEOUT) of
         {ok, <<0, Creation:32>>} -> {ok, #alive2_resp{creation = Creation}};
         {ok, <<Err, _:32>>} -> {error, Err};
-        {error, _} = ErrT -> ErrT
+        {error, Reason} -> {error, {?MODULE, ?LINE, Reason}}
     end.
 
 receive_alive2_resp(Socket) ->
     case socket:recv(Socket, 5, ?TIMEOUT) of
         {ok, <<0, Creation:16>>} -> {ok, #alive2_resp{creation = Creation}};
         {ok, <<Err, _:16>>} -> {error, Err};
-        {error, _} = ErrT -> ErrT
+        {error, Reason} -> {error, {?MODULE, ?LINE, Reason}}
     end.
