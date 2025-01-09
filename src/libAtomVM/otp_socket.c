@@ -1759,8 +1759,10 @@ static term nif_socket_accept(Context *ctx, int argc, term argv[])
     int fd = accept(rsrc_obj->fd, (struct sockaddr *) &clientaddr, &clientlen);
     SMP_RWLOCK_UNLOCK(rsrc_obj->socket_lock);
     if (UNLIKELY(fd == -1 || fd == CLOSED_FD)) {
-        AVM_LOGE(TAG, "Unable to accept on socket %i.", rsrc_obj->fd);
         int err = errno;
+        if (err != EAGAIN) {
+            AVM_LOGI(TAG, "Unable to accept on socket %i.  errno=%i", rsrc_obj->fd, (int) err);
+        }
         term reason = (err == ECONNABORTED) ? CLOSED_ATOM : posix_errno_to_term(err, global);
         return make_error_tuple(reason, ctx);
     } else {
