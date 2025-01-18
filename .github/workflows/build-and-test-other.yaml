@@ -136,6 +136,7 @@ jobs:
         docker run --platform linux/${{ matrix.platform }} --rm -v $PWD:/atomvm -w /atomvm \
         -e CFLAGS="${{ matrix.cflags }}" -e CXXFLAGS="${{ matrix.cflags }}" \
         ${{ matrix.arch }}/debian:${{ matrix.tag }} /bin/bash -c '
+        ulimit -c unlimited &&
         ([ -n "${{ matrix.sources }}" ] && echo "${{ matrix.sources }}" > /etc/apt/sources.list || true) &&
         cat /etc/apt/sources.list || true &&
         cat /etc/apt/sources.list.d/* || true &&
@@ -144,7 +145,7 @@ jobs:
             ${{ matrix.install_deps }}
         else
             apt update &&
-            apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
+            apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev systemd-coredump
         fi &&
         file /bin/bash &&
         uname -a &&
@@ -183,4 +184,13 @@ jobs:
         ./src/AtomVM tests/libs/estdlib/test_estdlib.avm &&
         ./src/AtomVM tests/libs/eavmlib/test_eavmlib.avm &&
         ./src/AtomVM tests/libs/alisp/test_alisp.avm
+        } || {
+            coredumpctl info || true &&
+            coredumpctl debug --debugger-arguments="-batch -ex 'info all-registers'" || true &&
+            coredumpctl debug --debugger-arguments="-batch -ex 'info threads'" || true &&
+            coredumpctl debug --debugger-arguments="-batch -ex 'thread apply all bt full'" || true &&
+            coredumpctl debug --debugger-arguments='-batch -ex "display /10i $pc"' || true &&
+            coredumpctl dump -o core.dump || true &&
+            exit 1
+        }
         '
