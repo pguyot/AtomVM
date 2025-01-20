@@ -29,7 +29,9 @@
     all_loaded/0,
     load_abs/1,
     load_binary/3,
-    ensure_loaded/1
+    ensure_loaded/1,
+    which/1,
+    is_loaded/1
 ]).
 
 %%-----------------------------------------------------------------------------
@@ -98,3 +100,19 @@ load_binary(_Module, _Filename, _Binary) ->
     Module :: atom().
 ensure_loaded(_Module) ->
     erlang:nif_error(undefined).
+
+is_loaded(Module) ->
+    case ?MODULE:ensure_loaded(Module) of
+        {module, _Module} ->
+            {file, preloaded};
+        {error, _} ->
+            false
+    end.
+
+which(Module) ->
+    case ?MODULE:ensure_loaded(Module) of
+        {module, _Module} ->
+            preloaded;
+        {error, _} ->
+            non_existing
+    end.

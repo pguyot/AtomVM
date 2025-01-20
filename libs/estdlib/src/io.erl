@@ -27,7 +27,42 @@
 %%-----------------------------------------------------------------------------
 -module(io).
 
--export([format/1, format/2, get_line/1, put_chars/1, put_chars/2]).
+-export([requests/1, format/1, format/2, fwrite/2, get_line/1, put_chars/1, put_chars/2, scan_erl_exprs/4, columns/0, getopts/0, printable_range/0]).
+
+requests(Requests) ->
+    execute_request(group_leader(), {requests, Requests}).
+
+columns() ->
+    {ok, 80}.
+
+% sensible default so far
+getopts() ->
+    [
+        {echo,true},
+        {binary,false},
+        {encoding,unicode},
+        {terminal,true},
+        {stdout,true},
+        {stderr,true},
+        {stdin,true}
+    ].
+
+printable_range() ->
+    unicode.
+
+fwrite(Format, Data) ->
+    format(Format, Data).
+
+scan_erl_exprs(Device, Prompt, StartLocation, Options) when is_pid(Device) ->
+    execute_request(Device, {get_until, unicode, Prompt, erl_scan, tokens, [StartLocation, Options]}).
+
+execute_request(Pid, Request) ->
+    Converted = convert_request(Request),
+    Ref = make_ref(),
+    Pid ! {io_request, self(), Ref, Converted},
+    receive
+        {io_reply, Ref, Result} -> Result
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc     Equivalent to format(Format, []).
@@ -90,11 +125,7 @@ put_chars(Chars) ->
         Self ->
             console:print(Chars);
         Leader ->
-            Ref = make_ref(),
-            Leader ! {io_request, self(), Ref, {put_chars, unicode, Chars}},
-            receive
-                {io_reply, Ref, Line} -> Line
-            end
+            execute_request(Leader, {put_chars, unicode, Chars})
     end.
 
 %%-----------------------------------------------------------------------------
@@ -108,3 +139,10 @@ put_chars(standard_error, Chars) ->
     put_chars(Chars);
 put_chars(standard_output, Chars) ->
     put_chars(Chars).
+
+convert_request({requests, Requests}) ->
+    {requests, [convert_request(Request) || Request <- Requests]};
+convert_request(nl) ->
+    {put_chars, unicode, "\n"};
+convert_request(Other) ->
+    Other.

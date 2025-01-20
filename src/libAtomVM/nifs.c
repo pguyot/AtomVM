@@ -150,6 +150,7 @@ static term nif_erlang_processes(Context *ctx, int argc, term argv[]);
 static term nif_erlang_process_info(Context *ctx, int argc, term argv[]);
 static term nif_erlang_fun_info_2(Context *ctx, int argc, term argv[]);
 static term nif_erlang_put_2(Context *ctx, int argc, term argv[]);
+static term nif_erlang_get_0(Context *ctx, int argc, term argv[]);
 static term nif_erlang_system_info(Context *ctx, int argc, term argv[]);
 static term nif_erlang_system_flag(Context *ctx, int argc, term argv[]);
 static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[]);
@@ -552,6 +553,12 @@ static const struct Nif process_info_nif =
 {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_process_info
+};
+
+static const struct Nif get_nif =
+{
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_erlang_get_0
 };
 
 static const struct Nif put_nif =
@@ -2981,6 +2988,19 @@ static term nif_erlang_system_info(Context *ctx, int argc, term argv[])
     if (key == ATOMVM_VERSION_ATOM) {
         return term_from_literal_binary((const uint8_t *) ATOMVM_VERSION, strlen(ATOMVM_VERSION), &ctx->heap, ctx->global);
     }
+    if (key == SYSTEM_VERSION_ATOM) {
+        char system_version[256];
+        int len;
+#ifndef AVM_NO_SMP
+        len = snprintf(system_version, sizeof(system_version), "AtomVM %s [%d-bit] [smp:%d:%d]\n", ATOMVM_VERSION, TERM_BYTES * 8, ctx->global->online_schedulers, smp_get_online_processors());
+#else
+        len = snprintf(system_version, sizeof(system_version), "AtomVM %s [%d-bit] [nosmp]\n", ATOMVM_VERSION, TERM_BYTES * 8);
+#endif
+        if (UNLIKELY(memory_ensure_free_opt(ctx, len * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return interop_bytes_to_list(system_version, len, &ctx->heap);
+    }
     if (key == REFC_BINARY_INFO_ATOM) {
         fprintf(stderr, "WARNING: The refc_binary_info system info tag is deprecated.  Use erlang:memory(binary) instead.\n");
         term ret = refc_binary_create_binary_info(ctx);
@@ -2988,6 +3008,16 @@ static term nif_erlang_system_info(Context *ctx, int argc, term argv[])
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         return ret;
+    }
+    // For distribution, we report a gullible OTP version
+    if (key == OTP_RELEASE_ATOM) {
+        if (UNLIKELY(memory_ensure_free_opt(ctx, strlen(DIST_OTP_RELEASE) * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return interop_bytes_to_list(DIST_OTP_RELEASE, strlen(DIST_OTP_RELEASE), &ctx->heap);
+    }
+    if (key == BREAK_IGNORED_ATOM) {
+        return TRUE_ATOM;
     }
     if (key == SCHEDULERS_ATOM) {
 #ifndef AVM_NO_SMP
@@ -3823,6 +3853,32 @@ static term nif_erlang_fun_info_2(Context *ctx, int argc, term argv[])
     term_put_tuple_element(fun_info_tuple, 0, key);
     term_put_tuple_element(fun_info_tuple, 1, value);
     return fun_info_tuple;
+}
+
+static term nif_erlang_get_0(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    UNUSED(argv);
+
+    term result = term_nil();
+    size_t size = 0;
+    struct ListHead *dictionary = &ctx->dictionary;
+    struct ListHead *item;
+    LIST_FOR_EACH (item, dictionary) {
+        size++;
+    }
+    if (UNLIKELY(memory_ensure_free(ctx, LIST_SIZE(size, TUPLE_SIZE(2))) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    LIST_FOR_EACH (item, dictionary) {
+        struct DictEntry *dict_entry = GET_LIST_ENTRY(item, struct DictEntry, head);
+        term tuple = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(tuple, 0, dict_entry->key);
+        term_put_tuple_element(tuple, 1, dict_entry->value);
+        result = term_list_prepend(tuple, result, &ctx->heap);
+    }
+
+    return result;
 }
 
 static term nif_erlang_put_2(Context *ctx, int argc, term argv[])

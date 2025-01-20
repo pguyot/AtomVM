@@ -29,6 +29,7 @@
 #include "globalcontext.h"
 #include "list.h"
 #include "mailbox.h"
+#include "memory.h"
 #include "smp.h"
 #include "synclist.h"
 #include "sys.h"

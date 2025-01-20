@@ -51,8 +51,10 @@
     all/2,
     any/2,
     flatten/1,
+    flatmap/2,
     search/2,
     filter/2,
+    dropwhile/2,
     filtermap/2,
     join/2,
     seq/2, seq/3,
@@ -485,6 +487,9 @@ flatten([H | T], Accum) ->
 
 %% post: return is flattened
 
+flatmap(F, L) when is_list(L) ->
+    flatten(map(F, L)).
+
 %%-----------------------------------------------------------------------------
 %% @param   Pred the predicate to apply to elements in List
 %% @param   List search
@@ -518,6 +523,13 @@ filter(Pred, L) when is_function(Pred, 1) ->
     [X || X <- L, Pred(X)].
 
 % Taken from `otp/blob/master/lib/stdlib/src/lists.erl`
+
+dropwhile(Pred, []) when is_function(Pred, 1) -> [];
+dropwhile(Pred, [H | T]) when is_function(Pred, 1) ->
+    case Pred(H) of
+        true -> dropwhile(Pred, T);
+        false -> T
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   Fun the filter/map fun

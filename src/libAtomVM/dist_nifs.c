@@ -428,8 +428,17 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
+    printf("nif_erlang_dist_ctrl_put_data -- control = ");
+    term_display(stdout, control, ctx);
+    printf("\n");
+
     switch (term_to_int(operation)) {
+        case OPERATION_LINK: {
+printf("OPERATION_LINK\n");
+            break;
+        }
         case OPERATION_REG_SEND: {
+printf("OPERATION_REG_SEND\n");
             if (UNLIKELY(arity != 4)) {
                 RAISE_ERROR(BADARG_ATOM);
             }
@@ -442,6 +451,7 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             break;
         }
         case OPERATION_MONITOR_P: {
+printf("OPERATION_MONITOR_P\n");
             if (UNLIKELY(arity != 4)) {
                 RAISE_ERROR(BADARG_ATOM);
             }
@@ -455,6 +465,7 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             break;
         }
         case OPERATION_DEMONITOR_P: {
+printf("OPERATION_DEMONITOR_P\n");
             if (UNLIKELY(arity != 4)) {
                 RAISE_ERROR(BADARG_ATOM);
             }
@@ -478,6 +489,7 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             break;
         }
         case OPERATION_SEND_SENDER: {
+printf("OPERATION_SEND_SENDER\n");
             if (UNLIKELY(arity != 3)) {
                 RAISE_ERROR(BADARG_ATOM);
             }
@@ -487,10 +499,14 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             }
             int target_process_id = term_to_local_process_id(target);
             term payload = externalterm_to_term_with_roots(data + 1 + bytes_read, binary_len - 1 - bytes_read, ctx, ExternalTermCopy, &bytes_read, 2, argv);
+printf("nif_erlang_dist_ctrl_put_data -- payload = ");
+term_display(stdout, payload, ctx);
+printf("\n");
             globalcontext_send_message(ctx->global, target_process_id, payload);
             break;
         }
         case OPERATION_SPAWN_REQUEST: {
+printf("OPERATION_SPAWN_REQUEST\n");
             if (UNLIKELY(arity != 6)) {
                 RAISE_ERROR(BADARG_ATOM);
             }
@@ -502,6 +518,9 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             if (UNLIKELY(memory_ensure_free_with_roots(ctx, LIST_SIZE(1, TUPLE_SIZE(2) + TUPLE_SIZE(5)), 4, roots, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
             }
+printf("nif_erlang_dist_ctrl_put_data -- payload = ");
+term_display(stdout, roots[3], ctx);
+printf("\n");
             control = roots[2];
             term arglist = roots[3];
             term mfa = term_get_tuple_element(control, 4);
@@ -538,6 +557,9 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             roots[1] = term_get_tuple_element(mfa, 1);
             roots[2] = arglist;
             roots[3] = spawn_opts;
+            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 4, roots, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
             nif_erlang_spawn_opt(ctx, 4, roots);
             break;
         }
@@ -551,6 +573,12 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
 
 term dist_send_message(term target, term payload, Context *ctx)
 {
+    printf("dist_send_message -- target = ");
+    term_display(stdout, target, ctx);
+    printf(", payload = ");
+    term_display(stdout, payload, ctx);
+    printf("\n");
+
     if (UNLIKELY(!term_is_external_pid(target) && !term_is_tuple(target))) {
         RAISE_ERROR(BADARG_ATOM);
     }

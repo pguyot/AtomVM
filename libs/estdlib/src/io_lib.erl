@@ -27,7 +27,14 @@
 %%-----------------------------------------------------------------------------
 -module(io_lib).
 
--export([format/2, latin1_char_list/1]).
+-export([write/1, format/2, fwrite/2, latin1_char_list/1, write_atom/1, printable_list/1, write_string/2, chars_length/1]).
+
+fwrite(Format, Args) when is_binary(Format) ->
+    fwrite(binary_to_list(Format), Args);
+fwrite(Format, Args) when is_atom(Format) ->
+    fwrite(atom_to_list(Format), Args);
+fwrite(Format, Args) ->
+    format(Format, Args).
 
 %%-----------------------------------------------------------------------------
 %% @param   Format format string
@@ -77,6 +84,8 @@ latin1_char_list(_) ->
 }).
 
 %% @private
+split(Format) when is_binary(Format) ->
+    split(binary_to_list(Format));
 split(Format) ->
     split(Format, [], [], []).
 
@@ -236,11 +245,7 @@ format_string(Format, T) ->
 format_spw(#format{control = s}, T) when is_atom(T) ->
     erlang:atom_to_list(T);
 format_spw(_Format, T) when is_atom(T) ->
-    AtomStr = erlang:atom_to_list(T),
-    case atom_requires_quotes(T, AtomStr) of
-        false -> AtomStr;
-        true -> [$', AtomStr, $']
-    end;
+    write_atom(T);
 format_spw(#format{control = s, mod = t} = Format, T) when is_binary(T) ->
     case unicode:characters_to_list(T, utf8) of
         L when is_list(L) -> L;
@@ -254,8 +259,8 @@ format_spw(#format{control = Control, mod = t} = Format, T) when is_binary(T) ->
         L when is_list(L) ->
             FormattedStr =
                 case {Control, test_string_class(L)} of
-                    {p, latin1_printable} -> format_p_string(L, []);
-                    {p, unicode} -> [format_p_string(L, []), "/utf8"];
+                    {p, latin1_printable} -> write_string(L, $");
+                    {p, unicode} -> [write_string(L, $"), "/utf8"];
                     _ -> lists:join($,, [integer_to_list(B) || B <- L])
                 end,
             [$<, $<, FormattedStr, $>, $>];
@@ -266,7 +271,7 @@ format_spw(#format{control = Control, mod = undefined}, T) when is_binary(T) ->
     L = erlang:binary_to_list(T),
     FormattedStr =
         case {Control, test_string_class(L)} of
-            {p, latin1_printable} -> format_p_string(L, []);
+            {p, latin1_printable} -> write_string(L, $");
             _ -> lists:join($,, [integer_to_list(B) || B <- L])
         end,
     [$<, $<, FormattedStr, $>, $>];
@@ -279,7 +284,7 @@ format_spw(#format{control = s, mod = Mod}, L) when is_list(L) ->
     end;
 format_spw(#format{control = p} = Format, L) when is_list(L) ->
     case test_string_class(L) of
-        latin1_printable -> format_p_string(L, []);
+        latin1_printable -> write_string(L, $");
         _ -> [$[, lists:join($,, [format_spw(Format, E) || E <- L]), $]]
     end;
 format_spw(#format{control = w} = Format, L) when is_list(L) ->
@@ -346,6 +351,14 @@ format_spw(#format{mod = Mod} = Format, T) when is_map(T) ->
     'when',
     'xor'
 ]).
+
+-spec write_atom(Atom :: atom()) -> iodata().
+write_atom(Atom) ->
+    AtomStr = erlang:atom_to_list(Atom),
+    case atom_requires_quotes(Atom, AtomStr) of
+        false -> AtomStr;
+        true -> [$', AtomStr, $']
+    end.
 
 %% @private
 atom_requires_quotes(Atom, AtomStr) ->
@@ -482,22 +495,41 @@ char_class(H) when H >= 14 andalso H < 32 -> latin1_unprintable;
 char_class(H) when H < 256 -> latin1_printable;
 char_class(_H) -> unicode.
 
+write_string(String, $") ->
+    format_p_string(String, $", []).
+
 %% @private
-format_p_string([], Acc) ->
-    [$", lists:reverse(Acc), $"];
-format_p_string([8 | T], Acc) ->
-    format_p_string(T, ["\\b" | Acc]);
-format_p_string([9 | T], Acc) ->
-    format_p_string(T, ["\\t" | Acc]);
-format_p_string([10 | T], Acc) ->
-    format_p_string(T, ["\\n" | Acc]);
-format_p_string([11 | T], Acc) ->
-    format_p_string(T, ["\\v" | Acc]);
-format_p_string([12 | T], Acc) ->
-    format_p_string(T, ["\\f" | Acc]);
-format_p_string([13 | T], Acc) ->
-    format_p_string(T, ["\\r" | Acc]);
-format_p_string([27 | T], Acc) ->
-    format_p_string(T, ["\\e" | Acc]);
-format_p_string([H | T], Acc) ->
-    format_p_string(T, [H | Acc]).
+format_p_string([], Q, Acc) ->
+    [Q, lists:reverse(Acc), Q];
+format_p_string([8 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\b" | Acc]);
+format_p_string([9 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\t" | Acc]);
+format_p_string([10 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\n" | Acc]);
+format_p_string([11 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\v" | Acc]);
+format_p_string([12 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\f" | Acc]);
+format_p_string([13 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\r" | Acc]);
+format_p_string([27 | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\e" | Acc]);
+format_p_string([Q | T], Q, Acc) ->
+    format_p_string(T, Q, ["\\", Q | Acc]);
+format_p_string([H | T], Q, Acc) ->
+    format_p_string(T, Q, [H | Acc]).
+
+printable_list(List) ->
+    test_string_class(List) =/= not_a_string.
+
+chars_length(S) ->
+    try
+        iolist_size(S)
+    catch
+        _:_ ->
+            string:length(S)
+    end.
+
+write(Term) ->
+    format("~p", [Term]).
