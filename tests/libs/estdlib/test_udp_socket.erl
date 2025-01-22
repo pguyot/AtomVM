@@ -28,6 +28,7 @@ test() ->
     ok = test_timeout(),
     ok = test_nowait(),
     ok = test_setopt_getopt(),
+    ok = test_multicast(),
     ok.
 
 -define(PACKET_SIZE, 7).
@@ -289,4 +290,37 @@ test_setopt_getopt() ->
     ok = socket:close(Socket),
     {error, closed} = socket:getopt(Socket, {socket, type}),
     {error, closed} = socket:setopt(Socket, {socket, reuseaddr}, true),
+    ok.
+
+test_multicast() ->
+    {ok, SocketRecv} = socket:open(inet, dgram, udp),
+    SocketRecvAddr = #{
+        family => inet, addr => {0, 0, 0, 0}, port => 8042
+    },
+    ok = socket:setopt(SocketRecv, {socket, reuseaddr}, true),
+    ok = socket:bind(SocketRecv, SocketRecvAddr),
+    ok = socket:setopt(SocketRecv, {ip, add_membership}, #{
+        multiaddr => {224, 0, 0, 42}, interface => {0, 0, 0, 0}
+    }),
+
+    {ok, SocketSender} = socket:open(inet, dgram, udp),
+    ok = socket:sendto(SocketSender, <<"42">>, #{
+        family => inet, addr => {224, 0, 0, 42}, port => 8042
+    }),
+    {ok, SocketSenderAddr} = socket:sockname(SocketSender),
+    SocketSenderAddrPort = maps:get(port, SocketSenderAddr),
+
+    {ok, {SocketSenderAddrFrom, <<"42">>}} = socket:recvfrom(SocketRecv, 2, 500),
+    {error, timeout} = socket:recvfrom(SocketRecv, 2, 0),
+    SocketSenderAddrPort = maps:get(port, SocketSenderAddrFrom),
+
+    ok = socket:sendto(SocketRecv, <<"43">>, #{
+        family => inet, addr => {224, 0, 0, 42}, port => 8042
+    }),
+    {ok, {SocketRecvAddrFrom, <<"43">>}} = socket:recvfrom(SocketRecv, 2, 500),
+    {error, timeout} = socket:recvfrom(SocketRecv, 2, 0),
+    8042 = maps:get(port, SocketRecvAddrFrom),
+
+    ok = socket:close(SocketRecv),
+    ok = socket:close(SocketSender),
     ok.
