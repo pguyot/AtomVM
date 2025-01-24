@@ -2334,6 +2334,7 @@ static ssize_t do_socket_send(struct SocketResource *rsrc_obj, const uint8_t *bu
     } else {
         sent_data = send(rsrc_obj->fd, buf, len, 0);
     }
+printf("sent_data = %d\n", (int) sent_data);
     if (sent_data < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return SocketWouldBlock;
