@@ -226,7 +226,6 @@ em_promise_t sys_enqueue_emscripten_call_message(GlobalContext *glb, const char 
     }
     struct EmscriptenPlatformData *platform = glb->platform_data;
     struct PromiseResource *promise_rsrc = enif_alloc_resource(platform->promise_resource_type, sizeof(struct PromiseResource));
-    enif_keep_resource(promise_rsrc);
     promise_rsrc->promise = promise;
     promise_rsrc->resolved = false;
     message->promise_rsrc = promise_rsrc;
@@ -438,6 +437,7 @@ static void sys_emscripten_send_message(GlobalContext *glb, int target_pid, cons
     term_put_tuple_element(payload, 0, globalcontext_make_atom(glb, is_call ? ATOM_STR("\x4", "call") : ATOM_STR("\x4", "cast")));
     if (is_call) {
         term promise_term = term_from_resource(promise, &heap);
+        enif_release_resource(promise);
         term_put_tuple_element(payload, 1, promise_term);
     }
     term bin = term_from_literal_binary(message, message_len, &heap, glb);

@@ -229,8 +229,6 @@ static bool get_register_callback_parameters(Context *ctx, int argc, term argv[]
     struct EmscriptenPlatformData *platform = ctx->global->platform_data;
     struct HTMLEventUserDataResource *htmlevent_user_data_resource = enif_alloc_resource(platform->htmlevent_user_data_resource_type, resource_size);
     htmlevent_user_data_resource->target_pid = ctx->process_id;
-    // We don't need to keep resource now because caller will make a term using
-    // enif_make_resource which increments ref count
     // Monitor process so we will unregister & decrement ref count if target dies.
     if (UNLIKELY(enif_monitor_process(erl_nif_env_from_context(ctx), htmlevent_user_data_resource, &ctx->process_id, NULL) != 0)) {
         // If we fail, caller will not make a term, so decrement resource count now to dispose it.
@@ -680,6 +678,7 @@ static EM_BOOL html5api_touch_callback(int eventType, const EmscriptenTouchEvent
             return term_from_emscripten_result(result, ctx);                                                                                                                             \
         }                                                                                                                                                                                \
         term resource_term = enif_make_resource(erl_nif_env_from_context(ctx), resource);                                                                                                \
+        enif_release_resource(resource);                                                                                                                                                 \
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(3), 1, &resource_term, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {                                                         \
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);                                                                                                                                             \
         }                                                                                                                                                                                \
