@@ -343,8 +343,6 @@ static term socket_make_select_notification(struct SocketResource *rsrc_obj, Hea
     term_put_tuple_element(notification, 0, DOLLAR_SOCKET_ATOM);
     term socket_tuple = term_alloc_tuple(2, heap);
     term_put_tuple_element(socket_tuple, 0, term_from_resource(rsrc_obj, heap));
-    struct RefcBinary *rsrc_refc = refc_binary_from_data(rsrc_obj);
-    refc_binary_increment_refcount(rsrc_refc);
     term socket_ref;
     if (rsrc_obj->socket_ref_ticks == 0) {
         socket_ref = UNDEFINED_ATOM;
@@ -1720,6 +1718,7 @@ static term nif_socket_listen(Context *ctx, int argc, term argv[])
 static term make_accepted_socket_term(struct SocketResource *conn_rsrc_obj, Heap *heap, GlobalContext *global)
 {
     term obj = term_from_resource(conn_rsrc_obj, heap);
+    enif_release_resource(conn_rsrc_obj);
 
     term socket_term = term_alloc_tuple(2, heap);
     uint64_t ref_ticks = globalcontext_get_ref_ticks(global);
