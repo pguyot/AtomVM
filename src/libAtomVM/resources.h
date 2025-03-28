@@ -27,6 +27,7 @@
 #include "list.h"
 #include "mailbox.h"
 #include "memory.h"
+#include "synclist.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,10 +53,21 @@ struct ResourceType
     struct ListHead head;
     const char *name;
     GlobalContext *global;
-    struct ListHead monitors;
+    struct SyncList monitors;
     ErlNifResourceDtor *dtor;
     ErlNifResourceStop *stop;
     ErlNifResourceDown *down;
+};
+
+/**
+ * @brief A resource monitor.
+ */
+struct ResourceMonitor
+{
+    struct ListHead resource_list_head;
+    struct RefcBinary *resource;
+    uint64_t ref_ticks;
+    int32_t process_id;
 };
 
 /**
@@ -130,6 +142,13 @@ void select_event_count_and_destroy_closed(struct ListHead *select_events, size_
  * available (see SELECT_EVENT_NOTIFICATION_SIZE)
  */
 term select_event_make_notification(void *rsrc_obj, uint64_t ref_ticks, bool is_write, Heap *heap);
+
+/**
+ * @brief Remove monitor from list of monitors.
+ * @param resource_type type holding the list of monitors
+ * @param ref_ticks reference of the monitor
+ */
+void resource_type_demonitor(struct ResourceType *resource_type, uint64_t ref_ticks);
 
 #ifdef __cplusplus
 }
