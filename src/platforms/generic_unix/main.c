@@ -19,6 +19,7 @@
  */
 
 #include <libgen.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,6 +37,7 @@
 #include "iff.h"
 #include "mapped_file.h"
 #include "module.h"
+#include "synclist.h"
 #include "sys.h"
 #include "term.h"
 #include "utils.h"
@@ -62,6 +64,39 @@ void print_help(const char *program_name)
         program_name, program_name);
 }
 
+static GlobalContext *glb;
+static struct sigaction sa_previous;
+
+void sigterm_handler(int signal)
+{
+    fprintf(stderr, "\n======================================================\n");
+    fprintf(stderr, "Signal %d received, dumping core\n", signal);
+    struct ListHead *item;
+    fprintf(stderr, "======================================================\n");
+    fprintf(stderr, "Reference counted binaries\n");
+    struct ListHead *refc_binaries = synclist_nolock(&glb->refc_binaries);
+    LIST_FOR_EACH (item, refc_binaries) {
+        struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
+        if (refc->resource_type) {
+            fprintf(stderr, "Resource of type %s, ref_count = %d, data = %p\n", refc->resource_type->name, (int) refc->ref_count, refc->data);
+        } else {
+            fprintf(stderr, "Refc binary, ref_count = %d, size = %zu, data = %p\n", (int) refc->ref_count, refc->size, refc->data);
+        }
+    }
+    fprintf(stderr, "======================================================\n");
+    fprintf(stderr, "Processes\n");
+    struct ListHead *processes_table = synclist_nolock(&glb->processes_table);
+    fprintf(stderr, "------------------------------------------------------\n");
+    LIST_FOR_EACH (item, processes_table) {
+        Context *p = GET_LIST_ENTRY(item, Context, processes_table_head);
+        context_dump(p);
+        fprintf(stderr, "------------------------------------------------------\n");
+    }
+    fprintf(stderr, "======================================================\n");
+    sigaction(signal, &sa_previous, NULL);
+    raise(signal);
+}
+
 int main(int argc, char **argv)
 {
     int c;
@@ -86,7 +121,11 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    GlobalContext *glb = globalcontext_new();
+    glb = globalcontext_new();
+    struct sigaction sa;
+    bzero(&sa, sizeof(sa));
+    sa.sa_handler = sigterm_handler;
+    sigaction(SIGTERM, &sa, &sa_previous);
 
     Module *startup_module = NULL;
 
@@ -164,6 +203,8 @@ int main(int argc, char **argv)
     }
 
     context_destroy(ctx);
+
+    sigaction(SIGTERM, &sa_previous, NULL);
     globalcontext_destroy(glb);
 
     return status;

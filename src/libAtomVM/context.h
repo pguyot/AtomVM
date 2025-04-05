@@ -473,6 +473,12 @@ term context_get_monitor_pid(Context *ctx, uint64_t ref_ticks, bool *is_monitori
  */
 void context_add_monitor(Context *ctx, struct Monitor *new_monitor);
 
+/**
+ * @brief Dump state of context to stderr
+ * @param ctx the context to dump the state of
+ */
+void context_dump(Context *ctx);
+
 #ifdef __cplusplus
 }
 #endif

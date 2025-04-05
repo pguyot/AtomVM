@@ -23,32 +23,7 @@
 #include "globalcontext.h"
 #include "memory.h"
 
-#ifndef AVM_CREATE_STACKTRACES
-
-term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term exception_class)
-{
-    UNUSED(ctx);
-    UNUSED(mod);
-    UNUSED(current_offset);
-    return exception_class;
-}
-
-term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
-{
-    UNUSED(ctx);
-    UNUSED(stack_info);
-    UNUSED(live);
-    return UNDEFINED_ATOM;
-}
-
-term stacktrace_exception_class(term stack_info)
-{
-    return stack_info;
-}
-
-#else
-
-static void cp_to_mod_lbl_off(term cp, Context *ctx, Module **cp_mod, int *label, int *l_off, long *mod_offset)
+void stacktrace_cp_to_mod_lbl_off(term cp, Context *ctx, Module **cp_mod, int *label, int *l_off, long *mod_offset)
 {
     int module_index = cp >> 24;
     Module *mod = globalcontext_get_module_by_index(ctx->global, module_index);
@@ -75,6 +50,31 @@ static void cp_to_mod_lbl_off(term cp, Context *ctx, Module **cp_mod, int *label
     *label = i - 1;
     *l_off = *mod_offset - (mod->labels[*label] - code);
 }
+
+#ifndef AVM_CREATE_STACKTRACES
+
+term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term exception_class)
+{
+    UNUSED(ctx);
+    UNUSED(mod);
+    UNUSED(current_offset);
+    return exception_class;
+}
+
+term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
+{
+    UNUSED(ctx);
+    UNUSED(stack_info);
+    UNUSED(live);
+    return UNDEFINED_ATOM;
+}
+
+term stacktrace_exception_class(term stack_info)
+{
+    return stack_info;
+}
+
+#else
 
 static bool location_sets_append(GlobalContext *global, Module *mod, const uint8_t *filename, size_t filename_len, size_t *total_filename_len, const void ***io_locations_set, size_t *io_locations_set_size)
 {
@@ -133,7 +133,7 @@ term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term e
             int offset;
             long mod_offset;
 
-            cp_to_mod_lbl_off(*ct, ctx, &cp_mod, &label, &offset, &mod_offset);
+            stacktrace_cp_to_mod_lbl_off(*ct, ctx, &cp_mod, &label, &offset, &mod_offset);
             if (mod_offset != cp_mod->end_instruction_ii && !(prev_mod == cp_mod && mod_offset == prev_mod_offset)) {
                 ++num_frames;
                 prev_mod = cp_mod;
@@ -220,7 +220,7 @@ term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term e
             int offset;
             long mod_offset;
 
-            cp_to_mod_lbl_off(*ct, ctx, &cp_mod, &label, &offset, &mod_offset);
+            stacktrace_cp_to_mod_lbl_off(*ct, ctx, &cp_mod, &label, &offset, &mod_offset);
             if (mod_offset != cp_mod->end_instruction_ii && !(prev_mod == cp_mod && mod_offset == prev_mod_offset)) {
 
                 prev_mod = cp_mod;
@@ -333,7 +333,7 @@ term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
         int label;
         int offset;
         long mod_offset;
-        cp_to_mod_lbl_off(cp, ctx, &cp_mod, &label, &offset, &mod_offset);
+        stacktrace_cp_to_mod_lbl_off(cp, ctx, &cp_mod, &label, &offset, &mod_offset);
 
         term module_name = module_get_name(cp_mod);
 

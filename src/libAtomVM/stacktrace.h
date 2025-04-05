@@ -29,6 +29,11 @@
 extern "C" {
 #endif
 
+/**
+ * @brief Extract module, label, offset and module offset from a continuation pointer term
+ */
+void stacktrace_cp_to_mod_lbl_off(term cp, Context *ctx, Module **cp_mod, int *label, int *l_off, long *mod_offset);
+
 term stacktrace_create_raw(Context *ctx, Module *mod, int current_offset, term exception_class);
 /**
  * @brief Build a stack trace
