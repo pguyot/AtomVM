@@ -369,24 +369,24 @@ jobs:
       working-directory: build
       run: |
         ulimit -c unlimited
-        valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
-        ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
+        timeout 3m valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
+        timeout 3m ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
 
     - name: "Test: test_eavmlib.avm"
       timeout-minutes: 10
       working-directory: build
       run: |
         ulimit -c unlimited
-        valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
-        ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
+        timeout 6m valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
+        timeout 6m ./src/AtomVM ./tests/libs/eavmlib/test_eavmlib.avm
 
     - name: "Test: test_alisp.avm"
       timeout-minutes: 10
       working-directory: build
       run: |
         ulimit -c unlimited
-        valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
-        ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
+        timeout 6m valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
+        timeout 6m ./src/AtomVM ./tests/libs/alisp/test_alisp.avm
 
     - name: "Test: Tests.avm (Elixir)"
       timeout-minutes: 10
@@ -395,8 +395,8 @@ jobs:
         ulimit -c unlimited
         if command -v elixirc &> /dev/null
         then
-          valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/exavmlib/Tests.avm
-          ./src/AtomVM ./tests/libs/exavmlib/Tests.avm
+          timeout 6m valgrind --error-exitcode=1 ./src/AtomVM ./tests/libs/exavmlib/Tests.avm
+          timeout 6m ./src/AtomVM ./tests/libs/exavmlib/Tests.avm
         fi
 
     - name: "Install and smoke test"
