@@ -74,14 +74,16 @@ accept(Listen) ->
 accept_loop(Kernel, LSock) ->
     case socket:accept(LSock) of
         {ok, CSock} ->
-            {ok, DistController} = socket_dist_controller:start(CSock),
-            Kernel ! {accept, self(), DistController, inet, tcp},
-            receive
-                {Kernel, controller, SupervisorPid} ->
-                    true = socket_dist_controller:supervisor(DistController, SupervisorPid);
-                {Kernel, unsupported_protocol} ->
-                    exit(unsupported_protocol)
-            end,
+            spawn(fun() ->
+                {ok, DistController} = socket_dist_controller:start(CSock),
+                Kernel ! {accept, self(), DistController, inet, tcp},
+                receive
+                    {Kernel, controller, SupervisorPid} ->
+                        true = socket_dist_controller:supervisor(DistController, SupervisorPid);
+                    {Kernel, unsupported_protocol} ->
+                        exit(unsupported_protocol)
+                end
+            end),
             accept_loop(Kernel, LSock);
         {error, _} = Error ->
             exit(Error)
