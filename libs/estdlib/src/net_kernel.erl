@@ -72,7 +72,9 @@
 %% @param Name name of the node
 %% @param Options options for distribution. Supported options are:
 %% - `name_domain' : whether name should be short or long
-%% - `proto_dist' : the module used for distribution (e.g. `socket_dist')
+%% - `proto_dist' : the module used for distribution (e.g. `socket_dist' or `websocket_dist')
+%% - `proto_dist_options' : options passed to distribution module to listen/3 or setup/6 if they exist
+%% - `dist_listen' : whether to listen for incoming connections
 %%-----------------------------------------------------------------------------
 -spec start(atom(), map()) -> {ok, pid()}.
 start(Name, Options0) when is_atom(Name) andalso is_map(Options0) ->
@@ -81,6 +83,8 @@ start(Name, Options0) when is_atom(Name) andalso is_map(Options0) ->
             case Key of
                 name_domain when Val =:= shortnames orelse Val =:= longnames -> ok;
                 proto_dist when is_atom(Val) -> ok;
+                proto_dist_options -> ok;
+                dist_listen when is_boolean(Val) -> ok;
                 _ -> error({invalid_option, Key, Val}, [Name, Options0])
             end
         end,
@@ -179,6 +183,7 @@ start_link(Options) ->
     listen :: any(),
     accept_pid :: pid(),
     proto_dist :: module(),
+    proto_dist_options :: any(),
     connections :: map(),
     cookies :: map(),
     cookie :: binary()
@@ -189,29 +194,58 @@ init(Options) ->
     process_flag(trap_exit, true),
     LongNames = maps:get(name_domain, Options, longnames) =:= longnames,
     ProtoDist = maps:get(proto_dist, Options, socket_dist),
+    ProtoDistOptions = maps:get(proto_dist_options, Options, undefined),
+    DistListen = maps:get(dist_listen, Options, true),
     Name = maps:get(name, Options),
     Node = maps:get(node, Options),
     Cookie = crypto:strong_rand_bytes(16),
+    Host = maps:get(host, Options),
     TickInterval = (?NET_TICK_TIME * 1000) div ?NET_TICK_INTENSITY,
     Self = self(),
     Ticker = spawn_link(fun() -> ticker(Self, TickInterval) end),
-    case ProtoDist:listen(Name) of
-        {ok, {Listen, _Address, Creation}} ->
+    case DistListen of
+        true ->
+            ListenResult = try
+                ProtoDist:listen(Name, Host, ProtoDistOptions)
+            catch error:undef ->
+                try
+                    ProtoDist:listen(Name, Host)
+                catch error:undef ->
+                    ProtoDist:listen(Name)
+                end
+            end,
+            case ListenResult of
+                {ok, {Listen, _Address, Creation}} ->
+                    true = erlang:setnode(Node, Creation),
+                    AcceptPid = ProtoDist:accept(Listen),
+                    {ok, #state{
+                        ticker = Ticker,
+                        longnames = LongNames,
+                        node = Node,
+                        listen = Listen,
+                        accept_pid = AcceptPid,
+                        proto_dist = ProtoDist,
+                        proto_dist_options = ProtoDistOptions,
+                        connections = maps:new(),
+                        cookies = maps:new(),
+                        cookie = Cookie
+                    }};
+                {error, Reason} ->
+                    {stop, Reason}
+            end;
+        false ->
+            <<Creation:24>> = crypto:strong_rand_bytes(3),
             true = erlang:setnode(Node, Creation),
-            AcceptPid = ProtoDist:accept(Listen),
             {ok, #state{
                 ticker = Ticker,
                 longnames = LongNames,
                 node = Node,
-                listen = Listen,
-                accept_pid = AcceptPid,
                 proto_dist = ProtoDist,
+                proto_dist_options = ProtoDistOptions,
                 connections = maps:new(),
                 cookies = maps:new(),
                 cookie = Cookie
-            }};
-        {error, Reason} ->
-            {stop, Reason}
+            }}
     end.
 
 %% @hidden
@@ -325,14 +359,17 @@ handle_info({'EXIT', Pid, _Reason}, #state{connections = Connections} = State) -
     {noreply, State#state{connections = NewConnections}};
 handle_info(
     {connect, OtherNode, DHandle},
-    #state{connections = Connections, node = MyNode, longnames = Longnames, proto_dist = ProtoDist} =
+    #state{connections = Connections, node = MyNode, longnames = Longnames, proto_dist = ProtoDist, proto_dist_options = ProtoDistOptions} =
         State
 ) ->
     % ensure DHandle is not garbage collected until setup failed or succeeded
     NewConnections =
         case maps:find(OtherNode, Connections) of
             error ->
-                ProtoDist:setup(OtherNode, normal, MyNode, Longnames, ?SETUPTIME),
+                try ProtoDist:setup(OtherNode, normal, MyNode, Longnames, ?SETUPTIME, ProtoDistOptions)
+                catch error:undef ->
+                    ProtoDist:setup(OtherNode, normal, MyNode, Longnames, ?SETUPTIME)
+                end,
                 maps:put(OtherNode, {pending, undefined, DHandle}, Connections);
             {ok, {pending, ConnPid, _}} ->
                 maps:put(OtherNode, {pending, ConnPid, DHandle}, Connections);
@@ -355,9 +392,9 @@ split_name(Options) ->
             % Ensure Hostname respects LongNames
             case binary:split(HostName, <<".">>, [global]) of
                 [HostName] when not LongNames ->
-                    Options#{name => NamePart, node => NameOption};
+                    Options#{name => NamePart, host => HostName, node => NameOption};
                 [_FirstPart, _SecondPart | _] when LongNames ->
-                    Options#{name => NamePart, node => NameOption};
+                    Options#{name => NamePart, host => HostName, node => NameOption};
                 [HostName] when LongNames ->
                     error(invalid_name, [NameOption, Options]);
                 [_FirstPart, _SecondPart | _] when not LongNames ->
@@ -371,12 +408,12 @@ split_name(Options) ->
             case string:split(HostName, ".") of
                 [FirstPart | _] when not LongNames ->
                     NodeNameStr = lists:flatten([binary_to_list(NamePart), "@", FirstPart]),
-                    Options#{name => NamePart, node => list_to_atom(NodeNameStr)};
+                    Options#{name => NamePart, host => list_to_binary(HostName), node => list_to_atom(NodeNameStr)};
                 [HostName] when LongNames ->
                     error(invalid_name, [NameOption, Options]);
                 [_FirstPart, _SecondPart] when LongNames ->
                     NodeNameStr = lists:flatten([binary_to_list(NamePart), "@", HostName]),
-                    Options#{name => NamePart, node => list_to_atom(NodeNameStr)}
+                    Options#{name => NamePart, host => list_to_binary(HostName), node => list_to_atom(NodeNameStr)}
             end
     end.
 

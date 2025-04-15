@@ -47,6 +47,8 @@ set(ERLANG_MODULES
     timestamp_util
     uart
     websocket
+    websocket_dist
+    websocket_dist_controller
 )
 
 pack_archive(eavmlib ${ERLANG_MODULES})
