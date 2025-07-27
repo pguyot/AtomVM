@@ -49,6 +49,7 @@
 #define LIST_EXT 108
 #define BINARY_EXT 109
 #define SMALL_BIG_EXT 110
+#define NEW_FUN_EXT 112
 #define EXPORT_EXT 113
 #define MAP_EXT 116
 #define ATOM_UTF8_EXT 118
@@ -362,7 +363,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, value, glb);
         }
         return k;
-    } else if (term_is_function(t)) {
+    } else if (term_is_external_function(t)) {
         if (!IS_NULL_PTR(buf)) {
             buf[0] = EXPORT_EXT;
         }
@@ -372,6 +373,13 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             term mfa = boxed_value[i];
             k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, mfa, glb);
         }
+        return k;
+    } else if (term_is_function(t)) {
+        if (!IS_NULL_PTR(buf)) {
+            buf[0] = NEW_FUN_EXT;
+        }
+        size_t k = 1;
+        
         return k;
     } else if (term_is_local_pid(t)) {
         if (!IS_NULL_PTR(buf)) {
