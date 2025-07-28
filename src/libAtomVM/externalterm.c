@@ -363,7 +363,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, value, glb);
         }
         return k;
-    } else if (term_is_external_function(t)) {
+    } else if (term_is_external_fun(t)) {
         if (!IS_NULL_PTR(buf)) {
             buf[0] = EXPORT_EXT;
         }
@@ -379,6 +379,10 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             buf[0] = NEW_FUN_EXT;
         }
         size_t k = 1;
+        const term *boxed_value = term_to_const_term_ptr(t);
+        uint32_t old_index, old_uniq;
+        Module *mod = (Module *) boxed_value[1];
+        module_get_fun_old_index_uniq(mod, boxed_value[2], &old_index, &old_uniq);
         
         return k;
     } else if (term_is_local_pid(t)) {
