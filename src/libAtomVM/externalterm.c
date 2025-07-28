@@ -31,6 +31,7 @@
 #include "bitstring.h"
 #include "defaultatoms.h"
 #include "memory.h"
+#include "module.h"
 #include "term.h"
 #include "unicode.h"
 #include "utils.h"
