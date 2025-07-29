@@ -92,7 +92,7 @@ fun_to_bin(Fun) ->
     erlang:list_to_binary(erlang:fun_to_list(Fun)).
 
 -if(?OTP_RELEASE =:= 28).
-check_uniq(14566766) -> ok.
+check_uniq(31578497) -> ok.
 -else.
 check_uniq(_) -> ok.
 -endif.
