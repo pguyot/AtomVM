@@ -260,12 +260,12 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
             size_t module_name_len;
             const uint8_t *module_name = atom_table_get_atom_string(global->atom_table, module_atom_index, &module_name_len);
 
-            // this is not the same fun_index used on the BEAM, but it should be fine
             uint32_t fun_index = boxed_value[2];
+            uint32_t old_index, old_uniq;
+            module_get_fun_old_index_uniq(module, fun_index, &old_index, &uint32_t old_index, old_uniq);
 
-            // TODO: last component is a uniq, we are temporarly using the memory address
-            int ret = fun->print(fun, "#Fun<%.*s.%" PRIu32 ".%" PRIuPTR ">", (int) module_name_len,
-                module_name, fun_index, (uintptr_t) fun_module);
+            int ret = fun->print(fun, "#Fun<%.*s.%" PRIu32 ".%" PRIu32 ">", (int) module_name_len,
+                module_name, old_index, old_uniq);
             return ret;
         }
 
