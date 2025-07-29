@@ -262,7 +262,7 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
 
             uint32_t fun_index = boxed_value[2];
             uint32_t old_index, old_uniq;
-            module_get_fun_old_index_uniq(module, fun_index, &old_index, &uint32_t old_index, old_uniq);
+            module_get_fun_old_index_uniq(fun_module, fun_index, &old_index, &uint32_t old_index, old_uniq);
 
             int ret = fun->print(fun, "#Fun<%.*s.%" PRIu32 ".%" PRIu32 ">", (int) module_name_len,
                 module_name, old_index, old_uniq);
