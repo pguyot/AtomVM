@@ -23,8 +23,11 @@
 -export([start/0, make_fun/0, make_fun/1, get_fun_bytes/0, fun_to_bin/1]).
 
 start() ->
+    erlang:display({?MODULE, ?LINE}),
     <<"#Fun<test_fun_to_list.", Rest1/binary>> = ?MODULE:fun_to_bin(?MODULE:make_fun()),
+    erlang:display({?MODULE, ?LINE}),
     <<"#Fun<test_fun_to_list.", Rest2/binary>> = ?MODULE:fun_to_bin(?MODULE:make_fun(42)),
+    erlang:display({?MODULE, ?LINE}),
 
     [Id1, LastTok1] = binary:split(Rest1, <<".">>),
     [Uniq1, <<"">>] = binary:split(LastTok1, <<">">>),
@@ -36,6 +39,7 @@ start() ->
 
     _ = erlang:binary_to_integer(Id2),
     _ = erlang:binary_to_integer(Uniq2),
+    erlang:display({?MODULE, ?LINE}),
 
     <<"fun erlang:integer_to_list/1">> = ?MODULE:fun_to_bin(
         erlang:binary_to_term(erlang:list_to_binary(?MODULE:get_fun_bytes()))
@@ -87,4 +91,5 @@ get_fun_bytes() ->
     ].
 
 fun_to_bin(Fun) ->
+    erlang:display({?MODULE, ?LINE}),
     erlang:list_to_binary(erlang:fun_to_list(Fun)).
