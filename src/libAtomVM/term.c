@@ -260,7 +260,7 @@ printf("term.c:%d\n", __LINE__);
             size_t module_name_len;
             const uint8_t *module_name = atom_table_get_atom_string(global->atom_table, module_atom_index, &module_name_len);
 printf("term.c:%d\n", __LINE__);
-            uint32_t fun_index = boxed_value[2];
+            uint32_t fun_index = term_to_int32(boxed_value[2]);
             uint32_t old_index, old_uniq;
             module_get_fun_old_index_uniq(fun_module, fun_index, &old_index, &old_uniq);
 printf("term.c:%d\n", __LINE__);
