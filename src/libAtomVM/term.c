@@ -254,19 +254,15 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
 
         } else {
             Module *fun_module = (Module *) boxed_value[1];
-printf("term.c:%d\n", __LINE__);
             term module_name_atom = module_get_name(fun_module);
             atom_index_t module_atom_index = term_to_atom_index(module_name_atom);
             size_t module_name_len;
             const uint8_t *module_name = atom_table_get_atom_string(global->atom_table, module_atom_index, &module_name_len);
-printf("term.c:%d\n", __LINE__);
             uint32_t fun_index = term_to_int32(boxed_value[2]);
             uint32_t old_index, old_uniq;
             module_get_fun_old_index_uniq(fun_module, fun_index, &old_index, &old_uniq);
-printf("term.c:%d\n", __LINE__);
             int ret = fun->print(fun, "#Fun<%.*s.%" PRIu32 ".%" PRIu32 ">", (int) module_name_len,
                 module_name, old_index, old_uniq);
-printf("term.c:%d\n", __LINE__);
             return ret;
         }
 
