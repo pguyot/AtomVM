@@ -314,7 +314,7 @@ test_function() ->
                     114, 121, 95, 116, 111, 95, 116, 101, 114, 109>>
         end,
     <<131, 108, 2:32, Funs/binary>> = Bin,
-    <<112, Size2:32, Fun2Bin:(Size2-4)/binary, 112, Size3:32, Fun3Bin:(Size3-4)/binary>>,
+    <<112, Size2:32, Fun2Bin:(Size2-4)/binary, 112, Size3:32, Fun3Bin:(Size3-4)/binary>> = Funs,
     <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom/binary, 97, Index2, 98, OldUniq:32, Rest2/binary>> = Fun2Bin,
     <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom/binary, 97, Index3, 98, OldUniq:32, Rest3/binary>> = Fun3Bin,
      
