@@ -306,14 +306,13 @@ test_function() ->
         case get_otp_version() of
             X when is_integer(X) andalso X >= 26 orelse X == atomvm ->
                 %% expect SMALL_ATOM_UTF8_EXT encoding
-                <<119, 19, 116, 101, 115, 116, 95, 98, 105, 110, 97, 114,
-                    121, 95, 116, 111, 95, 116, 101, 114, 109>>;
+                <<119, 19, "test_binary_to_term">>;
             _ ->
                 %% expect ATOM_EXT encoding
-                <<100, 0, 19, 116, 101, 115, 116, 95, 98, 105, 110, 97,
-                    114, 121, 95, 116, 111, 95, 116, 101, 114, 109>>
+                <<100, 0, 19, "test_binary_to_term">>
         end,
     ModuleAtomSize = byte_size(ModuleAtom),
+    erlang:display(ModuleAtom),
 
     <<131, 108, 2:32, Funs/binary>> = Bin,
     <<112, Size2:32, Fun2Bin:(Size2-4)/binary, 112, Size3:32, Fun3Bin:(Size3-4)/binary, 106>> = Funs,
