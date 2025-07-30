@@ -313,6 +313,7 @@ test_function() ->
                 <<100, 0, 19, 116, 101, 115, 116, 95, 98, 105, 110, 97,
                     114, 121, 95, 116, 111, 95, 116, 101, 114, 109>>
         end,
+    true = is_binary(ModuleAtom),
     <<131, 108, 2:32, Funs/binary>> = Bin,
     <<112, Size2:32, Fun2Bin:(Size2-4)/binary, 112, Size3:32, Fun3Bin:(Size3-4)/binary>> = Funs,
     <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom/binary, 97, Index2, 98, OldUniq:32, Rest2/binary>> = Fun2Bin,
