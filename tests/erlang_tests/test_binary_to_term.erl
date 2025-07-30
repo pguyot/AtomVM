@@ -310,8 +310,8 @@ test_function() ->
     % need to use split_binary for OTP 21/22
     {Fun2Bin, <<112, Size3:32, Rest2/binary>>} = split_binary(Rest1, Size2 - 4),
     {Fun3Bin, <<106>>} = split_binary(Rest2, Size3 - 4),
-    <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, Index2, 98, OldUniq:32, Rest2/binary>> = Fun2Bin,
-    <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, Rest3/binary>> = Fun3Bin,
+    <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, Index2, 98, OldUniq:32, Rest3/binary>> = Fun2Bin,
+    <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, Rest4/binary>> = Fun3Bin,
      
 %    88,
 %       119,13,110,111,110,111,100,101,64,110,111,104,111,115,116,
