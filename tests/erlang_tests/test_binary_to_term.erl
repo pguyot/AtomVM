@@ -302,8 +302,7 @@ test_function() ->
 
     Bin = erlang:term_to_binary(T),
 
-    %% ATOM_EXT encoding for all OTP versions
-    ModuleAtom = <<100, 0, 19, "test_binary_to_term">>,
+    <<131, ModuleAtom/binary>> = term_to_binary(?MODULE),
     ModuleAtomSize = byte_size(ModuleAtom),
 
     <<131, 108, 2:32, Funs/binary>> = Bin,
