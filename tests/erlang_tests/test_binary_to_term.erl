@@ -167,6 +167,7 @@ start() ->
             97, 251, 97, 252, 97, 253, 97, 254, 97, 255, 98, 0, 0, 1, 0>>
     ),
     ok = test_external_function(),
+    ok = test_function(),
 
     {32768, 6} = erlang:binary_to_term(<<131, 98, 0, 0, 128, 0, 127>>, [used]),
     test_catenate_and_split([foo, bar, 128, {foo, bar}, [a, b, c, {d}]]),
@@ -293,6 +294,18 @@ test_external_function() ->
     42 = Fun2(fun() -> 42 end, []),
     42 = Fun3(?MODULE, apply, [fun() -> 42 end, []]),
     42 = Fun3(?MODULE, apply, [Fun2, [fun() -> 42 end, []]]),
+    ok.
+
+test_function() ->
+    X = id(2),
+    T = [fun(A) -> A * 2 end, fun(A) -> A * X end],
+    Bin = erlang:term_to_binary(T),
+    erlang:display(Bin),
+    [Fun2, Fun3] = binary_to_term(Bin),
+    true = is_function(Fun2),
+    true = is_function(Fun3),
+    42 = Fun2(21),
+    42 = Fun3(21),
     ok.
 
 get_binary(Id) ->
