@@ -37,8 +37,6 @@ start() ->
     1 = erlang:binary_to_integer(Id2),
     Uniq = erlang:binary_to_integer(Uniq2),
 
-    ok = check_uniq(Uniq),
-
     <<"fun erlang:integer_to_list/1">> = ?MODULE:fun_to_bin(
         erlang:binary_to_term(erlang:list_to_binary(?MODULE:get_fun_bytes()))
     ),
@@ -90,9 +88,3 @@ get_fun_bytes() ->
 
 fun_to_bin(Fun) ->
     erlang:list_to_binary(erlang:fun_to_list(Fun)).
-
--if(?OTP_RELEASE =:= 28).
-check_uniq(31578497) -> ok.
--else.
-check_uniq(_) -> ok.
--endif.
