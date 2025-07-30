@@ -376,15 +376,35 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         }
         return k;
     } else if (term_is_function(t)) {
+        const term *boxed_value = term_to_const_term_ptr(t);
+        size_t k = 1 + 4;
+        size_t num_free = (((uintptr_t) boxed_value[0]) >> 6) - 2;
+        Module *mod = (Module *) boxed_value[1];
+        uint32_t index = term_to_int32(boxed_value[2]);
+        uint32_t arity, old_index, old_uniq;
+        module_get_fun_arity_old_index_uniq(mod, index, &arity, &old_index, &old_uniq);
+        
         if (!IS_NULL_PTR(buf)) {
             buf[0] = NEW_FUN_EXT;
+            buf[5] = arity;
+            bzero(buf + 6, 16);
+            WRITE_32_UNALIGNED(buf + 22, index);
+            WRITE_32_UNALIGNED(buf + 26, num_free);
         }
-        size_t k = 1;
-        const term *boxed_value = term_to_const_term_ptr(t);
-        uint32_t old_index, old_uniq;
-        Module *mod = (Module *) boxed_value[1];
-        module_get_fun_old_index_uniq(mod, boxed_value[2], &old_index, &old_uniq);
-        
+        size_t k = 1 + 4 + 1 + 16 + 4 + 4;
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, module_get_name(mod), glb);
+        if (!IS_NULL_PTR(buf)) {
+            WRITE_32_UNALIGNED(buf + k, old_index);
+            WRITE_32_UNALIGNED(buf + k + 4, old_uniq);
+        }
+        k += 8;
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_from_local_process_id(0), glb);
+        for (size_t i = 0; i < num_free; i++) {
+            k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, boxed_value[3 + i], glb);
+        }
+        if (!IS_NULL_PTR(buf)) {
+            WRITE_32_UNALIGNED(buf + 1, k - 1);
+        }
         return k;
     } else if (term_is_local_pid(t)) {
         if (!IS_NULL_PTR(buf)) {

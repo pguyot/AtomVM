@@ -314,7 +314,7 @@ static inline uint32_t module_get_fun_freeze(const Module *this_module, int fun_
     return n_freeze;
 }
 
-static inline void module_get_fun_old_index_uniq(const Module *this_module, int fun_index, uint32_t *index, uint32_t *uniq)
+static inline void module_get_fun_arity_old_index_uniq(const Module *this_module, int fun_index, uint32_t *arity, uint32_t *index, uint32_t *uniq)
 {
     const uint8_t *table_data = (const uint8_t *) this_module->fun_table;
     int funs_count = READ_32_UNALIGNED(table_data + 8);
@@ -324,7 +324,7 @@ static inline void module_get_fun_old_index_uniq(const Module *this_module, int 
     }
 
     // fun atom index
-    // arity
+    *arity = READ_32_UNALIGNED(table_data + fun_index * 24 + 4 + 12);
     // label
     *index = READ_32_UNALIGNED(table_data + fun_index * 24 + 12 + 12);
     // n_freeze
