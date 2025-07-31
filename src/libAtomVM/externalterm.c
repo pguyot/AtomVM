@@ -377,7 +377,6 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         return k;
     } else if (term_is_function(t)) {
         const term *boxed_value = term_to_const_term_ptr(t);
-        size_t k = 1 + 4;
         size_t num_free = (((uintptr_t) boxed_value[0]) >> 6) - 2;
         Module *mod = (Module *) boxed_value[1];
         uint32_t index = term_to_int32(boxed_value[2]);
