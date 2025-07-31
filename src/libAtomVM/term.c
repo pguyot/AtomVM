@@ -259,8 +259,8 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
             size_t module_name_len;
             const uint8_t *module_name = atom_table_get_atom_string(global->atom_table, module_atom_index, &module_name_len);
             uint32_t fun_index = term_to_int32(boxed_value[2]);
-            uint32_t old_index, old_uniq;
-            module_get_fun_old_index_uniq(fun_module, fun_index, &old_index, &old_uniq);
+            uint32_t arity, old_index, old_uniq;
+            module_get_fun_arity_old_index_uniq(fun_module, fun_index, &arity, &old_index, &old_uniq);
             int ret = fun->print(fun, "#Fun<%.*s.%" PRIu32 ".%" PRIu32 ">", (int) module_name_len,
                 module_name, old_index, old_uniq);
             return ret;
