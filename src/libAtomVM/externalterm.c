@@ -385,7 +385,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         
         if (!IS_NULL_PTR(buf)) {
             buf[0] = NEW_FUN_EXT;
-            buf[5] = arity;
+            buf[5] = arity - num_free;
             bzero(buf + 6, 16);
             WRITE_32_UNALIGNED(buf + 22, index);
             WRITE_32_UNALIGNED(buf + 26, num_free);
