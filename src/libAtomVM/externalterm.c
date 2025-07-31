@@ -392,11 +392,8 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         }
         size_t k = 1 + 4 + 1 + 16 + 4 + 4;
         k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, module_get_name(mod), glb);
-        if (!IS_NULL_PTR(buf)) {
-            WRITE_32_UNALIGNED(buf + k, old_index);
-            WRITE_32_UNALIGNED(buf + k + 4, old_uniq);
-        }
-        k += 8;
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_from_int(old_index), glb);
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_from_int(old_uniq), glb);
         k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_from_local_process_id(0), glb);
         for (size_t i = 0; i < num_free; i++) {
             k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, boxed_value[3 + i], glb);
