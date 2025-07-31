@@ -312,14 +312,6 @@ test_function() ->
     {Fun3Bin, <<106>>} = split_binary(Rest2, Size3 - 4),
     <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, Index2, 98, OldUniq:32, Rest3/binary>> = Fun2Bin,
     <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, Rest4/binary>> = Fun3Bin,
-     
-%    88,
-%       119,13,110,111,110,111,100,101,64,110,111,104,111,115,116,
-%       0,0,0,0, 0,0,0,0, 0,0,0,0,
-%    88,
-%       119,13,110,111,110,111,100,101,64,110,111,104,111,115,116,
-%       0,0,0,0, 0,0,0,0, 0,0,0,0,
-%       97,2,106
 
     [Fun2, Fun3] = binary_to_term(Bin),
     true = is_function(Fun2),
