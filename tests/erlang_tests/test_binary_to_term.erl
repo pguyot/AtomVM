@@ -313,20 +313,22 @@ test_function() ->
     <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, Index2, 98, OldUniq:32, Rest3/binary>> = Fun2Bin,
     <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, Rest4/binary>> = Fun3Bin,
 
+    erlang:display({?MODULE, ?LINE}),
     [Fun2, Fun3] = binary_to_term(Bin),
     true = is_function(Fun2),
     true = is_function(Fun3),
     42 = Fun2(21),
     42 = Fun3(21),
 
+    erlang:display({?MODULE, ?LINE}),
     B1 = <<131, 112, Size2:32, 1, 0:(16*8), Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, (Index2 bxor 42), 98, (OldUniq bxor 42):32, Rest3/binary>>,
     try
       Fun4 = binary_to_term(B1),
       io:format("~p\n", [Fun4]),
       42 = Fun4(21),
       ok
-    catch T:V ->
-      io:format("~p:~p\n", [T,V])
+    catch ExC:ExV ->
+      io:format("~p:~p\n", [ExC,ExV])
     end,
     ok.
   

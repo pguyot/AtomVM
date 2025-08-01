@@ -844,24 +844,31 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
         }
 
         case NEW_FUN_EXT: {
+printf("%s:%d\n", __FILE__, __LINE__);
             uint32_t len = READ_32_UNALIGNED(external_term_buf + 1);
             uint32_t index = READ_32_UNALIGNED(external_term_buf + 22);
             uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
             size_t term_size;
             size_t offset = 30;
+printf("%s:%d\n", __FILE__, __LINE__);
             term module = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
             offset += term_size;
+printf("%s:%d\n", __FILE__, __LINE__);
             term old_index = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
             UNUSED(old_index);
             offset += term_size;
+printf("%s:%d\n", __FILE__, __LINE__);
             term old_uniq = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
             UNUSED(old_uniq);
             offset += term_size;
+printf("%s:%d\n", __FILE__, __LINE__);
             // skip pid
             calculate_heap_usage(external_term_buf + offset, len - offset + 1, &term_size, copy);
             offset += term_size;
+printf("%s:%d\n", __FILE__, __LINE__);
             Module *mod = globalcontext_get_module(glb, module);
             size_t size = BOXED_FUN_SIZE + num_free;
+printf("%s:%d\n", __FILE__, __LINE__);
             term *boxed_func = memory_heap_alloc(heap, size);
             boxed_func[0] = ((size - 1) << 6) | TERM_BOXED_FUN;
             boxed_func[1] = (term) mod;
@@ -870,6 +877,7 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
                 boxed_func[i + 3] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
                 offset += term_size;
             }
+printf("%s:%d\n", __FILE__, __LINE__);
             *eterm_size = 1 + len;
             return ((term) boxed_func) | TERM_PRIMARY_BOXED;
         }
@@ -1228,6 +1236,7 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
         }
 
         case NEW_FUN_EXT: {
+printf("%s:%d\n", __FILE__, __LINE__);
             if (UNLIKELY(remaining < 30)) {
                 return INVALID_TERM_SIZE;
             }
@@ -1239,7 +1248,9 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
             uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
             size_t heap_size = BOXED_FUN_SIZE + num_free;
             int u;
+printf("%s:%d\n", __FILE__, __LINE__);
             if (num_free > 0) {
+printf("%s:%d\n", __FILE__, __LINE__);
                 remaining -= 29;
                 size_t offset = 30;
                 size_t term_size;
@@ -1252,6 +1263,7 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
                     remaining -= term_size;
                     offset += term_size;
                 }
+printf("%s:%d\n", __FILE__, __LINE__);
                 // add free values
                 for (size_t i = 0; i < num_free; i++) {
                     u = calculate_heap_usage(external_term_buf + offset, remaining, &term_size, copy);
@@ -1263,6 +1275,7 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
                     offset += term_size;
                 }
             }
+printf("%s:%d\n", __FILE__, __LINE__);
             *eterm_size = 1 + len;
             return heap_size;
         }
