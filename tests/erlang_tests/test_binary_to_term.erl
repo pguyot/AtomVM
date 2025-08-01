@@ -318,7 +318,18 @@ test_function() ->
     true = is_function(Fun3),
     42 = Fun2(21),
     42 = Fun3(21),
+
+    B1 = <<131, 112, Size2:32, 1, 0:(16*8), Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, (Index2 bxor 42), 98, (OldUniq bxor 42):32, Rest3/binary>>,
+    try
+      Fun4 = binary_to_term(B1),
+      io:format("~p\n", [Fun4]),
+      42 = Fun4(21),
+      ok
+    catch T:V ->
+      io:format("~p:~p\n", [T,V])
+    end,
     ok.
+  
 
 get_binary(Id) ->
     case Id of
