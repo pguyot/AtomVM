@@ -843,6 +843,24 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             }
         }
 
+        case NEW_FUN_EXT: {
+            uint32_t len = READ_32_UNALIGNED(external_term_buf + 1);
+            uint32_t index = READ_32_UNALIGNED(external_term_buf + 22);
+            uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
+            size_t term_size;
+            size_t offset = 30;
+            term module = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+            Module *mod = globalcontext_get_module(glb, module);
+            size_t size = BOXED_FUN_SIZE + num_free;
+            term *boxed_func = memory_heap_alloc(heap, size);
+            boxed_func[0] = ((size - 1) << 6) | TERM_BOXED_FUN;
+            boxed_func[1] = (term) mod;
+            boxed_func[2] = term_from_int(index);
+
+            *eterm_size = 1 + len;
+            return f;
+        }
+
         default:
             return term_invalid_term();
     }
@@ -1194,6 +1212,46 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
             }
             *eterm_size = buf_pos + 4 + (len * 4);
             return heap_size + u;
+        }
+
+        case NEW_FUN_EXT: {
+            if (UNLIKELY(remaining < 30)) {
+                return INVALID_TERM_SIZE;
+            }
+            uint32_t len = READ_32_UNALIGNED(external_term_buf + 1);
+            remaining -= 1;
+            if (UNLIKELY(remaining < len)) {
+                return INVALID_TERM_SIZE;
+            }
+            uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
+            size_t heap_size = BOXED_FUN_SIZE + num_free;
+            int u;
+            if (num_free > 0) {
+                remaining -= 29;
+                size_t offset = 30;
+                size_t term_size;
+                // skip module atom, old index, old uniq, pid
+                for (int i; i < 4; i++) {
+                    u = calculate_heap_usage(external_term_buf + offset, remaining, &term_size, copy);
+                    if (UNLIKELY(u == INVALID_TERM_SIZE)) {
+                        return INVALID_TERM_SIZE;
+                    }
+                    remaining -= term_size;
+                    offset += term_size;
+                }
+                // add free values
+                for (size_t i = 0; i < num_free; i++) {
+                    u = calculate_heap_usage(external_term_buf + offset, remaining, &term_size, copy);
+                    if (UNLIKELY(u == INVALID_TERM_SIZE)) {
+                        return INVALID_TERM_SIZE;
+                    }
+                    heap_size += u;
+                    remaining -= term_size;
+                    offset += term_size;
+                }
+            }
+            *eterm_size = 1 + len;
+            return heap_size;
         }
 
         default:
