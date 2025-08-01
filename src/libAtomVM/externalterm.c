@@ -856,9 +856,11 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             boxed_func[0] = ((size - 1) << 6) | TERM_BOXED_FUN;
             boxed_func[1] = (term) mod;
             boxed_func[2] = term_from_int(index);
-
+            for (int i = 0; i < num_free; i++) {
+                
+            }
             *eterm_size = 1 + len;
-            return f;
+            return ((term) boxed_func) | TERM_PRIMARY_BOXED;
         }
 
         default:
