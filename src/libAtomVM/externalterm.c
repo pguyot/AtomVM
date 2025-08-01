@@ -1244,7 +1244,7 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
                 size_t offset = 30;
                 size_t term_size;
                 // skip module atom, old index, old uniq, pid
-                for (int i; i < 4; i++) {
+                for (int i = 0; i < 4; i++) {
                     u = calculate_heap_usage(external_term_buf + offset, remaining, &term_size, copy);
                     if (UNLIKELY(u == INVALID_TERM_SIZE)) {
                         return INVALID_TERM_SIZE;
