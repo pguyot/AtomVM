@@ -844,31 +844,30 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
         }
 
         case NEW_FUN_EXT: {
-printf("%s:%d\n", __FILE__, __LINE__);
             uint32_t len = READ_32_UNALIGNED(external_term_buf + 1);
+            uint8_t arity = external_term_buf[5];
             uint32_t index = READ_32_UNALIGNED(external_term_buf + 22);
             uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
             size_t term_size;
             size_t offset = 30;
-printf("%s:%d\n", __FILE__, __LINE__);
             term module = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
             offset += term_size;
-printf("%s:%d\n", __FILE__, __LINE__);
             term old_index = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
-            UNUSED(old_index);
             offset += term_size;
-printf("%s:%d\n", __FILE__, __LINE__);
             term old_uniq = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
-            UNUSED(old_uniq);
             offset += term_size;
-printf("%s:%d\n", __FILE__, __LINE__);
             // skip pid
             calculate_heap_usage(external_term_buf + offset, len - offset + 1, &term_size, copy);
             offset += term_size;
-printf("%s:%d\n", __FILE__, __LINE__);
             Module *mod = globalcontext_get_module(glb, term_to_atom_index(module));
+            if (!IS_NULL_PTR(mod)) {
+                uint32_t f_arity, f_old_index, f_old_uniq;
+                module_get_fun_arity_old_index_uniq(mod, index, &f_arity, &f_old_index, &f_old_uniq);
+                if (UNLIKELY(f_arity != arity || f_old_index != term_to_int32(old_index) || f_old_uniq != term_to_int32(old_uniq))) {
+                    mod = NULL;
+                }
+            }
             size_t size = BOXED_FUN_SIZE + num_free;
-printf("%s:%d\n", __FILE__, __LINE__);
             term *boxed_func = memory_heap_alloc(heap, size);
             boxed_func[0] = ((size - 1) << 6) | TERM_BOXED_FUN;
             boxed_func[1] = (term) mod;
@@ -877,8 +876,6 @@ printf("%s:%d\n", __FILE__, __LINE__);
                 boxed_func[i + 3] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
                 offset += term_size;
             }
-printf("%s:%d\n", __FILE__, __LINE__);
-            *eterm_size = 1 + len;
             return ((term) boxed_func) | TERM_PRIMARY_BOXED;
         }
 
