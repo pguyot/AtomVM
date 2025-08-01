@@ -866,7 +866,7 @@ printf("%s:%d\n", __FILE__, __LINE__);
             calculate_heap_usage(external_term_buf + offset, len - offset + 1, &term_size, copy);
             offset += term_size;
 printf("%s:%d\n", __FILE__, __LINE__);
-            Module *mod = globalcontext_get_module(glb, module);
+            Module *mod = globalcontext_get_module(glb, term_to_atom_index(module));
             size_t size = BOXED_FUN_SIZE + num_free;
 printf("%s:%d\n", __FILE__, __LINE__);
             term *boxed_func = memory_heap_alloc(heap, size);
