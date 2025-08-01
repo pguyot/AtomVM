@@ -850,6 +850,14 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             size_t term_size;
             size_t offset = 30;
             term module = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+            offset += term_size;
+            term old_index = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+            offset += term_size;
+            term old_uniq = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+            offset += term_size;
+            // skip pid
+            calculate_heap_usage(external_term_buf + offset, len - offset + 1, &term_size, copy);
+            offset += term_size;
             Module *mod = globalcontext_get_module(glb, module);
             size_t size = BOXED_FUN_SIZE + num_free;
             term *boxed_func = memory_heap_alloc(heap, size);
@@ -857,7 +865,8 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             boxed_func[1] = (term) mod;
             boxed_func[2] = term_from_int(index);
             for (int i = 0; i < num_free; i++) {
-                
+                boxed_func[i + 3] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+                offset += term_size;
             }
             *eterm_size = 1 + len;
             return ((term) boxed_func) | TERM_PRIMARY_BOXED;
