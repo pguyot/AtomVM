@@ -311,7 +311,7 @@ test_function() ->
     {Fun2Bin, <<112, Size3:32, Rest2/binary>>} = split_binary(Rest1, Size2 - 4),
     {Fun3Bin, <<106>>} = split_binary(Rest2, Size3 - 4),
     <<1, MD5:16/binary, Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, Index2, 98, OldUniq:32, Rest3/binary>> = Fun2Bin,
-    <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, Rest4/binary>> = Fun3Bin,
+    <<1, MD5:16/binary, Index3:32, 1:32, ModuleAtom:ModuleAtomSize/binary, 97, Index3, 98, OldUniq:32, _Rest4/binary>> = Fun3Bin,
 
     [Fun2, Fun3] = binary_to_term(Bin),
     true = is_function(Fun2),
@@ -320,8 +320,8 @@ test_function() ->
     42 = Fun3(21),
 
     B1 = <<131, 112, Size2:32, 1, 0:(16*8), Index2:32, 0:32, ModuleAtom:ModuleAtomSize/binary, 97, (Index2 bxor 42), 98, (OldUniq bxor 42):32, Rest3/binary>>,
+    Fun4 = binary_to_term(B1),
     ok = try
-      Fun4 = binary_to_term(B1),
       42 = Fun4(21),
       unexpected
     catch error:{badfun, Fun4} ->
