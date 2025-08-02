@@ -876,6 +876,7 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
                 boxed_func[i + 3] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
                 offset += term_size;
             }
+            *eterm_size = len + 1;
             return ((term) boxed_func) | TERM_PRIMARY_BOXED;
         }
 
