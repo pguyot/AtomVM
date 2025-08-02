@@ -324,8 +324,13 @@ test_function() ->
     ok = try
       42 = Fun4(21),
       unexpected
-    catch error:{badfun, Fun4} ->
-      ok
+    catch
+      error:{badfun, Fun4} ->
+        % BEAM
+        ok;
+      error:undef ->
+        % AtomVM
+        ok
     end,
     ok.
   

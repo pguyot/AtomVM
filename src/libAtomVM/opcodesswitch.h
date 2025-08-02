@@ -1301,6 +1301,10 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         }                                                               \
     } else {                                                            \
         fun_module = (Module *) boxed_value[1];                         \
+        if (IS_NULL_PTR(fun_module)) {                              \
+            SET_ERROR(UNDEF_ATOM);                                  \
+            HANDLE_ERROR();                                         \
+        }                                                           \
         uint32_t fun_index = term_to_int(index_or_function);            \
         uint32_t fun_arity_and_freeze;                                  \
         module_get_fun(fun_module, fun_index, &label, &fun_arity_and_freeze, &n_freeze); \
