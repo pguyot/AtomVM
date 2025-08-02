@@ -67,7 +67,7 @@ jobs:
         cd erlfmt
         rebar3 as release escriptize
         cd ../AtomVM
-        find . -name *.erl | xargs ../erlfmt/_build/release/bin/erlfmt -c
+        find . -name *.erl | xargs ../erlfmt/_build/release/bin/erlfmt -c --verbose
 
   mix-format-check:
     runs-on: ubuntu-24.04
