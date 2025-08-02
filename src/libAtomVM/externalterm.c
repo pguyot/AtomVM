@@ -863,7 +863,7 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             if (!IS_NULL_PTR(mod)) {
                 uint32_t f_arity, f_old_index, f_old_uniq;
                 module_get_fun_arity_old_index_uniq(mod, index, &f_arity, &f_old_index, &f_old_uniq);
-                if (UNLIKELY(f_arity != arity || f_old_index != (uint32_t) term_to_int32(old_index) || f_old_uniq != (uint32_t) term_to_int32(old_uniq))) {
+                if (UNLIKELY(f_arity != (arity + num_free) || f_old_index != (uint32_t) term_to_int32(old_index) || f_old_uniq != (uint32_t) term_to_int32(old_uniq))) {
                     mod = NULL;
                 }
             }
