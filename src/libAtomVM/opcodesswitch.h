@@ -1300,7 +1300,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
             }                                                           \
         }                                                               \
     } else {                                                            \
-        if (term_is_tuple(boxed_value[1])) {                            \
+        if (term_is_atom(boxed_value[1])) {                            \
             SET_ERROR(UNDEF_ATOM);                                      \
             HANDLE_ERROR();                                             \
         }                                                               \

@@ -381,11 +381,14 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         term module, old_uniq, old_index;
         uint32_t arity;
         uint32_t index = term_to_int32(boxed_value[2]);
-        if (term_is_tuple(boxed_value[1])) {
-            module = term_get_tuple_element(boxed_value[1], 1);
-            arity = term_to_int32(term_get_tuple_element(boxed_value[1], 2));
-            old_index = term_get_tuple_element(boxed_value[1], 3);
-            old_uniq = term_get_tuple_element(boxed_value[1], 4);
+        size_t free_index;
+        if (term_is_atom(boxed_value[1])) {
+            module = boxed_value[1];
+            arity = term_to_int32(boxed_value[3]);
+            old_index = boxed_value[4];
+            old_uniq = boxed_value[5];
+            free_index = 6;
+            num_free -= 3;
         } else {
             Module *mod = (Module *) boxed_value[1];
             module = module_get_name(mod);
@@ -393,6 +396,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             module_get_fun_arity_old_index_uniq(mod, index, &arity, &f_old_index, &f_old_uniq);
             old_uniq = term_from_int(f_old_uniq);
             old_index = term_from_int(f_old_index);
+            free_index = 3;
         }
 
         if (!IS_NULL_PTR(buf)) {
@@ -408,7 +412,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, old_uniq, glb);
         k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_from_local_process_id(0), glb);
         for (size_t i = 0; i < num_free; i++) {
-            k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, boxed_value[3 + i], glb);
+            k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, boxed_value[free_index + i], glb);
         }
         if (!IS_NULL_PTR(buf)) {
             WRITE_32_UNALIGNED(buf + 1, k - 1);
@@ -872,28 +876,39 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
             calculate_heap_usage(external_term_buf + offset, len - offset + 1, &term_size, copy);
             offset += term_size;
             Module *mod = globalcontext_get_module(glb, term_to_atom_index(module));
-            term mod_term = (term) mod;
             if (!IS_NULL_PTR(mod)) {
                 uint32_t f_arity, f_old_index, f_old_uniq;
                 module_get_fun_arity_old_index_uniq(mod, index, &f_arity, &f_old_index, &f_old_uniq);
                 if (UNLIKELY(f_arity != (arity + num_free) || f_old_index != (uint32_t) term_to_int32(old_index) || f_old_uniq != (uint32_t) term_to_int32(old_uniq))) {
-                    mod_term = (term) NULL;
+                    mod = NULL;
                 }
             }
-            if (IS_NULL_PTR((void *) mod_term)) {
-                mod_term = term_alloc_tuple(4, heap);
                 term_put_tuple_element(mod_term, 1, module);
                 term_put_tuple_element(mod_term, 2, term_from_int(arity));
                 term_put_tuple_element(mod_term, 3, old_index);
                 term_put_tuple_element(mod_term, 4, old_uniq);
             }
             size_t size = BOXED_FUN_SIZE + num_free;
+            if (IS_NULL_PTR(mod)) {
+                size += 3;
+            }
             term *boxed_func = memory_heap_alloc(heap, size);
             boxed_func[0] = ((size - 1) << 6) | TERM_BOXED_FUN;
-            boxed_func[1] = mod_term;
+            size_t free_index;
+            if (IS_NULL_PTR(mod)) {
+                boxed_func[1] = module;
+                boxed_func[3] = term_from_int(arity);
+                boxed_func[4] = old_index;
+                boxed_func[5] = old_uniq;
+                free_index = 6;
+            } else {
+                boxed_func[1] = (term) mod;
+                free_index = 3;
+            }
+
             boxed_func[2] = term_from_int(index);
             for (uint32_t i = 0; i < num_free; i++) {
-                boxed_func[i + 3] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
+                boxed_func[i + free_index] = parse_external_terms(external_term_buf + offset, &term_size, copy, heap, glb);
                 offset += term_size;
             }
             *eterm_size = len + 1;
@@ -1263,8 +1278,8 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
                 return INVALID_TERM_SIZE;
             }
             uint32_t num_free = READ_32_UNALIGNED(external_term_buf + 26);
-            // If module doesn't match or exist, we'll need a tuple
-            size_t heap_size = BOXED_FUN_SIZE + num_free + TUPLE_SIZE(4);
+            // If module doesn't match or exist, we'll need 3 more for arity, old_index and old_uniq
+            size_t heap_size = BOXED_FUN_SIZE + num_free + 3;
             int u;
             if (num_free > 0) {
                 remaining -= 29;
