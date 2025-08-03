@@ -306,6 +306,7 @@ static inline uint32_t module_get_fun_freeze(const Module *this_module, int fun_
     }
 
     // fun atom index
+    // arity
     // label
     // index
     uint32_t n_freeze = READ_32_UNALIGNED(table_data + fun_index * 24 + 16 + 12);

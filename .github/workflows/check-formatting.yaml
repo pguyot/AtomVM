@@ -67,9 +67,6 @@ jobs:
         cd erlfmt
         rebar3 as release escriptize
         cd ../AtomVM
-        find . -name *.erl | xargs ../erlfmt/_build/release/bin/erlfmt -w
-        git diff
-        git reset --hard
         find . -name *.erl | xargs ../erlfmt/_build/release/bin/erlfmt -c
 
   mix-format-check:

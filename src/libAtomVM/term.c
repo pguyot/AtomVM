@@ -254,6 +254,7 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
 
         } else {
             Module *fun_module = (Module *) boxed_value[1];
+
             term module_name_atom = module_get_name(fun_module);
             atom_index_t module_atom_index = term_to_atom_index(module_name_atom);
             size_t module_name_len;
