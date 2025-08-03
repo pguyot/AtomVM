@@ -178,6 +178,7 @@ start() ->
     ok = test_encode_reference(),
     ok = test_encode_port(),
     ok = test_atom_encoding(),
+    ok = test_term_to_binary_atom(),
     0.
 
 test_reverse(T, Interop) ->
@@ -1038,6 +1039,12 @@ test_atom_encoding() ->
     true = compare_pair_encoding(latin1_as_utf8_2),
     true = compare_pair_encoding(latin1_as_utf8_3),
     true = compare_pair_encoding(long_with_two_bytes_length),
+    ok.
+
+test_term_to_binary_atom() ->
+    <<131, ModuleAtom/binary>> = term_to_binary(?MODULE),
+    ModuleBinarySize = byte_size(ModuleAtom),
+    true = ModuleBinarySize > 20,
     ok.
 
 make_binterm_fun(Id) ->
