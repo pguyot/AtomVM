@@ -332,6 +332,7 @@ test_function() ->
         % AtomVM
         ok
     end,
+    B1 = term_to_binary(Fun4),
     ok.
   
 
