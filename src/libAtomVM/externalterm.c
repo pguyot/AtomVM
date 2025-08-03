@@ -883,11 +883,6 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
                     mod = NULL;
                 }
             }
-                term_put_tuple_element(mod_term, 1, module);
-                term_put_tuple_element(mod_term, 2, term_from_int(arity));
-                term_put_tuple_element(mod_term, 3, old_index);
-                term_put_tuple_element(mod_term, 4, old_uniq);
-            }
             size_t size = BOXED_FUN_SIZE + num_free;
             if (IS_NULL_PTR(mod)) {
                 size += 3;
