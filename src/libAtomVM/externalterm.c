@@ -380,6 +380,7 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
         size_t num_free = (((uintptr_t) boxed_value[0]) >> 6) - 2;
         term module, old_uniq, old_index;
         uint32_t arity;
+        uint32_t index = term_to_int32(boxed_value[2]);
         if (term_is_tuple(boxed_value[1])) {
             module = term_get_tuple_element(boxed_value[1], 1);
             arity = term_to_int32(term_get_tuple_element(boxed_value[1], 2));
@@ -393,7 +394,6 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             old_uniq = term_from_int(f_old_uniq);
             old_index = term_from_int(f_old_index);
         }
-        uint32_t index = term_to_int32(boxed_value[2]);
 
         if (!IS_NULL_PTR(buf)) {
             buf[0] = NEW_FUN_EXT;
@@ -881,9 +881,9 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
                 }
             }
             if (IS_NULL_PTR((void *) mod_term)) {
-                mod_term = term_alloc_tuple(heap, 4);
+                mod_term = term_alloc_tuple(4, heap);
                 term_put_tuple_element(mod_term, 1, module);
-                term_put_tuple_element(mod_term, 2, term_from_int(arity))
+                term_put_tuple_element(mod_term, 2, term_from_int(arity));
                 term_put_tuple_element(mod_term, 3, old_index);
                 term_put_tuple_element(mod_term, 4, old_uniq);
             }
