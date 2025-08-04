@@ -66,5 +66,6 @@ The following guides provide more detailed information about getting started wit
 
 * [Getting Started Guide](./getting-started-guide.md)
 * [Programmers Guide](./programmers-guide.md)
+* [Differences with BEAM](./differences-with-beam.md)
 * [Example Programs](https://github.com/atomvm/atomvm_examples)
 * [Build Instructions](./build-instructions.md)
