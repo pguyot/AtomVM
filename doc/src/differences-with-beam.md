@@ -6,17 +6,26 @@
 
 # Differences between AtomVM and BEAM
 
-BEAM users may be surprised by limitations or differences between AtomVM and BEAM, whether they write Erlang, Elixir or Gleam code.
+BEAM users may be surprised by limitations or differences between AtomVM and BEAM, whether they
+write Erlang, Elixir or Gleam code.
 
 This document describes the current well known differences.
 
 ## Principles
 
-AtomVM is designed to be compatible with the BEAM as long as it makes sense on microcontrollers or environments such as Web Assembly.
+AtomVM is designed to be compatible with the BEAM as long as it makes sense on microcontrollers or
+environments such as Web Assembly.
 
-One should distinguish features of the VM itself from features of the standard library. AtomVM team will never reimplement the full OTP standard library, as this full library is too large for small embedded devices. Still, most modules of the OTP standard library can be executed by AtomVM. Typically, it is possible to run an Elixir or an [Erlang REPL](https://github.com/pguyot/atomvm_shell) with the appropriate OTP and Elixir standard library modules.
+One should distinguish features of the VM itself from features of the standard library. AtomVM
+team will never reimplement the full OTP standard library, as this full library is too large for
+small embedded devices. Still, most modules of the OTP standard library can be executed by AtomVM.
+Typically, it is possible to run an Elixir or an
+[Erlang REPL](https://github.com/pguyot/atomvm_shell) with the appropriate OTP and Elixir standard
+library modules.
 
-AtomVM tests (of the VM as well as the standard library) are typically executed with BEAM to ensure compatibility beyond BEAM documented features. The Continuous Integration environment runs these tests with a wide range of BEAM versions.
+AtomVM tests (of the VM as well as the standard library) are typically executed with BEAM to
+ensure compatibility beyond BEAM documented features. The Continuous Integration environment runs
+these tests with a wide range of BEAM versions.
 
 ## Determining if code is run by AtomVM or BEAM
 
@@ -26,15 +35,21 @@ BEAM returns `"BEAM"` while AtomVM returns `"ATOM"`.
 
 ## Known limitations of the VM
 
-AtomVM does not implement some key features of the BEAM. Some of these limitations are being worked on and this list might be outdated. Do not hesitate to check GitHub issues or contact us when in doubt.
+AtomVM does not implement some key features of the BEAM. Some of these limitations are being
+worked on and this list might be outdated. Do not hesitate to check GitHub issues or contact us
+when in doubt.
 
 ### Wide precision integers
 
-AtomVM currently only supports 64 bits integers. This is being worked on. However, please note that AtomVM is unlikely to support arbitrary precision integers as libraries for such support usually are quite large.
+AtomVM currently only supports 64 bits integers. This is being worked on. However, please note
+that AtomVM is unlikely to support arbitrary precision integers as libraries for such support
+usually are quite large.
 
 ### Bit syntax
 
-AtomVM supports binaries, binary construction. and binary pattern matching. Bit syntax (i.e. with sizes not a multiple of 8) is only supported as long as they would not generate bitstrings, i.e. binaries with a number if bits that are not multiple of 8.
+AtomVM supports binaries, binary construction and binary pattern matching. Bit syntax (i.e. with
+sizes not a multiple of 8) is only supported as long as they would not generate bitstrings, i.e.
+binaries with a number if bits that are not multiple of 8.
 
 The following is supported:
 
@@ -46,28 +61,38 @@ The following is not:
 
 ### Code reloading
 
-AtomVM does not support code reloading yet. Few items are prioritized before this feature but it is part of the roadmap.
+AtomVM does not support code reloading yet. Few items are prioritized before this feature but it
+is part of the roadmap.
 
 ### Distribution
 
-AtomVM support for distribution is a work in progress. Many operations are supported but some key features such as node monitoring are not implemented yet.
+AtomVM support for distribution is a work in progress. Many operations are supported but some key
+features such as node monitoring are not implemented yet.
 
 It is currently possible to connect a BEAM node with an AtomVM node.
 
 ## Known limitations of the standard library
 
-AtomVM standard library is extremely limited and while programs written for AtomVM can be run using OTP standard library if they do not call microcontroller-specific APIs, the opposite is not true. A program written for Erlang/OTP is very unlikely runnable on AtomVM without a lot of changes.
+AtomVM standard library is extremely limited and while programs written for AtomVM can be run
+using OTP standard library if they do not call microcontroller-specific APIs, the opposite is not
+true. A program written for Erlang/OTP is very unlikely runnable on AtomVM without a lot of
+changes.
 
 ### OTP architecture
 
-Support for OTP applications is currently very limited. `gen_server`, `gen_fsm` and `supervisor` are partially supported, but `proc_lib` is not.
+Support for OTP applications is currently very limited. `gen_server`, `gen_fsm` and `supervisor`
+are partially supported, but `proc_lib` is not.
 
 ## Memory usage and speed
 
 AtomVM is optimized for memory usage and is
-much slower than BEAM. It does not feature a JIT compiler yet (this is a work in progress) and even with a JIT compiler it will likely remain slower than BEAM.
+much slower than BEAM. It does not feature a JIT compiler yet (this is a work in progress) and
+even with a JIT compiler it will likely remain slower than BEAM.
 
-However, AtomVM uses much less RAM. Process heap initial size and process heap growth strategy are much more agressive on AtomVM, and garbage collector runs much more frequently. If speed matters, it is possible to use a process heap growth strategy inspired by BEAM's with an appropriate option passed to `spawn_opt`.
+However, AtomVM uses much less RAM. Process heap initial size and process heap growth strategy are
+much more agressive on AtomVM, and garbage collector runs much more frequently. If speed matters,
+it is possible to use a process heap growth strategy inspired by BEAM's with an appropriate option
+passed to `spawn_opt`.
 
     spawn_opt(
         fun() -> ... end,
@@ -78,16 +103,25 @@ However, AtomVM uses much less RAM. Process heap initial size and process heap g
 
 ### NIFs and Ports
 
-AtomVM supports NIFs and Ports but they need to be linked with the VM as most embedded environments do not support dynamic linking.
+AtomVM supports NIFs and Ports with an API similar but different from BEAM's. However NIFs
+and Ports need to be linked with the VM as most embedded environments do not support dynamic
+linking.
 
-AtomVM does not implement the onload opcode and therefore the -onload attribute, which is mostly used for NIFs support on BEAM.
+AtomVM does not implement the onload opcode and therefore the -onload attribute, which is mostly
+used for NIFs support on BEAM.
 
-AtomVM doesn't have any dirty scheduler for dirty nifs and nifs should return quickly to avoid locking the VM.
+AtomVM doesn't have any dirty scheduler for dirty NIFs and NIFs should return quickly to avoid
+locking the VM.
+
+Ports are also executed by the schedulers and should return quickly.
 
 ### Resources
 
-AtomVM supports resources but for historical reasons these appear as zero-length binaries as they used to with OTP21, and not as references as they currently do.
+AtomVM supports resources but for historical reasons these appear as zero-length binaries as they
+used to with OTP21, and not as references as they currently do with recent versions of the BEAM.
+This has some consequences on matching.
 
 ### BEAM file compatibility
 
-AtomVM can run BEAM fileq generated by erlc compiler from OTP21 to the latest master version, while BEAM cannot and often requires to recompile.
+AtomVM can run BEAM files generated by `erlc` compiler from OTP21 to the latest master version,
+while BEAM cannot and often requires to recompile.
