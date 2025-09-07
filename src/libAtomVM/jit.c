@@ -518,7 +518,6 @@ static bool jit_deallocate(Context *ctx, JITState *jit_state, uint32_t n_words)
 
 static TermCompareResult jit_term_compare(Context *ctx, JITState *jit_state, term t, term other, TermCompareOpts opts)
 {
-    TRACE("jit_term_compare: t=%p other=%p opts=%d\n", (void *) t, (void *) other, opts);
     TermCompareResult result = term_compare(t, other, opts, ctx->global);
     if (UNLIKELY(result == 0)) {
         set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
