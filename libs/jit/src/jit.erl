@@ -1335,7 +1335,7 @@ first_pass(<<?OP_BS_GET_BINARY2, Rest0/binary>>, MMod, MSt, State0) ->
     MSt17 = MMod:shift_left(MSt16, NewOffsetReg, 3),
     % Write new offset
     MSt18 = MMod:move_to_array_element(MSt17, NewOffsetReg, MatchStateRegPtr, 2),
-    MSt19 = MMod:free_native_registers(MSt18, [NewOffsetReg, MatchStateRegPtr]),
+    MSt19 = MMod:free_native_registers(MSt18, [NewOffsetReg]),
     {MSt20, TrimResultReg} = MMod:call_primitive(MSt19, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
     MSt21 = MMod:free_native_registers(MSt20, [TrimResultReg]),
     {MSt22, BSBinaryReg1} = MMod:get_array_element(MSt21, MatchStateRegPtr, 1),
