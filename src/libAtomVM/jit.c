@@ -1190,7 +1190,7 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
 
 static term jit_term_from_float(Context *ctx, int freg)
 {
-    TRACE("jit_term_from_float: freg=%d\n", freg);
+    TRACE("jit_term_from_float: freg=%d -- float = %f\n", freg, ctx->fr[freg]);
     return term_from_float(ctx->fr[freg], &ctx->heap);
 }
 
@@ -1202,7 +1202,7 @@ static void jit_term_conv_to_float(Context *ctx, term t, int freg)
 
 static bool jit_fadd(Context *ctx, int freg1, int freg2, int freg3)
 {
-    TRACE("jit_fadd: freg1=%d freg2=%d freg3=%d\n", freg1, freg2, freg3);
+    TRACE("jit_fadd: freg1=%d [%f] freg2=%d [%f] freg3=%d\n", freg1, ctx->fr[freg1], freg2, ctx->fr[freg2], freg3);
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
 #pragma STDC FENV_ACCESS ON
     feclearexcept(FE_OVERFLOW);
