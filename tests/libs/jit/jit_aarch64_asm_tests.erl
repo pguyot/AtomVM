@@ -20,9 +20,7 @@
 
 -module(jit_aarch64_asm_tests).
 
--ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--endif.
 
 -define(_assertAsmEqual(Bin, Str, Value),
     ?_assertEqual(jit_tests_common:asm(aarch64, Bin, Str), Value)
