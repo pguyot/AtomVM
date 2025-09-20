@@ -99,7 +99,6 @@ jobs:
       fail-fast: false
       matrix:
         arch: ["arm32v5", "arm32v7", "arm64v8"]
-        cmake_opts: ["-DAVM_WARNINGS_ARE_ERRORS=ON"]
         test_modules: ["test-modules"]
 
         include:
@@ -138,6 +137,9 @@ jobs:
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
           cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
           test_modules: "test-jit-modules"
+          install_deps: |
+            apt update &&
+            apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev erlang
 
         - arch: "arm64v8"
           platform: "arm64/v8"
