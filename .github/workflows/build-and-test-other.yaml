@@ -283,6 +283,10 @@ jobs:
         touch tests/erlang_tests/*/*.beam &&
         touch tests/erlang_tests/code_load/beams/*.beam &&
         touch tests/erlang_tests/code_load/beams/*/*.beam &&
+        echo "=== File timestamp diagnostics ===" &&
+        (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
+        (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&
+        (find . -name "*.erl" | head -5 | xargs ls -la 2>/dev/null || echo "No .erl source files found") &&
         echo "=== Diagnosing why ninja wants to rebuild targets ===" &&
         (ninja -d explain test-erlang 2>&1 || true) &&
         (ninja -d explain libs/jit/src/beams/jit_dwarf.beam 2>&1 || true) &&
