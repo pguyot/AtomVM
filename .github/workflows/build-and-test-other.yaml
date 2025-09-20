@@ -139,7 +139,7 @@ jobs:
           test_modules: "test-jit-modules"
           install_deps: |
             apt update &&
-            apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev erlang
+            apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
 
         - arch: "arm64v8"
           platform: "arm64/v8"
@@ -173,22 +173,41 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Create cached build environment
+      run: |
+        # Create a Dockerfile for caching the build environment
+        cat > Dockerfile.build << 'EOF'
+        FROM ${{ matrix.arch }}/debian:${{ matrix.tag }}
+        RUN echo "${{ matrix.sources }}" > /etc/apt/sources.list || true
+        RUN if [ -n "${{ matrix.install_deps }}" ]; then \
+              ${{ matrix.install_deps }}; \
+            else \
+              apt update && \
+              apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev; \
+            fi
+        WORKDIR /atomvm
+        EOF
+
+    - name: Build cached environment
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.build
+        platforms: linux/${{ matrix.platform }}
+        tags: atomvm-build-${{ matrix.arch }}-${{ matrix.tag }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        load: true
+
     - name: "Build and Test: AtomVM on foreign arch"
-      timeout-minutes: 30
+      timeout-minutes: 45
       run: |
         docker run --platform linux/${{ matrix.platform }} --rm -v $PWD:/atomvm -w /atomvm \
         -e CFLAGS="${{ matrix.cflags }}" -e CXXFLAGS="${{ matrix.cflags }}" \
-        ${{ matrix.arch }}/debian:${{ matrix.tag }} /bin/bash -c '
-        ([ -n "${{ matrix.sources }}" ] && echo "${{ matrix.sources }}" > /etc/apt/sources.list || true) &&
-        cat /etc/apt/sources.list || true &&
-        cat /etc/apt/sources.list.d/* || true &&
-        if test -n "${{ matrix.install_deps }}"; then
-            echo
-            ${{ matrix.install_deps }}
-        else
-            apt update &&
-            apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
-        fi &&
+        atomvm-build-${{ matrix.arch }}-${{ matrix.tag }}:latest /bin/bash -c '
         file /bin/bash &&
         uname -a &&
         cc --version &&
@@ -199,22 +218,27 @@ jobs:
         cmake --version &&
         mkdir -p build &&
         cd build &&
-        cmake .. ${{ matrix.cmake_opts }} &&
-        make PackBEAM &&
+        cmake .. -G Ninja ${{ matrix.cmake_opts }} &&
+        ninja PackBEAM &&
         cp -r ../build_tests/tests/erlang_tests/* tests/erlang_tests/ &&
         cp -r ../build_tests/tests/erlang_tests/code_load/* tests/erlang_tests/code_load/ &&
         cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
         cp ../build_tests/tests/libs/estdlib/*.avm tests/libs/estdlib/  &&
         cp ../build_tests/tests/libs/eavmlib/*.avm tests/libs/eavmlib/ &&
         cp ../build_tests/tests/libs/alisp/*.avm tests/libs/alisp/ &&
+        cp -r ../build_tests/libs/* libs/ &&
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
-        make AtomVM &&
-        make test-erlang &&
-        make test-enif &&
-        make test-heap &&
-        make test-mailbox &&
-        make test-structs &&
+        touch libs/jit/src/beams/*.beam &&
+        (touch libs/jit/src/beams/*/*.beam || true) &&
+        touch tests/erlang_tests/*.beam &&
+        (touch tests/erlang_tests/*/*.beam || true) &&
+        ninja AtomVM &&
+        ninja tests/test-erlang &&
+        ninja tests/test-enif &&
+        ninja tests/test-heap &&
+        ninja tests/test-mailbox &&
+        ninja tests/test-structs &&
         file ./tests/test-erlang &&
         ./tests/test-erlang -s prime_smp &&
         file ./tests/test-enif &&
