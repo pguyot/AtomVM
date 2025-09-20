@@ -71,6 +71,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: ["arm32v5", "arm32v7", "arm64v8"]
+        cmake_opts: ["-DAVM_WARNINGS_ARE_ERRORS=ON"]
 
         include:
         - arch: "arm32v5"
@@ -99,6 +100,14 @@ jobs:
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
           cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
+
+        - arch: "arm32v7"
+          platform: "arm/v7"
+          tag: "bookworm"
+          # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
+          # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
+          cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
+          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
 
         - arch: "arm64v8"
           platform: "arm64/v8"
@@ -160,10 +169,9 @@ jobs:
         cd build &&
         cmake .. ${{ matrix.cmake_opts }} &&
         make PackBEAM &&
-        cp ../build_tests/tests/erlang_tests/*.beam tests/erlang_tests/ &&
-        cp ../build_tests/tests/erlang_tests/code_load/*.{avm,beam,hrl} tests/erlang_tests/code_load/ &&
+        cp -r ../build_tests/tests/erlang_tests/* tests/erlang_tests/ &&
+        cp ../build_tests/tests/erlang_tests/code_load/* tests/erlang_tests/code_load/ &&
         mkdir -p tests/erlang_tests/code_load/beams/ &&
-        cp ../build_tests/tests/erlang_tests/code_load/beams/*.beam tests/erlang_tests/code_load/beams/ &&
         cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
         cp ../build_tests/tests/libs/estdlib/*.avm tests/libs/estdlib/  &&
         cp ../build_tests/tests/libs/eavmlib/*.avm tests/libs/eavmlib/ &&
