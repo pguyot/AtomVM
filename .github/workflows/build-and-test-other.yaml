@@ -173,40 +173,23 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Create cached build environment
-      run: |
-        # Create a Dockerfile for caching the build environment
-        echo "FROM ${{ matrix.arch }}/debian:${{ matrix.tag }}" > Dockerfile.build
-        echo "WORKDIR /atomvm" >> Dockerfile.build
-        if [ -n "${{ matrix.sources }}" ]; then
-          echo 'RUN echo "${{ matrix.sources }}" > /etc/apt/sources.list' >> Dockerfile.build
-        fi
-        if [ -n "${{ matrix.install_deps }}" ]; then
-          echo 'RUN ${{ matrix.install_deps }}' | tr '\n' ' ' >> Dockerfile.build
-        else
-          echo 'RUN apt update && apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev' >> Dockerfile.build
-        fi
-
-    - name: Build cached environment
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.build
-        platforms: linux/${{ matrix.platform }}
-        tags: atomvm-build-${{ matrix.arch }}-${{ matrix.tag }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        load: true
 
     - name: "Build and Test: AtomVM on foreign arch"
       timeout-minutes: 45
       run: |
         docker run --platform linux/${{ matrix.platform }} --rm -v $PWD:/atomvm -w /atomvm \
         -e CFLAGS="${{ matrix.cflags }}" -e CXXFLAGS="${{ matrix.cflags }}" \
-        atomvm-build-${{ matrix.arch }}-${{ matrix.tag }}:latest /bin/bash -c '
+        ${{ matrix.arch }}/debian:${{ matrix.tag }} /bin/bash -c '
+        ([ -n "${{ matrix.sources }}" ] && echo "${{ matrix.sources }}" > /etc/apt/sources.list || true) &&
+        cat /etc/apt/sources.list || true &&
+        cat /etc/apt/sources.list.d/* || true &&
+        if test -n "${{ matrix.install_deps }}"; then
+            echo
+            ${{ matrix.install_deps }}
+        else
+            apt update &&
+            apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+        fi &&
         file /bin/bash &&
         uname -a &&
         cc --version &&
