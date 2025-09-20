@@ -71,13 +71,13 @@ jobs:
     - name: Install required packages
       run: apt update && apt install -y gperf zlib1g-dev cmake ninja-build
 
-    - name: Compile test modules
+    - name: Compile jit and test modules
       run: |
         set -e
         mkdir build_tests
         cd build_tests
         cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF
-        ninja erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
+        ninja jit erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
 
     - name: Upload test modules
       uses: actions/upload-artifact@v4
@@ -104,55 +104,72 @@ jobs:
         include:
         - arch: "arm32v5"
           platform: "arm/v5"
+          tag: "arm32v5-stretch"
           cflags: "-O2 -mthumb -mthumb-interwork -march=armv4t"
           cmake_opts: "-DAVM_DISABLE_SMP=On -DAVM_DISABLE_TASK_DRIVER=On"
-          tag: "stretch"
-          sources: |
-            deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports main
-            deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports-sloppy main
-            deb [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main
-            deb-src [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main
-            deb [trusted=yes] http://archive.debian.org/debian/ stretch main
-            deb-src [trusted=yes] http://archive.debian.org/debian/ stretch main
-          # Workaround from https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=954852
-          install_deps: |
-            apt update &&
-            apt install -y -t stretch-backports-sloppy libarchive13 &&
-            apt install -y -t stretch-backports cmake &&
-            apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev
+          dockerfile: |
+            FROM arm32v5/debian:stretch
+            RUN echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports main" > /etc/apt/sources.list && \
+                echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports-sloppy main" >> /etc/apt/sources.list && \
+                echo "deb [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main" >> /etc/apt/sources.list && \
+                echo "deb-src [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main" >> /etc/apt/sources.list && \
+                echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch main" >> /etc/apt/sources.list && \
+                echo "deb-src [trusted=yes] http://archive.debian.org/debian/ stretch main" >> /etc/apt/sources.list
+            RUN apt update && \
+                apt install -y -t stretch-backports-sloppy libarchive13 && \
+                apt install -y -t stretch-backports cmake && \
+                apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev
+            WORKDIR /atomvm
 
         - arch: "arm32v7"
           platform: "arm/v7"
-          tag: "bookworm"
+          tag: "arm32v7-bookworm"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
-          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          dockerfile: |
+            FROM arm32v7/debian:bookworm
+            RUN apt update && \
+                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+            WORKDIR /atomvm
 
         - arch: "arm32v7"
           platform: "arm/v7"
-          tag: "trixie"
+          tag: "arm32v7-trixie-jit"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
-          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
+          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
           test_modules: "test-jit-modules"
-          install_deps: |
-            apt update &&
-            apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
+          dockerfile: |
+            FROM arm32v7/debian:trixie
+            RUN apt update && \
+                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
+            WORKDIR /atomvm
 
         - arch: "arm64v8"
           platform: "arm64/v8"
-          tag: "bookworm"
+          tag: "arm64v8-bookworm"
           cflags: "-O2"
-          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          dockerfile: |
+            FROM arm64v8/debian:bookworm
+            RUN apt update && \
+                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+            WORKDIR /atomvm
 
         # Required for testing big endian archs
         - arch: "s390x"
           platform: "s390x"
-          tag: "bookworm"
+          tag: "s390x-bookworm"
           cflags: "-O2"
-          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          dockerfile: |
+            FROM s390x/debian:bookworm
+            RUN apt update && \
+                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+            WORKDIR /atomvm
 
     steps:
     - name: Checkout repo
@@ -173,23 +190,30 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Create cached build environment
+      run: |
+        echo '${{ matrix.dockerfile }}' > Dockerfile.build
+
+    - name: Build cached environment
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.build
+        platforms: linux/${{ matrix.platform }}
+        tags: atomvm-build-${{ matrix.tag }}:latest
+        cache-from: type=gha,scope=${{ matrix.tag }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.tag }}
+        load: true
 
     - name: "Build and Test: AtomVM on foreign arch"
       timeout-minutes: 45
       run: |
         docker run --platform linux/${{ matrix.platform }} --rm -v $PWD:/atomvm -w /atomvm \
         -e CFLAGS="${{ matrix.cflags }}" -e CXXFLAGS="${{ matrix.cflags }}" \
-        ${{ matrix.arch }}/debian:${{ matrix.tag }} /bin/bash -c '
-        ([ -n "${{ matrix.sources }}" ] && echo "${{ matrix.sources }}" > /etc/apt/sources.list || true) &&
-        cat /etc/apt/sources.list || true &&
-        cat /etc/apt/sources.list.d/* || true &&
-        if test -n "${{ matrix.install_deps }}"; then
-            echo
-            ${{ matrix.install_deps }}
-        else
-            apt update &&
-            apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
-        fi &&
+        atomvm-build-${{ matrix.tag }}:latest /bin/bash -c '
         file /bin/bash &&
         uname -a &&
         cc --version &&
@@ -200,8 +224,8 @@ jobs:
         cmake --version &&
         mkdir -p build &&
         cd build &&
-        cmake .. -G Ninja ${{ matrix.cmake_opts }} &&
-        ninja PackBEAM &&
+        cmake .. ${{ matrix.cmake_opts }} &&
+        cmake --build . -t PackBEAM &&
         cp -r ../build_tests/tests/erlang_tests/* tests/erlang_tests/ &&
         cp -r ../build_tests/tests/erlang_tests/code_load/* tests/erlang_tests/code_load/ &&
         cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
@@ -215,12 +239,12 @@ jobs:
         (touch libs/jit/src/beams/*/*.beam || true) &&
         touch tests/erlang_tests/*.beam &&
         (touch tests/erlang_tests/*/*.beam || true) &&
-        ninja AtomVM &&
-        ninja tests/test-erlang &&
-        ninja tests/test-enif &&
-        ninja tests/test-heap &&
-        ninja tests/test-mailbox &&
-        ninja tests/test-structs &&
+        cmake --build . -t AtomVM &&
+        cmake --build . -t tests/test-erlang &&
+        cmake --build . -t tests/test-enif &&
+        cmake --build . -t tests/test-heap &&
+        cmake --build . -t tests/test-mailbox &&
+        cmake --build . -t tests/test-structs &&
         file ./tests/test-erlang &&
         ./tests/test-erlang -s prime_smp &&
         file ./tests/test-enif &&
