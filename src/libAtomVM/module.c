@@ -964,7 +964,7 @@ bool module_find_line(Module *mod, unsigned int offset, uint32_t *line, size_t *
 COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, int *l_off, long *out_mod_offset, GlobalContext *global)
 {
     Module *mod = globalcontext_get_module_by_index(global, ((uintptr_t) cp) >> 24);
-    long mod_offset = (cp & 0xFFFFFF) >> 2;
+    uint32_t mod_offset = (cp & 0xFFFFFF) >> 2;
     if (out_mod_offset) {
         *out_mod_offset = mod_offset;
     }
