@@ -137,7 +137,7 @@ jobs:
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
           cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
-          test_modules: ["test-jit-modules"]
+          test_modules: "test-jit-modules"
 
         - arch: "arm64v8"
           platform: "arm64/v8"
