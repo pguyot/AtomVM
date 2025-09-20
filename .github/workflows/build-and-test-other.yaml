@@ -200,7 +200,7 @@ jobs:
         mkdir -p build &&
         cd build &&
         cmake .. ${{ matrix.cmake_opts }} &&
-        cmake --build . -t PackBEAM &&
+        cmake --build . --target PackBEAM &&
         cp -r ../build_tests/tests/erlang_tests/* tests/erlang_tests/ &&
         cp -r ../build_tests/tests/erlang_tests/code_load/* tests/erlang_tests/code_load/ &&
         cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
@@ -211,15 +211,17 @@ jobs:
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
         touch libs/jit/src/beams/*.beam &&
-        (touch libs/jit/src/beams/*/*.beam || true) &&
+        touch libs/jit/src/beams/*/*.beam &&
         touch tests/erlang_tests/*.beam &&
-        (touch tests/erlang_tests/*/*.beam || true) &&
-        cmake --build . -t AtomVM &&
-        cmake --build . -t tests/test-erlang &&
-        cmake --build . -t tests/test-enif &&
-        cmake --build . -t tests/test-heap &&
-        cmake --build . -t tests/test-mailbox &&
-        cmake --build . -t tests/test-structs &&
+        touch tests/erlang_tests/*/*.beam &&
+        touch tests/erlang_tests/code_load/beams/*.beam &&
+        touch tests/erlang_tests/code_load/beams/*/*.beam &&
+        cmake --build . --target AtomVM &&
+        cmake --build . --target tests/test-erlang &&
+        cmake --build . --target tests/test-enif &&
+        cmake --build . --target tests/test-heap &&
+        cmake --build . --target tests/test-mailbox &&
+        cmake --build . --target tests/test-structs &&
         file ./tests/test-erlang &&
         ./tests/test-erlang -s prime_smp &&
         file ./tests/test-enif &&
