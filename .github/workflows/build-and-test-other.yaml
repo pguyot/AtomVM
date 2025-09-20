@@ -33,35 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compile_tests:
-    runs-on: ubuntu-24.04
-    container: erlang:27
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
-
-    - name: Install required packages
-      run: apt update && apt install -y gperf zlib1g-dev cmake ninja-build
-
-    - name: Compile test modules
-      run: |
-        set -e
-        mkdir build_tests
-        cd build_tests
-        cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON
-        ninja erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
-
-    - name: Upload test modules
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-modules
-        path: |
-            build_tests/**/*.avm
-            build_tests/**/*.beam
-            build_tests/**/*.hrl
-        retention-days: 1
-
-  compile_jit_tests:
+  compile_jit_and_tests:
     runs-on: ubuntu-24.04
     container: erlang:27
     steps:
@@ -76,13 +48,18 @@ jobs:
         set -e
         mkdir build_tests
         cd build_tests
-        cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF
+        cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON
         ninja jit erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
+        # jit_precompile tests
+        mkdir -p tests/erlang_tests/armv6m/
+        erl -pa libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- armv6m tests/erlang_tests/armv6m/ tests/erlang_tests/*.beam
+        mkdir -p tests/erlang_tests/code_load/beams/armv6m/
+        erl -pa libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- armv6m tests/erlang_tests/code_load/beams/armv6m/ tests/erlang_tests/code_load/beams/*.beam
 
-    - name: Upload test modules
+    - name: Upload jit and test modules
       uses: actions/upload-artifact@v4
       with:
-        name: test-jit-modules
+        name: jit-and-test-modules
         path: |
             build_tests/**/*.avm
             build_tests/**/*.beam
@@ -90,7 +67,7 @@ jobs:
         retention-days: 1
 
   build-and-test-other:
-    needs: [compile_tests, compile_jit_tests]
+    needs: [compile_jit_and_tests]
     # GCC on qemu segfaults on s390x and arm64v8 when using 24.04
     # See also https://github.com/actions/runner-images/issues/11471
     runs-on: ubuntu-22.04
@@ -99,7 +76,6 @@ jobs:
       fail-fast: false
       matrix:
         arch: ["arm32v5", "arm32v7", "arm64v8"]
-        test_modules: ["test-modules"]
 
         include:
         - arch: "arm32v5"
@@ -141,7 +117,6 @@ jobs:
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
           cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
-          test_modules: "test-jit-modules"
           dockerfile: |
             FROM arm32v7/debian:trixie
             RUN apt update && \
@@ -184,7 +159,7 @@ jobs:
     - name: Download test modules
       uses: actions/download-artifact@v4
       with:
-        name: ${{ matrix.test_modules }}
+        name: jit-and-test-modules
         path: build_tests
 
     - name: Set up QEMU
