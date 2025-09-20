@@ -60,7 +60,7 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm64|aarch64$")
     if (NOT AVM_DISABLE_JIT)
         set(AVM_JIT_TARGET_ARCH "aarch64")
     endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m.+$")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m.+|armv7l$")
     # We only have armv6m for now, which all cortex-m should support
     if (NOT AVM_DISABLE_JIT)
         set(AVM_JIT_TARGET_ARCH "armv6m")
