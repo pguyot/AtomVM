@@ -99,7 +99,6 @@ jobs:
       fail-fast: false
       matrix:
         arch: ["arm32v5", "arm32v7", "arm64v8"]
-        platform: []
         cmake_opts: ["-DAVM_WARNINGS_ARE_ERRORS=ON"]
         test_modules: ["test-modules"]
 
