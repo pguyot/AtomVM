@@ -206,7 +206,6 @@ jobs:
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
         touch libs/jit/src/beams/*.beam &&
-        touch libs/jit/src/beams/*/*.beam &&
         touch tests/erlang_tests/*.beam &&
         touch tests/erlang_tests/*/*.beam &&
         touch tests/erlang_tests/code_load/beams/*.beam &&
