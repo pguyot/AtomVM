@@ -1023,7 +1023,7 @@ COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, i
 
         int i = 1;
         const uint8_t *l = mod->labels[1];
-        while (mod_offset > l - code) {
+        while (mod_offset > (uint32_t) (l - code)) {
             i++;
             if (i >= labels_count) {
                 // last label + 1 is reserved for end of module.
