@@ -63,7 +63,7 @@ jobs:
 
   compile_jit_tests:
     runs-on: ubuntu-24.04
-    container: erlang:28
+    container: erlang:27
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
