@@ -75,12 +75,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ["arm32v5", "arm32v7", "arm64v8"]
+        tag: ["arm32v5-stretch", "arm32v7-bookworm", "arm32v7-trixie-jit", "arm64v8-bookworm", "s390x-bookworm"]
 
         include:
-        - arch: "arm32v5"
+        - tag: "arm32v5-stretch"
           platform: "arm/v5"
-          tag: "arm32v5-stretch"
           cflags: "-O2 -mthumb -mthumb-interwork -march=armv4t"
           cmake_opts: "-DAVM_DISABLE_SMP=On -DAVM_DISABLE_TASK_DRIVER=On"
           dockerfile: |
@@ -97,9 +96,8 @@ jobs:
                 apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
-        - arch: "arm32v7"
+        - tag: "arm32v7-bookworm"
           platform: "arm/v7"
-          tag: "arm32v7-bookworm"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
@@ -110,9 +108,8 @@ jobs:
                 apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
-        - arch: "arm32v7"
+        - tag: "arm32v7-trixie-jit"
           platform: "arm/v7"
-          tag: "arm32v7-trixie-jit"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
@@ -123,9 +120,8 @@ jobs:
                 apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
             WORKDIR /atomvm
 
-        - arch: "arm64v8"
+        - tag: "arm64v8-bookworm"
           platform: "arm64/v8"
-          tag: "arm64v8-bookworm"
           cflags: "-O2"
           cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
           dockerfile: |
@@ -135,9 +131,8 @@ jobs:
             WORKDIR /atomvm
 
         # Required for testing big endian archs
-        - arch: "s390x"
+        - tag: "s390x-bookworm"
           platform: "s390x"
-          tag: "s390x-bookworm"
           cflags: "-O2"
           cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
           dockerfile: |
