@@ -830,7 +830,10 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t si
     return (ModuleNativeEntryPoint) (native_code_mmap + offset);
 #else
     UNUSED(size);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     return (ModuleNativeEntryPoint) (native_code + offset);
+#pragma GCC diagnostic pop
 #endif
 }
 #endif

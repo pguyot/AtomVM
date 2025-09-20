@@ -66,13 +66,13 @@ extern "C" {
 #define SET_ERROR(error_type_atom)                                      \
     x_regs[0] = ERROR_ATOM;                                             \
     x_regs[1] = error_type_atom;                                        \
-    x_regs[2] = stacktrace_create_raw(ctx, mod, native_pc - mod->native_code, ERROR_ATOM);
+    x_regs[2] = stacktrace_create_raw(ctx, mod, (uint8_t *) native_pc - (uint8_t *) mod->native_code, ERROR_ATOM);
 #else
 #define SET_ERROR(error_type_atom)                                      \
     x_regs[0] = ERROR_ATOM;                                             \
     x_regs[1] = error_type_atom;                                        \
     if (mod->native_code) {                                             \
-        x_regs[2] = stacktrace_create_raw(ctx, mod, native_pc - mod->native_code, ERROR_ATOM); \
+        x_regs[2] = stacktrace_create_raw(ctx, mod, (uint8_t *) native_pc - (uint8_t *) mod->native_code, ERROR_ATOM); \
     } else {                                                            \
         x_regs[2] = stacktrace_create_raw(ctx, mod, pc - code, ERROR_ATOM); \
     }
@@ -1841,10 +1841,16 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
         ctx->saved_ip = mod->labels[label];
 #elif AVM_NO_EMU
         assert(mod->native_code);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         ctx->saved_ip = module_get_native_entry_point(mod, label);
+#pragma GCC diagnostic pop
 #else
         if (mod->native_code) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
             ctx->saved_ip = module_get_native_entry_point(mod, label);
+#pragma GCC diagnostic pop
         } else {
             ctx->saved_ip = mod->labels[label];
         }
@@ -1904,7 +1910,10 @@ schedule_in:
     // set PC
     pc = (ctx->saved_ip);
 #elif AVM_NO_EMU
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     native_pc = (ModuleNativeEntryPoint) (ctx->saved_ip);
+#pragma GCC diagnostic pop
 #else
     if (mod->native_code == NULL) {
         code = mod->code->code;
@@ -1912,7 +1921,10 @@ schedule_in:
         pc = (ctx->saved_ip);
         native_pc = NULL;
     } else {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         native_pc = (ModuleNativeEntryPoint) (ctx->saved_ip);
+#pragma GCC diagnostic pop
     }
 #endif
 
@@ -1988,7 +2000,10 @@ schedule_in:
                 JUMP_TO_ADDRESS(jit_state.continuation);
             } else {
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
                 native_pc = jit_state.continuation;
+#pragma GCC diagnostic pop
 #ifndef AVM_NO_EMU
             }
 #endif

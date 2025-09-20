@@ -461,7 +461,10 @@ void context_process_code_server_resume_signal(Context *ctx)
     uint32_t label = (uint32_t) (uintptr_t) ctx->saved_ip;
     Module *module = ctx->saved_module;
     if (module->native_code) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         ctx->saved_ip = (ModuleNativeEntryPoint) module_get_native_entry_point(module, label);
+#pragma GCC diagnostic pop
     } else {
         ctx->saved_ip = module->labels[label];
     }

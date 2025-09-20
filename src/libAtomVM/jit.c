@@ -293,7 +293,10 @@ static Context *jit_return(Context *ctx, JITState *jit_state)
         jit_state->continuation = pc;
     } else {
         // return to native
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         const void *native_pc = ((const uint8_t *) mod->native_code) + ((ctx->cp & 0xFFFFFF) >> 2);
+#pragma GCC diagnostic pop
         jit_state->continuation = native_pc;
     }
     jit_state->module = mod;
@@ -323,7 +326,10 @@ static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
     if (target_label) {
         if (jit_state->module->native_code) {
             // catch label is in native code.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
             jit_state->continuation = module_get_native_entry_point(jit_state->module, target_label);
+#pragma GCC diagnostic pop
         } else {
             // Native case
             // jit_state->continuation = jit_state->module->labels[target_label];
@@ -519,7 +525,10 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
                 SMP_MODULE_UNLOCK(jit_state->module);
 
                 jit_state->module = jump->target;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
                 jit_state->continuation = jump->entry_point;
+#pragma GCC diagnostic pop
             }
             break;
         }
@@ -533,7 +542,10 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
             // clang cannot tail-optimize this, so return to loop to avoid any stack overflow
             // __attribute__((musttail)) return jump->entry_point(ctx, jit_state, &module_native_interface);
             jit_state->module = jump->target;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
             jit_state->continuation = jump->entry_point;
+#pragma GCC diagnostic pop
             break;
         }
         case BIFFunctionType: {
@@ -628,7 +640,10 @@ static void *jit_get_imported_bif(JITState *jit_state, uint32_t bif)
 {
     TRACE("jit_get_imported_bif: bif=%u\n", bif);
     const struct ExportedFunction *exported_bif = jit_state->module->imported_funcs[bif];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     void *result = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif0_ptr;
+#pragma GCC diagnostic pop
     return result;
 }
 
@@ -1040,7 +1055,10 @@ static Context *jit_wait_timeout(Context *ctx, JITState *jit_state, term timeout
     } else {
         // clang cannot tail-optimize this, so return to loop to avoid any stack overflow
         // __attribute__((musttail)) return jit_state->continuation(ctx, jit_state, &module_native_interface);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
+#pragma GCC diagnostic pop
         return ctx;
     }
 }
@@ -1055,7 +1073,10 @@ static Context *jit_wait_timeout_trap_handler(Context *ctx, JITState *jit_state,
         return scheduler_wait(ctx);
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
+#pragma GCC diagnostic pop
     return ctx;
 }
 
@@ -1171,7 +1192,10 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
     if (fun_module->native_code) {
         // JIT case
         jit_state->module = fun_module;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
+#pragma GCC diagnostic pop
     } else {
         // Native case
         // jit_state->module = fun_module;
@@ -1532,7 +1556,10 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
         if (target_module->native_code) {
             // catch label is in native code.
             jit_state->module = target_module;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
             jit_state->continuation = module_get_native_entry_point(jit_state->module, target_label);
+#pragma GCC diagnostic pop
         } else {
             // Native case
             // jit_state->module = target_module;

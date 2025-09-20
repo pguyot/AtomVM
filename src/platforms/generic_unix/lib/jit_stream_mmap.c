@@ -241,7 +241,10 @@ ModuleNativeEntryPoint jit_stream_entry_point(Context *ctx, term jit_stream)
 #elif defined(__GNUC__)
     __builtin___clear_cache(js_obj->stream_base, js_obj->stream_base + js_obj->stream_size);
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     ModuleNativeEntryPoint result = (ModuleNativeEntryPoint) js_obj->stream_base;
+#pragma GCC diagnostic pop
     js_obj->stream_base = NULL;
     return result;
 }

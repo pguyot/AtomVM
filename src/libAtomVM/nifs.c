@@ -1382,7 +1382,10 @@ static term nif_erlang_spawn_fun_opt(Context *ctx, int argc, term argv[])
     new_ctx->saved_module = fun_module;
 #ifndef AVM_NO_JIT
     if (fun_module->native_code) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         new_ctx->saved_ip = module_get_native_entry_point(fun_module, label);
+#pragma GCC diagnostic pop
     } else {
 #endif
 #ifndef AVM_NO_EMU
@@ -1433,7 +1436,10 @@ term nif_erlang_spawn_opt(Context *ctx, int argc, term argv[])
     new_ctx->saved_module = found_module;
 #ifndef AVM_NO_JIT
     if (found_module->native_code) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
         new_ctx->saved_ip = module_get_native_entry_point(found_module, label);
+#pragma GCC diagnostic pop
     } else {
 #endif
 #ifndef AVM_NO_EMU

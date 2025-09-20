@@ -531,7 +531,10 @@ term module_load_literal(Module *mod, int index, Context *ctx)
 ModuleNativeEntryPoint module_get_native_entry_point(Module *module, int exported_label)
 {
     assert(module->native_code);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     return (ModuleNativeEntryPoint) (((const uint8_t *) module->native_code) + JIT_JUMPTABLE_ENTRY_SIZE * exported_label);
+#pragma GCC diagnostic pop
 }
 #endif
 
