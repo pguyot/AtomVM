@@ -131,7 +131,7 @@ jobs:
 
         - arch: "arm32v7"
           platform: "arm/v7"
-          tag: "bookworm"
+          tag: "trixie"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
@@ -139,7 +139,7 @@ jobs:
           test_modules: "test-jit-modules"
           install_deps: |
             apt update &&
-            apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev erlang
+            apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev erlang
 
         - arch: "arm64v8"
           platform: "arm64/v8"
