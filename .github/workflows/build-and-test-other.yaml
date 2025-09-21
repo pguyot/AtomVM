@@ -208,6 +208,8 @@ jobs:
         cmake .. ${{ matrix.cmake_opts }} &&
         make PackBEAM &&
         cp -p ../build_tests/tests/erlang_tests/*.beam tests/erlang_tests/ &&
+        mkdir -p tests/erlang_tests/beams/ &&
+        cp -p ../build_tests/tests/erlang_tests/beams/*.beam tests/erlang_tests/beams/ &&
         cp -p ../build_tests/tests/erlang_tests/code_load/*.{avm,beam,hrl} tests/erlang_tests/code_load/ &&
         mkdir -p tests/erlang_tests/code_load/beams/ &&
         cp -rp ../build_tests/tests/erlang_tests/code_load/beams/* tests/erlang_tests/code_load/beams/ &&
