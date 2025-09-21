@@ -220,6 +220,9 @@ jobs:
         cp -rp ../build_tests/libs/* libs/ &&
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
+        echo "Making source files older than precompiled artifacts:" &&
+        find ../libs -name "*.erl" -exec touch -t 202109210800 {} \; &&
+        find ../tests -name "*.erl" -exec touch -t 202109210800 {} \; &&
         echo "=== JIT timestamp debugging ===" &&
         echo "JIT source files (.erl):" &&
         find libs/jit/src -name "*.erl" -exec ls -la {} \; | head -3 &&
@@ -231,6 +234,8 @@ jobs:
         find libs/jit/src -name "*.avm" -exec ls -la {} \; | head -3 &&
         echo "Make will rebuild jit_armv6m target?" &&
         (make -q jit_armv6m 2>&1 && echo "jit_armv6m is up to date" || echo "jit_armv6m needs rebuilding") &&
+        echo "Checking if jit-armv6m.avm exists:" &&
+        ls -la libs/jit/src/jit-armv6m.avm 2>/dev/null || echo "jit-armv6m.avm not found" &&
         echo "=== File timestamp diagnostics ===" &&
         (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
         (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&
