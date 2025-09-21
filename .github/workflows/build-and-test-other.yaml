@@ -66,86 +66,9 @@ jobs:
             build_tests/**/*.hrl
         retention-days: 1
 
-  build-docker-images:
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        tag: ["arm32v5-stretch", "arm32v7-bookworm", "arm32v7-trixie-jit", "arm64v8-bookworm", "s390x-bookworm"]
-        include:
-        - tag: "arm32v5-stretch"
-          platform: "arm/v5"
-          dockerfile: |
-            FROM arm32v5/debian:stretch
-            RUN echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports main" > /etc/apt/sources.list && \
-                echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch-backports-sloppy main" >> /etc/apt/sources.list && \
-                echo "deb [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main" >> /etc/apt/sources.list && \
-                echo "deb-src [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main" >> /etc/apt/sources.list && \
-                echo "deb [trusted=yes] http://archive.debian.org/debian/ stretch main" >> /etc/apt/sources.list && \
-                echo "deb-src [trusted=yes] http://archive.debian.org/debian/ stretch main" >> /etc/apt/sources.list
-            RUN apt update && \
-                apt install -y -t stretch-backports-sloppy libarchive13 && \
-                apt install -y -t stretch-backports cmake && \
-                apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev
-            WORKDIR /atomvm
-        - tag: "arm32v7-bookworm"
-          platform: "arm/v7"
-          dockerfile: |
-            FROM arm32v7/debian:bookworm
-            RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
-            WORKDIR /atomvm
-        - tag: "arm32v7-trixie-jit"
-          platform: "arm/v7"
-          dockerfile: |
-            FROM arm32v7/debian:trixie
-            RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
-            WORKDIR /atomvm
-        - tag: "arm64v8-bookworm"
-          platform: "arm64/v8"
-          dockerfile: |
-            FROM arm64v8/debian:bookworm
-            RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
-            WORKDIR /atomvm
-        - tag: "s390x-bookworm"
-          platform: "s390x"
-          dockerfile: |
-            FROM s390x/debian:bookworm
-            RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
-            WORKDIR /atomvm
-
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Create cached build environment
-      run: |
-        echo '${{ matrix.dockerfile }}' > Dockerfile.build
-
-    - name: Build cached environment
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.build
-        platforms: linux/${{ matrix.platform }}
-        tags: atomvm-build-${{ matrix.tag }}:latest
-        cache-from: type=gha,scope=${{ matrix.tag }}
-        cache-to: type=gha,mode=max,scope=${{ matrix.tag }}
-        push: false
-        load: false
-        outputs: type=cacheonly
 
   build-and-test-other:
-    needs: [compile_jit_and_tests, build-docker-images]
+    needs: [compile_jit_and_tests]
     # GCC on qemu segfaults on s390x and arm64v8 when using 24.04
     # See also https://github.com/actions/runner-images/issues/11471
     runs-on: ubuntu-22.04
@@ -153,11 +76,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: ["arm32v5-stretch", "arm32v7-bookworm", "arm32v7-trixie-jit", "arm64v8-bookworm", "s390x-bookworm"]
-
         include:
-        - tag: "arm32v5-stretch"
+        - arch: "arm32v5"
           platform: "arm/v5"
+          debian_version: "stretch"
+          docker_tag: "arm32v5-debian-stretch-buildtools"
           cflags: "-O2 -mthumb -mthumb-interwork -march=armv4t"
           cmake_opts: "-DAVM_DISABLE_SMP=On -DAVM_DISABLE_TASK_DRIVER=On"
           dockerfile: |
@@ -174,49 +97,57 @@ jobs:
                 apt install -y file gcc g++ binutils make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
-        - tag: "arm32v7-bookworm"
+        - arch: "arm32v7"
           platform: "arm/v7"
+          debian_version: "bookworm"
+          docker_tag: "arm32v7-debian-bookworm-buildtools"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
-          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
           dockerfile: |
             FROM arm32v7/debian:bookworm
             RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+                apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
-        - tag: "arm32v7-trixie-jit"
+        - arch: "arm32v7"
           platform: "arm/v7"
+          debian_version: "trixie"
+          docker_tag: "arm32v7-debian-trixie-buildtools"
           # -D_FILE_OFFSET_BITS=64 is required for making atomvm:posix_readdir/1 test work
           # otherwise readdir will fail due to 64 bits inode numbers with 32 bit ino_t
           cflags: "-mcpu=cortex-a7 -mfloat-abi=hard -O2 -mthumb -mthumb-interwork -D_FILE_OFFSET_BITS=64"
-          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
+          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON -DAVM_DISABLE_JIT=OFF"
           dockerfile: |
             FROM arm32v7/debian:trixie
             RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev erlang
+                apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
-        - tag: "arm64v8-bookworm"
+        - arch: "arm64v8"
           platform: "arm64/v8"
+          debian_version: "bookworm"
+          docker_tag: "arm64v8-debian-bookworm-buildtools"
           cflags: "-O2"
-          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
           dockerfile: |
             FROM arm64v8/debian:bookworm
             RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+                apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
         # Required for testing big endian archs
-        - tag: "s390x-bookworm"
+        - arch: "s390x"
           platform: "s390x"
+          debian_version: "bookworm"
+          docker_tag: "s390x-debian-bookworm-buildtools"
           cflags: "-O2"
-          cmake_opts: "-G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON"
+          cmake_opts: "-DAVM_WARNINGS_ARE_ERRORS=ON"
           dockerfile: |
             FROM s390x/debian:bookworm
             RUN apt update && \
-                apt install -y file gcc g++ binutils cmake make ninja-build doxygen gperf zlib1g-dev libmbedtls-dev
+                apt install -y file gcc g++ binutils cmake make doxygen gperf zlib1g-dev libmbedtls-dev
             WORKDIR /atomvm
 
     steps:
@@ -241,22 +172,27 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Load cached build environment
+    - name: Build and load cached environment
       run: |
         echo '${{ matrix.dockerfile }}' > Dockerfile.build
-        docker buildx build \
-          --platform linux/${{ matrix.platform }} \
-          --tag atomvm-build-${{ matrix.tag }}:latest \
-          --cache-from type=gha,scope=${{ matrix.tag }} \
-          --load \
-          -f Dockerfile.build .
+
+    - name: Build Docker image with cache
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.build
+        platforms: linux/${{ matrix.platform }}
+        tags: atomvm-build-${{ matrix.docker_tag }}:latest
+        cache-from: type=gha,scope=${{ matrix.docker_tag }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.docker_tag }}
+        load: true
 
     - name: "Build and Test: AtomVM on foreign arch"
       timeout-minutes: 45
       run: |
         docker run --platform linux/${{ matrix.platform }} --rm -v $PWD:/atomvm -w /atomvm \
         -e CFLAGS="${{ matrix.cflags }}" -e CXXFLAGS="${{ matrix.cflags }}" \
-        atomvm-build-${{ matrix.tag }}:latest /bin/bash -c '
+        atomvm-build-${{ matrix.docker_tag }}:latest /bin/bash -c '
         file /bin/bash &&
         uname -a &&
         cc --version &&
@@ -268,9 +204,11 @@ jobs:
         mkdir -p build &&
         cd build &&
         cmake .. ${{ matrix.cmake_opts }} &&
-        cmake --build . --target PackBEAM &&
-        cp -r ../build_tests/tests/erlang_tests/* tests/erlang_tests/ &&
-        cp -r ../build_tests/tests/erlang_tests/code_load/* tests/erlang_tests/code_load/ &&
+        make PackBEAM &&
+        cp ../build_tests/tests/erlang_tests/*.beam tests/erlang_tests/ &&
+        cp ../build_tests/tests/erlang_tests/code_load/*.{avm,beam,hrl} tests/erlang_tests/code_load/ &&
+        mkdir -p tests/erlang_tests/code_load/beams/ &&
+        cp ../build_tests/tests/erlang_tests/code_load/beams/*.beam tests/erlang_tests/code_load/beams/ &&
         cp ../build_tests/tests/libs/etest/*.avm tests/libs/etest/  &&
         cp ../build_tests/tests/libs/estdlib/*.avm tests/libs/estdlib/  &&
         cp ../build_tests/tests/libs/eavmlib/*.avm tests/libs/eavmlib/ &&
@@ -278,20 +216,18 @@ jobs:
         cp -r ../build_tests/libs/* libs/ &&
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
-        touch libs/jit/src/beams/*.beam &&
-        touch tests/erlang_tests/*.beam &&
-        touch tests/erlang_tests/*/*.beam &&
-        touch tests/erlang_tests/code_load/beams/*.beam &&
-        touch tests/erlang_tests/code_load/beams/*/*.beam &&
         echo "=== File timestamp diagnostics ===" &&
         (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
         (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&
         (find . -name "*.erl" | head -5 | xargs ls -la 2>/dev/null || echo "No .erl source files found") &&
-        echo "=== Diagnosing why ninja wants to rebuild targets ===" &&
-        (ninja -d explain test-erlang 2>&1 || true) &&
-        (ninja -d explain libs/jit/src/beams/jit_dwarf.beam 2>&1 || true) &&
-        (ninja -d explain tests/erlang_tests/code_load/beams/export_test_module.beam 2>&1 || true) &&
-        echo "=== End diagnostic ===" &&
+        echo "=== Make diagnostics ===" &&
+        (command -v erlc && echo "erlc found" || echo "erlc not found") &&
+        (command -v escript && echo "escript found" || echo "escript not found") &&
+        echo "Make dry-run for test-erlang (first 15 lines):" &&
+        (make -n test-erlang 2>&1 | head -15 || true) &&
+        echo "Is test-erlang up to date?" &&
+        (make -q test-erlang 2>&1 && echo "test-erlang is up to date" || echo "test-erlang needs rebuilding") &&
+        echo "=== End diagnostics ===" &&
         cmake --build . --target AtomVM &&
         cmake --build . --target test-erlang &&
         cmake --build . --target test-enif &&
