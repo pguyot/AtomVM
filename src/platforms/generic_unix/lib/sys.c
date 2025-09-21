@@ -827,7 +827,17 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t si
     memcpy(native_code_mmap, native_code, size);
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(native_code_mmap, size);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
     return (ModuleNativeEntryPoint) (native_code_mmap + offset);
+#pragma GCC diagnostic pop
+#elif defined(__arm__)
+    // Set thumb bit on arm
+    UNUSED(size);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+    return (ModuleNativeEntryPoint) (native_code + offset + 1);
+#pragma GCC diagnostic pop
 #else
     UNUSED(size);
 #pragma GCC diagnostic push
