@@ -49,7 +49,7 @@ jobs:
         mkdir build_tests
         cd build_tests
         cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON
-        ninja jit jit_x86_64 jit_aarch64 jit_armv6m erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
+        ninja jit jit_x86_64 jit_aarch64 jit_armv6m erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp test_jit
         # jit_precompile tests
         find tests/erlang_tests
         mkdir -p tests/erlang_tests/armv6m/
