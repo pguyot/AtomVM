@@ -236,6 +236,18 @@ jobs:
         (make -q jit_armv6m 2>&1 && echo "jit_armv6m is up to date" || echo "jit_armv6m needs rebuilding") &&
         echo "Checking if jit-armv6m.avm exists:" &&
         ls -la libs/jit/src/jit-armv6m.avm 2>/dev/null || echo "jit-armv6m.avm not found" &&
+        echo "Checking JIT x86_64 dependencies:" &&
+        echo "libs/jit/src/beams/jit.beam (dependency):" &&
+        ls -la libs/jit/src/beams/jit.beam 2>/dev/null || echo "Missing" &&
+        echo "libs/jit/src/beams/x86_64/jit.beam (target):" &&
+        ls -la libs/jit/src/beams/x86_64/jit.beam 2>/dev/null || echo "Missing" &&
+        echo "Checking test module armv6m dependencies:" &&
+        echo "tests/erlang_tests/beams/add.beam (dependency):" &&
+        ls -la tests/erlang_tests/beams/add.beam 2>/dev/null || echo "Missing" &&
+        echo "tests/erlang_tests/armv6m/add.beam (target):" &&
+        ls -la tests/erlang_tests/armv6m/add.beam 2>/dev/null || echo "Missing" &&
+        echo "../tests/erlang_tests/add.erl (source):" &&
+        ls -la ../tests/erlang_tests/add.erl 2>/dev/null || echo "Missing" &&
         echo "=== File timestamp diagnostics ===" &&
         (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
         (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&
