@@ -49,12 +49,14 @@ jobs:
         mkdir build_tests
         cd build_tests
         cmake .. -G Ninja -DAVM_WARNINGS_ARE_ERRORS=ON
-        ninja jit erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
+        ninja jit jit_x86_64 jit_aarch64 jit_armv6m erlang_test_modules test_etest test_estdlib test_eavmlib test_alisp
         # jit_precompile tests
+        find tests/erlang_tests
         mkdir -p tests/erlang_tests/armv6m/
         erl -pa libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- armv6m tests/erlang_tests/armv6m/ tests/erlang_tests/*.beam
         mkdir -p tests/erlang_tests/code_load/beams/armv6m/
         erl -pa libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- armv6m tests/erlang_tests/code_load/beams/armv6m/ tests/erlang_tests/code_load/beams/*.beam
+
 
     - name: Upload jit and test modules
       uses: actions/upload-artifact@v4
@@ -213,10 +215,13 @@ jobs:
         cp ../build_tests/tests/libs/estdlib/*.avm tests/libs/estdlib/  &&
         cp ../build_tests/tests/libs/eavmlib/*.avm tests/libs/eavmlib/ &&
         cp ../build_tests/tests/libs/alisp/*.avm tests/libs/alisp/ &&
+        cp ../build_tests/tests/libs/jit/*.avm tests/libs/jit/ &&
         cp -r ../build_tests/libs/* libs/ &&
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
-        ([ -f libs/jit/src/jit.avm ] && touch libs/jit/src/jit.avm || echo "JIT archive not found") &&
+        echo "Touching JIT artifacts to prevent rebuilding:" &&
+        find libs/jit/src -name "*.avm" -exec touch {} \; &&
+        find libs/jit/src -name "*.beam" -exec touch {} \; &&
         echo "=== File timestamp diagnostics ===" &&
         (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
         (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&

@@ -64,33 +64,35 @@ macro(pack_precompiled_archive avm_name)
     set(multiValueArgs ERLC_FLAGS MODULES)
     cmake_parse_arguments(PACK_ARCHIVE "" "" "${multiValueArgs}" ${ARGN})
 
-    if(NOT AVM_DISABLE_JIT)
-        if(${avm_name} STREQUAL jit)
-            set(jit_deps "")
-        else()
-            set(jit_deps "jit")
-        endif()
-        foreach(jit_target_arch x86_64 aarch64 armv6m)
-            set(jit_compiler_modules
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_dwarf.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_precompile.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_stream_binary.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}_asm.beam
-            )
+    # Always create JIT compilation targets, but only add dependencies when JIT is enabled
+    if(${avm_name} STREQUAL jit)
+        set(jit_deps "")
+    elseif(NOT AVM_DISABLE_JIT)
+        set(jit_deps "jit")
+    else()
+        set(jit_deps "")
+    endif()
+    foreach(jit_target_arch x86_64 aarch64 armv6m)
+        set(jit_compiler_modules
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit.beam
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_dwarf.beam
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_precompile.beam
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_stream_binary.beam
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}.beam
+            ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}_asm.beam
+        )
 
-            foreach(module_name IN LISTS ${PACK_ARCHIVE_MODULES} PACK_ARCHIVE_MODULES PACK_ARCHIVE_UNPARSED_ARGUMENTS)
-                add_custom_command(
-                    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/${module_name}.beam
-                    COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/
-                        && erl -pa ${CMAKE_BINARY_DIR}/libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- ${jit_target_arch} ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/ ${CMAKE_CURRENT_BINARY_DIR}/beams/${module_name}.beam
-                    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/beams/${module_name}.beam ${jit_compiler_modules} ${jit_deps}
-                    COMMENT "Compiling ${module_name}.beam to ${jit_target_arch}"
-                    VERBATIM
-                )
-                set(pack_precompile_archive_${avm_name}_beams ${pack_precompile_archive_${avm_name}_beams} ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/${module_name}.beam)
-            endforeach()
+        foreach(module_name IN LISTS ${PACK_ARCHIVE_MODULES} PACK_ARCHIVE_MODULES PACK_ARCHIVE_UNPARSED_ARGUMENTS)
+            add_custom_command(
+                OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/${module_name}.beam
+                COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/
+                    && erl -pa ${CMAKE_BINARY_DIR}/libs/jit/src/beams/ -noshell -s jit_precompile -s init stop -- ${jit_target_arch} ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/ ${CMAKE_CURRENT_BINARY_DIR}/beams/${module_name}.beam
+                DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/beams/${module_name}.beam ${jit_compiler_modules} ${jit_deps}
+                COMMENT "Compiling ${module_name}.beam to ${jit_target_arch}"
+                VERBATIM
+            )
+            set(pack_precompile_archive_${avm_name}_beams ${pack_precompile_archive_${avm_name}_beams} ${CMAKE_CURRENT_BINARY_DIR}/beams/${jit_target_arch}/${module_name}.beam)
+        endforeach()
 
             if(AVM_RELEASE)
                 set(INCLUDE_LINES "")
@@ -104,14 +106,15 @@ macro(pack_precompiled_archive avm_name)
                 COMMAND ${CMAKE_BINARY_DIR}/tools/packbeam/PackBEAM -a ${INCLUDE_LINES} ${avm_name}-${jit_target_arch}.avm ${pack_precompile_archive_${avm_name}_beams}
                 COMMENT "Packing archive ${avm_name}-${jit_target_arch}.avm"
                 VERBATIM
-            )
-            add_custom_target(
-                ${avm_name}_${jit_target_arch} ALL
-                DEPENDS ${avm_name}-${jit_target_arch}.avm
-            )
+        )
+        add_custom_target(
+            ${avm_name}_${jit_target_arch} ALL
+            DEPENDS ${avm_name}-${jit_target_arch}.avm
+        )
+        if(NOT AVM_DISABLE_JIT)
             add_dependencies(${avm_name} ${avm_name}_${jit_target_arch})
+        endif()
         endforeach()
-    endif()
 endmacro()
 
 macro(pack_lib avm_name)
