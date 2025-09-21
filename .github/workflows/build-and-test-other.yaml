@@ -216,6 +216,7 @@ jobs:
         cp -r ../build_tests/libs/* libs/ &&
         touch tests/erlang_tests/code_load/code_load_pack.avm &&
         touch tests/erlang_tests/code_load/code_load_pack_data.hrl &&
+        ([ -f libs/jit/src/jit.avm ] && touch libs/jit/src/jit.avm || echo "JIT archive not found") &&
         echo "=== File timestamp diagnostics ===" &&
         (ls -la libs/jit/src/beams/*.beam 2>/dev/null | head -5 || echo "No JIT .beam files found") &&
         (ls -la tests/erlang_tests/code_load/beams/*.beam 2>/dev/null | head -5 || echo "No test .beam files found") &&
@@ -223,6 +224,9 @@ jobs:
         echo "=== Make diagnostics ===" &&
         (command -v erlc && echo "erlc found" || echo "erlc not found") &&
         (command -v escript && echo "escript found" || echo "escript not found") &&
+        echo "CMAKE_SYSTEM_PROCESSOR: $CMAKE_SYSTEM_PROCESSOR" &&
+        echo "AVM_JIT_TARGET_ARCH from cmake cache:" &&
+        (grep AVM_JIT_TARGET_ARCH CMakeCache.txt || echo "AVM_JIT_TARGET_ARCH not found in cache") &&
         echo "Make dry-run for test-erlang (first 15 lines):" &&
         (make -n test-erlang 2>&1 | head -15 || true) &&
         echo "Is test-erlang up to date?" &&
