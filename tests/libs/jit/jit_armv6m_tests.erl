@@ -1067,6 +1067,94 @@ if_block_test_() ->
                     >>,
                     ?assertEqual(dump_to_bin(Dump), Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {100, '<', RegA},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   2:	69c6      	ldr	r6, [r0, #28]\n"
+                        "   4:	2f64      	cmp	r7, #100	; 0x64\n"
+                        "   6:	dd00      	ble.n	0xa\n"
+                        "   8:	3602      	adds	r6, #2"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {100, '<', {free, RegA}},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   2:	69c6      	ldr	r6, [r0, #28]\n"
+                        "   4:	2f64      	cmp	r7, #100	; 0x64\n"
+                        "   6:	dd00      	ble.n	0xa\n"
+                        "   8:	3602      	adds	r6, #2"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    ?assertEqual([RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {1024, '<', RegA},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    State2 = ?BACKEND:jump_to_offset(State1, 16#100),
+                    Stream = ?BACKEND:stream(State2),
+                    Dump = <<
+                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   2:	69c6      	ldr	r6, [r0, #28]\n"
+                        "   4:	4d02      	ldr	r5, [pc, #8]	; (0x10)\n"
+                        "   6:	dd01      	ble.n	0xc\n"
+                        "   8:	ffff      	; to be rewritten\n"
+                        "   a:	3602      	adds	r6, #2\n"
+                        "   c:	e078      	b.n	0x100\n"
+                        "   e:	0000      	movs	r0, r0\n"
+                        "  10:	0400      	lsls	r0, r0, #16\n"
+                        "  12:	0000      	movs	r0, r0"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {1024, '<', {free, RegA}},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    State2 = ?BACKEND:jump_to_offset(State1, 16#100),
+                    Stream = ?BACKEND:stream(State2),
+                    Dump = <<
+                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   2:	69c6      	ldr	r6, [r0, #28]\n"
+                        "   4:	4d02      	ldr	r5, [pc, #8]	; (0x10)\n"
+                        "   6:	dd01      	ble.n	0xc\n"
+                        "   8:	ffff      	; to be rewritten\n"
+                        "   a:	3602      	adds	r6, #2\n"
+                        "   c:	e078      	b.n	0x100\n"
+                        "   e:	0000      	movs	r0, r0\n"
+                        "  10:	0400      	lsls	r0, r0, #16\n"
+                        "  12:	0000      	movs	r0, r0"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end)
             ]
         end}.
@@ -2724,6 +2812,34 @@ move_array_element_test_() ->
                         "   2:	68be      	ldr	r6, [r7, #8]\n"
                         "   4:	62c6      	str	r6, [r0, #44]	; 0x2c"
                     >>)
+                end),
+                %% move_array_element: reg[32] to x_reg (large offset, index 32, offset 128)
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 32, {x_reg, 0}, <<
+                        "   0:	2704      	movs	r7, #4\n"
+                        "   2:	441f      	add	r7, r3\n"
+                        "   4:	6ffe      	ldr	r6, [r7, #124]	; 0x7c\n"
+                        "   6:	6186      	str	r6, [r0, #24]"
+                    >>)
+                end),
+                %% move_array_element: reg[32] to ptr (large offset)
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 32, {ptr, r5}, <<
+                        "   0:	2704      	movs	r7, #4\n"
+                        "   2:	441f      	add	r7, r3\n"
+                        "   4:	6fff      	ldr	r7, [r7, #124]	; 0x7c\n"
+                        "   6:	602f      	str	r7, [r5, #0]"
+                    >>)
+                end),
+                %% move_array_element: reg[32] to y_reg (large offset)
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 32, {y_reg, 2}, <<
+                        "   0:	2604      	movs	r6, #4\n"
+                        "   2:	441e      	add	r6, r3\n"
+                        "   4:	6ff6      	ldr	r6, [r6, #124]	; 0x7c\n"
+                        "   6:	6947      	ldr	r7, [r0, #20]\n"
+                        "   8:	60be      	str	r6, [r7, #8]"
+                    >>)
                 end)
             ]
         end}.
@@ -2741,6 +2857,19 @@ get_array_element_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
                         "   0:	6927      	ldr	r7, [r4, #16]"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    ?assertEqual(r7, Reg)
+                end),
+                %% get_array_element: reg[x] with large offset (index 32, offset 128)
+                %% For offset 128, we use ldr with max offset 124 + temp register for remainder (4)
+                ?_test(begin
+                    {State1, Reg} = ?BACKEND:get_array_element(State0, r4, 32),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	2604      	movs	r6, #4\n"
+                        "   2:	4426      	add	r6, r4\n"
+                        "   4:	6ff7      	ldr	r7, [r6, #124]	; 0x7c"
                     >>,
                     ?assertEqual(dump_to_bin(Dump), Stream),
                     ?assertEqual(r7, Reg)
@@ -2762,6 +2891,18 @@ move_to_array_element_test_() ->
                     Dump = <<
                         "   0:	6987      	ldr	r7, [r0, #24]\n"
                         "   2:	609f      	str	r7, [r3, #8]"
+                    >>,
+                    ?assertEqual(dump_to_bin(Dump), Stream)
+                end),
+                %% move_to_array_element/4: x_reg to reg[x], larger immediate offset
+                ?_test(begin
+                    State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, 32),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   2:	2604      	movs	r6, #4\n"
+                        "   4:	441e      	add	r6, r3\n"
+                        "   6:	67f7      	str	r7, [r6, #124]	; 0x7c"
                     >>,
                     ?assertEqual(dump_to_bin(Dump), Stream)
                 end),
