@@ -449,6 +449,8 @@ update_branches(
 
                         % Set thumb bit for bx instruction - target address must be odd for Thumb mode
                         % So we substract 1 less
+                        % ldr requires align PC
+                        % add rx, pc doesn't and reads pc+4 whatever the alignment
 
                         case {TempReg, Size} of
                             {?IP_REG, 18} ->
@@ -457,18 +459,12 @@ update_branches(
                                 I1 = jit_armv6m_asm:push([r0]),
                                 % Aligned
                                 I2 = jit_armv6m_asm:ldr(r0, {pc, 8}),
-                                % Unaligned
                                 I3 = jit_armv6m_asm:mov(?IP_REG, r0),
-                                % Aligned
                                 I4 = jit_armv6m_asm:pop([r0]),
-                                % Unaligned, PC value is at I6
                                 I5 = jit_armv6m_asm:add(?IP_REG, pc),
-                                % Aligned
                                 I6 = jit_armv6m_asm:bx(?IP_REG),
-                                % Unaligned
                                 I7 = jit_armv6m_asm:nop(),
-                                RelativeOffset = LabelOffset - Offset - 9,
-                                % Aligned
+                                RelativeOffset = LabelOffset - Offset - 11,
                                 I8 = <<RelativeOffset:32/little>>,
                                 <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary,
                                     I7/binary, I8/binary>>;
@@ -478,16 +474,11 @@ update_branches(
                                 I1 = jit_armv6m_asm:push([r0]),
                                 % Unaligned
                                 I2 = jit_armv6m_asm:ldr(r0, {pc, 8}),
-                                % Aligned
                                 I3 = jit_armv6m_asm:mov(?IP_REG, r0),
-                                % Unaligned
                                 I4 = jit_armv6m_asm:pop([r0]),
-                                % Aligned, PC value is at I7
                                 I5 = jit_armv6m_asm:add(?IP_REG, pc),
-                                % Unaligned
                                 I6 = jit_armv6m_asm:bx(?IP_REG),
                                 RelativeOffset = LabelOffset - Offset - 11,
-                                % Aligned
                                 I7 = <<RelativeOffset:32/little>>,
                                 <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary,
                                     I7/binary>>;
@@ -495,26 +486,19 @@ update_branches(
                                 % 12-byte sequence with alignment
                                 % Aligned
                                 I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-                                % Unaligned, PC value is at I3
                                 I2 = jit_armv6m_asm:add(TempReg, pc),
-                                % Aligned
                                 I3 = jit_armv6m_asm:bx(TempReg),
-                                % Unaligned
                                 I4 = jit_armv6m_asm:nop(),
-                                RelativeOffset = LabelOffset - Offset - 3,
-                                % Aligned
+                                RelativeOffset = LabelOffset - Offset - 5,
                                 I5 = <<RelativeOffset:32/little>>,
                                 <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>;
                             {_, 10} ->
                                 % 10-byte sequence without alignment
                                 % Unaligned
                                 I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-                                % Aligned, PC value is at I4
                                 I2 = jit_armv6m_asm:add(TempReg, pc),
-                                % Unaligned
                                 I3 = jit_armv6m_asm:bx(TempReg),
                                 RelativeOffset = LabelOffset - Offset - 5,
-                                % Aligned
                                 I4 = <<RelativeOffset:32/little>>,
                                 <<I1/binary, I2/binary, I3/binary, I4/binary>>
                         end
@@ -836,26 +820,19 @@ branch_to_label_code(
         Offset rem 4 =:= 0 ->
             % Aligned
             I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-            % Unaligned
-            % PC value is at I3
             I2 = jit_armv6m_asm:add(TempReg, pc),
-            % Aligned
             I3 = jit_armv6m_asm:bx(TempReg),
-            % Unaligned
+            % Unaligned : need nop
             I4 = jit_armv6m_asm:nop(),
-            LiteralValue = LabelOffset - Offset - 3,
-            % Aligned
+            LiteralValue = LabelOffset - Offset - 5,
             I5 = <<LiteralValue:32/little>>,
             CodeBlock = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>;
         true ->
             % Unaligned
             I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-            % Aligned, PC value is at I4
             I2 = jit_armv6m_asm:add(TempReg, pc),
-            % Unaligned
             I3 = jit_armv6m_asm:bx(TempReg),
             LiteralValue = LabelOffset - Offset - 5,
-            % Aligned
             I4 = <<LiteralValue:32/little>>,
             CodeBlock = <<I1/binary, I2/binary, I3/binary, I4/binary>>
     end,
@@ -868,9 +845,7 @@ branch_to_label_code(
             Offset rem 4 =:= 0 ->
                 % Aligned
                 I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-                % Unaligned
                 I2 = jit_armv6m_asm:add(TempReg, pc),
-                % Aligned
                 I3 = jit_armv6m_asm:bx(TempReg),
                 % Unaligned : need nop
                 I4 = jit_armv6m_asm:nop(),
@@ -881,11 +856,8 @@ branch_to_label_code(
             true ->
                 % Unaligned
                 I1 = jit_armv6m_asm:ldr(TempReg, {pc, 4}),
-                % Aligned
                 I2 = jit_armv6m_asm:add(TempReg, pc),
-                % Unaligned
                 I3 = jit_armv6m_asm:bx(TempReg),
-                % Aligned
                 % Placeholder offset
                 I4 = <<0:32/little>>,
                 Seq = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
@@ -905,17 +877,12 @@ branch_to_label_code(
                 I1 = jit_armv6m_asm:push([r0]),
                 % Aligned
                 I2 = jit_armv6m_asm:ldr(r0, {pc, 8}),
-                % Unaligned
                 I3 = jit_armv6m_asm:mov(?IP_REG, r0),
-                % Aligned
                 I4 = jit_armv6m_asm:pop([r0]),
-                % Unaligned
                 I5 = jit_armv6m_asm:add(?IP_REG, pc),
-                % Aligned
                 I6 = jit_armv6m_asm:bx(?IP_REG),
-                % Unaligned
+                % Unaligned : need nop
                 I7 = jit_armv6m_asm:nop(),
-                % Aligned
                 % Placeholder offset
                 I8 = <<0:32/little>>,
                 Seq =
@@ -927,15 +894,10 @@ branch_to_label_code(
                 I1 = jit_armv6m_asm:push([r0]),
                 % Unaligned
                 I2 = jit_armv6m_asm:ldr(r0, {pc, 8}),
-                % Aligned
                 I3 = jit_armv6m_asm:mov(?IP_REG, r0),
-                % Unaligned
                 I4 = jit_armv6m_asm:pop([r0]),
-                % Aligned
                 I5 = jit_armv6m_asm:add(?IP_REG, pc),
-                % Unaligned
                 I6 = jit_armv6m_asm:bx(?IP_REG),
-                % Aligned
                 % Placeholder offset
                 I7 = <<0:32/little>>,
                 Seq =
