@@ -38,6 +38,11 @@ export_test_module_data() ->
 
 export_test_module_data() ->
     ?EXPORT_TEST_MODULE_DATA_x86_64.
+-elif(?AVM_JIT_TARGET_ARCH == armv6m).
+-include("code_load/export_test_module_data_armv6m.hrl").
+
+export_test_module_data() ->
+    ?EXPORT_TEST_MODULE_DATA_armv6m.
 -endif.
 -endif.
 

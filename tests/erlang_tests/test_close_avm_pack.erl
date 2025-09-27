@@ -38,11 +38,11 @@ load_pack_data() ->
 
 load_pack_data() ->
     ?CODE_LOAD_PACK_DATA_x86_64.
--else.
--include("code_load/code_load_pack_data_x86_64.hrl").
+-elif(?AVM_JIT_TARGET_ARCH == armv6m).
+-include("code_load/code_load_pack_data_armv6m.hrl").
 
 load_pack_data() ->
-    ?CODE_LOAD_PACK_DATA_x86_64.
+    ?CODE_LOAD_PACK_DATA_armv6m.
 -endif.
 -endif.
 
