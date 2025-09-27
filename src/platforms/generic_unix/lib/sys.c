@@ -828,6 +828,9 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t si
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(native_code_mmap, size);
     return (ModuleNativeEntryPoint) (native_code_mmap + offset);
+#elif JIT_ARCH_TARGET == JIT_ARCH_ARMV6M
+    UNUSED(size);
+    return (ModuleNativeEntryPoint) (native_code + offset + 1);
 #else
     UNUSED(size);
     return (ModuleNativeEntryPoint) (native_code + offset);
