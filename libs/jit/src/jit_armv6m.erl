@@ -1144,12 +1144,12 @@ if_block_cond(
     % Compare two free registers: cmp RegA, RegB; beq <target>
     I1 = jit_armv6m_asm:cmp(RegA, RegB),
     Stream1 = StreamModule:append(Stream0, I1),
-    I2 = jit_armv6m_asm:bcc(eq, 0),
+    I2 = jit_armv6m_asm:bcc(ne, 0),
     Stream2 = StreamModule:append(Stream1, I2),
     State1 = State0#state{stream = Stream2},
     State2 = if_block_free_reg({free, RegA}, State1),
     State3 = if_block_free_reg({free, RegB}, State2),
-    {State3, eq, byte_size(I1)};
+    {State3, ne, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = [Temp | _]} = State0,
     {RegOrTuple, '==', Val}
