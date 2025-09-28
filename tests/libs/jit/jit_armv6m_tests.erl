@@ -3415,10 +3415,10 @@ jump_to_continuation_test() ->
     % Based on actual generated output
     Dump =
         <<
-            "   0:	a700      	adr	r7, 0x0\n"
-            "   2:	2704      	movs	r7, #4\n"
-            "   4:	427f      	negs	r7, r7\n"
-            "   6:	19c0      	adds	r0, r0, r7\n"
+            "   0:	a700      	add	r7, pc, #0	@ (adr r7, 0x4)\n"
+            "   2:	19c0      	adds	r0, r0, r7\n"
+            "   4:	2703      	movs	r7, #3\n"
+            "   6:	427f      	negs	r7, r7\n"
             "   8:	19c0      	adds	r0, r0, r7\n"
             "   a:	9f05      	ldr	r7, [sp, #20]\n"
             "   c:	9005      	str	r0, [sp, #20]\n"

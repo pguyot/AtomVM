@@ -772,16 +772,17 @@ jump_to_continuation(
     AdrOffset = StreamModule:offset(Stream0),
     % ADR Temp, +4 stores PC+4 in Temp
     I1 = jit_armv6m_asm:adr(Temp, 4),
-    Stream1 = StreamModule:append(Stream0, I1),
 
     % Add PC to OffsetReg: OffsetReg = OffsetReg + PC
     I2 = jit_armv6m_asm:adds(OffsetReg, OffsetReg, Temp),
 
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+
     % PC is aligned down to 4-byte boundary
     AdrPC = (AdrOffset + 4) band (bnot 3),
 
-    % Calculate what we need to add: BaseOffset - AdrPC
-    ImmediateValue = BaseOffset - AdrPC,
+    % Calculate what we need to add: BaseOffset - AdrPC + 1 for thumb bit
+    ImmediateValue = BaseOffset - AdrPC + 1,
 
     % Generate mov_immediate to load the calculated base offset into Temp
     State1 = mov_immediate(State0#state{stream = Stream1}, Temp, ImmediateValue),
@@ -800,7 +801,7 @@ jump_to_continuation(
     % This restores jit_state in r1 and branches to target via pc
     I7 = jit_armv6m_asm:pop([r1, r4, r5, r6, r7, pc]),
 
-    Code = <<I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary>>,
+    Code = <<I3/binary, I4/binary, I5/binary, I6/binary, I7/binary>>,
     Stream2 = StreamModule:append(State1#state.stream, Code),
     % Free all registers as this is a terminal instruction
     State1#state{stream = Stream2, available_regs = ?AVAILABLE_REGS, used_regs = []}.
