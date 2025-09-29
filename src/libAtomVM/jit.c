@@ -2013,7 +2013,7 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
     }
 
     new_phdr->p_filesz = code_size; // Size in file
-    new_phdr->p_memsz = code_size;  // Size in memory
+    new_phdr->p_memsz = code_size; // Size in memory
     new_phdr->p_align = 1;
 
     // Create section headers
