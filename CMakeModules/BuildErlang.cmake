@@ -81,6 +81,7 @@ macro(pack_precompiled_archive avm_name)
                 ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}.beam
                 ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}_asm.beam
             )
+            set(pack_precompile_archive_${avm_name}_beams)
 
             foreach(module_name IN LISTS ${PACK_ARCHIVE_MODULES} PACK_ARCHIVE_MODULES PACK_ARCHIVE_UNPARSED_ARGUMENTS)
                 add_custom_command(
