@@ -215,7 +215,6 @@ call_primitive_few_free_regs_test() ->
         "  24:	b002      	add	sp, #8\n"
         "  26:	bce7      	pop	{r0, r1, r2, r5, r6, r7}"
     >>,
-    file:write_file("call_primitive_few_free_regs.bin", Stream),
     ?assertEqual(dump_to_bin(Dump), Stream).
 
 call_ext_only_test() ->
