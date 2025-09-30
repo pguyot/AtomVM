@@ -25,7 +25,7 @@
 
 basic_dwarf_state_test() ->
     % Create a basic DWARF state
-    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024, fun(_) -> false end),
 
     % Add some test data
     State1 = jit_dwarf:opcode(State, ?OP_FUNC_INFO),
@@ -41,7 +41,7 @@ basic_dwarf_state_test() ->
 
 elf_generation_test() ->
     % Create state with some debug info
-    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024, fun(_) -> false end),
     % Some opcode
     State1 = jit_dwarf:opcode(State, <<"test_opcode/2">>),
     State2 = jit_dwarf:function(State1, test_func, 1),
@@ -93,7 +93,7 @@ elf_generation_test() ->
     end.
 
 section_header_test() ->
-    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_armv6m, test_module, jit_stream_binary, 1024, fun(_) -> false end),
     State1 = jit_dwarf:function(State, main, 0),
 
     case jit_dwarf:elf(State1, <<>>) of
@@ -119,7 +119,7 @@ section_header_test() ->
     end.
 
 string_table_test() ->
-    State = jit_dwarf:new(jit_armv6m, string_test, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_armv6m, string_test, jit_stream_binary, 1024, fun(_) -> false end),
 
     case jit_dwarf:elf(State, <<>>) of
         false ->
@@ -149,7 +149,7 @@ string_table_test() ->
 
 elf_with_text_test() ->
     % Test the new elf_with_text/2 function that creates complete ELF with .text section
-    State = jit_dwarf:new(jit_x86_64, test_module, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_x86_64, test_module, jit_stream_binary, 1024, fun(_) -> false end),
 
     % Some dummy x86_64 native code (mov rax, 1; ret)
     NativeCode = <<16#48, 16#c7, 16#c0, 16#01, 16#00, 16#00, 16#00, 16#c3>>,
@@ -181,7 +181,7 @@ elf_with_text_test() ->
 
 text_section_properties_test() ->
     % Test that the .text section has proper properties
-    State = jit_dwarf:new(jit_aarch64, test_module, jit_stream_binary, 1024),
+    State = jit_dwarf:new(jit_aarch64, test_module, jit_stream_binary, 1024, fun(_) -> false end),
 
     % AArch64 native code (mov x0, #42; ret)
     NativeCode = <<16#d2800540, 16#d65f03c0>>,
@@ -237,7 +237,7 @@ different_architectures_test() ->
 
     lists:foreach(
         fun(Backend) ->
-            State = jit_dwarf:new(Backend, test_module, jit_stream_binary, 1024),
+            State = jit_dwarf:new(Backend, test_module, jit_stream_binary, 1024, fun(_) -> false end),
             case jit_dwarf:elf(State, NativeCode) of
                 false ->
                     ok;
