@@ -213,7 +213,8 @@ line(
 %% Helper function to add line 1 at offset 0 for the module file if not already present
 maybe_add_initial_line(Lines, ModuleName, Filename) ->
     ExpectedBasename = <<(atom_to_binary(ModuleName, utf8))/binary, ".erl">>,
-    case filename:basename(Filename) =:= ExpectedBasename of
+    Basename = lists:last(binary:split(Filename, <<"/">>, [global])),
+    case Basename =:= ExpectedBasename of
         true ->
             % This is the module file, check if we already have an entry at offset 0
             case lists:any(fun({Offset, _, _}) -> Offset =:= 0 end, Lines) of
