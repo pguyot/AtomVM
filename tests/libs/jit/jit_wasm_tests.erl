@@ -755,3 +755,119 @@ return_if_not_equal_to_ctx_test() ->
     Stream = ?BACKEND:stream(State2),
     % Should contain comparison, if, return, end
     ?assert(byte_size(Stream) > 5).
+
+set_continuation_to_label_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Set continuation to label 5 (function index)
+    State1 = ?BACKEND:set_continuation_to_label(State0, 5),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit: local.get 1 (jit_state), i32.const 5, i32.store offset=4
+    Expected = <<
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % i32.const 5
+        16#41,
+        16#05,
+        % i32.store align=2 offset=4
+        16#36,
+        16#02,
+        16#04
+    >>,
+    ?assertEqual(Expected, Stream).
+
+jump_to_continuation_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, DummyLocal} = ?BACKEND:move_to_native_register(State0, 0),
+    % Jump to stored continuation
+    State2 = ?BACKEND:jump_to_continuation(State1, DummyLocal),
+    Stream = ?BACKEND:stream(State2),
+    % Should emit: local.get 0, local.get 1, local.get 2, local.get 1, i32.load offset=4, call_indirect 0
+    Expected = <<
+        % Move to register first
+
+        % i32.const 0
+        16#41,
+        16#00,
+        % local.set 3
+        16#21,
+        16#03,
+        % Jump to continuation
+
+        % local.get 0 (ctx)
+        16#20,
+        16#00,
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % local.get 2 (native_interface)
+        16#20,
+        16#02,
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % i32.load align=2 offset=4
+        16#28,
+        16#02,
+        16#04,
+        % call_indirect type=0 table=0
+        16#11,
+        16#00,
+        16#00
+    >>,
+    ?assertEqual(Expected, Stream).
+
+jump_to_offset_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Jump to function at byte offset 12 in label table
+    State1 = ?BACKEND:jump_to_offset(State0, 12),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit: local.get 0, local.get 1, local.get 2, local.get 2, i32.const 12, i32.add, i32.load, call_indirect
+    Expected = <<
+        % local.get 0 (ctx)
+        16#20,
+        16#00,
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % local.get 2 (native_interface)
+        16#20,
+        16#02,
+        % local.get 2 (for address calc)
+        16#20,
+        16#02,
+        % i32.const 12
+        16#41,
+        16#0C,
+        % i32.add
+        16#6A,
+        % i32.load align=2 offset=0
+        16#28,
+        16#02,
+        16#00,
+        % call_indirect type=0 table=0
+        16#11,
+        16#00,
+        16#00
+    >>,
+    ?assertEqual(Expected, Stream).
+
+set_continuation_to_offset_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Set continuation to offset (placeholder implementation stores 0)
+    State1 = ?BACKEND:set_continuation_to_offset(State0),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit: local.get 1, i32.const 0, i32.store offset=4
+    Expected = <<
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % i32.const 0 (placeholder)
+        16#41,
+        16#00,
+        % i32.store align=2 offset=4
+        16#36,
+        16#02,
+        16#04
+    >>,
+    ?assertEqual(Expected, Stream).

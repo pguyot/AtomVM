@@ -441,17 +441,54 @@ jump_to_label(
 jump_to_continuation(
     #state{stream_module = StreamModule, stream = Stream0} = State, {local, _Idx}
 ) ->
-    % For WASM, continuation-based jumps are complex
-    % Use unreachable as placeholder for now
-    Code = jit_wasm_asm:unreachable(),
+    % Jump to continuation stored in jit_state->continuation
+    % Load continuation and call indirectly (same pattern as primitives)
+    Code = <<
+        % Standard arguments
+
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        % native_interface
+        (jit_wasm_asm:local_get(2))/binary,
+        % Load continuation from jit_state->continuation (offset 4)
+
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        (jit_wasm_asm:i32_load(2, ?JITSTATE_CONTINUATION_OFFSET))/binary,
+        % Call indirectly (type 0 = (i32,i32,i32)->i32)
+        (jit_wasm_asm:call_indirect(0))/binary
+    >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
 -spec jump_to_offset(state(), non_neg_integer()) -> state().
-jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, _TargetOffset) ->
-    % WASM doesn't support arbitrary jumps to offsets
-    % Use unreachable as placeholder
-    Code = jit_wasm_asm:unreachable(),
+jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
+    % Jump to function at a byte offset in the label table
+    % This combines loading the function pointer and calling it
+    Code = <<
+        % Standard arguments
+
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        % native_interface
+        (jit_wasm_asm:local_get(2))/binary,
+        % Load function pointer from native_interface (label table) + offset
+
+        % native_interface base
+        (jit_wasm_asm:local_get(2))/binary,
+        % Byte offset
+        (jit_wasm_asm:i32_const(TargetOffset))/binary,
+        % Calculate address
+        (jit_wasm_asm:i32_add())/binary,
+        % Load function pointer
+        (jit_wasm_asm:i32_load(2, 0))/binary,
+        % Call indirectly
+        (jit_wasm_asm:call_indirect(0))/binary
+    >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
@@ -925,26 +962,44 @@ increment_sp(State, _Amount) ->
     State.
 
 -spec set_continuation_to_label(state(), integer() | reference()) -> state().
+set_continuation_to_label(
+    #state{stream_module = StreamModule, stream = Stream0} = State, Label
+) when is_integer(Label) ->
+    % Set continuation to a label (function index in WASM)
+    % Store label index to jit_state->continuation (offset 4)
+    % In WASM, labels are function indices that can be stored as i32
+    Code = <<
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        % Label as function index
+        (jit_wasm_asm:i32_const(Label))/binary,
+        (jit_wasm_asm:i32_store(2, ?JITSTATE_CONTINUATION_OFFSET))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
 set_continuation_to_label(State, _Label) ->
-    % Set continuation to label - complex operation requiring label resolution
-    % Placeholder: no-op for now
+    % Reference-based labels need runtime resolution
+    % For now, placeholder (no-op)
     State.
 
--spec set_continuation_to_offset(non_neg_integer()) -> state().
-set_continuation_to_offset(_Offset) ->
-    % Set continuation to offset - returns a new state
-    % Placeholder: return minimal state
-    #state{
-        stream_module = jit_stream_binary,
-        stream = jit_stream_binary:new(0),
-        offset = 0,
-        branches = [],
-        available_locals = [{local, N} || N <- lists:seq(3, 8)],
-        used_locals = [],
-        labels = [],
-        variant = ?JIT_VARIANT_PIC,
-        control_stack = []
-    }.
+-spec set_continuation_to_offset(state()) -> state().
+set_continuation_to_offset(
+    #state{stream_module = StreamModule, stream = Stream0} = State
+) ->
+    % Set continuation to offset stored in a native local
+    % The offset is typically computed from module base + label offset
+    % For WASM, this loads a function pointer from a computed address and stores to continuation
+    % This is a placeholder - needs a local with the offset
+    % Store offset 0 for now (minimal implementation)
+    Code = <<
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        % Placeholder: offset 0
+        (jit_wasm_asm:i32_const(0))/binary,
+        (jit_wasm_asm:i32_store(2, ?JITSTATE_CONTINUATION_OFFSET))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec continuation_entry_point(state()) -> state().
 continuation_entry_point(State) ->
