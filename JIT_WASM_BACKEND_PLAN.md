@@ -64,7 +64,7 @@ cd $PROJECT_ROOT/build && erl -pa tests/libs/jit/beams/ libs/jit/src/beams/ libs
 # 9. Run all WASM tests
 cd $PROJECT_ROOT/build && erl -pa tests/libs/jit/beams/ libs/jit/src/beams/ libs/etest/src/beams -noshell -s jit_wasm_asm_tests test -s init stop -noshell | tail -n 5
 
-# 10. Checkpoint commit (see below)
+# 10. Checkpoint commit and push (see below)
 ```
 
 **Why:** Small steps reduce debugging complexity and make it easier to identify what broke when tests fail.
@@ -130,7 +130,7 @@ erl -pa tests/libs/jit/beams/ libs/jit/src/beams/ libs/etest/src/beams -noshell 
 
 #### 4. Checkpoint Commits
 
-**After each successful step**, create a checkpoint commit:
+**After each successful step**, create a checkpoint commit and push:
 
 ```bash
 # Stage all changes
@@ -144,8 +144,12 @@ git commit -m "wasm: add i32_add instruction
 - Verified with wasm-as/wasm-dis
 - All tests passing"
 
-# Optionally tag major milestones
+# Push to remote immediately
+git push
+
+# Optionally tag major milestones and push tags
 git tag wasm-assembler-complete
+git push --tags
 ```
 
 **Commit Message Format:**
@@ -168,11 +172,13 @@ git tag wasm-assembler-complete
 - Clear commit history helps reviewers understand the evolution
 - Makes bisecting easier if bugs are found later
 - Documents what was tested at each step
+- **Pushing immediately** backs up work to remote and enables collaboration
 
-**Commit Frequency:**
+**Commit and Push Frequency:**
 - **Minimum:** After each completed feature (e.g., one instruction, one backend operation)
-- **Maximum:** Don't let more than 2-3 hours of work accumulate without a commit
+- **Maximum:** Don't let more than 2-3 hours of work accumulate without a commit+push
 - **Sweet spot:** Every 30-60 minutes when actively developing
+- **Always push** after committing to ensure work is backed up
 
 #### 5. Development Workflow Summary
 
@@ -205,13 +211,14 @@ erl -pa tests/libs/jit/beams/ libs/jit/src/beams/ libs/etest/src/beams -noshell 
 # 8. Run all tests to check for regressions
 erl -pa tests/libs/jit/beams/ libs/jit/src/beams/ libs/etest/src/beams -noshell -s jit_wasm_asm_tests test -s init stop -noshell | tail -n 5
 
-# 9. Checkpoint commit
+# 9. Checkpoint commit and push
 git add libs/jit/src/jit_wasm_asm.erl tests/libs/jit/jit_wasm_asm_tests.erl
 git commit -m "wasm: add <feature>
 
 - Implementation details
 - Test coverage
 - All tests passing"
+git push
 
 # 10. Repeat for next feature
 ```
@@ -224,19 +231,32 @@ git commit -m "wasm: add <feature>
 # 2. Debug the issue
 # 3. Fix the code
 # 4. Re-run tests until they pass
-# 5. Only then commit
+# 5. Only then commit and push
 
-# If you need to backtrack:
+# If you need to backtrack (before pushing):
 git status  # See what changed
 git diff    # Review changes
 git checkout -- <file>  # Discard changes to specific file
 git reset --hard HEAD   # Nuclear option: discard all changes (use carefully!)
 git reset --soft HEAD~1 # Undo last commit but keep changes
+
+# If you already pushed and need to fix:
+# Option 1: Create a new commit that fixes the issue
+git add <fixed-files>
+git commit -m "wasm: fix <issue>"
+git push
+
+# Option 2: If no one else pulled, force push (use with extreme caution!)
+git reset --soft HEAD~1  # Undo commit but keep changes
+# Fix the issue
+git add <files>
+git commit -m "wasm: corrected implementation"
+git push --force-with-lease  # Safer than --force
 ```
 
-#### 6. Quality Checklist (Before Committing)
+#### 6. Quality Checklist (Before Committing and Pushing)
 
-Every commit should meet these criteria:
+Every commit should meet these criteria before pushing:
 
 - [ ] All modified `.erl` files formatted with `erlfmt -w`
 - [ ] Code compiles without warnings
@@ -245,6 +265,7 @@ Every commit should meet these criteria:
 - [ ] New tests pass
 - [ ] Commit message is clear and descriptive
 - [ ] Changes are logically grouped (don't mix unrelated changes)
+- [ ] Ready to push to remote (work is in stable state)
 
 #### 7. Phase-Specific Testing Strategy
 
