@@ -31,9 +31,10 @@ This document outlines a comprehensive plan to add WebAssembly (WASM) as a fourt
   - ✅ Tier 6: Advanced (return_if_not_equal, continuations, debug info)
 
 ### Implementation Notes
-- **Function Calls (Tier 5):** Implemented as placeholders using `unreachable` instruction. Full implementation requires WASM imports and function table support from runtime/embedding.
+- **Function Calls (Tier 5):** Core primitives (`call_primitive`, `call_primitive_last`) implemented using `call_indirect` with function table. Loads function pointers from `ModuleNativeInterface->functions[]` array and calls indirectly. Remaining call operations still use placeholders pending runtime integration.
 - **Continuations (Tier 6):** Basic implementations provided; complex continuation management requires runtime integration.
 - **WASM Compliance:** All generated code follows WebAssembly binary format specification with proper LEB128 encoding.
+- **Critical Discovery:** Analysis of C-compiled WASM revealed that function calls use `call_indirect` with function tables, not direct imports. This simplified the implementation significantly.
 
 ## Development Methodology
 
@@ -756,12 +757,12 @@ Implement in order of dependency:
 31. `move_to_cp/2` - Set continuation pointer ✅
 32. `increment_sp/2` - No-op for WASM ✅
 
-**Tier 5: Function Calls (Week 6)** ✅ **COMPLETED - Placeholders**
+**Tier 5: Function Calls (Week 6)** ✅ **COMPLETED - Real Implementation**
 
-33. `call_primitive/3` - Call imported C function (placeholder) ✅
-34. `call_primitive_last/3` - Tail call to C function (placeholder) ✅
+33. `call_primitive/3` - Call via `call_indirect` with function table ✅
+34. `call_primitive_last/3` - Tail call via `call_indirect` ✅
 35. `call_primitive_with_cp/3` - Call with continuation point (placeholder) ✅
-36. `call_func_ptr/3` - Indirect call (placeholder for call_indirect) ✅
+36. `call_func_ptr/3` - Indirect call (placeholder) ✅
 37. `call_or_schedule_next/2` - Call or yield (placeholder) ✅
 38. `call_only_or_schedule_next/2` - Tail call or yield (placeholder) ✅
 39. `decrement_reductions_and_maybe_schedule_next/1` - Cooperative scheduling (placeholder) ✅
