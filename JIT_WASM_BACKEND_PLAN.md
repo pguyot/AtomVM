@@ -715,15 +715,15 @@ Implement in order of dependency:
 24. `shift_left/3` - i32.shl ✅
 25. `shift_right/3` - i32.shr_u ✅
 
-**Tier 4: Memory Access (Week 5)**
+**Tier 4: Memory Access (Week 5)** ✅ **COMPLETED**
 
-26. `get_array_element/3` - Load from array (i32.load)
-27. `move_array_element/4` - Load array element to local
-28. `move_to_array_element/4` - Store local to array
-29. `move_to_array_element/5` - Store with offset
-30. `set_bs/2` - Set binary state pointer
-31. `move_to_cp/2` - Set continuation pointer
-32. `increment_sp/2` - Adjust stack pointer
+26. `get_array_element/3` - Load from array (i32.load) ✅
+27. `move_array_element/4` - Load array element to local ✅
+28. `move_to_array_element/4` - Store local to array ✅
+29. `move_to_array_element/5` - Store with computed index ✅
+30. `set_bs/2` - Set binary state pointer ✅
+31. `move_to_cp/2` - Set continuation pointer ✅
+32. `increment_sp/2` - No-op for WASM ✅
 
 **Tier 5: Function Calls (Week 6)**
 
@@ -820,11 +820,11 @@ WASM has linear memory starting at 0.
    - shift_left, shift_right ✅
    - and_, or_ ✅
 
-3. **Memory Access**
-   - get_array_element
-   - move_array_element
-   - move_to_array_element
-   - set_bs, move_to_cp
+3. **Memory Access** ✅
+   - get_array_element ✅
+   - move_array_element ✅
+   - move_to_array_element ✅
+   - set_bs, move_to_cp ✅
 
 4. **Control Flow** ✅
    - add_label ✅
