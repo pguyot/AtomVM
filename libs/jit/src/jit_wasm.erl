@@ -295,7 +295,12 @@ assert_all_native_free(#state{used_locals = Used}) ->
 
 -spec jump_table(state(), non_neg_integer()) -> {state(), wasm_local()}.
 jump_table(
-    #state{stream_module = StreamModule, stream = Stream0, available_locals = [Local | AvailT], used_locals = Used} =
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } =
         State,
     Size
 ) ->
@@ -325,12 +330,19 @@ call_primitive(
     % 3. Call indirectly through function table
     Code = <<
         % Arguments for the call: ctx, jit_state, native_interface
-        (jit_wasm_asm:local_get(0))/binary,  % ctx (local 0)
-        (jit_wasm_asm:local_get(1))/binary,  % jit_state (local 1)
-        (jit_wasm_asm:local_get(2))/binary,  % native_interface (local 2)
+
+        % ctx (local 0)
+        (jit_wasm_asm:local_get(0))/binary,
+        % jit_state (local 1)
+        (jit_wasm_asm:local_get(1))/binary,
+        % native_interface (local 2)
+        (jit_wasm_asm:local_get(2))/binary,
         % Load function pointer from native_interface->functions[PrimIndex]
-        (jit_wasm_asm:local_get(2))/binary,  % native_interface base address
-        (jit_wasm_asm:i32_load(2, PrimIndex * 4))/binary,  % Load functions[PrimIndex]
+
+        % native_interface base address
+        (jit_wasm_asm:local_get(2))/binary,
+        % Load functions[PrimIndex]
+        (jit_wasm_asm:i32_load(2, PrimIndex * 4))/binary,
         % Call indirectly (type 0 = (i32,i32,i32)->i32)
         (jit_wasm_asm:call_indirect(0))/binary
     >>,
@@ -340,11 +352,31 @@ call_primitive(
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_last(
     #state{stream_module = StreamModule, stream = Stream0} = State,
-    _Index,
+    PrimIndex,
     _Args
 ) ->
-    % Tail call primitive - placeholder using unreachable
-    Code = jit_wasm_asm:unreachable(),
+    % Tail call primitive using call_indirect followed by return
+    % WASM doesn't have native tail calls yet, so we call and return
+    Code = <<
+        % Arguments for the call: ctx, jit_state, native_interface
+
+        % ctx (local 0)
+        (jit_wasm_asm:local_get(0))/binary,
+        % jit_state (local 1)
+        (jit_wasm_asm:local_get(1))/binary,
+        % native_interface (local 2)
+        (jit_wasm_asm:local_get(2))/binary,
+        % Load function pointer from native_interface->functions[PrimIndex]
+
+        % native_interface base address
+        (jit_wasm_asm:local_get(2))/binary,
+        % Load functions[PrimIndex]
+        (jit_wasm_asm:i32_load(2, PrimIndex * 4))/binary,
+        % Call indirectly (type 0 = (i32,i32,i32)->i32)
+        (jit_wasm_asm:call_indirect(0))/binary,
+        % Return the result immediately (tail call)
+        (jit_wasm_asm:return_())/binary
+    >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
@@ -368,10 +400,12 @@ return_if_not_equal_to_ctx(
     % Compare local with ctx (local 0), if not equal, return
     Code = <<
         (jit_wasm_asm:local_get(LocalIdx))/binary,
-        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
         (jit_wasm_asm:i32_ne())/binary,
         (jit_wasm_asm:if_(empty))/binary,
-        (jit_wasm_asm:local_get(LocalIdx))/binary,  % return the local value
+        % return the local value
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
         (jit_wasm_asm:return_())/binary,
         (jit_wasm_asm:end_())/binary
     >>,
@@ -490,7 +524,9 @@ if_block(
     IfCode = jit_wasm_asm:if_(empty),
     Stream1 = StreamModule:append(Stream0, <<CondCode/binary, IfCode/binary>>),
     Offset1 = StreamModule:offset(Stream1),
-    State2 = State1#state{stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]},
+    State2 = State1#state{
+        stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]
+    },
     % Execute then block
     State3 = ThenFun(State2),
     % Emit end instruction
@@ -515,7 +551,9 @@ if_else_block(
     IfCode = jit_wasm_asm:if_(empty),
     Stream1 = StreamModule:append(Stream0, <<CondCode/binary, IfCode/binary>>),
     Offset1 = StreamModule:offset(Stream1),
-    State2 = State1#state{stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]},
+    State2 = State1#state{
+        stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]
+    },
     % Execute then block
     State3 = ThenFun(State2),
     % Emit else instruction
@@ -751,7 +789,8 @@ move_to_cp(
 ) ->
     % Move to continuation pointer: store local to ctx->cp (offset 0x5C)
     Code = <<
-        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
         (jit_wasm_asm:local_get(LocalIdx))/binary,
         (jit_wasm_asm:i32_store(2, ?CP_OFFSET))/binary
     >>,
@@ -821,7 +860,8 @@ set_bs(
 ) ->
     % Set binary state: store local to ctx->bs (offset 0x64)
     Code = <<
-        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
         (jit_wasm_asm:local_get(LocalIdx))/binary,
         (jit_wasm_asm:i32_store(2, ?BS_OFFSET))/binary
     >>,
@@ -923,7 +963,8 @@ get_module_index(
     % Get module index from jit_state
     % Load from jit_state->module (offset 0)
     Code = <<
-        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
         (jit_wasm_asm:i32_load(2, ?JITSTATE_MODULE_OFFSET))/binary,
         (jit_wasm_asm:local_set(element(2, Local)))/binary
     >>,
@@ -1085,7 +1126,11 @@ return_labels_and_lines(
         (jit_wasm_asm:local_set(element(2, Local)))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1, available_locals = AvailT, used_locals = [Local | Used]}, Local, LabelsAndLines}.
+    {
+        State#state{stream = Stream1, available_locals = AvailT, used_locals = [Local | Used]},
+        Local,
+        LabelsAndLines
+    }.
 
 -spec add_label(state(), integer() | reference()) -> state().
 add_label(#state{stream_module = StreamModule, stream = Stream0} = State0, Label) ->

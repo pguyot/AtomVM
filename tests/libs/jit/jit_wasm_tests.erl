@@ -651,22 +651,60 @@ call_primitive_test() ->
     Stream = ?BACKEND:stream(State1),
     % Should emit: local.get 0, local.get 1, local.get 2, local.get 2, i32.load offset=0, call_indirect 0
     Expected = <<
-        16#20, 16#00,        % local.get 0 (ctx)
-        16#20, 16#01,        % local.get 1 (jit_state)
-        16#20, 16#02,        % local.get 2 (native_interface)
-        16#20, 16#02,        % local.get 2 (for load)
-        16#28, 16#02, 16#00, % i32.load align=2 offset=0
-        16#11, 16#00, 16#00  % call_indirect type=0 table=0
+        % local.get 0 (ctx)
+        16#20,
+        16#00,
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % local.get 2 (native_interface)
+        16#20,
+        16#02,
+        % local.get 2 (for load)
+        16#20,
+        16#02,
+        % i32.load align=2 offset=0
+        16#28,
+        16#02,
+        16#00,
+        % call_indirect type=0 table=0
+        16#11,
+        16#00,
+        16#00
     >>,
     ?assertEqual(Expected, Stream).
 
 call_primitive_last_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    % Tail call primitive (placeholder)
+    % Tail call primitive 1 using call_indirect + return
     State1 = ?BACKEND:call_primitive_last(State0, 1, []),
     Stream = ?BACKEND:stream(State1),
-    % Should emit unreachable
-    ?assertEqual(<<16#00>>, Stream).
+    % Should emit: local.get 0, local.get 1, local.get 2, local.get 2, i32.load offset=4, call_indirect 0, return
+    Expected = <<
+        % local.get 0 (ctx)
+        16#20,
+        16#00,
+        % local.get 1 (jit_state)
+        16#20,
+        16#01,
+        % local.get 2 (native_interface)
+        16#20,
+        16#02,
+        % local.get 2 (for load)
+        16#20,
+        16#02,
+        % i32.load align=2 offset=4 (index 1 * 4)
+        16#28,
+        16#02,
+        16#04,
+        % call_indirect type=0 table=0
+        16#11,
+        16#00,
+        16#00,
+        % return
+        16#0F
+    >>,
+    ?assertEqual(Expected, Stream).
 
 call_primitive_with_cp_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
