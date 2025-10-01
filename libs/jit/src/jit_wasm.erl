@@ -340,25 +340,217 @@ if_block(_State, _Condition, _ThenFun) ->
 if_else_block(_State, _Condition, _ThenFun, _ElseFun) ->
     error(not_implemented).
 
+%%-----------------------------------------------------------------------------
+%% @doc Shift right: local = local >> shift (unsigned)
+%% @end
+%%-----------------------------------------------------------------------------
 -spec shift_right(state(), wasm_local(), non_neg_integer()) -> state().
-shift_right(_State, _Local, _Shift) ->
-    error(not_implemented).
+shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift) ->
+    Code = <<
+        (jit_wasm_asm:local_get(Idx))/binary,
+        (jit_wasm_asm:i32_const(Shift))/binary,
+        (jit_wasm_asm:i32_shr_u())/binary,
+        (jit_wasm_asm:local_set(Idx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Shift left: local = local << shift
+%% @end
+%%-----------------------------------------------------------------------------
 -spec shift_left(state(), wasm_local(), non_neg_integer()) -> state().
-shift_left(_State, _Local, _Shift) ->
-    error(not_implemented).
+shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift) ->
+    Code = <<
+        (jit_wasm_asm:local_get(Idx))/binary,
+        (jit_wasm_asm:i32_const(Shift))/binary,
+        (jit_wasm_asm:i32_shl())/binary,
+        (jit_wasm_asm:local_set(Idx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Move a value from a native local to a VM register (x_reg or y_reg).
+%% @end
+%%-----------------------------------------------------------------------------
 -spec move_to_vm_register(state(), vm_register(), wasm_local()) -> state().
-move_to_vm_register(_State, _VMReg, _Local) ->
-    error(not_implemented).
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {x_reg, X}, {local, SrcIdx}
+) ->
+    % Store to X register in context
+    Offset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_store(2, Offset))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {y_reg, Y}, {local, SrcIdx}
+) ->
+    % Store to Y register in context
+    % Y regs are stored as an array at offset ?Y_REGS_OFFSET
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_store(2, Y * 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Move a value to a native local, allocating a new local if needed.
+%% Returns the state and the local containing the value.
+%% @end
+%%-----------------------------------------------------------------------------
 -spec move_to_native_register(state(), value()) -> {state(), wasm_local()}.
-move_to_native_register(_State, _Value) ->
-    error(not_implemented).
+move_to_native_register(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State,
+    cp
+) ->
+    % Load continuation pointer from context
+    % ctx->cp is at offset ?CP_OFFSET
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?CP_OFFSET))/binary,
+        (jit_wasm_asm:local_set(element(2, Local)))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local};
+move_to_native_register(State, {local, _} = Local) ->
+    % Already a local, return as-is
+    {State, Local};
+move_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {ptr, {local, Idx}}
+) ->
+    % Dereference pointer (load from memory address in local)
+    Code = <<
+        (jit_wasm_asm:local_get(Idx))/binary,
+        (jit_wasm_asm:i32_load(2, 0))/binary,
+        (jit_wasm_asm:local_set(Idx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {State#state{stream = Stream1}, {local, Idx}};
+move_to_native_register(
+    #state{
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State0,
+    Imm
+) when is_integer(Imm) ->
+    State1 = State0#state{used_locals = [Local | Used], available_locals = AvailT},
+    {move_to_native_register(State1, Imm, Local), Local};
+move_to_native_register(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State,
+    {x_reg, X}
+) ->
+    % Load X register from context
+    Offset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, Offset))/binary,
+        (jit_wasm_asm:local_set(element(2, Local)))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local};
+move_to_native_register(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State,
+    {y_reg, Y}
+) ->
+    % Load Y register from context
+    % Y regs are stored as an array at offset ?Y_REGS_OFFSET
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        (jit_wasm_asm:i32_load(2, Y * 4))/binary,
+        (jit_wasm_asm:local_set(element(2, Local)))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Move a value to a specific native local.
+%% @end
+%%-----------------------------------------------------------------------------
 -spec move_to_native_register(state(), value(), wasm_local()) -> state().
-move_to_native_register(_State, _Value, _Local) ->
-    error(not_implemented).
+move_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, SrcIdx}, {local, DstIdx}
+) ->
+    % Copy from one local to another
+    Code = <<
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:local_set(DstIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+move_to_native_register(State, Imm, {local, DstIdx}) when is_integer(Imm) ->
+    % Load immediate constant
+    mov_immediate(State, {local, DstIdx}, Imm);
+move_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {ptr, {local, SrcIdx}},
+    {local, DstIdx}
+) ->
+    % Dereference pointer
+    Code = <<
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_load(2, 0))/binary,
+        (jit_wasm_asm:local_set(DstIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+move_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {x_reg, X}, {local, DstIdx}
+) ->
+    % Load X register
+    Offset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, Offset))/binary,
+        (jit_wasm_asm:local_set(DstIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+move_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {y_reg, Y}, {local, DstIdx}
+) ->
+    % Load Y register
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        (jit_wasm_asm:i32_load(2, Y * 4))/binary,
+        (jit_wasm_asm:local_set(DstIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
+
+%% Helper to move immediate to local
+-spec mov_immediate(state(), wasm_local(), integer()) -> state().
+mov_immediate(#state{stream_module = StreamModule, stream = Stream0} = State, {local, DstIdx}, Imm) ->
+    Code = <<
+        (jit_wasm_asm:i32_const(Imm))/binary,
+        (jit_wasm_asm:local_set(DstIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec move_to_cp(state(), wasm_local()) -> state().
 move_to_cp(_State, _Local) ->
@@ -382,9 +574,30 @@ move_to_array_element(_State, _Src, _Base, _Index, _Scale) ->
 set_bs(_State, _Local) ->
     error(not_implemented).
 
+%%-----------------------------------------------------------------------------
+%% @doc Copy a value to a new native local. Allocates a new local and copies
+%% the value from the source local.
+%% @end
+%%-----------------------------------------------------------------------------
 -spec copy_to_native_register(state(), wasm_local()) -> {state(), wasm_local()}.
-copy_to_native_register(_State, _Src) ->
-    error(not_implemented).
+copy_to_native_register(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [NewLocal | AvailT],
+        used_locals = Used
+    } = State,
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:local_set(element(2, NewLocal)))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {
+        State#state{stream = Stream1, available_locals = AvailT, used_locals = [NewLocal | Used]},
+        NewLocal
+    }.
 
 -spec get_array_element(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
 get_array_element(_State, _Base, _Offset) ->
@@ -410,25 +623,100 @@ continuation_entry_point(_State) ->
 get_module_index(_State) ->
     error(not_implemented).
 
+%%-----------------------------------------------------------------------------
+%% @doc Bitwise AND: dest = dest & src
+%% @end
+%%-----------------------------------------------------------------------------
 -spec and_(state(), wasm_local(), wasm_local()) -> state().
-and_(_State, _Dest, _Src) ->
-    error(not_implemented).
+and_(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_and())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Bitwise OR: dest = dest | src
+%% @end
+%%-----------------------------------------------------------------------------
 -spec or_(state(), wasm_local(), wasm_local()) -> state().
-or_(_State, _Dest, _Src) ->
-    error(not_implemented).
+or_(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_or())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Addition: dest = dest + src
+%% @end
+%%-----------------------------------------------------------------------------
 -spec add(state(), wasm_local(), wasm_local()) -> state().
-add(_State, _Dest, _Src) ->
-    error(not_implemented).
+add(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_add())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Subtraction: dest = dest - src
+%% @end
+%%-----------------------------------------------------------------------------
 -spec sub(state(), wasm_local(), wasm_local()) -> state().
-sub(_State, _Dest, _Src) ->
-    error(not_implemented).
+sub(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_sub())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Multiplication: dest = dest * src
+%% @end
+%%-----------------------------------------------------------------------------
 -spec mul(state(), wasm_local(), wasm_local()) -> state().
-mul(_State, _Dest, _Src) ->
-    error(not_implemented).
+mul(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, SrcIdx}
+) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_mul())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(_State) ->
