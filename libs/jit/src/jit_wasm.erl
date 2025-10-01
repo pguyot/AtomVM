@@ -293,34 +293,43 @@ assert_all_native_free(#state{used_locals = Used}) ->
 %% Stubs for remaining functions - to be implemented in subsequent commits
 %%-----------------------------------------------------------------------------
 
--spec jump_table(state(), non_neg_integer()) -> {state(), wasm_local()}.
-jump_table(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0,
-        available_locals = [Local | AvailT],
-        used_locals = Used
-    } =
-        State,
-    Size
+-spec jump_table(state(), non_neg_integer()) -> state().
+jump_table(State, LabelsCount) ->
+    jump_table0(State, 0, LabelsCount).
+
+jump_table0(State, N, LabelsCount) when N > LabelsCount ->
+    State;
+jump_table0(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    N,
+    LabelsCount
 ) ->
-    % Generate br_table with Size entries
-    % The table value is expected to be on the stack (loaded by caller)
-    % For now, generate a default br_table that branches to depth 0
-    Targets = lists:duplicate(Size, 0),
-    DefaultTarget = 0,
-    Code = jit_wasm_asm:br_table(Targets, DefaultTarget),
+    % In WASM, jump table entries are function indices in the function table
+    % Each entry is a placeholder that will be patched during update_branches
+    % We store a placeholder function index (0 for now)
+    % The actual function index will be resolved when labels are known
+    PlaceholderIndex = 0,
+    Code = jit_wasm_asm:i32_const(PlaceholderIndex),
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
+
+    % Note: We may need to add relocation info here for later patching
+    % For now, just generate the placeholder
+
+    jump_table0(State#state{stream = Stream1}, N + 1, LabelsCount).
 
 -spec update_branches(state()) -> state().
 update_branches(State) ->
     % TODO: implement branch resolution
     State.
 
--spec call_primitive(state(), non_neg_integer(), [arg()]) -> state().
+-spec call_primitive(state(), non_neg_integer(), [arg()]) -> {state(), wasm_local()}.
 call_primitive(
-    #state{stream_module = StreamModule, stream = Stream0} = State,
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State,
     PrimIndex,
     _Args
 ) ->
@@ -328,6 +337,7 @@ call_primitive(
     % 1. Push standard arguments (ctx, jit_state, native_interface)
     % 2. Load function pointer from native_interface->functions[PrimIndex]
     % 3. Call indirectly through function table
+    % 4. Store result in a local and return it
     Code = <<
         % Arguments for the call: ctx, jit_state, native_interface
 
@@ -344,10 +354,12 @@ call_primitive(
         % Load functions[PrimIndex]
         (jit_wasm_asm:i32_load(2, PrimIndex * 4))/binary,
         % Call indirectly (type 0 = (i32,i32,i32)->i32)
-        (jit_wasm_asm:call_indirect(0))/binary
+        (jit_wasm_asm:call_indirect(0))/binary,
+        % Store result in local
+        (jit_wasm_asm:local_set(element(2, Local)))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
 
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_last(
@@ -641,11 +653,66 @@ shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {loca
 %% @doc Move a value from a native local to a VM register (x_reg or y_reg).
 %% @end
 %%-----------------------------------------------------------------------------
--spec move_to_vm_register(state(), vm_register(), wasm_local()) -> state().
+-spec move_to_vm_register(state(), value(), vm_register()) -> state().
+% Move immediate value to X register
 move_to_vm_register(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {x_reg, X}, {local, SrcIdx}
+    #state{stream_module = StreamModule, stream = Stream0} = State, Value, {x_reg, X}
+) when is_integer(Value) ->
+    Offset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_const(Value))/binary,
+        (jit_wasm_asm:i32_store(2, Offset))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% Move immediate value to Y register
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, Value, {y_reg, Y}
+) when is_integer(Value) ->
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        (jit_wasm_asm:i32_const(Value))/binary,
+        (jit_wasm_asm:i32_store(2, Y * 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% Move from X register to Y register
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {x_reg, SrcX}, {y_reg, Y}
 ) ->
-    % Store to X register in context
+    SrcOffset = ?X_REG_OFFSET(SrcX),
+    Code = <<
+        % Load Y regs array base
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        % Load value from X register
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, SrcOffset))/binary,
+        % Store to Y register
+        (jit_wasm_asm:i32_store(2, Y * 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% Move from Y register to X register
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {y_reg, SrcY}, {x_reg, X}
+) ->
+    DestOffset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        (jit_wasm_asm:i32_load(2, SrcY * 4))/binary,
+        (jit_wasm_asm:i32_store(2, DestOffset))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% Move from local to X register
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, SrcIdx}, {x_reg, X}
+) ->
     Offset = ?X_REG_OFFSET(X),
     Code = <<
         (jit_wasm_asm:local_get(0))/binary,
@@ -654,11 +721,10 @@ move_to_vm_register(
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1};
+% Move from local to Y register
 move_to_vm_register(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {y_reg, Y}, {local, SrcIdx}
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, SrcIdx}, {y_reg, Y}
 ) ->
-    % Store to Y register in context
-    % Y regs are stored as an array at offset ?Y_REGS_OFFSET
     Code = <<
         (jit_wasm_asm:local_get(0))/binary,
         (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
@@ -1165,17 +1231,23 @@ call_only_or_schedule_next(
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
--spec call_func_ptr(state(), wasm_local(), [arg()]) -> state().
+-spec call_func_ptr(state(), wasm_local(), [arg()]) -> {state(), wasm_local()}.
 call_func_ptr(
-    #state{stream_module = StreamModule, stream = Stream0} = State,
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [Local | AvailT],
+        used_locals = Used
+    } = State,
     _FuncPtr,
     _Args
 ) ->
     % Indirect function call - placeholder
     % Full implementation requires call_indirect with function table
+    % For now, use unreachable and return a result local
     Code = jit_wasm_asm:unreachable(),
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
 
 -spec return_labels_and_lines(state(), [{integer(), integer()}]) ->
     {state(), wasm_local(), [{integer(), integer()}]}.

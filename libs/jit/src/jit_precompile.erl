@@ -105,7 +105,9 @@ compile(Target, Dir, Path) ->
             case BaseTarget of
                 "x86_64" -> ?JIT_ARCH_X86_64;
                 "aarch64" -> ?JIT_ARCH_AARCH64;
-                "armv6m" -> ?JIT_ARCH_ARMV6M
+                "armv6m" -> ?JIT_ARCH_ARMV6M;
+                "wasm" -> ?JIT_ARCH_WASM32;
+                "wasm32" -> ?JIT_ARCH_WASM32
             end,
 
         <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> =
