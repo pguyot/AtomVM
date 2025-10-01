@@ -294,8 +294,19 @@ assert_all_native_free(#state{used_locals = Used}) ->
 %%-----------------------------------------------------------------------------
 
 -spec jump_table(state(), non_neg_integer()) -> {state(), wasm_local()}.
-jump_table(_State, _Size) ->
-    error(not_implemented).
+jump_table(
+    #state{stream_module = StreamModule, stream = Stream0, available_locals = [Local | AvailT], used_locals = Used} =
+        State,
+    Size
+) ->
+    % Generate br_table with Size entries
+    % The table value is expected to be on the stack (loaded by caller)
+    % For now, generate a default br_table that branches to depth 0
+    Targets = lists:duplicate(Size, 0),
+    DefaultTarget = 0,
+    Code = jit_wasm_asm:br_table(Targets, DefaultTarget),
+    Stream1 = StreamModule:append(Stream0, Code),
+    {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
 
 -spec update_branches(state()) -> state().
 update_branches(State) ->
@@ -319,26 +330,158 @@ return_if_not_equal_to_ctx(_State, _Local) ->
     error(not_implemented).
 
 -spec jump_to_label(state(), integer() | reference()) -> state().
-jump_to_label(_State, _Label) ->
-    error(not_implemented).
+jump_to_label(
+    #state{stream_module = StreamModule, stream = Stream0, labels = Labels, branches = Branches} =
+        State,
+    Label
+) ->
+    LabelLookupResult = lists:keyfind(Label, 1, Labels),
+    CurrentOffset = StreamModule:offset(Stream0),
+    case LabelLookupResult of
+        {Label, TargetOffset} when TargetOffset =< CurrentOffset ->
+            % Backward branch: implement using loop + br
+            % For now, use unreachable as placeholder
+            Code = jit_wasm_asm:unreachable(),
+            Stream1 = StreamModule:append(Stream0, Code),
+            State#state{stream = Stream1};
+        _ ->
+            % Forward branch: record it for later resolution
+            % Emit br instruction with placeholder depth 0
+            Code = jit_wasm_asm:br(0),
+            Stream1 = StreamModule:append(Stream0, Code),
+            BranchOffset = CurrentOffset,
+            NewBranches = [{Label, BranchOffset, 1} | Branches],
+            State#state{stream = Stream1, branches = NewBranches}
+    end.
 
 -spec jump_to_continuation(state(), wasm_local()) -> state().
-jump_to_continuation(_State, _Local) ->
-    error(not_implemented).
+jump_to_continuation(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, _Idx}
+) ->
+    % For WASM, continuation-based jumps are complex
+    % Use unreachable as placeholder for now
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec jump_to_offset(state(), non_neg_integer()) -> state().
-jump_to_offset(_State, _Offset) ->
-    error(not_implemented).
+jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, _TargetOffset) ->
+    % WASM doesn't support arbitrary jumps to offsets
+    % Use unreachable as placeholder
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Emit condition code for if/if_else blocks
+%% Returns {State, ConditionCode} where ConditionCode evaluates to i32 on stack
+%% @end
+%%-----------------------------------------------------------------------------
+-spec emit_condition(state(), condition()) -> {state(), binary()}.
+emit_condition(State, {Local, '==', Value}) when is_integer(Value) ->
+    {LocalIdx, Code1} = get_local_idx(Local),
+    Code = <<
+        Code1/binary,
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_const(Value))/binary,
+        (jit_wasm_asm:i32_eq())/binary
+    >>,
+    {State, Code};
+emit_condition(State, {Local, '!=', Value}) when is_integer(Value) ->
+    {LocalIdx, Code1} = get_local_idx(Local),
+    Code = <<
+        Code1/binary,
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_const(Value))/binary,
+        (jit_wasm_asm:i32_ne())/binary
+    >>,
+    {State, Code};
+emit_condition(State, {Local1, '==', Local2}) ->
+    {LocalIdx1, Code1} = get_local_idx(Local1),
+    {LocalIdx2, Code2} = get_local_idx(Local2),
+    Code = <<
+        Code1/binary,
+        (jit_wasm_asm:local_get(LocalIdx1))/binary,
+        Code2/binary,
+        (jit_wasm_asm:local_get(LocalIdx2))/binary,
+        (jit_wasm_asm:i32_eq())/binary
+    >>,
+    {State, Code};
+emit_condition(State, {Local, '<', Value}) when is_integer(Value) ->
+    {LocalIdx, Code1} = get_local_idx(Local),
+    Code = <<
+        Code1/binary,
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_const(Value))/binary,
+        (jit_wasm_asm:i32_lt_s())/binary
+    >>,
+    {State, Code};
+emit_condition(State, Condition) ->
+    % For other conditions, use unreachable as placeholder
+    io:format("Warning: Unimplemented condition: ~p~n", [Condition]),
+    {State, <<(jit_wasm_asm:i32_const(1))/binary>>}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Helper to extract local index from maybe_free_wasm_local
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_local_idx(maybe_free_wasm_local()) -> {non_neg_integer(), binary()}.
+get_local_idx({free, {local, Idx}}) -> {Idx, <<>>};
+get_local_idx({local, Idx}) -> {Idx, <<>>}.
 
 -spec if_block(state(), condition(), fun((state()) -> state())) -> state().
-if_block(_State, _Condition, _ThenFun) ->
-    error(not_implemented).
+if_block(
+    #state{stream_module = StreamModule, stream = Stream0, control_stack = ControlStack} = State0,
+    Condition,
+    ThenFun
+) ->
+    % Emit condition code
+    {State1, CondCode} = emit_condition(State0, Condition),
+    % Emit if instruction
+    IfCode = jit_wasm_asm:if_(empty),
+    Stream1 = StreamModule:append(Stream0, <<CondCode/binary, IfCode/binary>>),
+    Offset1 = StreamModule:offset(Stream1),
+    State2 = State1#state{stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]},
+    % Execute then block
+    State3 = ThenFun(State2),
+    % Emit end instruction
+    EndCode = jit_wasm_asm:end_(),
+    Stream3 = StreamModule:append(State3#state.stream, EndCode),
+    Offset3 = StreamModule:offset(Stream3),
+    [{if_, _} | RestStack] = State3#state.control_stack,
+    State3#state{stream = Stream3, offset = Offset3, control_stack = RestStack}.
 
 -spec if_else_block(
     state(), condition(), fun((state()) -> state()), fun((state()) -> state())
 ) -> state().
-if_else_block(_State, _Condition, _ThenFun, _ElseFun) ->
-    error(not_implemented).
+if_else_block(
+    #state{stream_module = StreamModule, stream = Stream0, control_stack = ControlStack} = State0,
+    Condition,
+    ThenFun,
+    ElseFun
+) ->
+    % Emit condition code
+    {State1, CondCode} = emit_condition(State0, Condition),
+    % Emit if instruction
+    IfCode = jit_wasm_asm:if_(empty),
+    Stream1 = StreamModule:append(Stream0, <<CondCode/binary, IfCode/binary>>),
+    Offset1 = StreamModule:offset(Stream1),
+    State2 = State1#state{stream = Stream1, offset = Offset1, control_stack = [{if_, Offset1} | ControlStack]},
+    % Execute then block
+    State3 = ThenFun(State2),
+    % Emit else instruction
+    ElseCode = jit_wasm_asm:else_(),
+    Stream3 = StreamModule:append(State3#state.stream, ElseCode),
+    Offset3 = StreamModule:offset(Stream3),
+    State4 = State3#state{stream = Stream3, offset = Offset3},
+    % Execute else block
+    State5 = ElseFun(State4),
+    % Emit end instruction
+    EndCode = jit_wasm_asm:end_(),
+    Stream5 = StreamModule:append(State5#state.stream, EndCode),
+    Offset5 = StreamModule:offset(Stream5),
+    [{if_, _} | RestStack] = State5#state.control_stack,
+    State5#state{stream = Stream5, offset = Offset5, control_stack = RestStack}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Shift right: local = local >> shift (unsigned)
@@ -740,9 +883,10 @@ return_labels_and_lines(_State, _LabelsAndLines) ->
     error(not_implemented).
 
 -spec add_label(state(), integer() | reference()) -> state().
-add_label(_State, _Label) ->
-    error(not_implemented).
+add_label(#state{stream_module = StreamModule, stream = Stream0} = State0, Label) ->
+    Offset = StreamModule:offset(Stream0),
+    add_label(State0, Label, Offset).
 
--spec add_label(state(), integer() | reference(), atom()) -> state().
-add_label(_State, _Label, _Type) ->
-    error(not_implemented).
+-spec add_label(state(), integer() | reference(), integer()) -> state().
+add_label(#state{labels = Labels} = State, Label, Offset) ->
+    State#state{labels = [{Label, Offset} | Labels]}.

@@ -36,7 +36,9 @@
     end_/0,
     br/1,
     br_if/1,
+    br_table/2,
     return_/0,
+    unreachable/0,
     % Variable access
     local_get/1,
     local_set/1,
@@ -164,6 +166,17 @@ br_if(LabelIdx) ->
 %% @doc return - Return from function
 -spec return_() -> binary().
 return_() -> <<16#0F>>.
+
+%% @doc unreachable - Trap immediately
+-spec unreachable() -> binary().
+unreachable() -> <<16#00>>.
+
+%% @doc br_table - Branch table with list of targets and default
+-spec br_table([non_neg_integer()], non_neg_integer()) -> binary().
+br_table(Targets, Default) ->
+    Count = length(Targets),
+    TargetsBin = << <<(encode_uleb128(T))/binary>> || T <- Targets >>,
+    <<16#0E, (encode_uleb128(Count))/binary, TargetsBin/binary, (encode_uleb128(Default))/binary>>.
 
 %%-----------------------------------------------------------------------------
 %% Variable Access Instructions

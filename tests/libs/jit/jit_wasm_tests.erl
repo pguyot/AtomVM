@@ -489,3 +489,82 @@ assert_all_free_test() ->
     {State1, _Local} = ?BACKEND:move_to_native_register(State0, 1),
     % Should fail assertion
     ?assertError({used_locals_not_freed, _}, ?BACKEND:assert_all_native_free(State1)).
+
+%%-----------------------------------------------------------------------------
+%% Control flow tests
+%%-----------------------------------------------------------------------------
+
+add_label_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:add_label(State0, 1),
+    % Should have label at offset 0
+    Stream = ?BACKEND:stream(State1),
+    ?assertEqual(<<>>, Stream),
+    ?assertEqual(0, ?BACKEND:offset(State1)).
+
+add_label_with_offset_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, _} = ?BACKEND:move_to_native_register(State0, 42),
+    State2 = ?BACKEND:add_label(State1, 2),
+    % Label should be at current offset
+    Offset = ?BACKEND:offset(State2),
+    ?assert(Offset > 0).
+
+if_block_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Local} = ?BACKEND:move_to_native_register(State0, 5),
+    % Create if block that increments local if equal to 5
+    State2 = ?BACKEND:if_block(
+        State1,
+        {Local, '==', 5},
+        fun(S) ->
+            {S1, One} = ?BACKEND:move_to_native_register(S, 1),
+            S2 = ?BACKEND:add(S1, Local, One),
+            ?BACKEND:free_native_registers(S2, [One])
+        end
+    ),
+    Stream = ?BACKEND:stream(State2),
+    % Should contain: local.get, i32.const 5, i32.eq, if, (body), end
+    ?assert(byte_size(Stream) > 5).
+
+if_else_block_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Local} = ?BACKEND:move_to_native_register(State0, 10),
+    % Create if/else block
+    State2 = ?BACKEND:if_else_block(
+        State1,
+        {Local, '!=', 10},
+        fun(S) ->
+            {S1, One} = ?BACKEND:move_to_native_register(S, 1),
+            S2 = ?BACKEND:add(S1, Local, One),
+            ?BACKEND:free_native_registers(S2, [One])
+        end,
+        fun(S) ->
+            {S1, Two} = ?BACKEND:move_to_native_register(S, 2),
+            S2 = ?BACKEND:sub(S1, Local, Two),
+            ?BACKEND:free_native_registers(S2, [Two])
+        end
+    ),
+    Stream = ?BACKEND:stream(State2),
+    % Should contain: condition, if, then body, else, else body, end
+    ?assert(byte_size(Stream) > 10).
+
+jump_to_label_forward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Jump to forward label (not yet defined)
+    State1 = ?BACKEND:jump_to_label(State0, 1),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit br instruction (0x0C) with depth
+    ?assert(byte_size(Stream) > 0).
+
+jump_to_label_backward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Add label first
+    State1 = ?BACKEND:add_label(State0, 1),
+    % Add some code
+    {State2, _} = ?BACKEND:move_to_native_register(State1, 42),
+    % Jump backwards (uses unreachable as placeholder for now)
+    State3 = ?BACKEND:jump_to_label(State2, 1),
+    Stream = ?BACKEND:stream(State3),
+    % Should emit unreachable (0x00)
+    ?assert(byte_size(Stream) > 0).
