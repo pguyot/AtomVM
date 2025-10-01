@@ -27,7 +27,8 @@
     offset/1,
     append/2,
     replace/3,
-    map/4
+    map/4,
+    flush/1
 ]).
 
 -export_type([stream/0]).
@@ -93,3 +94,13 @@ map(Stream, Offset, Length, MapFunction) ->
     {Prefix, <<Previous:Length/binary, Suffix/binary>>} = split_binary(Stream, Offset),
     Replacement = MapFunction(Previous),
     <<Prefix/binary, Replacement/binary, Suffix/binary>>.
+
+%%-----------------------------------------------------------------------------
+%% @param Stream        stream to flush
+%% @returns the updated stream
+%% @doc     Flush the stream.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec flush(stream()) -> stream().
+flush(Stream) ->
+    Stream.

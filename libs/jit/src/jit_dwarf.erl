@@ -47,6 +47,7 @@
     function/3,
     line/2,
     stream/1,
+    flush/1,
     elf/2
 ]).
 
@@ -125,6 +126,16 @@ replace(#state{stream_module = StreamModule, stream = Stream0} = State, Offset, 
 -spec map(state(), non_neg_integer(), pos_integer(), fun((binary()) -> binary())) -> state().
 map(#state{stream_module = StreamModule, stream = Stream0} = State, Offset, Length, MapFunction) ->
     Stream1 = StreamModule:map(Stream0, Offset, Length, MapFunction),
+    State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @param Stream        stream to flush
+%% @returns ok
+%% @doc     Flush the stream.
+%% @end
+%%-----------------------------------------------------------------------------
+flush(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    Stream1 = StreamModule:flush(Stream0),
     State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
