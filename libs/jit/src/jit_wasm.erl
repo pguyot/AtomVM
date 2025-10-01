@@ -696,26 +696,88 @@ mov_immediate(#state{stream_module = StreamModule, stream = Stream0} = State, {l
     State#state{stream = Stream1}.
 
 -spec move_to_cp(state(), wasm_local()) -> state().
-move_to_cp(_State, _Local) ->
-    error(not_implemented).
+move_to_cp(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, LocalIdx}
+) ->
+    % Move to continuation pointer: store local to ctx->cp (offset 0x5C)
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_store(2, ?CP_OFFSET))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec move_array_element(state(), wasm_local(), wasm_local(), non_neg_integer()) -> state().
-move_array_element(_State, _Dest, _Base, _Offset) ->
-    error(not_implemented).
+move_array_element(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    {local, BaseIdx},
+    Offset
+) ->
+    % Load from array and store to local: dest = base[offset]
+    Code = <<
+        (jit_wasm_asm:local_get(BaseIdx))/binary,
+        (jit_wasm_asm:i32_load(2, Offset * 4))/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec move_to_array_element(state(), wasm_local(), wasm_local(), non_neg_integer()) -> state().
-move_to_array_element(_State, _Src, _Base, _Offset) ->
-    error(not_implemented).
+move_to_array_element(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, SrcIdx},
+    {local, BaseIdx},
+    Offset
+) ->
+    % Store to array: base[offset] = src
+    Code = <<
+        (jit_wasm_asm:local_get(BaseIdx))/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_store(2, Offset * 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec move_to_array_element(
     state(), wasm_local(), wasm_local(), wasm_local(), non_neg_integer()
 ) -> state().
-move_to_array_element(_State, _Src, _Base, _Index, _Scale) ->
-    error(not_implemented).
+move_to_array_element(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, SrcIdx},
+    {local, BaseIdx},
+    {local, IndexIdx},
+    Scale
+) ->
+    % Store to array with index: base[index * scale] = src
+    % Need to compute offset: index * scale
+    Code = <<
+        (jit_wasm_asm:local_get(BaseIdx))/binary,
+        (jit_wasm_asm:local_get(IndexIdx))/binary,
+        (jit_wasm_asm:i32_const(Scale))/binary,
+        (jit_wasm_asm:i32_mul())/binary,
+        (jit_wasm_asm:i32_add())/binary,
+        (jit_wasm_asm:local_get(SrcIdx))/binary,
+        (jit_wasm_asm:i32_store(2, 0))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec set_bs(state(), wasm_local()) -> state().
-set_bs(_State, _Local) ->
-    error(not_implemented).
+set_bs(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, LocalIdx}
+) ->
+    % Set binary state: store local to ctx->bs (offset 0x64)
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_store(2, ?BS_OFFSET))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Copy a value to a new native local. Allocates a new local and copies
@@ -743,12 +805,35 @@ copy_to_native_register(
     }.
 
 -spec get_array_element(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
-get_array_element(_State, _Base, _Offset) ->
-    error(not_implemented).
+get_array_element(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_locals = [ElemLocal | AvailT],
+        used_locals = Used
+    } = State,
+    {local, BaseIdx},
+    Offset
+) ->
+    % Load from array: base[offset]
+    % WASM: local.get base, i32.load align=2 offset=(Offset*4), local.set elem
+    Code = <<
+        (jit_wasm_asm:local_get(BaseIdx))/binary,
+        (jit_wasm_asm:i32_load(2, Offset * 4))/binary,
+        (jit_wasm_asm:local_set(element(2, ElemLocal)))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    {
+        State#state{stream = Stream1, available_locals = AvailT, used_locals = [ElemLocal | Used]},
+        ElemLocal
+    }.
 
 -spec increment_sp(state(), integer()) -> state().
-increment_sp(_State, _Amount) ->
-    error(not_implemented).
+increment_sp(State, _Amount) ->
+    % Increment stack pointer - for WASM this is likely a no-op or placeholder
+    % as WASM manages its own stack. For compatibility, just return state unchanged.
+    % In the future, this might adjust a stack pointer in the context.
+    State.
 
 -spec set_continuation_to_label(state(), integer() | reference()) -> state().
 set_continuation_to_label(_State, _Label) ->

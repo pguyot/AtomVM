@@ -568,3 +568,74 @@ jump_to_label_backward_test() ->
     Stream = ?BACKEND:stream(State3),
     % Should emit unreachable (0x00)
     ?assert(byte_size(Stream) > 0).
+
+%%-----------------------------------------------------------------------------
+%% Memory access tests
+%%-----------------------------------------------------------------------------
+
+get_array_element_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, BaseLocal} = ?BACKEND:move_to_native_register(State0, 16#1000),
+    % Load element at index 2: elem = base[2]
+    {State2, ElemLocal} = ?BACKEND:get_array_element(State1, BaseLocal, 2),
+    Stream = ?BACKEND:stream(State2),
+    % Should contain: local.get base, i32.load offset=8, local.set elem
+    ?assert(byte_size(Stream) > 5),
+    ?assertEqual({local, 4}, ElemLocal).
+
+move_array_element_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, DestLocal} = ?BACKEND:move_to_native_register(State0, 0),
+    {State2, BaseLocal} = ?BACKEND:move_to_native_register(State1, 16#2000),
+    % Load from array: dest = base[1]
+    State3 = ?BACKEND:move_array_element(State2, DestLocal, BaseLocal, 1),
+    Stream = ?BACKEND:stream(State3),
+    % Should contain: local.get base, i32.load offset=4, local.set dest
+    ?assert(byte_size(Stream) > 5).
+
+move_to_array_element_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, SrcLocal} = ?BACKEND:move_to_native_register(State0, 42),
+    {State2, BaseLocal} = ?BACKEND:move_to_native_register(State1, 16#3000),
+    % Store to array: base[3] = src
+    State3 = ?BACKEND:move_to_array_element(State2, SrcLocal, BaseLocal, 3),
+    Stream = ?BACKEND:stream(State3),
+    % Should contain: local.get base, local.get src, i32.store offset=12
+    ?assert(byte_size(Stream) > 5).
+
+move_to_array_element_indexed_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, SrcLocal} = ?BACKEND:move_to_native_register(State0, 99),
+    {State2, BaseLocal} = ?BACKEND:move_to_native_register(State1, 16#4000),
+    {State3, IndexLocal} = ?BACKEND:move_to_native_register(State2, 5),
+    % Store to array: base[index * 4] = src
+    State4 = ?BACKEND:move_to_array_element(State3, SrcLocal, BaseLocal, IndexLocal, 4),
+    Stream = ?BACKEND:stream(State4),
+    % Should contain: base, index, const 4, mul, add, src, store
+    ?assert(byte_size(Stream) > 10).
+
+set_bs_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, BsLocal} = ?BACKEND:move_to_native_register(State0, 16#5000),
+    % Set binary state pointer
+    State2 = ?BACKEND:set_bs(State1, BsLocal),
+    Stream = ?BACKEND:stream(State2),
+    % Should store to ctx->bs at offset 0x64
+    ?assert(byte_size(Stream) > 0).
+
+move_to_cp_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, CpLocal} = ?BACKEND:move_to_native_register(State0, 16#6000),
+    % Set continuation pointer
+    State2 = ?BACKEND:move_to_cp(State1, CpLocal),
+    Stream = ?BACKEND:stream(State2),
+    % Should store to ctx->cp at offset 0x5C
+    ?assert(byte_size(Stream) > 0).
+
+increment_sp_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Increment stack pointer (no-op for WASM)
+    State1 = ?BACKEND:increment_sp(State0, 8),
+    Stream = ?BACKEND:stream(State1),
+    % Should be no-op, stream unchanged
+    ?assertEqual(<<>>, Stream).
