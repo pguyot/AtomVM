@@ -294,23 +294,25 @@ set_continuation_to_label(State, Label) ->
     >>.
 ```
 
-#### 2. set_continuation_to_offset/1
+#### 2. set_continuation_to_offset/1 ✅ IMPLEMENTED
 
-**When continuation is at a byte offset**
+**Set continuation to current code position (returns reference for add_label)**
 
 ```erlang
-set_continuation_to_offset(State, Offset) ->
+set_continuation_to_offset(State) ->
+    OffsetRef = make_ref(),
+    Offset = StreamModule:offset(Stream0),
     Code = <<
         (jit_wasm_asm:local_get(1))/binary,  % jit_state
-        % Load from module label table + offset
-        (jit_wasm_asm:local_get(2))/binary,  % native_interface (or label table)
-        (jit_wasm_asm:i32_const(Offset))/binary,
-        (jit_wasm_asm:i32_add())/binary,
-        (jit_wasm_asm:i32_load(2, 0))/binary,  % Load function pointer
-        % Store to jit_state->continuation
+        (jit_wasm_asm:i32_const(Offset))/binary,  % Current offset (placeholder)
         (jit_wasm_asm:i32_store(2, ?JITSTATE_CONTINUATION_OFFSET))/binary
-    >>.
+    >>,
+    % Record relocation for later patching to function index
+    Reloc = {OffsetRef, Offset, continuation},
+    {State#state{stream = Stream1, branches = [Reloc | Branches]}, OffsetRef}.
 ```
+
+**Note**: The offset is a placeholder that will be resolved to a function index when the label is defined.
 
 #### 3. jump_to_continuation/1
 
@@ -450,15 +452,17 @@ Test continuation flow:
 2. Jump to continuation
 3. Verify label 1 code executes
 
-## Next Steps
+## Implementation Status
 
-1. ✅ Analyze C→WASM for continuation operations (DONE)
-2. ⏭️ Implement `set_continuation_to_label/2` in `jit_wasm.erl`
-3. ⏭️ Implement `set_continuation_to_offset/1`
-4. ⏭️ Implement `jump_to_continuation/1`
-5. ⏭️ Implement `jump_to_offset/2`
-6. ⏭️ Add tests for all four operations
-7. ⏭️ Update documentation
+1. ✅ Analyze C→WASM for continuation operations
+2. ✅ Implement `set_continuation_to_label/2` in `jit_wasm.erl`
+3. ✅ Implement `set_continuation_to_offset/1` (returns {State, OffsetRef})
+4. ✅ Implement `jump_to_continuation/2`
+5. ✅ Implement `jump_to_offset/2`
+6. ✅ Add tests for all four operations (4 new tests, 43 total)
+7. ✅ Update documentation
+
+**All continuation operations are now fully implemented and tested!**
 
 ## Conclusion
 
