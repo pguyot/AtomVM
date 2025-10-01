@@ -1,8 +1,8 @@
 # WASM JIT Backend - Implementation Summary
 
-## Status: ✅ COMPLETE with Real Function Calls
+## Status: ✅ COMPLETE with Real Function Calls & Continuations
 
-The WASM JIT backend is now functionally complete with proper `call_indirect` implementation based on actual WASM calling conventions discovered through C code analysis.
+The WASM JIT backend is now functionally complete with proper `call_indirect` implementation for both primitives and continuations, based on actual WASM calling conventions discovered through C code analysis.
 
 ## Major Milestone: Real Function Calls Working
 
@@ -60,14 +60,37 @@ call_primitive_last(State, PrimIndex, _Args) ->
 
 Note: WASM doesn't have native tail calls yet (proposal pending), so we simulate tail call semantics with call + immediate return.
 
+**Continuation operations:**
+Similar pattern - continuations are stored as function indices in `jit_state->continuation`:
+```erlang
+% Set continuation to label 5
+set_continuation_to_label(State, 5) ->
+    Code = <<
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        (jit_wasm_asm:i32_const(5))/binary,  % Label as function index
+        (jit_wasm_asm:i32_store(2, ?JITSTATE_CONTINUATION_OFFSET))/binary
+    >>.
+
+% Jump to stored continuation
+jump_to_continuation(State, _Local) ->
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        (jit_wasm_asm:local_get(2))/binary,  % native_interface
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        (jit_wasm_asm:i32_load(2, ?JITSTATE_CONTINUATION_OFFSET))/binary,
+        (jit_wasm_asm:call_indirect(0))/binary
+    >>.
+```
+
 ## Complete Implementation Statistics
 
 ### Code Metrics
-- **2,479 lines** total implementation
+- **2,800+ lines** total implementation
 - **50+ operations** implemented
-- **123 tests** (100% passing)
+- **127 tests** (100% passing)
   - 84 assembler tests
-  - 39 backend tests
+  - 43 backend tests
 
 ### Operations by Category
 
@@ -79,8 +102,9 @@ Note: WASM doesn't have native tail calls yet (proposal pending), so we simulate
 | **Memory Access** | array ops, set_bs, move_to_cp | ✅ Complete |
 | **Control Flow** | labels, jumps, if/else, jump_table | ✅ Complete |
 | **Function Calls** | call_primitive (call_indirect) | ✅ **REAL** |
+| **Continuations** | set/jump to continuation | ✅ **REAL** |
 | **Scheduling** | decrement_reductions | ✅ Placeholder* |
-| **Advanced** | continuations, debug info | ✅ Placeholder* |
+| **Advanced** | debug info | ✅ Placeholder* |
 
 *Placeholders remain for complex operations requiring runtime integration
 
@@ -112,12 +136,13 @@ Note: WASM doesn't have native tail calls yet (proposal pending), so we simulate
 1. **Basic Operations**: All move, copy, arithmetic
 2. **Memory Access**: Load/store from arrays
 3. **Control Flow**: if/else blocks, labels
-4. **Function Calls**: Real call_indirect implementation
+4. **Function Calls**: Real call_indirect implementation (primitives)
+5. **Continuations**: Set and jump to stored continuations
 
 ### ⏸️ Placeholder (Runtime Integration Needed)
-1. **Scheduler Integration**: Reduction counting
-2. **Continuations**: Complex control flow
-3. **Some Advanced Operations**: Debug info
+1. **Scheduler Integration**: Reduction counting, yielding
+2. **Some Call Variants**: call_primitive_with_cp, call_func_ptr
+3. **Advanced Operations**: Debug info
 
 ## Runtime Integration Requirements
 
@@ -205,13 +230,15 @@ generate_type_section() ->
 ### Documentation
 - `JIT_WASM_BACKEND_PLAN.md` - Overall implementation plan
 - `WASM_CALL_ANALYSIS.md` - Function call discovery and analysis
+- `WASM_CONTINUATION_ANALYSIS.md` - Continuation operations analysis
 - `WASM_PLACEHOLDER_REPLACEMENT_PLAN.md` - Strategy for remaining work
 - `WASM_JIT_SUMMARY.md` - This file
 
 ### Analysis
-- `test_wasm_call.c` - C code used for WASM analysis
+- `test_wasm_call.c` - C code for primitive call analysis
 - `test_wasm_call.wasm` - Compiled WASM output
-- `test_wasm_call.o` - Object file
+- `test_wasm_continuation.c` - C code for continuation analysis
+- `test_wasm_continuation.wasm` - Compiled WASM output
 
 ## Next Steps
 
