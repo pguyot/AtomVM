@@ -316,12 +316,24 @@ update_branches(State) ->
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive(
     #state{stream_module = StreamModule, stream = Stream0} = State,
-    _Index,
+    PrimIndex,
     _Args
 ) ->
-    % Call primitive function - placeholder using unreachable
-    % Full implementation requires WASM imports and function table setup
-    Code = jit_wasm_asm:unreachable(),
+    % Call primitive using call_indirect
+    % 1. Push standard arguments (ctx, jit_state, native_interface)
+    % 2. Load function pointer from native_interface->functions[PrimIndex]
+    % 3. Call indirectly through function table
+    Code = <<
+        % Arguments for the call: ctx, jit_state, native_interface
+        (jit_wasm_asm:local_get(0))/binary,  % ctx (local 0)
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state (local 1)
+        (jit_wasm_asm:local_get(2))/binary,  % native_interface (local 2)
+        % Load function pointer from native_interface->functions[PrimIndex]
+        (jit_wasm_asm:local_get(2))/binary,  % native_interface base address
+        (jit_wasm_asm:i32_load(2, PrimIndex * 4))/binary,  % Load functions[PrimIndex]
+        % Call indirectly (type 0 = (i32,i32,i32)->i32)
+        (jit_wasm_asm:call_indirect(0))/binary
+    >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 

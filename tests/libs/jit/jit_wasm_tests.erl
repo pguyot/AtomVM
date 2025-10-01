@@ -646,11 +646,19 @@ increment_sp_test() ->
 
 call_primitive_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    % Call primitive (placeholder)
+    % Call primitive 0 using call_indirect
     State1 = ?BACKEND:call_primitive(State0, 0, []),
     Stream = ?BACKEND:stream(State1),
-    % Should emit unreachable (0x00)
-    ?assertEqual(<<16#00>>, Stream).
+    % Should emit: local.get 0, local.get 1, local.get 2, local.get 2, i32.load offset=0, call_indirect 0
+    Expected = <<
+        16#20, 16#00,        % local.get 0 (ctx)
+        16#20, 16#01,        % local.get 1 (jit_state)
+        16#20, 16#02,        % local.get 2 (native_interface)
+        16#20, 16#02,        % local.get 2 (for load)
+        16#28, 16#02, 16#00, % i32.load align=2 offset=0
+        16#11, 16#00, 16#00  % call_indirect type=0 table=0
+    >>,
+    ?assertEqual(Expected, Stream).
 
 call_primitive_last_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
