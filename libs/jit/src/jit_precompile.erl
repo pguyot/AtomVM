@@ -120,7 +120,8 @@ compile(Target, Dir, Path) ->
                 {LabelsCount, Stream2} = jit:compile(
                     CodeChunk, AtomResolver, LiteralResolver, TypeResolver, Backend, Stream1
                 ),
-                DwarfStream = Backend:stream(Stream2),
+                Stream3 = Backend:flush(Stream2),
+                DwarfStream = Backend:stream(Stream3),
                 NativeCode = jit_dwarf:stream(DwarfStream),
                 <<InfoSize:32, Info:InfoSize/binary>> = jit:beam_chunk_header(
                     LabelsCount, Arch, Variant
