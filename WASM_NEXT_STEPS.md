@@ -1,4 +1,4 @@
-# WASM JIT Backend - Next Steps
+# WASM JIT Backend - Next Steps (REVISED)
 
 ## Current Status ✅
 
@@ -11,285 +11,201 @@ The WASM JIT backend is **structurally complete** with all core operations imple
 - ✅ Continuations (all 4 operations)
 - ✅ Control flow, arithmetic, memory access
 
-## What's Next: Runtime Integration
+## What's Next: Practical Integration Testing
 
-To make the WASM backend actually execute code, we need to integrate it with the AtomVM runtime. This requires work on three fronts:
+**Key Insight:** We don't need a separate `jit_wasm_module.erl`. The existing `jit.erl` and `jit_precompile.erl` infrastructure already handles compilation. We just need to:
 
-### Option A: Module Generation (Erlang-side, easier first step)
+1. Add WASM as a recognized target in `jit_precompile.erl`
+2. Try to precompile tests
+3. See what breaks
+4. Fix issues iteratively
+5. Load generated WASM and test execution
 
-**Goal:** Generate complete, valid WASM modules from JIT bytecode
+This is the **test-driven, empirical approach** we've been using successfully!
 
-**Tasks:**
-1. Create WASM module wrapper
-   - Magic number & version (8 bytes)
-   - Type section (function signatures)
-   - Import section (primitives, memory, table)
-   - Function section (declare JIT function)
-   - Export section (export JIT function)
-   - Code section (actual generated code)
+### Step 1: Add WASM to jit_precompile.erl (Easy)
 
-2. Implement `flush/1` properly
-   - Currently just delegates to stream
-   - Should wrap generated code in complete module
-   - Return valid .wasm binary
-
-3. Test with wasm-validate
-   - Ensure generated modules are valid
-   - Can load with Node.js WebAssembly API
-
-**Why start here:**
-- Pure Erlang work (no C required)
-- Can validate output independently
-- Provides concrete artifacts to work with
-- Enables offline testing
-
-**Estimated effort:** 1-2 weeks
-
-### Option B: Simple End-to-End Test (Recommended next)
-
-**Goal:** Get ONE simple function working end-to-end
+**Goal:** Make WASM a recognized compilation target
 
 **Tasks:**
-1. Write minimal Erlang function
+1. Add WASM architecture constant to `jit.hrl`
    ```erlang
-   -module(test_simple).
-   -export([add/2]).
-   add(A, B) -> A + B.
+   -define(JIT_ARCH_WASM32, 3).
    ```
 
-2. Manually compile to WASM
-   - Use jit compiler to generate bytecode
-   - Wrap in complete module (from Option A)
-   - Save as test_simple.wasm
-
-3. Load in Node.js
-   ```javascript
-   const fs = require('fs');
-   const wasmBytes = fs.readFileSync('test_simple.wasm');
-   const wasmModule = new WebAssembly.Module(wasmBytes);
-   // ... setup imports ...
-   const instance = new WebAssembly.Instance(wasmModule, imports);
+2. Update `jit_precompile.erl` to recognize "wasm" or "wasm32"
+   ```erlang
+   Arch = case BaseTarget of
+       "x86_64" -> ?JIT_ARCH_X86_64;
+       "aarch64" -> ?JIT_ARCH_AARCH64;
+       "armv6m" -> ?JIT_ARCH_ARMV6M;
+       "wasm" -> ?JIT_ARCH_WASM32;  % ADD THIS
+       "wasm32" -> ?JIT_ARCH_WASM32  % ADD THIS
+   end,
    ```
 
-4. Call and verify
-   - Call add(5, 3)
-   - Expect result = 8
+3. Test precompilation
+   ```bash
+   cd build
+   erl -pa libs/jit/src/beams -noshell \
+       -eval 'jit_precompile:compile("wasm", ".", "tests/erlang_tests/add.beam")' \
+       -s init stop
+   ```
 
-**Why this approach:**
-- Validates entire pipeline
-- Identifies integration issues early
-- Provides working example
-- Builds confidence
+**Expected outcome:** It will try to compile and likely fail with specific errors. This tells us what's missing!
 
-**Estimated effort:** 2-3 weeks
+**Estimated effort:** 1 hour
 
-### Option C: Full Platform Integration (Later)
+### Step 2: Fix Issues Iteratively (Test-Driven)
 
-**Goal:** Integrate WASM JIT into Emscripten platform
+**Goal:** Get precompilation working for simple tests
+
+**Approach:**
+1. Try to precompile the simplest test
+   ```bash
+   cd build
+   # Try tests/erlang_tests/test_negate.beam (very simple)
+   erl -pa libs/jit/src/beams -noshell \
+       -eval 'jit_precompile:compile("wasm", ".", "../tests/erlang_tests/test_negate.beam")' \
+       -s init stop 2>&1 | tee compile.log
+   ```
+
+2. Read the error message
+   - What operation failed?
+   - What's missing?
+   - Is it a placeholder that needs implementation?
+
+3. Fix the specific issue
+   - If it's a missing operation: implement it
+   - If it's a bug in existing code: fix it
+   - If it's WASM-specific logic needed: add it
+
+4. Repeat until precompilation succeeds
+
+5. Examine the output
+   ```bash
+   # Check what's in the avmN chunk
+   erl -noshell -eval 'beam_lib:chunks("test_negate.beam", ["avmN"])' -s init stop
+   ```
+
+**Expected iterations:**
+- Issue 1: Missing WASM arch constant → Add to jit.hrl
+- Issue 2: Some operation not implemented → Implement or fix
+- Issue 3: flush() needs to return proper format → Fix
+- Issue 4-10: Various smaller issues → Fix one by one
+
+**Estimated effort:** 1-2 weeks (depends on issues found)
+
+### Step 3: Precompile All Tests (Validation)
+
+**Goal:** Ensure we can precompile entire test suite
 
 **Tasks:**
-1. C-side changes
-   - Modify `src/platforms/emscripten/src/main.c`
-   - Add WASM module loading
-   - Set up function table
-   - Configure imports
+1. Create script to precompile all tests
+   ```bash
+   #!/bin/bash
+   cd build
+   for beam in ../tests/erlang_tests/*.beam; do
+       echo "Compiling $beam..."
+       erl -pa libs/jit/src/beams -noshell \
+           -eval "jit_precompile:compile(\"wasm\", \".\", \"$beam\")" \
+           -s init stop || echo "FAILED: $beam"
+   done
+   ```
 
-2. Build system
-   - CMake configuration
-   - Emscripten linker flags
-   - Export primitive functions
+2. Count successes vs failures
+   - Target: 80%+ success rate
 
-3. Testing infrastructure
-   - Run erlang_tests with WASM JIT
-   - Compare with interpreter
-   - Ensure no regressions
+3. Fix remaining issues
+   - Focus on common patterns
+   - Defer edge cases if needed
 
-**Why later:**
-- More complex (C + build system)
-- Depends on Options A & B working
-- Harder to debug
+**Success criteria:**
+- Can precompile 50+ simple tests
+- avmN chunks contain WASM bytecode
+- No crashes during compilation
+
+**Estimated effort:** 1 week
+
+### Step 4: Extract and Validate WASM (Verification)
+
+**Goal:** Verify generated WASM is valid
+
+**Tasks:**
+1. Extract WASM from avmN chunk
+   ```erlang
+   extract_wasm(BeamFile) ->
+       {ok, {_Module, [{avmN, Chunk}]}} = beam_lib:chunks(BeamFile, [avmN]),
+       % Parse chunk header (skip header, get native code)
+       <<_Header:32/binary, WasmCode/binary>> = Chunk,
+       WasmCode.
+   ```
+
+2. Save as .wasm file
+   ```bash
+   erl -noshell -eval '
+       Wasm = extract_wasm("test_negate.beam"),
+       file:write_file("test_negate.wasm", Wasm)
+   ' -s init stop
+   ```
+
+3. Validate with wasm-validate
+   ```bash
+   wasm-validate test_negate.wasm
+   ```
+
+4. Disassemble and inspect
+   ```bash
+   wasm-dis test_negate.wasm > test_negate.wat
+   less test_negate.wat
+   ```
+
+**Expected issues:**
+- WASM might be incomplete (missing module structure)
+- May need to wrap bare code in module sections
+- This tells us what flush() needs to return
+
+**Estimated effort:** 2-3 days
+
+### Step 5: Runtime Integration (Later)
+
+**Goal:** Actually execute WASM code
+
+**Tasks:**
+1. C-side loader
+2. Emscripten integration
+3. Test execution
+
+**This comes AFTER** we have working precompilation!
 
 **Estimated effort:** 3-4 weeks
 
-## Recommended Roadmap
+## Immediate Next Action
 
-### Phase 1: Module Generation (Week 1-2)
-**Focus:** Make `flush/1` generate valid WASM modules
+**Start with Step 1:** Add WASM as a recognized target
 
-**Deliverables:**
-- Complete WASM module generation
-- Valid .wasm files
-- Pass wasm-validate
+1. Add `?JIT_ARCH_WASM32` constant to `libs/jit/src/jit.hrl`
+2. Update `jit_precompile.erl` to handle "wasm" target
+3. Try to precompile a simple test: `test_negate.beam`
+4. See what error we get
+5. Fix it
+6. Repeat!
 
-**Success criteria:**
-```bash
-# Generate module
-erl -pa libs/jit/src/beams -eval 'jit:compile_module(test_simple, wasm)' -s init stop
+This is the **empirical, test-driven approach** that's worked for us:
+- Compile C → WASM → analyze disassembly → implement
+- Write test → see it fail → implement → see it pass
 
-# Validate
-wasm-validate test_simple.wasm  # Should pass
-```
+Same approach, but now at the integration level!
 
-### Phase 2: Standalone Testing (Week 3-4)
-**Focus:** Load and execute generated modules
+## Summary
 
-**Deliverables:**
-- Node.js test harness
-- Primitive function stubs
-- Working add(5,3) example
+**DON'T create `jit_wasm_module.erl`** - the infrastructure already exists!
 
-**Success criteria:**
-```bash
-node test_wasm_jit.js
-# Expected: add(5, 3) = 8 ✓
-```
+**DO:**
+1. ✅ Add WASM target recognition
+2. ✅ Try precompilation
+3. ✅ Fix errors iteratively
+4. ✅ Validate generated WASM
+5. ✅ Test execution (later)
 
-### Phase 3: Platform Integration (Week 5-8)
-**Focus:** Integrate with AtomVM runtime
-
-**Deliverables:**
-- Modified Emscripten platform
-- JIT-enabled builds
-- Passing test suite
-
-**Success criteria:**
-```bash
-cd build
-cmake .. -DAVM_EMSCRIPTEN_JIT=ON
-cmake --build .
-./tests/test-erlang  # All tests pass with WASM JIT
-```
-
-## Detailed Next Action: Implement Module Generation
-
-Let's start with module generation since it's pure Erlang and validates our bytecode.
-
-### Step 1: Create jit_wasm_module.erl
-
-A new module to handle WASM module generation:
-
-```erlang
--module(jit_wasm_module).
--export([generate/1]).
-
-generate(FunctionBodies) ->
-    Magic = <<16#00, 16#61, 16#73, 16#6D>>,  % \0asm
-    Version = <<16#01, 16#00, 16#00, 16#00>>,  % version 1
-
-    TypeSection = generate_type_section(),
-    ImportSection = generate_import_section(),
-    FunctionSection = generate_function_section(length(FunctionBodies)),
-    ExportSection = generate_export_section(),
-    CodeSection = generate_code_section(FunctionBodies),
-
-    <<Magic/binary, Version/binary,
-      TypeSection/binary, ImportSection/binary,
-      FunctionSection/binary, ExportSection/binary,
-      CodeSection/binary>>.
-```
-
-### Step 2: Update jit_wasm.erl flush/1
-
-```erlang
-flush(#state{stream = Stream} = State) ->
-    % Get raw bytecode
-    Bytecode = jit_stream_binary:contents(Stream),
-
-    % Wrap in complete WASM module
-    Module = jit_wasm_module:generate([Bytecode]),
-
-    State#state{stream = Module}.
-```
-
-### Step 3: Add validation test
-
-```erlang
-module_generation_test() ->
-    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    % Simple function: return ctx
-    State1 = State0,  % Empty function
-    FinalState = ?BACKEND:flush(State1),
-    Module = ?BACKEND:stream(FinalState),
-
-    % Should start with WASM magic
-    <<16#00, 16#61, 16#73, 16#6D, _/binary>> = Module,
-
-    % Should validate
-    TempFile = "/tmp/test.wasm",
-    file:write_file(TempFile, Module),
-    ?assertMatch({0, _}, os:cmd("wasm-validate " ++ TempFile)),
-    file:delete(TempFile).
-```
-
-## Questions to Consider
-
-1. **Module structure:** One function per module, or multiple functions?
-   - Recommendation: Multiple functions (one per label)
-   - Each label becomes a WASM function
-   - Exported by name
-
-2. **Import strategy:** Import all 71 primitives individually, or use function table?
-   - We discovered: Use function table (already implemented in backend)
-   - Simpler than 71 individual imports
-   - Matches our call_indirect implementation
-
-3. **Memory management:** Shared memory or separate?
-   - Must be shared with C runtime
-   - Import memory from environment
-
-4. **Label resolution:** How do we handle labels as separate functions?
-   - Each label → separate WASM function
-   - Function indices stored in continuation
-   - Requires tracking label → function index mapping
-
-## Open Questions
-
-1. How does jit.erl currently call backend flush?
-2. What format does it expect back?
-3. Should we generate one .wasm per Erlang module or one big module?
-4. How do we test without C integration?
-
-## Success Metrics
-
-**Phase 1 (Module Generation):**
-- [ ] Generate valid WASM module
-- [ ] Pass wasm-validate
-- [ ] Load in Node.js (even if imports missing)
-
-**Phase 2 (Standalone Testing):**
-- [ ] Execute simple function (add)
-- [ ] Correct results
-- [ ] All primitives stubbed
-
-**Phase 3 (Integration):**
-- [ ] 50% of erlang_tests pass
-- [ ] 2x+ performance vs interpreter
-- [ ] No regressions
-
-## Resources
-
-- WASM Spec: https://webassembly.github.io/spec/core/binary/modules.html
-- Emscripten WASM: https://emscripten.org/docs/compiling/WebAssembly.html
-- Node.js WASM API: https://nodejs.org/api/wasm.html
-
-## Decision: What to do next?
-
-**Recommended:** Start with **Phase 1: Module Generation**
-
-1. Create `jit_wasm_module.erl`
-2. Implement section generators
-3. Update `flush/1`
-4. Add validation test
-5. Iterate until wasm-validate passes
-
-This gives us:
-- Concrete progress (valid .wasm files)
-- Independent validation (wasm-validate)
-- Foundation for testing
-- No C dependencies yet
-
-**Estimated time:** 1-2 weeks
-**Risk:** Low (pure Erlang, well-defined spec)
-**Value:** High (enables next phases)
-
-Ready to proceed?
+**Next commit:** Add WASM32 arch constant and target recognition to jit_precompile.erl
