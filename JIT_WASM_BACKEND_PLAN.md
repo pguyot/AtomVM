@@ -760,7 +760,7 @@ Implement in order of dependency:
 **Tier 5: Function Calls (Week 6)** ✅ **COMPLETED - Real Implementation**
 
 33. `call_primitive/3` - Call via `call_indirect` with function table ✅
-34. `call_primitive_last/3` - Tail call via `call_indirect` ✅
+34. `call_primitive_last/3` - Tail call via `call_indirect` + return ✅
 35. `call_primitive_with_cp/3` - Call with continuation point (placeholder) ✅
 36. `call_func_ptr/3` - Indirect call (placeholder) ✅
 37. `call_or_schedule_next/2` - Call or yield (placeholder) ✅
