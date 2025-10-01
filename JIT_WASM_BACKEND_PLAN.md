@@ -681,18 +681,18 @@ local_get_test_() ->
 
 Implement in order of dependency:
 
-**Tier 1: Foundation (Week 4)**
+**Tier 1: Foundation (Week 4)** ✅ **COMPLETED**
 
-1. `word_size/0` - Return 4
-2. `new/3` - Initialize state with fixed 6 locals
-3. `stream/1`, `offset/1` - State accessors
-4. `flush/1` - Finalize WASM function body
-5. `move_to_native_register/2` - Load value into local
-6. `move_to_native_register/3` - Load value into specific local
-7. `move_to_vm_register/3` - Store local to VM register (x/y regs)
-8. `copy_to_native_register/2` - Copy local to another local
-9. `free_native_registers/2` - Mark locals as available
-10. `assert_all_native_free/1` - Debugging helper
+1. `word_size/0` - Return 4 ✅
+2. `new/3` - Initialize state with fixed 6 locals ✅
+3. `stream/1`, `offset/1` - State accessors ✅
+4. `flush/1` - Finalize WASM function body ✅
+5. `move_to_native_register/2` - Load value into local ✅
+6. `move_to_native_register/3` - Load value into specific local ✅
+7. `move_to_vm_register/3` - Store local to VM register (x/y regs) ✅
+8. `copy_to_native_register/2` - Copy local to another local ✅
+9. `free_native_registers/2` - Mark locals as available ✅
+10. `assert_all_native_free/1` - Debugging helper ✅
 
 **Tier 2: Control Flow (Week 4-5)**
 
@@ -705,15 +705,15 @@ Implement in order of dependency:
 17. `jump_table/2` - Generate dispatch table (br_table)
 18. `update_branches/1` - Resolve all label references
 
-**Tier 3: Arithmetic and Logic (Week 5)**
+**Tier 3: Arithmetic and Logic (Week 5)** ✅ **COMPLETED**
 
-19. `add/3` - i32.add
-20. `sub/3` - i32.sub
-21. `mul/3` - i32.mul
-22. `and_/3` - i32.and
-23. `or_/3` - i32.or
-24. `shift_left/3` - i32.shl
-25. `shift_right/3` - i32.shr_u / i32.shr_s
+19. `add/3` - i32.add ✅
+20. `sub/3` - i32.sub ✅
+21. `mul/3` - i32.mul ✅
+22. `and_/3` - i32.and ✅
+23. `or_/3` - i32.or ✅
+24. `shift_left/3` - i32.shl ✅
+25. `shift_right/3` - i32.shr_u ✅
 
 **Tier 4: Memory Access (Week 5)**
 
