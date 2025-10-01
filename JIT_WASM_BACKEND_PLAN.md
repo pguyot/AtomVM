@@ -803,22 +803,22 @@ WASM has linear memory starting at 0.
 
 ### Phase 3: Testing Infrastructure (Week 7)
 
-#### 3.1 Backend Tests (`jit_wasm_tests.erl`)
+#### 3.1 Backend Tests (`jit_wasm_tests.erl`) ✅ **COMPLETED - Initial Suite**
 
 **Structure:** Mirror `jit_armv6m_tests.erl` (most comprehensive)
 
 **Test Categories:**
 
-1. **Basic Operations**
-   - move_to_native_register
-   - move_to_vm_register
-   - copy_to_native_register
-   - free_native_registers
+1. **Basic Operations** ✅
+   - move_to_native_register ✅
+   - move_to_vm_register ✅
+   - copy_to_native_register ✅
+   - free_native_registers ✅
 
-2. **Arithmetic**
-   - add, sub, mul
-   - shift_left, shift_right
-   - and_, or_
+2. **Arithmetic** ✅
+   - add, sub, mul ✅
+   - shift_left, shift_right ✅
+   - and_, or_ ✅
 
 3. **Memory Access**
    - get_array_element
