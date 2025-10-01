@@ -345,33 +345,28 @@ Context *(*ModuleNativeEntryPoint)(Context *ctx, JITState *jit_state, const Modu
 
 ## Implementation Strategy
 
-### Phase 0: Preliminary Analysis (Week 1)
+### Phase 0: Preliminary Analysis (Week 1) ✅ COMPLETED
 
-#### 0.1 Verify Term Size on Emscripten
+#### 0.1 Verify Term Size on Emscripten ✅
 
-**Objective:** Ensure `sizeof(term)` is 32 bits on Emscripten platform.
+**Status:** COMPLETED
 
-**Background:**
-- `word_size/0` returns `sizeof(term)`, which is defined in `term_typedef.h`
-- ARMv6-M already uses 4 bytes (32-bit)
-- Need to confirm Emscripten configuration
+**Findings:**
+- `term_typedef.h` defines term size based on `UINTPTR_MAX`
+- For WASM32 (Emscripten): `UINTPTR_MAX == UINT32_MAX` → `TERM_BYTES = 4`
+- No explicit CMake configuration needed - automatic from pointer size
+- ARMv6-M backend already uses 4 bytes (32-bit)
+- WASM backend will use `word_size() -> 4` matching ARMv6-M
 
-**Tasks:**
-1. Examine `src/libAtomVM/term_typedef.h` for TERM_BYTES definition
-2. Check CMake configuration for Emscripten
-3. Verify that Emscripten build uses `-DTERM_BYTES=4` or relies on `UINTPTR_MAX == UINT32_MAX`
-4. Add static assertion if needed in C code
-5. Document the term size requirement
+**Deliverable:** ✅ Confirmed that `word_size/0` will return 4 for WASM backend.
 
-**Deliverable:** Confirmation that `word_size/0` will return 4 for WASM backend.
+#### 0.2 Analyze Entry Points and Local Allocation Strategy ✅
 
-#### 0.2 Analyze Entry Points and Local Allocation Strategy
-
-**Objective:** Determine optimal local variable allocation strategy for WASM.
+**Status:** COMPLETED
 
 **Entry Points Analysis:**
 
-From code analysis, JIT-compiled code can be entered at:
+JIT-compiled code can be entered at:
 1. **Module labels** (via `add_label/2`): Function entry points in modules
 2. **Continuation points** (via `continuation_entry_point/1`): For resuming after yielding/scheduling
 3. **Factorized tail calls** (via `tail_cache` in jit.erl): Shared tail call sequences
@@ -382,13 +377,7 @@ From code analysis, JIT-compiled code can be entered at:
 - AArch64 has 13 available: `[r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6]`
 - ARMv6-M has a function prolog (`push {r1, r4, r5, r6, r7, lr}`) but x86-64/AArch64 don't
 
-**Local Allocation Strategy Decision:**
-
-Two approaches:
-1. **Fixed locals (conservative)**: Allocate 6 locals to match ARMv6-M
-2. **Dynamic locals (flexible)**: Allocate locals on demand
-
-**Recommendation:** Start with **fixed 6 locals** approach for MVP:
+**Decision:** **Fixed 6 locals** approach for MVP:
 - Simplifies register allocation logic (can reuse ARMv6-M patterns)
 - Easier to port existing backend code
 - WASM engines handle small local counts very efficiently
@@ -413,21 +402,7 @@ Local 3-8: Scratch registers (6 total, matching ARMv6-M)
 )
 ```
 
-**Special Handling for Entry Points:**
-- **Labels**: Standard entry, no special prolog
-- **Continuation points**: May need to restore state from context (TBD based on backend requirements)
-- **Tail calls**: Direct jump/branch to target
-
-**Tasks:**
-1. Document local allocation strategy
-2. Create mapping from ARMv6-M register allocation to WASM locals
-3. Identify any special requirements for continuation points
-4. Test with simple function to validate approach
-
-**Deliverable:**
-- Document: "WASM Local Allocation Strategy"
-- Confirmation that 6 locals + 3 parameters is sufficient
-- Map of how existing backends' register operations translate to WASM locals
+**Deliverable:** ✅ Strategy documented (see Appendix D for full details)
 
 ### Phase 1: Foundation (Weeks 2-3)
 
