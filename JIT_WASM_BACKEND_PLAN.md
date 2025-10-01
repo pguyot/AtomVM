@@ -725,25 +725,25 @@ Implement in order of dependency:
 31. `move_to_cp/2` - Set continuation pointer ✅
 32. `increment_sp/2` - No-op for WASM ✅
 
-**Tier 5: Function Calls (Week 6)**
+**Tier 5: Function Calls (Week 6)** ✅ **COMPLETED - Placeholders**
 
-33. `call_primitive/3` - Call imported C function
-34. `call_primitive_last/3` - Tail call to C function
-35. `call_primitive_with_cp/3` - Call with continuation point
-36. `call_func_ptr/3` - Indirect call (call_indirect)
-37. `call_or_schedule_next/2` - Call or yield
-38. `call_only_or_schedule_next/2` - Tail call or yield
-39. `decrement_reductions_and_maybe_schedule_next/1` - Cooperative scheduling
+33. `call_primitive/3` - Call imported C function (placeholder) ✅
+34. `call_primitive_last/3` - Tail call to C function (placeholder) ✅
+35. `call_primitive_with_cp/3` - Call with continuation point (placeholder) ✅
+36. `call_func_ptr/3` - Indirect call (placeholder for call_indirect) ✅
+37. `call_or_schedule_next/2` - Call or yield (placeholder) ✅
+38. `call_only_or_schedule_next/2` - Tail call or yield (placeholder) ✅
+39. `decrement_reductions_and_maybe_schedule_next/1` - Cooperative scheduling (placeholder) ✅
 
-**Tier 6: Advanced (Week 6)**
+**Tier 6: Advanced (Week 6)** ⏸️ **PARTIAL**
 
-40. `return_if_not_equal_to_ctx/2` - Conditional return
-41. `continuation_entry_point/1` - Entry point for continuation
-42. `set_continuation_to_label/2` - Set continuation to label
-43. `set_continuation_to_offset/1` - Set continuation to offset
-44. `get_module_index/1` - Get module index
-45. `return_labels_and_lines/2` - Generate debug info
-46. `debugger/1` - Insert unreachable instruction
+40. `return_if_not_equal_to_ctx/2` - Conditional return ✅
+41. `continuation_entry_point/1` - Entry point for continuation (stub)
+42. `set_continuation_to_label/2` - Set continuation to label (stub)
+43. `set_continuation_to_offset/1` - Set continuation to offset (stub)
+44. `get_module_index/1` - Get module index (stub)
+45. `return_labels_and_lines/2` - Generate debug info (stub)
+46. `debugger/1` - Insert unreachable instruction ✅
 
 #### 2.4 WASM-Specific Challenges and Solutions
 
@@ -832,11 +832,13 @@ WASM has linear memory starting at 0.
    - if_block, if_else_block ✅
    - jump_table ✅
 
-5. **Function Calls**
-   - call_primitive (0-5 args)
-   - call_primitive_last
-   - call_primitive_with_cp
-   - call_func_ptr
+5. **Function Calls** ✅ **(Placeholders)**
+   - call_primitive ✅
+   - call_primitive_last ✅
+   - call_primitive_with_cp ✅
+   - call_func_ptr ✅
+   - call_or_schedule_next ✅
+   - decrement_reductions ✅
 
 **Test Methodology:**
 - Generate WASM function body for each operation
