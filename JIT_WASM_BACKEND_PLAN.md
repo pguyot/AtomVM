@@ -9,14 +9,15 @@ This document outlines a comprehensive plan to add WebAssembly (WASM) as a fourt
 **STATUS: ✅ COMPLETE - All Tiers Implemented**
 
 ### Summary
-- **Total Lines of Code:** 2,479
-  - `jit_wasm.erl`: 1,085 lines (backend)
+- **Total Lines of Code:** 3,200+ (including documentation)
+  - `jit_wasm.erl`: 1,100+ lines (backend)
   - `jit_wasm_asm.erl`: 339 lines (assembler)
-  - `jit_wasm_tests.erl`: 711 lines (backend tests)
+  - `jit_wasm_tests.erl`: 800+ lines (backend tests)
   - `jit_wasm_asm_tests.erl`: 344 lines (assembler tests)
+  - Analysis docs: 900+ lines
 
 - **Total Functions:** 50+ backend operations
-- **Total Tests:** 123 (84 assembler + 39 backend)
+- **Total Tests:** 127 (84 assembler + 43 backend)
 - **Test Success Rate:** 100% (all tests passing)
 
 ### Completed Phases
@@ -31,10 +32,10 @@ This document outlines a comprehensive plan to add WebAssembly (WASM) as a fourt
   - ✅ Tier 6: Advanced (return_if_not_equal, continuations, debug info)
 
 ### Implementation Notes
-- **Function Calls (Tier 5):** Core primitives (`call_primitive`, `call_primitive_last`) implemented using `call_indirect` with function table. Loads function pointers from `ModuleNativeInterface->functions[]` array and calls indirectly. Remaining call operations still use placeholders pending runtime integration.
-- **Continuations (Tier 6):** Basic implementations provided; complex continuation management requires runtime integration.
+- **Function Calls (Tier 5):** Core primitives (`call_primitive`, `call_primitive_last`) fully implemented using `call_indirect` with function table. Loads function pointers from `ModuleNativeInterface->functions[]` array and calls indirectly. Some specialized call operations (call_primitive_with_cp, call_func_ptr) still use placeholders pending runtime integration.
+- **Continuations (Tier 6):** ✅ **FULLY IMPLEMENTED** - All 4 continuation operations working: `set_continuation_to_label`, `set_continuation_to_offset`, `jump_to_continuation`, `jump_to_offset`. Uses same `call_indirect` pattern as primitives.
 - **WASM Compliance:** All generated code follows WebAssembly binary format specification with proper LEB128 encoding.
-- **Critical Discovery:** Analysis of C-compiled WASM revealed that function calls use `call_indirect` with function tables, not direct imports. This simplified the implementation significantly.
+- **Critical Discovery:** Analysis of C-compiled WASM revealed that both function calls and continuations use `call_indirect` with function tables, not direct imports. This simplified the implementation significantly.
 
 ## Development Methodology
 
