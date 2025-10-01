@@ -453,7 +453,26 @@ jump_to_label(
             State#state{stream = Stream1, branches = NewBranches}
     end.
 
--spec jump_to_continuation(state(), wasm_local()) -> state().
+-spec jump_to_continuation(state(), maybe_free_wasm_local()) -> state().
+% Handle {free, Local} - use it and free it (we're jumping away)
+jump_to_continuation(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Local}) ->
+    % Jump to continuation stored in jit_state->continuation
+    % Load continuation and call indirectly (same pattern as primitives)
+    Code = <<
+        % Standard arguments
+        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        (jit_wasm_asm:local_get(2))/binary,  % native_interface
+        % Load continuation from jit_state->continuation (offset 4)
+        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+        (jit_wasm_asm:i32_load(2, ?JITSTATE_CONTINUATION_OFFSET))/binary,
+        % Call indirectly (type 0 = (i32,i32,i32)->i32)
+        (jit_wasm_asm:call_indirect(0))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State1 = State0#state{stream = Stream1},
+    % Free the register after use
+    free_native_register(State1, Local);
 jump_to_continuation(
     #state{stream_module = StreamModule, stream = Stream0} = State, {local, _Idx}
 ) ->
@@ -530,6 +549,20 @@ emit_condition(State, {Local, '!=', Value}) when is_integer(Value) ->
         (jit_wasm_asm:local_get(LocalIdx))/binary,
         (jit_wasm_asm:i32_const(Value))/binary,
         (jit_wasm_asm:i32_ne())/binary
+    >>,
+    {State, Code};
+% Handle typed comparisons like {'(bool)', Local, '==', Value}
+emit_condition(State, {'(bool)', Local, Op, Value}) ->
+    % Strip the type annotation and handle the comparison
+    emit_condition(State, {Local, Op, Value});
+% Handle comparison with false (0 in WASM) - must come before general == clause
+emit_condition(State, {Local, '==', false}) ->
+    {LocalIdx, Code1} = get_local_idx(Local),
+    Code = <<
+        Code1/binary,
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:i32_const(0))/binary,  % false = 0
+        (jit_wasm_asm:i32_eq())/binary
     >>,
     {State, Code};
 emit_condition(State, {Local1, '==', Local2}) ->
@@ -627,7 +660,20 @@ if_else_block(
 %% @doc Shift right: local = local >> shift (unsigned)
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_right(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+-spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+% Handle {free, Local} - use it and then free it
+shift_right(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, {local, Idx} = Local}, Shift) ->
+    Code = <<
+        (jit_wasm_asm:local_get(Idx))/binary,
+        (jit_wasm_asm:i32_const(Shift))/binary,
+        (jit_wasm_asm:i32_shr_u())/binary,
+        (jit_wasm_asm:local_set(Idx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State1 = State0#state{stream = Stream1},
+    % Free the register after use
+    State2 = free_native_register(State1, Local),
+    {State2, Local};
 shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
