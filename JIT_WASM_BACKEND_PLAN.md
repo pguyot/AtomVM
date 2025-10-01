@@ -694,16 +694,16 @@ Implement in order of dependency:
 9. `free_native_registers/2` - Mark locals as available ✅
 10. `assert_all_native_free/1` - Debugging helper ✅
 
-**Tier 2: Control Flow (Week 4-5)**
+**Tier 2: Control Flow (Week 4-5)** ✅ **COMPLETED**
 
-11. `add_label/2`, `add_label/3` - Mark branch targets (emit block)
-12. `jump_to_label/2` - Branch to label (br)
-13. `jump_to_offset/2` - Jump to absolute offset (br with calculated depth)
-14. `jump_to_continuation/2` - Jump via continuation pointer
-15. `if_block/3` - Conditional execution (if/end)
-16. `if_else_block/4` - Conditional execution (if/else/end)
-17. `jump_table/2` - Generate dispatch table (br_table)
-18. `update_branches/1` - Resolve all label references
+11. `add_label/2`, `add_label/3` - Mark branch targets ✅
+12. `jump_to_label/2` - Branch to label (br for forward, placeholder for backward) ✅
+13. `jump_to_offset/2` - Jump to absolute offset (placeholder) ✅
+14. `jump_to_continuation/2` - Jump via continuation pointer (placeholder) ✅
+15. `if_block/3` - Conditional execution (if/end) ✅
+16. `if_else_block/4` - Conditional execution (if/else/end) ✅
+17. `jump_table/2` - Generate dispatch table (br_table) ✅
+18. `update_branches/1` - Branch resolution (placeholder) ✅
 
 **Tier 3: Arithmetic and Logic (Week 5)** ✅ **COMPLETED**
 
@@ -826,10 +826,11 @@ WASM has linear memory starting at 0.
    - move_to_array_element
    - set_bs, move_to_cp
 
-4. **Control Flow**
-   - jump_to_label
-   - if_block, if_else_block
-   - jump_table
+4. **Control Flow** ✅
+   - add_label ✅
+   - jump_to_label ✅
+   - if_block, if_else_block ✅
+   - jump_table ✅
 
 5. **Function Calls**
    - call_primitive (0-5 args)
