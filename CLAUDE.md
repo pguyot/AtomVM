@@ -141,8 +141,16 @@ Context *(*ModuleNativeEntryPoint)(Context *ctx, JITState *jit_state, const Modu
 There is no function prolog with x86\_64 and aarch64 backends because they have sufficiently scratch registers to work with, but there is a prolog with armv6m backend which pushes registers r1 (`jit_state`) as well as r4-r7 and lr.
 
 
+## Git workflow
+
+IMPORTANT: When committing changes:
+- NEVER use `git add -A`
+- ALWAYS explicitly add only the specific files that were modified
+- Example: `git add libs/jit/src/jit_wasm.erl libs/jit/include/jit.hrl`
+
 ## Other notes
 
 - Files are often too large to fit in context. Always make sure the function you work on is in context to avoid suggesting edits that don't make sense.
 - When writing new tests, always look for existing tests to stick with the style.
 - Always format code with `erlfmt -w` or `clang-format -i`.
+- jit_dwarf is just an empty proxy when DWARF debugging is disabled - don't worry about dwarf state wrapping issues.

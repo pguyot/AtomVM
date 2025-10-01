@@ -150,7 +150,11 @@
 -define(JUMP_TABLE_ENTRY_SIZE, 12).
 
 % Available scratch locals (6 total, matching ARMv6-M)
--define(AVAILABLE_LOCALS, [{local, 3}, {local, 4}, {local, 5}, {local, 6}, {local, 7}, {local, 8}]).
+-define(AVAILABLE_LOCALS, [
+    {local, 3}, {local, 4}, {local, 5}, {local, 6}, {local, 7}, {local, 8},
+    {local, 9}, {local, 10}, {local, 11}, {local, 12}, {local, 13}, {local, 14},
+    {local, 15}, {local, 16}, {local, 17}, {local, 18}, {local, 19}, {local, 20}
+]).
 
 %%-----------------------------------------------------------------------------
 %% @doc Return the word size in bytes, i.e. the sizeof(term) i.e.
@@ -623,8 +627,8 @@ if_else_block(
 %% @doc Shift right: local = local >> shift (unsigned)
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_right(state(), wasm_local(), non_neg_integer()) -> state().
-shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift) ->
+-spec shift_right(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
         (jit_wasm_asm:i32_const(Shift))/binary,
@@ -632,14 +636,14 @@ shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {loc
         (jit_wasm_asm:local_set(Idx))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1}, Local}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Shift left: local = local << shift
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_left(state(), wasm_local(), non_neg_integer()) -> state().
-shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift) ->
+-spec shift_left(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
         (jit_wasm_asm:i32_const(Shift))/binary,
@@ -647,7 +651,7 @@ shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {loca
         (jit_wasm_asm:local_set(Idx))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1}, Local}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Move a value from a native local to a VM register (x_reg or y_reg).
@@ -1110,7 +1114,22 @@ get_module_index(
 %% @doc Bitwise AND: dest = dest & src
 %% @end
 %%-----------------------------------------------------------------------------
--spec and_(state(), wasm_local(), wasm_local()) -> state().
+-spec and_(state(), wasm_local(), wasm_local() | integer()) -> state().
+% AND with immediate value
+and_(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    Imm
+) when is_integer(Imm) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:i32_const(Imm))/binary,
+        (jit_wasm_asm:i32_and())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% AND with another local
 and_(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {local, DestIdx},
