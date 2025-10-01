@@ -854,15 +854,16 @@ jump_to_offset_test() ->
 
 set_continuation_to_offset_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    % Set continuation to offset (placeholder implementation stores 0)
-    State1 = ?BACKEND:set_continuation_to_offset(State0),
+    % Set continuation to current offset, returns {State, OffsetRef}
+    {State1, OffsetRef} = ?BACKEND:set_continuation_to_offset(State0),
     Stream = ?BACKEND:stream(State1),
-    % Should emit: local.get 1, i32.const 0, i32.store offset=4
+    % Should emit: local.get 1, i32.const <offset>, i32.store offset=4
+    % The offset will be 0 since we're at the start of the stream
     Expected = <<
         % local.get 1 (jit_state)
         16#20,
         16#01,
-        % i32.const 0 (placeholder)
+        % i32.const 0 (current offset)
         16#41,
         16#00,
         % i32.store align=2 offset=4
@@ -870,4 +871,6 @@ set_continuation_to_offset_test() ->
         16#02,
         16#04
     >>,
-    ?assertEqual(Expected, Stream).
+    ?assertEqual(Expected, Stream),
+    % Verify OffsetRef is a reference
+    ?assert(is_reference(OffsetRef)).

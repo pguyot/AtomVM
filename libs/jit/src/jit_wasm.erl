@@ -982,24 +982,38 @@ set_continuation_to_label(State, _Label) ->
     % For now, placeholder (no-op)
     State.
 
--spec set_continuation_to_offset(state()) -> state().
+-spec set_continuation_to_offset(state()) -> {state(), reference()}.
 set_continuation_to_offset(
-    #state{stream_module = StreamModule, stream = Stream0} = State
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        branches = Branches
+    } = State
 ) ->
-    % Set continuation to offset stored in a native local
-    % The offset is typically computed from module base + label offset
-    % For WASM, this loads a function pointer from a computed address and stores to continuation
-    % This is a placeholder - needs a local with the offset
-    % Store offset 0 for now (minimal implementation)
+    % Set continuation to the current code position
+    % Create a reference that will be resolved to a label
+    % The label will point to the code following this instruction
+    OffsetRef = make_ref(),
+    Offset = StreamModule:offset(Stream0),
+
+    % For WASM, we store a placeholder function index that will be resolved later
+    % When add_label is called with OffsetRef, it will associate it with a function
+    % For now, we store the offset as a temporary placeholder value
+    % This will need to be patched when the label is resolved
     Code = <<
         % jit_state
         (jit_wasm_asm:local_get(1))/binary,
-        % Placeholder: offset 0
-        (jit_wasm_asm:i32_const(0))/binary,
+        % Temporary: store offset as placeholder (will be patched to function index)
+        (jit_wasm_asm:i32_const(Offset))/binary,
         (jit_wasm_asm:i32_store(2, ?JITSTATE_CONTINUATION_OFFSET))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+
+    % Record this for later resolution (similar to a branch that needs fixing)
+    % The 'continuation' tag indicates this needs special handling
+    Reloc = {OffsetRef, Offset, continuation},
+
+    {State#state{stream = Stream1, branches = [Reloc | Branches]}, OffsetRef}.
 
 -spec continuation_entry_point(state()) -> state().
 continuation_entry_point(State) ->
