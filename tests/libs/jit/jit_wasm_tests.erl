@@ -639,3 +639,73 @@ increment_sp_test() ->
     Stream = ?BACKEND:stream(State1),
     % Should be no-op, stream unchanged
     ?assertEqual(<<>>, Stream).
+
+%%-----------------------------------------------------------------------------
+%% Function call tests (placeholders using unreachable)
+%%-----------------------------------------------------------------------------
+
+call_primitive_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Call primitive (placeholder)
+    State1 = ?BACKEND:call_primitive(State0, 0, []),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable (0x00)
+    ?assertEqual(<<16#00>>, Stream).
+
+call_primitive_last_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Tail call primitive (placeholder)
+    State1 = ?BACKEND:call_primitive_last(State0, 1, []),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable
+    ?assertEqual(<<16#00>>, Stream).
+
+call_primitive_with_cp_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Call with continuation point (placeholder)
+    State1 = ?BACKEND:call_primitive_with_cp(State0, 2, []),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable
+    ?assertEqual(<<16#00>>, Stream).
+
+call_func_ptr_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, FuncPtr} = ?BACKEND:move_to_native_register(State0, 16#1234),
+    % Indirect call (placeholder)
+    State2 = ?BACKEND:call_func_ptr(State1, FuncPtr, []),
+    Stream = ?BACKEND:stream(State2),
+    % Should contain move + unreachable
+    ?assert(byte_size(Stream) > 1).
+
+call_or_schedule_next_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Call or schedule (placeholder)
+    State1 = ?BACKEND:call_or_schedule_next(State0, 1),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable
+    ?assertEqual(<<16#00>>, Stream).
+
+call_only_or_schedule_next_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Tail call or schedule (placeholder)
+    State1 = ?BACKEND:call_only_or_schedule_next(State0, 2),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable
+    ?assertEqual(<<16#00>>, Stream).
+
+decrement_reductions_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Decrement reductions (placeholder)
+    State1 = ?BACKEND:decrement_reductions_and_maybe_schedule_next(State0),
+    Stream = ?BACKEND:stream(State1),
+    % Should emit unreachable
+    ?assertEqual(<<16#00>>, Stream).
+
+return_if_not_equal_to_ctx_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Local} = ?BACKEND:move_to_native_register(State0, 42),
+    % Conditional return
+    State2 = ?BACKEND:return_if_not_equal_to_ctx(State1, Local),
+    Stream = ?BACKEND:stream(State2),
+    % Should contain comparison, if, return, end
+    ?assert(byte_size(Stream) > 5).

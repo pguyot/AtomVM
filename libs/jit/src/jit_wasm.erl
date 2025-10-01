@@ -314,20 +314,57 @@ update_branches(State) ->
     State.
 
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> state().
-call_primitive(_State, _Index, _Args) ->
-    error(not_implemented).
+call_primitive(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _Index,
+    _Args
+) ->
+    % Call primitive function - placeholder using unreachable
+    % Full implementation requires WASM imports and function table setup
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
-call_primitive_last(_State, _Index, _Args) ->
-    error(not_implemented).
+call_primitive_last(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _Index,
+    _Args
+) ->
+    % Tail call primitive - placeholder using unreachable
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec call_primitive_with_cp(state(), non_neg_integer(), [arg()]) -> state().
-call_primitive_with_cp(_State, _Index, _Args) ->
-    error(not_implemented).
+call_primitive_with_cp(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _Index,
+    _Args
+) ->
+    % Call primitive with continuation point - placeholder
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec return_if_not_equal_to_ctx(state(), wasm_local()) -> state().
-return_if_not_equal_to_ctx(_State, _Local) ->
-    error(not_implemented).
+return_if_not_equal_to_ctx(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, LocalIdx}
+) ->
+    % Return if local != ctx - placeholder
+    % Compare local with ctx (local 0), if not equal, return
+    Code = <<
+        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        (jit_wasm_asm:local_get(0))/binary,  % ctx
+        (jit_wasm_asm:i32_ne())/binary,
+        (jit_wasm_asm:if_(empty))/binary,
+        (jit_wasm_asm:local_get(LocalIdx))/binary,  % return the local value
+        (jit_wasm_asm:return_())/binary,
+        (jit_wasm_asm:end_())/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec jump_to_label(state(), integer() | reference()) -> state().
 jump_to_label(
@@ -947,20 +984,46 @@ mul(
     State#state{stream = Stream1}.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
-decrement_reductions_and_maybe_schedule_next(_State) ->
-    error(not_implemented).
+decrement_reductions_and_maybe_schedule_next(
+    #state{stream_module = StreamModule, stream = Stream0} = State
+) ->
+    % Decrement reductions counter and potentially yield - placeholder
+    % Full implementation requires cooperation with scheduler
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec call_or_schedule_next(state(), integer() | reference()) -> state().
-call_or_schedule_next(_State, _Label) ->
-    error(not_implemented).
+call_or_schedule_next(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _Label
+) ->
+    % Call or schedule next - placeholder
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec call_only_or_schedule_next(state(), integer() | reference()) -> state().
-call_only_or_schedule_next(_State, _Label) ->
-    error(not_implemented).
+call_only_or_schedule_next(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _Label
+) ->
+    % Tail call or schedule next - placeholder
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec call_func_ptr(state(), wasm_local(), [arg()]) -> state().
-call_func_ptr(_State, _FuncPtr, _Args) ->
-    error(not_implemented).
+call_func_ptr(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    _FuncPtr,
+    _Args
+) ->
+    % Indirect function call - placeholder
+    % Full implementation requires call_indirect with function table
+    Code = jit_wasm_asm:unreachable(),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 -spec return_labels_and_lines(state(), [{integer(), integer()}]) ->
     {state(), wasm_local(), [{integer(), integer()}]}.
