@@ -684,12 +684,13 @@ if_else_block(
 %% @doc Shift right: local = local >> shift (unsigned)
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> state().
-% Handle {free, Local} - just unwrap, caller will free when done
+-spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+% Handle {free, Local} - unwrap and return the local
 shift_right(State, {free, Local}, Shift) ->
-    shift_right(State, Local, Shift);
+    {State1, _} = shift_right(State, Local, Shift),
+    {State1, Local};
 shift_right(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift
 ) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
@@ -698,7 +699,7 @@ shift_right(
         (jit_wasm_asm:local_set(Idx))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1}, Local}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Shift left: local = local << shift
