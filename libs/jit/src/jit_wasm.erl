@@ -151,9 +151,24 @@
 
 % Available scratch locals (6 total, matching ARMv6-M)
 -define(AVAILABLE_LOCALS, [
-    {local, 3}, {local, 4}, {local, 5}, {local, 6}, {local, 7}, {local, 8},
-    {local, 9}, {local, 10}, {local, 11}, {local, 12}, {local, 13}, {local, 14},
-    {local, 15}, {local, 16}, {local, 17}, {local, 18}, {local, 19}, {local, 20}
+    {local, 3},
+    {local, 4},
+    {local, 5},
+    {local, 6},
+    {local, 7},
+    {local, 8},
+    {local, 9},
+    {local, 10},
+    {local, 11},
+    {local, 12},
+    {local, 13},
+    {local, 14},
+    {local, 15},
+    {local, 16},
+    {local, 17},
+    {local, 18},
+    {local, 19},
+    {local, 20}
 ]).
 
 %%-----------------------------------------------------------------------------
