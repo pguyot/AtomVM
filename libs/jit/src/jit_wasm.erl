@@ -684,12 +684,12 @@ if_else_block(
 %% @doc Shift right: local = local >> shift (unsigned)
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+-spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> state().
 % Handle {free, Local} - just unwrap, caller will free when done
 shift_right(State, {free, Local}, Shift) ->
     shift_right(State, Local, Shift);
 shift_right(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift
 ) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
@@ -698,15 +698,15 @@ shift_right(
         (jit_wasm_asm:local_set(Idx))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1}, Local}.
+    State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Shift left: local = local << shift
 %% @end
 %%-----------------------------------------------------------------------------
--spec shift_left(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
+-spec shift_left(state(), wasm_local(), non_neg_integer()) -> state().
 shift_left(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx}, Shift
 ) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
@@ -715,7 +715,7 @@ shift_left(
         (jit_wasm_asm:local_set(Idx))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1}, Local}.
+    State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Move a value from a native local to a VM register (x_reg or y_reg).
@@ -970,16 +970,21 @@ mov_immediate(#state{stream_module = StreamModule, stream = Stream0} = State, {l
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
--spec move_to_cp(state(), wasm_local()) -> state().
+-spec move_to_cp(state(), vm_register()) -> state().
 move_to_cp(
     #state{stream_module = StreamModule, stream = Stream0} = State,
-    {local, LocalIdx}
+    {y_reg, Y}
 ) ->
-    % Move to continuation pointer: store local to ctx->cp (offset 0x5C)
+    % Move to continuation pointer: load from y_reg and store to ctx->cp (offset 0x5C)
     Code = <<
         % ctx
         (jit_wasm_asm:local_get(0))/binary,
-        (jit_wasm_asm:local_get(LocalIdx))/binary,
+        % Load y_regs base
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
+        % Load value from Y register
+        (jit_wasm_asm:i32_load(2, Y * 4))/binary,
+        % Store to ctx->cp
         (jit_wasm_asm:i32_store(2, ?CP_OFFSET))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -1229,7 +1234,22 @@ and_(
 %% @doc Bitwise OR: dest = dest | src
 %% @end
 %%-----------------------------------------------------------------------------
--spec or_(state(), wasm_local(), wasm_local()) -> state().
+-spec or_(state(), wasm_local(), wasm_local() | integer()) -> state().
+% OR with immediate value
+or_(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    {local, DestIdx},
+    Val
+) when is_integer(Val) ->
+    Code = <<
+        (jit_wasm_asm:local_get(DestIdx))/binary,
+        (jit_wasm_asm:i32_const(Val))/binary,
+        (jit_wasm_asm:i32_or())/binary,
+        (jit_wasm_asm:local_set(DestIdx))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% OR with another local
 or_(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {local, DestIdx},
