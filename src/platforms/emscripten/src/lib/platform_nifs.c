@@ -46,6 +46,11 @@
 #include "platform_nifs.h"
 #include "websocket_nifs.h"
 
+#ifndef AVM_NO_JIT
+extern const struct Nif *jit_stream_wasm_get_nif(const char *nifname);
+extern void jit_stream_wasm_init(GlobalContext *global);
+#endif
+
 static term nif_atomvm_platform(Context *ctx, int argc, term argv[])
 {
     UNUSED(ctx);
@@ -826,5 +831,16 @@ const struct Nif *platform_nifs_get_nif(const char *nifname)
     }
 
     const struct Nif *result = websocket_get_nif(nifname);
-    return result;
+    if (result) {
+        return result;
+    }
+
+#ifndef AVM_NO_JIT
+    result = jit_stream_wasm_get_nif(nifname);
+    if (result) {
+        return result;
+    }
+#endif
+
+    return NULL;
 }

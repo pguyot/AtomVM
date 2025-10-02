@@ -176,6 +176,11 @@ void sys_init_platform(GlobalContext *glb)
         AVM_ABORT();
     }
 
+#ifndef AVM_NO_JIT
+    extern void jit_stream_wasm_init(GlobalContext *global);
+    jit_stream_wasm_init(glb);
+#endif
+
 #ifndef AVM_NO_SMP
     platform->entropy_mutex = smp_mutex_create();
     if (IS_NULL_PTR(platform->entropy_mutex)) {
