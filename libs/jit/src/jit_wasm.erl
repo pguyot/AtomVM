@@ -231,7 +231,7 @@ offset(#state{stream_module = StreamModule, stream = Stream}) ->
 %% @param State current backend state
 %% @return The new state
 %%-----------------------------------------------------------------------------
--spec flush(state()) -> stream().
+-spec flush(state()) -> state().
 flush(#state{stream_module = StreamModule, stream = Stream0} = State) ->
     Stream1 = StreamModule:flush(Stream0),
     State#state{stream = Stream1}.
@@ -470,16 +470,24 @@ jump_to_label(
 
 -spec jump_to_continuation(state(), maybe_free_wasm_local()) -> state().
 % Handle {free, Local} - use it and free it (we're jumping away)
-jump_to_continuation(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Local}) ->
+jump_to_continuation(
+    #state{stream_module = StreamModule, stream = Stream0} = State0, {free, Local}
+) ->
     % Jump to continuation stored in jit_state->continuation
     % Load continuation and call indirectly (same pattern as primitives)
     Code = <<
         % Standard arguments
-        (jit_wasm_asm:local_get(0))/binary,  % ctx
-        (jit_wasm_asm:local_get(1))/binary,  % jit_state
-        (jit_wasm_asm:local_get(2))/binary,  % native_interface
+
+        % ctx
+        (jit_wasm_asm:local_get(0))/binary,
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
+        % native_interface
+        (jit_wasm_asm:local_get(2))/binary,
         % Load continuation from jit_state->continuation (offset 4)
-        (jit_wasm_asm:local_get(1))/binary,  % jit_state
+
+        % jit_state
+        (jit_wasm_asm:local_get(1))/binary,
         (jit_wasm_asm:i32_load(2, ?JITSTATE_CONTINUATION_OFFSET))/binary,
         % Call indirectly (type 0 = (i32,i32,i32)->i32)
         (jit_wasm_asm:call_indirect(0))/binary
@@ -576,7 +584,8 @@ emit_condition(State, {Local, '==', false}) ->
     Code = <<
         Code1/binary,
         (jit_wasm_asm:local_get(LocalIdx))/binary,
-        (jit_wasm_asm:i32_const(0))/binary,  % false = 0
+        % false = 0
+        (jit_wasm_asm:i32_const(0))/binary,
         (jit_wasm_asm:i32_eq())/binary
     >>,
     {State, Code};
@@ -676,20 +685,12 @@ if_else_block(
 %% @end
 %%-----------------------------------------------------------------------------
 -spec shift_right(state(), maybe_free_wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
-% Handle {free, Local} - use it and then free it
-shift_right(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, {local, Idx} = Local}, Shift) ->
-    Code = <<
-        (jit_wasm_asm:local_get(Idx))/binary,
-        (jit_wasm_asm:i32_const(Shift))/binary,
-        (jit_wasm_asm:i32_shr_u())/binary,
-        (jit_wasm_asm:local_set(Idx))/binary
-    >>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    State1 = State0#state{stream = Stream1},
-    % Free the register after use
-    State2 = free_native_register(State1, Local),
-    {State2, Local};
-shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift) ->
+% Handle {free, Local} - just unwrap, caller will free when done
+shift_right(State, {free, Local}, Shift) ->
+    shift_right(State, Local, Shift);
+shift_right(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift
+) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
         (jit_wasm_asm:i32_const(Shift))/binary,
@@ -704,7 +705,9 @@ shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {loc
 %% @end
 %%-----------------------------------------------------------------------------
 -spec shift_left(state(), wasm_local(), non_neg_integer()) -> {state(), wasm_local()}.
-shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift) ->
+shift_left(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {local, Idx} = Local, Shift
+) ->
     Code = <<
         (jit_wasm_asm:local_get(Idx))/binary,
         (jit_wasm_asm:i32_const(Shift))/binary,
@@ -719,6 +722,9 @@ shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, {loca
 %% @end
 %%-----------------------------------------------------------------------------
 -spec move_to_vm_register(state(), value(), vm_register()) -> state().
+% Handle {free, Value} - just unwrap, caller will free when done
+move_to_vm_register(State, {free, Value}, Dest) ->
+    move_to_vm_register(State, Value, Dest);
 % Move immediate value to X register
 move_to_vm_register(
     #state{stream_module = StreamModule, stream = Stream0} = State, Value, {x_reg, X}
@@ -795,6 +801,20 @@ move_to_vm_register(
         (jit_wasm_asm:i32_load(2, ?Y_REGS_OFFSET))/binary,
         (jit_wasm_asm:local_get(SrcIdx))/binary,
         (jit_wasm_asm:i32_store(2, Y * 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1};
+% Move from X register to X register
+move_to_vm_register(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {x_reg, SrcX}, {x_reg, X}
+) ->
+    SrcOffset = ?X_REG_OFFSET(SrcX),
+    DestOffset = ?X_REG_OFFSET(X),
+    Code = <<
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:local_get(0))/binary,
+        (jit_wasm_asm:i32_load(2, SrcOffset))/binary,
+        (jit_wasm_asm:i32_store(2, DestOffset))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
@@ -1329,29 +1349,12 @@ call_func_ptr(
     Stream1 = StreamModule:append(Stream0, Code),
     {State#state{stream = Stream1, used_locals = [Local | Used], available_locals = AvailT}, Local}.
 
--spec return_labels_and_lines(state(), [{integer(), integer()}]) ->
-    {state(), wasm_local(), [{integer(), integer()}]}.
-return_labels_and_lines(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0,
-        available_locals = [Local | AvailT],
-        used_locals = Used
-    } = State,
-    LabelsAndLines
-) ->
+-spec return_labels_and_lines(state(), [{integer(), integer()}]) -> state().
+return_labels_and_lines(State, _LabelsAndLines) ->
     % Return labels and lines for debug info - placeholder
-    % For now, just allocate a local and return unchanged labels
-    Code = <<
-        (jit_wasm_asm:i32_const(0))/binary,
-        (jit_wasm_asm:local_set(element(2, Local)))/binary
-    >>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    {
-        State#state{stream = Stream1, available_locals = AvailT, used_locals = [Local | Used]},
-        Local,
-        LabelsAndLines
-    }.
+    % For WASM, we don't need to emit anything special here
+    % The labels are tracked in the state already
+    State.
 
 -spec add_label(state(), integer() | reference()) -> state().
 add_label(#state{stream_module = StreamModule, stream = Stream0} = State0, Label) ->
