@@ -1232,7 +1232,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
             goto terminate_context;                                                             \
         }                                                                                       \
         if (handle_error) {                                                                     \
-            goto handle_error;                                                                  \
+            goto handle_error;                                                                   \
         }                                                                                       \
         if (context_get_flags(ctx, Trap)) {                                                     \
             SCHEDULE_WAIT_ANY(mod);                                                             \
@@ -1989,7 +1989,7 @@ schedule_in:
             if (mod->native_code == NULL) {
                 // set PC
                 native_pc = NULL;
-                JUMP_TO_ADDRESS(jit_state.continuation);
+                JUMP_TO_ADDRESS(jit_state.continuation_pc);
             } else {
 #endif
                 native_pc = jit_state.continuation;
