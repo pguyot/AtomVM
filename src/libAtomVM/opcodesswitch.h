@@ -1100,7 +1100,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 #define PROCESS_SIGNAL_MESSAGES() \
     {                                                                                           \
         MailboxMessage *signal_message = mailbox_process_outer_list(&ctx->mailbox);             \
-        void *next_label = NULL;                                                                \
+        bool handle_error = false;                                                              \
         bool reprocess_outer = false;                                                           \
         while (signal_message) {                                                                \
             switch (signal_message->type) {                                                     \
@@ -1113,7 +1113,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                 case GCSignal: {                                                                \
                     if (UNLIKELY(memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) { \
                         SET_ERROR(OUT_OF_MEMORY_ATOM);                                          \
-                        next_label = &&handle_error;                                            \
+                        handle_error = true;                                                    \
                     }                                                                           \
                     break;                                                                      \
                 }                                                                               \
@@ -1128,7 +1128,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                         = CONTAINER_OF(signal_message, struct TermSignal, base);                \
                     if (UNLIKELY(!context_process_signal_trap_answer(ctx, trap_answer))) {      \
                         SET_ERROR(OUT_OF_MEMORY_ATOM);                                          \
-                        next_label = &&handle_error;                                            \
+                        handle_error = true;                                                    \
                     }                                                                           \
                     break;                                                                      \
                 }                                                                               \
@@ -1136,7 +1136,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                     struct ImmediateSignal *trap_exception                                      \
                         = CONTAINER_OF(signal_message, struct ImmediateSignal, base);           \
                     SET_ERROR(trap_exception->immediate);                                       \
-                    next_label = &&handle_error;                                                \
+                    handle_error = true;                                                        \
                     break;                                                                      \
                 }                                                                               \
                 case FlushMonitorSignal:                                                        \
@@ -1152,7 +1152,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                         = CONTAINER_OF(signal_message, struct TermSignal, base);                \
                     if (UNLIKELY(!context_process_signal_set_group_leader(ctx, group_leader))) { \
                         SET_ERROR(OUT_OF_MEMORY_ATOM);                                          \
-                        next_label = &&handle_error;                                            \
+                        handle_error = true;                                                    \
                     }                                                                           \
                     break;                                                                      \
                 }                                                                               \
@@ -1231,8 +1231,8 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         if (context_get_flags(ctx, Killed)) {                                                   \
             goto terminate_context;                                                             \
         }                                                                                       \
-        if (next_label) {                                                                       \
-            goto *next_label;                                                                   \
+        if (handle_error) {                                                                     \
+            goto handle_error;                                                                  \
         }                                                                                       \
         if (context_get_flags(ctx, Trap)) {                                                     \
             SCHEDULE_WAIT_ANY(mod);                                                             \
