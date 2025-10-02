@@ -576,7 +576,7 @@ emit_condition(State, {Local, '==', false}) ->
         (jit_wasm_asm:i32_eq())/binary
     >>,
     {State, Code};
-emit_condition(State, {Local1, '==', Local2}) ->
+emit_condition(State0, {Local1, '==', Local2}) ->
     {LocalIdx1, Code1} = get_local_idx(Local1),
     {LocalIdx2, Code2} = get_local_idx(Local2),
     Code = <<
@@ -586,7 +586,16 @@ emit_condition(State, {Local1, '==', Local2}) ->
         (jit_wasm_asm:local_get(LocalIdx2))/binary,
         (jit_wasm_asm:i32_eq())/binary
     >>,
-    {State, Code};
+    % Free locals if they were marked with {free, ...}
+    State1 = case Local1 of
+        {free, L1} -> free_native_register(State0, L1);
+        _ -> State0
+    end,
+    State2 = case Local2 of
+        {free, L2} -> free_native_register(State1, L2);
+        _ -> State1
+    end,
+    {State2, Code};
 emit_condition(State, {Local, '<', Value}) when is_integer(Value) ->
     {LocalIdx, Code1} = get_local_idx(Local),
     Code = <<
