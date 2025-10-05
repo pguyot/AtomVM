@@ -74,6 +74,14 @@ asm(Arch, Bin, Str) ->
 
 %% Helper function to find available binutils for a given architecture
 -spec find_binutils(atom()) -> {ok, string(), string()} | false.
+find_binutils(xtensa) ->
+    %% For xtensa, try esp32-specific binutils
+    BinutilsList = [
+        {"xtensa-esp32-elf-as", "xtensa-esp32-elf-objdump"},
+        {"xtensa-esp32s3-elf-as", "xtensa-esp32s3-elf-objdump"},
+        {"xtensa-esp-elf-as", "xtensa-esp-elf-objdump"}
+    ],
+    find_binutils_from_list(BinutilsList);
 find_binutils(Arch) ->
     ArchStr = atom_to_list(Arch),
     BinutilsList = [
@@ -104,6 +112,8 @@ get_asm_header(arm) ->
 get_asm_header(aarch64) ->
     ".text\n";
 get_asm_header(x86_64) ->
+    ".text\n";
+get_asm_header(xtensa) ->
     ".text\n".
 
 %% Get architecture-specific assembler flags
@@ -113,7 +123,9 @@ get_as_flags(arm) ->
 get_as_flags(aarch64) ->
     "";
 get_as_flags(x86_64) ->
-    "--64".
+    "--64";
+get_as_flags(xtensa) ->
+    "".
 
 %% Parse objdump output lines and extract binary data
 -spec asm_lines([binary()], binary(), atom()) -> binary().
