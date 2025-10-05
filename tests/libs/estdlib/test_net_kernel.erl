@@ -22,6 +22,8 @@
 
 -export([test/0, start/0]).
 
+-define(EPMD_PORT, 4369).
+
 start() ->
     test().
 
@@ -85,11 +87,27 @@ has_command("ATOM", Command) ->
 
 ensure_epmd("BEAM") ->
     _ = os:cmd("epmd -daemon"),
-    ok;
+    ensure_epmd_connect_loop(5);
 ensure_epmd("ATOM") ->
     {ok, _, Fd} = atomvm:subprocess("/bin/sh", ["sh", "-c", "epmd -daemon"], undefined, [stdout]),
     ok = atomvm:posix_close(Fd),
-    ok.
+    ensure_epmd_connect_loop(5).
+
+ensure_epmd_connect_loop(0) ->
+    io:format("Could not connect to epmd after retries\n"),
+    {error, timeout};
+ensure_epmd_connect_loop(N) ->
+    Result = gen_tcp:connect({127, 0, 0, 1}, ?EPMD_PORT, []),
+    case Result of
+        {ok, Socket} ->
+            gen_tcp:close(Socket),
+            io:format("Successfully connected to epmd (retries left: ~p)\n", [N]),
+            ok;
+        {error, Error} ->
+            io:format("epmd connection error: ~p, retrying (~p attempts left)...\n", [Error, N]),
+            timer:sleep(100),
+            ensure_epmd_connect_loop(N - 1)
+    end.
 
 test_ping_from_beam(Platform) ->
     {ok, _NetKernelPid} = net_kernel_start(Platform, atomvm),
@@ -98,9 +116,9 @@ test_ping_from_beam(Platform) ->
     erlang:set_cookie(Node, 'AtomVM'),
     Result = execute_command(
         Platform,
-        "erl -sname otp -setcookie AtomVM -eval \"R = net_adm:ping('" ++
+        "erl -sname otp -setcookie AtomVM -eval \"L1 = net_adm:names(), R = net_adm:ping('" ++
             atom_to_list(Node) ++
-            "'), erlang:display(R).\" -s init stop -noshell"
+            "'), erlang:display(R), L2 = net_adm:names(), erlang:display({L1, L2}).\" -s init stop -noshell"
     ),
     "pong" ++ _ = Result,
     net_kernel:stop(),

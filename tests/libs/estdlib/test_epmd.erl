@@ -84,16 +84,39 @@ has_command("ATOM", Command) ->
     Result.
 
 ensure_epmd("BEAM") ->
-    Result = os:cmd("epmd -daemon"),
-    io:format("~s\n", [Result]),
-    ok;
+    % Check if epmd is already running
+    case is_epmd_running() of
+        true ->
+            io:format("epmd already running\n"),
+            ok;
+        false ->
+            Result = os:cmd("epmd -daemon"),
+            io:format("Started epmd: ~s\n", [Result]),
+            ok
+    end;
 ensure_epmd("ATOM") ->
-    {ok, _, Fd} = atomvm:subprocess("/bin/sh", ["sh", "-c", "epmd -daemon 2>&1"], undefined, [
-        stdout
-    ]),
-    print_loop(Fd),
-    ok = atomvm:posix_close(Fd),
-    ok.
+    % Check if epmd is already running
+    case is_epmd_running() of
+        true ->
+            io:format("epmd already running\n"),
+            ok;
+        false ->
+            {ok, _, Fd} = atomvm:subprocess("/bin/sh", ["sh", "-c", "epmd -daemon 2>&1"], undefined, [
+                stdout
+            ]),
+            print_loop(Fd),
+            ok = atomvm:posix_close(Fd),
+            ok
+    end.
+
+is_epmd_running() ->
+    {ok, Socket} = socket:open(inet, stream, tcp),
+    Result = socket:connect(Socket, #{addr => {127, 0, 0, 1}, port => ?EPMD_PORT, family => inet}),
+    socket:close(Socket),
+    case Result of
+        ok -> true;
+        {error, _} -> false
+    end.
 
 ensure_epmd_connect_loop(0) ->
     io:format("Coult not connect to epmd\n"),
