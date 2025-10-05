@@ -32,22 +32,39 @@ test() ->
             _ ->
                 [[]]
         end,
-    [
-        ok = test_send_receive(SpawnControllingProcess, IsActive, Mode, BackendOption)
+    Results = [
+        case catch run_with_timeout(
+            fun() -> test_send_receive(SpawnControllingProcess, IsActive, Mode, BackendOption) end,
+            {SpawnControllingProcess, IsActive, Mode, BackendOption},
+            15000
+        ) of
+            ok -> ok;
+            Error -> {error, {SpawnControllingProcess, IsActive, Mode, BackendOption}, Error}
+        end
      || SpawnControllingProcess <- [false, true],
         IsActive <- [false, true],
         Mode <- [binary, list],
         BackendOption <- BackendOptions
     ],
-    ok.
+    Failures = [R || R <- Results, element(1, R) =:= error],
+    case Failures of
+        [] ->
+            ok;
+        _ ->
+            io:format("~n=== FAILED TESTS ===~n~p~n", [Failures]),
+            error({tests_failed, length(Failures)})
+    end.
 
 test_send_receive(SpawnControllingProcess, IsActive, Mode, BackendOption) ->
-    io:format("GEN_UDP-TEST> SpawnControllingProcess=~p IsActive=~p Mode=~p Backendoption=~p~n", [
+    StartTime = erlang:monotonic_time(millisecond),
+    io:format("GEN_UDP-TEST> START SpawnControllingProcess=~p IsActive=~p Mode=~p Backendoption=~p~n", [
         SpawnControllingProcess, IsActive, Mode, BackendOption
     ]),
 
+    io:format("GEN_UDP-TEST> [~pms] Opening socket...~n", [elapsed(StartTime)]),
     {ok, Socket} = gen_udp:open(0, BackendOption ++ [{active, IsActive}, Mode]),
     {ok, Port} = inet:port(Socket),
+    io:format("GEN_UDP-TEST> [~pms] Socket opened on port ~p~n", [elapsed(StartTime), Port]),
 
     Self = self(),
     F = fun() ->
@@ -70,18 +87,25 @@ test_send_receive(SpawnControllingProcess, IsActive, Mode, BackendOption) ->
 
     case SpawnControllingProcess of
         true ->
+            io:format("GEN_UDP-TEST> [~pms] Spawning controlling process...~n", [elapsed(StartTime)]),
             Pid = spawn(F),
             gen_udp:controlling_process(Socket, Pid),
             receive
-                ready -> ok
-            after 10000 ->
-                error({timeout, ?MODULE, ?LINE})
+                ready ->
+                    io:format("GEN_UDP-TEST> [~pms] Controlling process ready~n", [elapsed(StartTime)]),
+                    ok
+            after 5000 ->
+                io:format("GEN_UDP-TEST> [~pms] TIMEOUT waiting for ready. Message queue length: ~p~n",
+                    [elapsed(StartTime), get_message_queue_len()]),
+                try_get_socket_info(Socket),
+                error({timeout, ?MODULE, ?LINE, waiting_for_ready})
             end;
         false ->
             ok
     end,
 
     NumToSend = 10,
+    io:format("GEN_UDP-TEST> [~pms] Spawning sender for ~p messages...~n", [elapsed(StartTime), NumToSend]),
     {Sender, SenderMonitor} = erlang:spawn_opt(
         ?MODULE, start_sender, [Socket, Port, make_messages(NumToSend)], [monitor]
     ),
@@ -89,30 +113,44 @@ test_send_receive(SpawnControllingProcess, IsActive, Mode, BackendOption) ->
     NumReceived =
         case SpawnControllingProcess of
             true ->
+                io:format("GEN_UDP-TEST> [~pms] Waiting for {done, _} message...~n", [elapsed(StartTime)]),
                 receive
                     {done, Received} ->
+                        io:format("GEN_UDP-TEST> [~pms] Received ~p messages~n", [elapsed(StartTime), Received]),
                         Received
-                after 10000 ->
-                    error({timeout, ?MODULE, ?LINE})
+                after 5000 ->
+                    io:format("GEN_UDP-TEST> [~pms] TIMEOUT waiting for {done, _}. Message queue length: ~p~n",
+                        [elapsed(StartTime), get_message_queue_len()]),
+                    try_get_socket_info(Socket),
+                    error({timeout, ?MODULE, ?LINE, waiting_for_done})
                 end;
             false ->
-                F()
+                io:format("GEN_UDP-TEST> [~pms] Counting received messages (inline)...~n", [elapsed(StartTime)]),
+                Received = F(),
+                io:format("GEN_UDP-TEST> [~pms] Received ~p messages~n", [elapsed(StartTime), Received]),
+                Received
         end,
+    io:format("GEN_UDP-TEST> [~pms] Stopping sender...~n", [elapsed(StartTime)]),
     Sender ! stop,
     receive
-        {'DOWN', SenderMonitor, process, Sender, normal} -> ok
-    after 10000 ->
-        error({timeout, ?MODULE, ?LINE})
+        {'DOWN', SenderMonitor, process, Sender, normal} ->
+            io:format("GEN_UDP-TEST> [~pms] Sender stopped~n", [elapsed(StartTime)]),
+            ok
+    after 5000 ->
+        io:format("GEN_UDP-TEST> [~pms] TIMEOUT waiting for sender to stop~n", [elapsed(StartTime)]),
+        error({timeout, ?MODULE, ?LINE, waiting_for_sender_down})
     end,
 
     ?ASSERT_TRUE((0 < NumReceived) and (NumReceived =< NumToSend)),
     %% NB. Might be closed if controlling process terminates
+    io:format("GEN_UDP-TEST> [~pms] Closing socket...~n", [elapsed(StartTime)]),
     case SpawnControllingProcess of
         true ->
             catch gen_udp:close(Socket);
         _ ->
             ok = gen_udp:close(Socket)
     end,
+    io:format("GEN_UDP-TEST> [~pms] COMPLETED successfully~n", [elapsed(StartTime)]),
     ok.
 
 make_messages(0) ->
@@ -170,4 +208,51 @@ get_otp_version() ->
             list_to_integer(erlang:system_info(otp_release));
         _ ->
             atomvm
+    end.
+
+run_with_timeout(F, Params, Timeout) ->
+    Parent = self(),
+    {Pid, Ref} = spawn_monitor(fun() ->
+        Parent ! {self(), result, F()}
+    end),
+    receive
+        {Pid, result, Result} ->
+            erlang:demonitor(Ref, [flush]),
+            Result;
+        {'DOWN', Ref, process, Pid, Reason} ->
+            error({test_crashed, Params, Reason})
+    after Timeout ->
+        io:format("GEN_UDP-TEST> TIMEOUT after ~pms for params: ~p~n", [Timeout, Params]),
+        case process_info(Pid) of
+            undefined ->
+                io:format("GEN_UDP-TEST> Test process already dead~n");
+            Info ->
+                io:format("GEN_UDP-TEST> Test process state: ~p~n", [Info])
+        end,
+        io:format("GEN_UDP-TEST> Total processes: ~p~n", [length(processes())]),
+        exit(Pid, kill),
+        erlang:demonitor(Ref, [flush]),
+        error({timeout, Params, Timeout})
+    end.
+
+elapsed(StartTime) ->
+    erlang:monotonic_time(millisecond) - StartTime.
+
+get_message_queue_len() ->
+    case process_info(self(), message_queue_len) of
+        {message_queue_len, Len} -> Len;
+        undefined -> unknown
+    end.
+
+try_get_socket_info(Socket) ->
+    try
+        case inet:info(Socket) of
+            {ok, SockInfo} ->
+                io:format("GEN_UDP-TEST> Socket info: ~p~n", [SockInfo]);
+            Error ->
+                io:format("GEN_UDP-TEST> Socket info error: ~p~n", [Error])
+        end
+    catch
+        Class:Reason ->
+            io:format("GEN_UDP-TEST> Could not get socket info: ~p:~p~n", [Class, Reason])
     end.
