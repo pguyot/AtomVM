@@ -39,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["macos-14", "macos-15", "macos-15-intel", "macos-26"]
-        otp: ["24", "25", "26", "27", "28"]
+        otp: ["28"]
         cmake_opts_other: [""]
 
         include:
@@ -52,6 +52,10 @@ jobs:
           cmake_opts_other: "-DAVM_DISABLE_JIT=OFF"
 
         - os: "macos-15"
+          otp: "28"
+          cmake_opts_other: "-DAVM_DISABLE_JIT=OFF"
+
+        - os: "macos-26"
           otp: "28"
           cmake_opts_other: "-DAVM_DISABLE_JIT=OFF"
 
