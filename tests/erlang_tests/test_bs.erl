@@ -142,26 +142,44 @@ test_create_with_unsupported_unaligned_int_size() ->
     atom_unsupported(fun() -> create_int_binary(16#FFFF, id(28)) end).
 
 test_create_with_int_little_endian() ->
+    erlang:display({?MODULE, ?LINE}),
     <<2, 1>> = create_int_binary_little_endian(16#0102, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<254, 255>> = create_int_binary_little_endian(16#FFFE, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<4, 3, 2, 1>> = create_int_binary_little_endian(16#01020304, 32),
+    erlang:display({?MODULE, ?LINE}),
     <<252, 253, 254, 255>> = create_int_binary_little_endian(16#FFFEFDFC, 32),
+    erlang:display({?MODULE, ?LINE}),
     <<0>> = create_int_binary_little_endian(1024, 8),
+    erlang:display({?MODULE, ?LINE}),
 
     <<0, 2, 1>> = create_int_binary_little_endian(8, 16#0102, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 254, 255>> = create_int_binary_little_endian(8, 16#FFFE, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 4, 3, 2, 1>> = create_int_binary_little_endian(8, 16#01020304, 32),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 252, 253, 254, 255>> = create_int_binary_little_endian(8, 16#FFFEFDFC, 32),
+    erlang:display({?MODULE, ?LINE}),
 
     <<0, 0, 2, 1>> = create_int_binary_little_endian(16, 16#0102, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 254, 255>> = create_int_binary_little_endian(16, 16#FFFE, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 4, 3, 2, 1>> = create_int_binary_little_endian(16, 16#01020304, 32),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 252, 253, 254, 255>> = create_int_binary_little_endian(16, 16#FFFEFDFC, 32),
+    erlang:display({?MODULE, ?LINE}),
 
     <<0, 0, 0, 2, 1>> = create_int_binary_little_endian(24, 16#0102, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 0, 254, 255>> = create_int_binary_little_endian(24, 16#FFFE, 16),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 0, 4, 3, 2, 1>> = create_int_binary_little_endian(24, 16#01020304, 32),
+    erlang:display({?MODULE, ?LINE}),
     <<0, 0, 0, 252, 253, 254, 255>> = create_int_binary_little_endian(24, 16#FFFEFDFC, 32),
+    erlang:display({?MODULE, ?LINE}),
     ok.
 
 test_create_with_int_signed() ->
@@ -194,10 +212,15 @@ test_get_with_unsupported_int_unit() ->
 test_get_with_int_little_endian() ->
     Bin1 = id(<<255, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245, 244>>),
     Bin2 = id(<<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>>),
+    erlang:display({?MODULE, ?LINE}),
     16#FEFF = get_integer_little_unsigned(id(Bin1), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#0100 = get_integer_little_unsigned(id(Bin2), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#FCFDFEFF = get_integer_little_unsigned(id(Bin1), 32),
+    erlang:display({?MODULE, ?LINE}),
     16#03020100 = get_integer_little_unsigned(id(Bin2), 32),
+    erlang:display({?MODULE, ?LINE}),
     %   16#F8F9FAFBFCFDFEFF = get_integer_little_unsigned(id(Bin1), 64),
     %   Even this fails as well until we have proper bigint support as we can't
     %   represent 16#F8F9FAFBFCFDFEFF unsigned
@@ -205,27 +228,43 @@ test_get_with_int_little_endian() ->
     %   16#F8F9FAFB = X bsr 32,
     %   16#FCFDFEFF = X band 16#FFFFFFFF,
     16#0706050403020100 = get_integer_little_unsigned(id(Bin2), 64),
+    erlang:display({?MODULE, ?LINE}),
 
     16#FDFE = get_integer_little_unsigned(8, id(Bin1), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#0201 = get_integer_little_unsigned(8, id(Bin2), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#FBFCFDFE = get_integer_little_unsigned(8, id(Bin1), 32),
+    erlang:display({?MODULE, ?LINE}),
     16#04030201 = get_integer_little_unsigned(8, id(Bin2), 32),
+    erlang:display({?MODULE, ?LINE}),
     %   16#F7F8F9FAFBFCFDFE = get_integer_little_unsigned(8, id(Bin1), 64),
     16#0807060504030201 = get_integer_little_unsigned(8, id(Bin2), 64),
+    erlang:display({?MODULE, ?LINE}),
 
     16#FCFD = get_integer_little_unsigned(16, id(Bin1), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#0302 = get_integer_little_unsigned(16, id(Bin2), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#FAFBFCFD = get_integer_little_unsigned(16, id(Bin1), 32),
+    erlang:display({?MODULE, ?LINE}),
     16#05040302 = get_integer_little_unsigned(16, id(Bin2), 32),
+    erlang:display({?MODULE, ?LINE}),
     %   16#F6F7F8F9FAFBFCFD = get_integer_little_unsigned(16, id(Bin1), 64),
     16#0908070605040302 = get_integer_little_unsigned(16, id(Bin2), 64),
+    erlang:display({?MODULE, ?LINE}),
 
     16#FBFC = get_integer_little_unsigned(24, id(Bin1), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#0403 = get_integer_little_unsigned(24, id(Bin2), 16),
+    erlang:display({?MODULE, ?LINE}),
     16#F9FAFBFC = get_integer_little_unsigned(24, id(Bin1), 32),
+    erlang:display({?MODULE, ?LINE}),
     16#06050403 = get_integer_little_unsigned(24, id(Bin2), 32),
+    erlang:display({?MODULE, ?LINE}),
     %   16#F5F6F7F8F9FAFBFC = get_integer_little_unsigned(24, id(Bin1), 64),
     16#0A09080706050403 = get_integer_little_unsigned(24, id(Bin2), 64),
+    erlang:display({?MODULE, ?LINE}),
 
     ok.
 
