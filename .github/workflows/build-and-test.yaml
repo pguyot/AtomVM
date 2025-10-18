@@ -473,8 +473,9 @@ jobs:
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv32imac -mabi=ilp32" CACHE STRING "" FORCE)
 
         # Set up paths for cross-compiled libraries
-        set(ZLIB_LIBRARY /usr/lib/riscv32-linux-gnu-ilp32/libz.so)
-        set(ZLIB_INCLUDE_DIR /usr/riscv32-linux-gnu/include)
+        set(ZLIB_LIBRARY /usr/lib/riscv32-linux-gnu-ilp32/libz.so CACHE FILEPATH "")
+        set(ZLIB_INCLUDE_DIR /usr/riscv32-linux-gnu/include CACHE PATH "")
+        set(ZLIB_FOUND TRUE CACHE BOOL "")
 
         # MbedTLS configuration
         set(MBEDTLS_ROOT_DIR /usr)
