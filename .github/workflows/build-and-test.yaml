@@ -449,10 +449,12 @@ jobs:
         dpkg-deb --build zlib-dev-extracted zlib1g-dev-ilp32-fixed.deb
         sudo dpkg -i zlib1g-dev-ilp32-fixed.deb
 
+        # Install mbedtls runtime packages first (in dependency order)
         sudo dpkg -i libmbedcrypto7-ilp32_2.28.8-0ubuntu1_riscv32.deb
-        sudo dpkg -i libmbedtls-dev-ilp32_2.28.8-0ubuntu1_riscv32.deb
-        sudo dpkg -i libmbedtls14-ilp32_2.28.8-0ubuntu1_riscv32.deb
         sudo dpkg -i libmbedx509-1-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        sudo dpkg -i libmbedtls14-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        # Then install the dev package
+        sudo dpkg -i libmbedtls-dev-ilp32_2.28.8-0ubuntu1_riscv32.deb
 
         sudo sed -i '/Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
 
