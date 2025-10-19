@@ -414,19 +414,11 @@ jobs:
       run: |
         sudo dpkg --add-architecture ${{ matrix.arch }}
 
-        # Download toolchain and libraries from release
-        gh release download riscv-toolchain-2025.10.18 \
+        # TEMPORARY: Download packages from workflow run artifacts (with fixed packaging)
+        # TODO: Switch back to release downloads once new packages are released
+        gh run download 18621837129 \
           -R pguyot/crossbuild-essential-riscv32 \
-          --pattern 'riscv32-gnu-toolchain-ilp32_2025.10.18_amd64.deb' \
-          --pattern 'libc6-ilp32_2.39-0ubuntu1_riscv32.deb' \
-          --pattern 'libc6-dev-ilp32_2.39-0ubuntu1_riscv32.deb' \
-          --pattern 'libc6-dbg-ilp32_2.39-0ubuntu1_riscv32.deb' \
-          --pattern 'zlib1g-ilp32_1.3.1-0ubuntu1_riscv32.deb' \
-          --pattern 'zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb' \
-          --pattern 'libmbedcrypto7-ilp32_2.28.8-0ubuntu1_riscv32.deb' \
-          --pattern 'libmbedtls-dev-ilp32_2.28.8-0ubuntu1_riscv32.deb' \
-          --pattern 'libmbedtls14-ilp32_2.28.8-0ubuntu1_riscv32.deb' \
-          --pattern 'libmbedx509-1-ilp32_2.28.8-0ubuntu1_riscv32.deb'
+          -n riscv32-gnu-toolchain-ilp32-2025.10.18
 
         # Install the toolchain
         sudo dpkg -i riscv32-gnu-toolchain-ilp32_2025.10.18_amd64.deb
@@ -434,20 +426,13 @@ jobs:
         # Add to PATH for all subsequent steps
         echo "/opt/riscv32-ilp32/bin" >> $GITHUB_PATH
 
-        # Install the libs
+        # Install the libs (packages now have proper separation of runtime and dev files)
         sudo dpkg -i libc6-ilp32_2.39-0ubuntu1_riscv32.deb
         sudo dpkg -i libc6-dev-ilp32_2.39-0ubuntu1_riscv32.deb
         sudo dpkg -i libc6-dbg-ilp32_2.39-0ubuntu1_riscv32.deb
 
-        # WORKAROUND: Extract zlib1g-dev and remove conflicting libz.so before installing
-        # This fixes a packaging issue where libz.so appears in both zlib1g and zlib1g-dev
-        # TODO: Remove this workaround once the packages are rebuilt with the fix
         sudo dpkg -i zlib1g-ilp32_1.3.1-0ubuntu1_riscv32.deb
-        dpkg-deb -x zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb zlib-dev-extracted
-        sudo rm -f zlib-dev-extracted/usr/lib/riscv32-linux-gnu-ilp32/libz.so
-        dpkg-deb -e zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb zlib-dev-extracted/DEBIAN
-        dpkg-deb --build zlib-dev-extracted zlib1g-dev-ilp32-fixed.deb
-        sudo dpkg -i zlib1g-dev-ilp32-fixed.deb
+        sudo dpkg -i zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb
 
         # Install mbedtls runtime packages first (in dependency order)
         sudo dpkg -i libmbedcrypto7-ilp32_2.28.8-0ubuntu1_riscv32.deb
