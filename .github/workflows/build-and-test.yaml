@@ -427,19 +427,20 @@ jobs:
         echo "/opt/riscv32-ilp32/bin" >> $GITHUB_PATH
 
         # Install the libs (packages now have proper separation of runtime and dev files)
-        sudo dpkg -i libc6-ilp32_2.39-0ubuntu1_riscv32.deb
-        sudo dpkg -i libc6-dev-ilp32_2.39-0ubuntu1_riscv32.deb
-        sudo dpkg -i libc6-dbg-ilp32_2.39-0ubuntu1_riscv32.deb
+        # Library packages are in the build/ subdirectory
+        sudo dpkg -i build/libc6-ilp32_2.39-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libc6-dev-ilp32_2.39-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libc6-dbg-ilp32_2.39-0ubuntu1_riscv32.deb
 
-        sudo dpkg -i zlib1g-ilp32_1.3.1-0ubuntu1_riscv32.deb
-        sudo dpkg -i zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/zlib1g-ilp32_1.3.1-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/zlib1g-dev-ilp32_1.3.1-0ubuntu1_riscv32.deb
 
         # Install mbedtls runtime packages first (in dependency order)
-        sudo dpkg -i libmbedcrypto7-ilp32_2.28.8-0ubuntu1_riscv32.deb
-        sudo dpkg -i libmbedx509-1-ilp32_2.28.8-0ubuntu1_riscv32.deb
-        sudo dpkg -i libmbedtls14-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libmbedcrypto7-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libmbedx509-1-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libmbedtls14-ilp32_2.28.8-0ubuntu1_riscv32.deb
         # Then install the dev package
-        sudo dpkg -i libmbedtls-dev-ilp32_2.28.8-0ubuntu1_riscv32.deb
+        sudo dpkg -i build/libmbedtls-dev-ilp32_2.28.8-0ubuntu1_riscv32.deb
 
         sudo sed -i '/Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
 
