@@ -460,7 +460,7 @@ jobs:
 
         # Set up paths for cross-compiled libraries
         set(ZLIB_LIBRARY /usr/lib/riscv32-linux-gnu-ilp32/libz.so CACHE FILEPATH "")
-        set(ZLIB_INCLUDE_DIR /usr/riscv32-linux-gnu/include CACHE PATH "")
+        set(ZLIB_INCLUDE_DIR /usr/include/riscv32-linux-gnu CACHE PATH "")
         set(ZLIB_FOUND TRUE CACHE BOOL "")
 
         # MbedTLS configuration
@@ -468,7 +468,7 @@ jobs:
         set(MBEDTLS_LIBRARIES_DIR /usr/lib/riscv32-linux-gnu-ilp32)
 
         # Add cross-compilation include path to compiler flags
-        include_directories(SYSTEM /usr/riscv32-linux-gnu/include)
+        include_directories(SYSTEM /usr/include/riscv32-linux-gnu)
 
         # Search for programs in the build host directories
         set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
