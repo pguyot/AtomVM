@@ -106,7 +106,7 @@ call_primitive_6_args_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     % Get bin_ptr from x_reg 0 (similar to get_list_test pattern)
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
-    State2 = ?BACKEND:and_(State1, RegA, ?TERM_PRIMARY_CLEAR_MASK),
+    {State2, RegA} = ?BACKEND:and_(State1, {free, RegA}, ?TERM_PRIMARY_CLEAR_MASK),
     % Get another register for the last parameter to test {free, Reg} handling
     {State3, OtherReg} = ?BACKEND:move_to_native_register(State2, {x_reg, 1}),
     % Call PRIM_BITSTRING_EXTRACT_INTEGER with 6 arguments
