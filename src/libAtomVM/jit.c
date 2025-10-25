@@ -39,7 +39,7 @@
 #include <math.h>
 #include <stddef.h>
 
-//#define ENABLE_TRACE
+// #define ENABLE_TRACE
 #include "trace.h"
 
 // Verify matching atom index in default_atoms.hrl
@@ -500,7 +500,7 @@ static term jit_module_get_atom_term_by_id(JITState *jit_state, int atom_index)
 
 static bool jit_allocate(Context *ctx, JITState *jit_state, uint32_t stack_need, uint32_t heap_need, uint32_t live)
 {
-    TRACE("jit_allocate: ENTRY ctx=%p jit_state=%p stack_need=%" PRIu32 " heap_need=%" PRIu32 " live=%" PRIu32 "\n", (void*)ctx, (void*)jit_state, stack_need, heap_need, live);
+    TRACE("jit_allocate: ENTRY ctx=%p jit_state=%p stack_need=%" PRIu32 " heap_need=%" PRIu32 " live=%" PRIu32 "\n", (void *) ctx, (void *) jit_state, stack_need, heap_need, live);
     if (ctx->heap.root->next || ((ctx->heap.heap_ptr + heap_need > ctx->e - (stack_need + 1)))) {
         TRIM_LIVE_REGS(live);
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_need + stack_need + 1, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -1258,6 +1258,9 @@ static term jit_bitstring_extract_float(Context *ctx, term *bin_ptr, size_t offs
     avm_float_t value;
     bool status;
     switch (n) {
+        case 16:
+            status = bitstring_extract_f16(((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
+            break;
         case 32:
             status = bitstring_extract_f32(((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
             break;
@@ -1372,6 +1375,18 @@ static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, si
 {
     avm_uint64_t int_value = term_maybe_unbox_int64(value);
     return bitstring_insert_integer(bin, offset, int_value, n, flags);
+}
+
+static bool jit_bitstring_insert_float(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags)
+{
+    avm_float_t float_value = term_conv_to_float(value);
+    if (n == 16) {
+        return bitstring_insert_f16(bin, offset, float_value, flags);
+    } else if (n == 32) {
+        return bitstring_insert_f32(bin, offset, float_value, flags);
+    } else {
+        return bitstring_insert_f64(bin, offset, float_value, flags);
+    }
 }
 
 static void jit_bitstring_copy_module_str(Context *ctx, JITState *jit_state, term bin, size_t offset, int str_id, size_t len)
@@ -1755,7 +1770,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_bitstring_get_utf32,
     term_copy_map,
     jit_stacktrace_build,
-    jit_term_reuse_binary
+    jit_term_reuse_binary,
+    jit_bitstring_insert_float
 };
 
 #endif
