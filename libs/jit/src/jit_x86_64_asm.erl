@@ -53,6 +53,7 @@
     orq_rel32/2,
     leaq/2,
     leaq_rel32/2,
+    call/1,
     callq/1,
     pushq/1,
     popq/1,
@@ -63,6 +64,7 @@
 ]).
 
 -define(IS_SINT8_T(X), is_integer(X) andalso X >= -128 andalso X =< 127).
+-define(IS_SINT16_T(X), is_integer(X) andalso X >= -32768 andalso X =< 32767).
 -define(IS_SINT32_T(X), is_integer(X) andalso X >= -16#80000000 andalso X < 16#80000000).
 -define(IS_UINT8_T(X), is_integer(X) andalso X >= 0 andalso X =< 255).
 -define(IS_UINT32_T(X), is_integer(X) andalso X >= 0 andalso X < 16#100000000).
@@ -564,6 +566,12 @@ leaq({Offset, BaseReg}, DestReg) when is_atom(BaseReg), is_atom(DestReg), ?IS_SI
     {REX_B, MODRM_RM} = x86_64_x_reg(BaseReg),
     % ModRM: mod=10 (disp32), reg=DestReg, rm=BaseReg
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8D, 2:2, MODRM_REG:3, MODRM_RM:3, Offset:32/little>>.
+
+call(Offset) when is_integer(Offset), ?IS_SINT32_T(Offset - 5) ->
+    % Offset is relative to current position, but instruction encoding
+    % is relative to next instruction, so subtract instruction length (5)
+    ImmOffset = Offset - 5,
+    <<16#E8, ImmOffset:32/little-signed>>.
 
 callq({Reg}) ->
     case x86_64_x_reg(Reg) of

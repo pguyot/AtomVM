@@ -723,6 +723,23 @@ popq_test_() ->
         ?_assertAsmEqual(<<16#41, 16#58>>, "pop %r8", jit_x86_64_asm:popq(r8))
     ].
 
+call_test_() ->
+    [
+        ?_assertAsmEqual(<<16#E8, 16#00, 16#00, 16#00, 16#00>>, "call .+5", jit_x86_64_asm:call(5)),
+        ?_assertAsmEqual(
+            <<16#E8, 16#10, 16#00, 16#00, 16#00>>, "call .+21", jit_x86_64_asm:call(21)
+        ),
+        ?_assertAsmEqual(
+            <<16#E8, 16#F0, 16#FF, 16#FF, 16#FF>>, "call .-11", jit_x86_64_asm:call(-11)
+        ),
+        ?_assertAsmEqual(
+            <<16#E8, 16#FF, 16#7F, 16#00, 16#00>>, "call .+32772", jit_x86_64_asm:call(32772)
+        ),
+        ?_assertAsmEqual(
+            <<16#E8, 16#00, 16#80, 16#FF, 16#FF>>, "call .-32763", jit_x86_64_asm:call(-32763)
+        )
+    ].
+
 callq_test_() ->
     [
         ?_assertAsmEqual(<<16#FF, 16#D0>>, "call *%rax", jit_x86_64_asm:callq({rax})),

@@ -116,7 +116,13 @@ compile(Target, Dir, Path) ->
 
         Stream2 = Backend:new(RequestedVariant, jit_stream_binary, Stream1),
         {LabelsCount, Stream3} = jit:compile(
-            CodeChunk, AtomResolver, LiteralResolver, TypeResolver, ImportedFunctionResolver, Backend, Stream2
+            CodeChunk,
+            AtomResolver,
+            LiteralResolver,
+            TypeResolver,
+            ImportedFunctionResolver,
+            Backend,
+            Stream2
         ),
         NativeCode = Backend:stream(Stream3),
         UpdatedChunks = FilteredChunks ++ [{"avmN", NativeCode}],

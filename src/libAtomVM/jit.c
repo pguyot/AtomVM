@@ -265,9 +265,10 @@ static void set_error(Context *ctx, JITState *jit_state, int offset, term error_
     }
 }
 
-static Context *jit_raise_error(Context *ctx, JITState *jit_state, int offset, term error_type_atom)
+static Context *jit_raise_error(Context *ctx, JITState *jit_state, uintptr_t pc, term error_type_atom)
 {
-    TRACE("jit_raise_error: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id, offset);
+    TRACE("jit_raise_error: ctx->process_id = %" PRId32 ", offset = " PRIxPTR "\n", ctx->process_id, pc);
+    int offset = pc - (uintptr_t) jit_state->module->native_code;
     set_error(ctx, jit_state, offset, error_type_atom);
     return jit_handle_error(ctx, jit_state, 0);
 }

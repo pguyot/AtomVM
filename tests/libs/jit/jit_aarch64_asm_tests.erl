@@ -152,6 +152,15 @@ brk_test_() ->
         ?_assertAsmEqual(<<16#D4201900:32/little>>, "brk #200", jit_aarch64_asm:brk(200))
     ].
 
+bl_test_() ->
+    [
+        ?_assertAsmEqual(<<16#94000000:32/little>>, "bl .+0", jit_aarch64_asm:bl(0)),
+        ?_assertAsmEqual(<<16#94000001:32/little>>, "bl .+4", jit_aarch64_asm:bl(4)),
+        ?_assertAsmEqual(<<16#94000004:32/little>>, "bl .+16", jit_aarch64_asm:bl(16)),
+        ?_assertAsmEqual(<<16#97FFFFFF:32/little>>, "bl .+-4", jit_aarch64_asm:bl(-4)),
+        ?_assertAsmEqual(<<16#97FFFFFC:32/little>>, "bl .+-16", jit_aarch64_asm:bl(-16))
+    ].
+
 blr_test_() ->
     [
         ?_assertAsmEqual(<<16#D63F0000:32/little>>, "blr x0", jit_aarch64_asm:blr(r0)),

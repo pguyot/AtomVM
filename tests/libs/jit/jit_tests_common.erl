@@ -20,7 +20,7 @@
 
 -module(jit_tests_common).
 
--export([asm/3]).
+-export([asm/3, dump_to_bin/1]).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -162,3 +162,102 @@ hex_to_bin(HexStr, Acc, Arch) ->
             % All architectures use little-endian encoding
             <<Acc/binary, HexVal:NumBits/little>>
     end.
+
+%% Parse objdump output and extract the binary bytes
+%% This function parses assembly dump output (from objdump) and extracts
+%% just the hex bytes, ignoring addresses and instruction mnemonics.
+-spec dump_to_bin(binary()) -> binary().
+dump_to_bin(Dump) ->
+    dump_to_bin0(Dump, addr, []).
+
+-spec dump_to_bin0(binary(), atom(), [byte()]) -> binary().
+% Skip whitespace at start or between lines
+dump_to_bin0(<<N, Tail/binary>>, addr, Acc) when N == $\  orelse N == $\n orelse N == $\t ->
+    dump_to_bin0(Tail, addr, Acc);
+% Parse hex digits in address (offset)
+dump_to_bin0(<<N, Tail/binary>>, addr, Acc) when
+    (N >= $0 andalso N =< $9) orelse (N >= $a andalso N =< $f)
+->
+    dump_to_bin0(Tail, addr, Acc);
+% Found colon after address, move to pre_hex state
+dump_to_bin0(<<$:, Tail/binary>>, addr, Acc) ->
+    dump_to_bin0(Tail, pre_hex, Acc);
+% Skip whitespace between colon and hex bytes
+dump_to_bin0(<<N, Tail/binary>>, pre_hex, Acc) when N == $\  orelse N == $\t ->
+    dump_to_bin0(Tail, pre_hex, Acc);
+% Start of hex bytes
+dump_to_bin0(<<_Other, _Tail/binary>> = Bin, pre_hex, Acc) ->
+    dump_to_bin0(Bin, hex, Acc);
+% Parse 2 hex digits followed by single space (continue hex parsing)
+dump_to_bin0(<<D1, D2, $\ , Tail/binary>>, hex, Acc) when
+    ((D1 >= $0 andalso D1 =< $9) orelse (D1 >= $a andalso D1 =< $f) orelse
+        (D1 >= $A andalso D1 =< $F)) andalso
+        ((D2 >= $0 andalso D2 =< $9) orelse (D2 >= $a andalso D2 =< $f) orelse
+            (D2 >= $A andalso D2 =< $F))
+->
+    Byte = list_to_integer([D1, D2], 16),
+    dump_to_bin0(Tail, hex, [Byte | Acc]);
+% Parse 4 hex digits followed by space or tab (armv6m format: "46fe " or "46fe\t")
+% This handles 16-bit Thumb instructions
+dump_to_bin0(<<D1, D2, D3, D4, N, Tail/binary>>, hex, Acc) when
+    ((D1 >= $0 andalso D1 =< $9) orelse (D1 >= $a andalso D1 =< $f) orelse
+        (D1 >= $A andalso D1 =< $F)) andalso
+        ((D2 >= $0 andalso D2 =< $9) orelse (D2 >= $a andalso D2 =< $f) orelse
+            (D2 >= $A andalso D2 =< $F)) andalso
+        ((D3 >= $0 andalso D3 =< $9) orelse (D3 >= $a andalso D3 =< $f) orelse
+            (D3 >= $A andalso D3 =< $F)) andalso
+        ((D4 >= $0 andalso D4 =< $9) orelse (D4 >= $a andalso D4 =< $f) orelse
+            (D4 >= $A andalso D4 =< $F)) andalso
+        (N == $\  orelse N == $\t)
+->
+    % Parse as 2 bytes in reverse order (objdump shows big-endian, but actual bytes are little-endian)
+    % Since Acc is reversed at the end, we add bytes in reverse order here
+    B1 = list_to_integer([D3, D4], 16),
+    B2 = list_to_integer([D1, D2], 16),
+    dump_to_bin0(Tail, hex, [B2, B1 | Acc]);
+% Parse 8 hex digits followed by space or tab (aarch64 format: "94000001 " or "94000001\t")
+% This handles the case where hex bytes are grouped (e.g., "94000001" instead of "94 00 00 01")
+% The bytes are in big-endian in the dump but represent little-endian instruction encoding
+dump_to_bin0(<<D1, D2, D3, D4, D5, D6, D7, D8, N, Tail/binary>>, hex, Acc) when
+    ((D1 >= $0 andalso D1 =< $9) orelse (D1 >= $a andalso D1 =< $f) orelse
+        (D1 >= $A andalso D1 =< $F)) andalso
+        ((D2 >= $0 andalso D2 =< $9) orelse (D2 >= $a andalso D2 =< $f) orelse
+            (D2 >= $A andalso D2 =< $F)) andalso
+        ((D3 >= $0 andalso D3 =< $9) orelse (D3 >= $a andalso D3 =< $f) orelse
+            (D3 >= $A andalso D3 =< $F)) andalso
+        ((D4 >= $0 andalso D4 =< $9) orelse (D4 >= $a andalso D4 =< $f) orelse
+            (D4 >= $A andalso D4 =< $F)) andalso
+        ((D5 >= $0 andalso D5 =< $9) orelse (D5 >= $a andalso D5 =< $f) orelse
+            (D5 >= $A andalso D5 =< $F)) andalso
+        ((D6 >= $0 andalso D6 =< $9) orelse (D6 >= $a andalso D6 =< $f) orelse
+            (D6 >= $A andalso D6 =< $F)) andalso
+        ((D7 >= $0 andalso D7 =< $9) orelse (D7 >= $a andalso D7 =< $f) orelse
+            (D7 >= $A andalso D7 =< $F)) andalso
+        ((D8 >= $0 andalso D8 =< $9) orelse (D8 >= $a andalso D8 =< $f) orelse
+            (D8 >= $A andalso D8 =< $F)) andalso
+        (N == $\  orelse N == $\t)
+->
+    % Parse as 4 bytes in reverse order (objdump shows big-endian, but actual bytes are little-endian)
+    % Since Acc is reversed at the end, we add bytes in reverse order here
+    B1 = list_to_integer([D7, D8], 16),
+    B2 = list_to_integer([D5, D6], 16),
+    B3 = list_to_integer([D3, D4], 16),
+    B4 = list_to_integer([D1, D2], 16),
+    dump_to_bin0(Tail, hex, [B4, B3, B2, B1 | Acc]);
+% Skip extra whitespace in hex section (single space was already handled above)
+dump_to_bin0(<<N, Tail/binary>>, hex, Acc) when N == $\  orelse N == $\t ->
+    dump_to_bin0(Tail, hex, Acc);
+% Newline ends this line, go back to addr state
+dump_to_bin0(<<$\n, Tail/binary>>, hex, Acc) ->
+    dump_to_bin0(Tail, addr, Acc);
+% Any other character in hex state means we hit the instruction - skip to end of line
+dump_to_bin0(<<_Other, Tail/binary>>, hex, Acc) ->
+    dump_to_bin0(Tail, instr, Acc);
+% In instruction state, skip everything until newline
+dump_to_bin0(<<$\n, Tail/binary>>, instr, Acc) ->
+    dump_to_bin0(Tail, addr, Acc);
+dump_to_bin0(<<_Other, Tail/binary>>, instr, Acc) ->
+    dump_to_bin0(Tail, instr, Acc);
+% End of input
+dump_to_bin0(<<>>, _, Acc) ->
+    list_to_binary(lists:reverse(Acc)).

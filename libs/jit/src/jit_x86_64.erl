@@ -31,6 +31,8 @@
     available_regs/1,
     free_native_registers/2,
     assert_all_native_free/1,
+    tail_cache_lookup/2,
+    tail_cache_update/3,
     jump_table/2,
     update_branches/1,
     call_primitive/3,
@@ -40,6 +42,9 @@
     jump_to_label/2,
     jump_to_continuation/2,
     jump_to_offset/2,
+    call_to_offset/2,
+    set_lr_to_pc/1,
+    get_parameter_register/2,
     if_block/3,
     if_else_block/4,
     shift_right/3,
@@ -119,7 +124,8 @@
     available_regs :: [x86_64_register()],
     used_regs :: [x86_64_register()],
     labels :: [{integer() | reference(), integer()}],
-    variant :: non_neg_integer()
+    variant :: non_neg_integer(),
+    tail_cache :: [{any(), any()}]
 }).
 
 -type state() :: #state{}.
@@ -225,7 +231,8 @@ new(Variant, StreamModule, Stream) ->
         available_regs = ?AVAILABLE_REGS,
         used_regs = [],
         labels = [],
-        variant = Variant
+        variant = Variant,
+        tail_cache = []
     }.
 
 %%-----------------------------------------------------------------------------
@@ -331,6 +338,30 @@ assert_all_native_free(State) ->
     [] = State#state.used_regs,
     ?AVAILABLE_REGS = State#state.available_regs,
     ok.
+
+%%-----------------------------------------------------------------------------
+%% @doc Lookup an entry in the tail cache.
+%% @end
+%% @param State current backend state
+%% @param Key the tail cache key
+%% @return `false` or `{Key, Value}`
+%%-----------------------------------------------------------------------------
+-spec tail_cache_lookup(state(), any()) -> false | {any(), any()}.
+tail_cache_lookup(#state{tail_cache = TC}, Key) ->
+    lists:keyfind(Key, 1, TC).
+
+%%-----------------------------------------------------------------------------
+%% @doc Update an entry in the tail cache.
+%% @end
+%% @param State current backend state
+%% @param Key the tail cache key
+%% @param Value value to put in the tail cache
+%% @return the updated state
+%%-----------------------------------------------------------------------------
+-spec tail_cache_update(state(), any(), any()) -> state().
+tail_cache_update(#state{tail_cache = TC0} = State, Key, Value) ->
+    TC1 = lists:keystore(Key, 1, TC0, {Key, Value}),
+    State#state{tail_cache = TC1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit the jump table at the beginning of the module. Branches will be
@@ -580,13 +611,18 @@ jump_to_label(
             RelOffset = LabelOffset - Offset,
             I1 = jit_x86_64_asm:jmp(RelOffset),
             Stream1 = StreamModule:append(Stream0, I1),
-            State#state{stream = Stream1};
+            State#state{stream = Stream1, available_regs = ?AVAILABLE_REGS, used_regs = []};
         false ->
             % Label not yet known, emit placeholder and add relocation
             {RelocOffset, I1} = jit_x86_64_asm:jmp_rel32(1),
             Reloc = {Label, Offset + RelocOffset, 32},
             Stream1 = StreamModule:append(Stream0, I1),
-            State#state{stream = Stream1, branches = [Reloc | AccBranches]}
+            State#state{
+                stream = Stream1,
+                branches = [Reloc | AccBranches],
+                available_regs = ?AVAILABLE_REGS,
+                used_regs = []
+            }
     end.
 
 jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
@@ -594,7 +630,39 @@ jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     RelOffset = TargetOffset - Offset,
     I1 = jit_x86_64_asm:jmp(RelOffset),
     Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1, available_regs = ?AVAILABLE_REGS, used_regs = []}.
+
+call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
+    Offset = StreamModule:offset(Stream0),
+    RelOffset = TargetOffset - Offset,
+    I1 = jit_x86_64_asm:call(RelOffset),
+    Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % push xip to the stack
+    I1 = jit_x86_64_asm:call(5),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get parameter register to optimize tail cache usage.
+%% @end
+%% @param State current backend state
+%% @param Index parameter index, 1-based
+%% @return a tuple with the updated state and the register
+%%-----------------------------------------------------------------------------
+get_parameter_register(#state{available_regs = AR0, used_regs = UR0} = State, Index) ->
+    Register = lists:nth(Index, ?PARAMETER_REGS),
+    case lists:member(Register, UR0) of
+        true ->
+            {State, Register};
+        false ->
+            {
+                State#state{available_regs = AR0 -- [Register], used_regs = [Register | UR0]},
+                Register
+            }
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.
@@ -1198,7 +1266,7 @@ parameter_regs(Args) ->
 parameter_regs0([], _, Acc) ->
     lists:reverse(Acc);
 parameter_regs0([Special | T], [GPReg | GPRegsT], Acc) when
-    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset
+    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset orelse Special =:= lr
 ->
     parameter_regs0(T, GPRegsT, [GPReg | Acc]);
 parameter_regs0([{free, Free} | T], GPRegs, Acc) ->
@@ -1244,6 +1312,9 @@ set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc) ->
     set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc);
 set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, Acc) ->
     set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, Acc);
+set_args0([lr | ArgsT], [lr | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc) ->
+    Pop = jit_x86_64_asm:popq(ParamReg),
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [Pop | Acc]);
 set_args0(
     [jit_state | ArgsT],
     [?JITSTATE_REG | ArgsRegs],

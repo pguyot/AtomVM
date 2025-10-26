@@ -90,6 +90,21 @@ b_test_() ->
         ?_assertError({unencodable_offset, -2046}, jit_armv6m_asm:b(-2046))
     ].
 
+bl_test_() ->
+    [
+        %% Thumb-2 BL (branch with link) encoding tests - 32-bit instruction
+        ?_assertAsmEqual(<<16#F000:16/little, 16#F800:16/little>>, "bl .+4", jit_armv6m_asm:bl(4)),
+        ?_assertAsmEqual(<<16#F000:16/little, 16#F802:16/little>>, "bl .+8", jit_armv6m_asm:bl(8)),
+        ?_assertAsmEqual(<<16#F7FF:16/little, 16#FFFE:16/little>>, "bl .+0", jit_armv6m_asm:bl(0)),
+        ?_assertAsmEqual(<<16#F7FF:16/little, 16#FFFC:16/little>>, "bl .-4", jit_armv6m_asm:bl(-4)),
+        ?_assertAsmEqual(
+            <<16#F000:16/little, 16#F808:16/little>>, "bl .+20", jit_armv6m_asm:bl(20)
+        ),
+        ?_assertAsmEqual(
+            <<16#F7FF:16/little, 16#FFF4:16/little>>, "bl .-20", jit_armv6m_asm:bl(-20)
+        )
+    ].
+
 blx_test_() ->
     [
         %% Thumb BLX (register) encoding tests

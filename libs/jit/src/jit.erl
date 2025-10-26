@@ -102,8 +102,7 @@
     atom_resolver :: fun((integer()) -> atom()),
     literal_resolver :: fun((integer()) -> any()),
     type_resolver :: fun((integer()) -> any()),
-    import_resolver :: fun((integer()) -> {atom(), atom(), non_neg_integer()}),
-    tail_cache :: [{tuple(), non_neg_integer()}]
+    import_resolver :: fun((integer()) -> {atom(), atom(), non_neg_integer()})
 }).
 
 -type stream() :: any().
@@ -154,8 +153,7 @@ compile(
         atom_resolver = AtomResolver,
         literal_resolver = LiteralResolver,
         type_resolver = TypeResolver,
-        import_resolver = ImportResolver,
-        tail_cache = []
+        import_resolver = ImportResolver
     },
     ?INSTRUMENT("compile_start", State0, MSt0),
     MSt1 = MMod:jump_table(MSt0, LabelsCount),
@@ -180,6 +178,40 @@ compile(
 compile(CodeChunk, _AtomResolver, _LiteralResolver, _TypeResolver, _ImportResolver, _MMod, _MSt) ->
     error(badarg, [CodeChunk]).
 
+raise_error(MMod, MSt0, Atom) ->
+    TailCacheKey0 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, Atom]},
+    case MMod:tail_cache_lookup(MSt0, TailCacheKey0) of
+        false ->
+            {MSt1, AtomReg} = MMod:get_parameter_register(MSt0, 4),
+            TailCacheKey1 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, AtomReg]},
+            case MMod:tail_cache_lookup(MSt1, TailCacheKey1) of
+                false ->
+                    % None are present.
+                    %% Set LR to PC, will be used as a parameter
+                    MSt2 = MMod:set_lr_to_pc(MSt1),
+                    CacheOffset0 = MMod:offset(MSt2),
+                    MSt3 = MMod:move_to_native_register(MSt2, Atom, AtomReg),
+                    CacheOffset1 = MMod:offset(MSt3),
+                    MSt4 = MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR, [
+                        ctx, jit_state, lr, {free, AtomReg}
+                    ]),
+                    MSt5 = MMod:tail_cache_update(MSt4, TailCacheKey1, CacheOffset1),
+                    MMod:tail_cache_update(MSt5, TailCacheKey0, CacheOffset0);
+                {TailCacheKey1, CacheOffsetC1} ->
+                    %% Set LR to PC, will be used as a parameter
+                    MSt2 = MMod:set_lr_to_pc(MSt1),
+                    CacheOffset0 = MMod:offset(MSt2),
+                    MSt3 = MMod:move_to_native_register(MSt2, Atom, AtomReg),
+                    MSt4 = MMod:jump_to_offset(MSt3, CacheOffsetC1),
+                    MMod:tail_cache_update(MSt4, TailCacheKey0, CacheOffset0)
+            end;
+        {TailCacheKey0, CacheOffsetC0} ->
+            %% This is not a real call, we just save PC to LR and
+            %% pass it the function.
+            MSt2 = MMod:call_to_offset(MSt0, CacheOffsetC0),
+            MMod:free_native_registers(MSt2, MMod:used_regs(MSt2))
+    end.
+
 % 1
 first_pass(
     <<?OP_LABEL, Rest0/binary>>, MMod, MSt0, State0
@@ -191,30 +223,16 @@ first_pass(
     ?ASSERT_ALL_NATIVE_FREE(MSt1),
     first_pass(Rest1, MMod, MSt1, State0);
 % 2
-first_pass(<<?OP_FUNC_INFO, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
+first_pass(<<?OP_FUNC_INFO, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {_ModuleAtom, Rest1} = decode_atom(Rest0),
     {_FunctionName, Rest2} = decode_atom(Rest1),
     {_Arity, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_FUNC_INFO ~p, ~p, ~p\n", [_ModuleAtom, _FunctionName, _Arity]),
     % Implement function clause at the previous label.
-    Offset = MMod:offset(MSt0),
-    {MSt1, OffsetReg} = MMod:move_to_native_register(MSt0, Offset),
-    TailCacheKey = {call_primitive_last, ?PRIM_RAISE_ERROR, [OffsetReg, ?FUNCTION_CLAUSE_ATOM]},
-    State1 =
-        case lists:keyfind(TailCacheKey, 1, TC) of
-            false ->
-                MSt3 = MMod:call_primitive_last(MSt1, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, {free, OffsetReg}, ?FUNCTION_CLAUSE_ATOM
-                ]),
-                State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
-            {TailCacheKey, CacheOffset} ->
-                MSt2 = MMod:jump_to_offset(MSt1, CacheOffset),
-                MSt3 = MMod:free_native_registers(MSt2, [OffsetReg]),
-                State0
-        end,
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest3, MMod, MSt3, State1);
+    MSt1 = raise_error(MMod, MSt0, ?FUNCTION_CLAUSE_ATOM),
+    ?ASSERT_ALL_NATIVE_FREE(MSt1),
+    first_pass(Rest3, MMod, MSt1, State0);
 % 3
 first_pass(
     <<?OP_INT_CALL_END>>, MMod, MSt0, #state{labels_count = LabelsCount} = State
@@ -236,56 +254,53 @@ first_pass(<<?OP_CALL, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt1),
     first_pass(Rest2, MMod, MSt1, State0);
 % 5
-first_pass(<<?OP_CALL_LAST, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
+first_pass(<<?OP_CALL_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {_Arity, Rest1} = decode_literal(Rest0),
     {Label, Rest2} = decode_label(Rest1),
     {NWords, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_CALL_LAST ~p, ~p, ~p\n", [_Arity, Label, NWords]),
     TailCacheKey0 = {op_call_last, NWords, Label},
-    case lists:keyfind(TailCacheKey0, 1, TC) of
-        false ->
-            Offset0 = MMod:offset(MSt0),
-            MSt1 = MMod:move_to_cp(MSt0, {y_reg, NWords}),
-            MSt2 = MMod:increment_sp(MSt1, NWords + 1),
-            TailCacheKey1 = {op_call_only, Label},
-            case lists:keyfind(TailCacheKey1, 1, TC) of
-                false ->
-                    Offset1 = MMod:offset(MSt2),
-                    MSt3 = MMod:call_only_or_schedule_next(MSt2, Label),
-                    State1 = State0#state{
-                        tail_cache = [{TailCacheKey1, Offset1}, {TailCacheKey0, Offset0} | TC]
-                    };
-                {TailCacheKey1, Offset1} ->
-                    MSt3 = MMod:jump_to_offset(MSt2, Offset1),
-                    State1 = State0#state{
-                        tail_cache = [{TailCacheKey0, Offset0} | TC]
-                    }
-            end;
-        {TailCacheKey0, Offset0} ->
-            MSt3 = MMod:jump_to_offset(MSt0, Offset0),
-            State1 = State0
-    end,
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest3, MMod, MSt3, State1);
+    MSt5 =
+        case MMod:tail_cache_lookup(MSt0, TailCacheKey0) of
+            false ->
+                Offset0 = MMod:offset(MSt0),
+                MSt1 = MMod:move_to_cp(MSt0, {y_reg, NWords}),
+                MSt2 = MMod:increment_sp(MSt1, NWords + 1),
+                TailCacheKey1 = {op_call_only, Label},
+                case MMod:tail_cache_lookup(MSt2, TailCacheKey1) of
+                    false ->
+                        Offset1 = MMod:offset(MSt2),
+                        MSt3 = MMod:call_only_or_schedule_next(MSt2, Label),
+                        MSt4 = MMod:tail_cache_update(MSt3, TailCacheKey1, Offset1),
+                        MMod:tail_cache_update(MSt4, TailCacheKey0, Offset0);
+                    {TailCacheKey1, Offset1} ->
+                        MSt3 = MMod:jump_to_offset(MSt2, Offset1),
+                        MMod:tail_cache_update(MSt3, TailCacheKey0, Offset0)
+                end;
+            {TailCacheKey0, Offset0} ->
+                MMod:jump_to_offset(MSt0, Offset0)
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt5),
+    first_pass(Rest3, MMod, MSt5, State0);
 % 6
-first_pass(<<?OP_CALL_ONLY, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
+first_pass(<<?OP_CALL_ONLY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {_Arity, Rest1} = decode_literal(Rest0),
     {Label, Rest2} = decode_label(Rest1),
     ?TRACE("OP_CALL_ONLY ~p, ~p\n", [_Arity, Label]),
     TailCacheKey = {op_call_only, Label},
-    case lists:keyfind(TailCacheKey, 1, TC) of
-        false ->
-            Offset = MMod:offset(MSt0),
-            MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
-            State1 = State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
-        {TailCacheKey, Offset} ->
-            MSt1 = MMod:jump_to_offset(MSt0, Offset),
-            State1 = State0
-    end,
-    ?ASSERT_ALL_NATIVE_FREE(MSt1),
-    first_pass(Rest2, MMod, MSt1, State1);
+    MSt2 =
+        case MMod:tail_cache_lookup(MSt0, TailCacheKey) of
+            false ->
+                Offset = MMod:offset(MSt0),
+                MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
+                MMod:tail_cache_update(MSt1, TailCacheKey, Offset);
+            {TailCacheKey, Offset} ->
+                MMod:jump_to_offset(MSt0, Offset)
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    first_pass(Rest2, MMod, MSt2, State0);
 % 7
 first_pass(<<?OP_CALL_EXT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -411,7 +426,7 @@ first_pass(<<?OP_DEALLOCATE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest1, MMod, MSt2, State0);
 % 19
-first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
+first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     ?TRACE("OP_RETURN\n", []),
     % Optimized return: check if returning within same module
@@ -435,17 +450,17 @@ first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = St
     MSt5 = MMod:free_native_registers(MSt4, [CpReg0]),
     % Different module: use existing slow path
     TailCacheKey = {call_primitive_last, ?PRIM_RETURN},
-    case lists:keyfind(TailCacheKey, 1, TC) of
-        false ->
-            Offset = MMod:offset(MSt5),
-            MSt6 = MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state]),
-            State1 = State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
-        {TailCacheKey, Offset} ->
-            MSt6 = MMod:jump_to_offset(MSt5, Offset),
-            State1 = State0
-    end,
-    ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    first_pass(Rest, MMod, MSt6, State1);
+    MSt7 =
+        case MMod:tail_cache_lookup(MSt5, TailCacheKey) of
+            false ->
+                Offset = MMod:offset(MSt5),
+                MSt6 = MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state]),
+                MMod:tail_cache_update(MSt6, TailCacheKey, Offset);
+            {TailCacheKey, Offset} ->
+                MMod:jump_to_offset(MSt5, Offset)
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt7),
+    first_pass(Rest, MMod, MSt7, State0);
 % 20
 first_pass(<<?OP_SEND, Rest/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -902,22 +917,22 @@ first_pass(<<?OP_SELECT_TUPLE_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest4, MMod, MSt5, State0);
 % 61
-first_pass(<<?OP_JUMP, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
+first_pass(<<?OP_JUMP, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
     ?TRACE("OP_JUMP ~p\n", [Label]),
     TailCacheKey = {op_call_only, Label},
-    case lists:keyfind(TailCacheKey, 1, TC) of
-        false ->
-            Offset = MMod:offset(MSt0),
-            MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
-            ?ASSERT_ALL_NATIVE_FREE(MSt1),
-            first_pass(Rest1, MMod, MSt1, State0#state{tail_cache = [{TailCacheKey, Offset} | TC]});
-        {TailCacheKey, Offset} ->
-            MSt1 = MMod:jump_to_offset(MSt0, Offset),
-            ?ASSERT_ALL_NATIVE_FREE(MSt1),
-            first_pass(Rest1, MMod, MSt1, State0)
-    end;
+    MSt2 =
+        case MMod:tail_cache_lookup(MSt0, TailCacheKey) of
+            false ->
+                Offset = MMod:offset(MSt0),
+                MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
+                MMod:tail_cache_update(MSt1, TailCacheKey, Offset);
+            {TailCacheKey, Offset} ->
+                MMod:jump_to_offset(MSt0, Offset)
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    first_pass(Rest1, MMod, MSt2, State0);
 % 62
 % Same implementation as OP_TRY, to confirm.
 first_pass(<<?OP_CATCH, Rest0/binary>>, MMod, MSt0, State0) ->
@@ -1020,9 +1035,7 @@ first_pass(<<?OP_BADMATCH, Rest0/binary>>, MMod, MSt0, State0) ->
 first_pass(<<?OP_IF_END, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     ?TRACE("OP_IF_END\n", []),
-    MSt1 = MMod:call_primitive_last(MSt0, ?PRIM_RAISE_ERROR, [
-        ctx, jit_state, offset, ?IF_CLAUSE_ATOM
-    ]),
+    MSt1 = raise_error(MMod, MSt0, ?IF_CLAUSE_ATOM),
     ?ASSERT_ALL_NATIVE_FREE(MSt1),
     first_pass(Rest0, MMod, MSt1, State0);
 % 74
@@ -1097,9 +1110,7 @@ first_pass(<<?OP_FCONV, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, SrcValue),
     {MSt3, IsNumber} = MMod:call_primitive(MSt2, ?PRIM_TERM_IS_NUMBER, [Reg]),
     MSt4 = MMod:if_block(MSt3, {'(bool)', {free, IsNumber}, '==', false}, fun(BlockSt) ->
-        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?BADARITH_ATOM
-        ])
+        raise_error(MMod, BlockSt, ?BADARITH_ATOM)
     end),
     {{fp_reg, FPRegIndex}, Rest2} = decode_fp_register(Rest1),
     {MSt5, ResultReg} = MMod:call_primitive(MSt4, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
@@ -1354,19 +1365,13 @@ first_pass(<<?OP_BS_GET_BINARY2, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt5, BSOffsetReg0} = MMod:get_array_element(MSt4, MatchStateRegPtr, 2),
     MSt6 =
         if
-            Unit =/= 8 ->
-                MMod:call_primitive_last(MSt5, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                ]);
-            FlagsValue =/= 0 ->
-                MMod:call_primitive_last(MSt5, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                ]);
+            Unit =/= 8 orelse FlagsValue =/= 0 ->
+                raise_error(MMod, MSt5, ?UNSUPPORTED_ATOM);
             true ->
                 MSt5
         end,
     MSt7 = MMod:if_block(MSt6, {BSOffsetReg0, '&', 16#7, '!=', 0}, fun(BlockSt) ->
-        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [ctx, jit_state, offset, ?BADARG_ATOM])
+        raise_error(MMod, BlockSt, ?BADARG_ATOM)
     end),
     {MSt8, BSOffsetReg1} = MMod:shift_right(MSt7, {free, BSOffsetReg0}, 3),
     {MSt9, BSBinaryReg0} = MMod:and_(MSt8, {free, BSBinaryReg0}, ?TERM_PRIMARY_CLEAR_MASK),
@@ -1576,9 +1581,7 @@ first_pass(<<?OP_BS_INIT_WRITABLE, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt2 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt1),
     {MSt3, CreatedBin} = MMod:call_primitive(MSt2, ?PRIM_TERM_CREATE_EMPTY_BINARY, [ctx, 0]),
     MSt4 = MMod:if_block(MSt3, {CreatedBin, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-        ])
+        raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
     end),
     MSt5 = MMod:set_bs(MSt4, CreatedBin),
     MSt6 = MMod:move_to_vm_register(MSt5, CreatedBin, {x_reg, 0}),
@@ -1747,9 +1750,7 @@ first_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
             end),
             ASt4 = MMod:if_block(
                 ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
+                    raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
                 end
             ),
             {ASt4, ARest2}
@@ -1823,15 +1824,11 @@ first_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
                 ctx, Src, {free, Key}
             ]),
             ASt3 = MMod:if_block(ASt2, {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, fun(BSt0) ->
-                MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARG_ATOM
-                ])
+                raise_error(MMod, BSt0, ?BADARG_ATOM)
             end),
             ASt4 = MMod:if_block(
                 ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
+                    raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
                 end
             ),
             {ASt4, ARest2}
@@ -1860,9 +1857,7 @@ first_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
             ASt4 = MMod:if_block(ASt3, {'(int)', PosReg, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(
                 BSt0
             ) ->
-                MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                ])
+                raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
             end),
             ASt5 = term_set_map_assoc(
                 NewMapPtrReg, {free, PosReg}, {free, Key}, {free, Value}, MMod, ASt4
@@ -1901,9 +1896,7 @@ first_pass(<<?OP_HAS_MAP_FIELDS, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt5 = MMod:if_block(MSt4, {'(int)', {free, PosReg1}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(
         BSt0
     ) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-        ])
+        raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
     end),
     {MSt6, Rest5} = lists:foldl(
         fun(_Index, {AccMSt0, AccRest0}) ->
@@ -1917,10 +1910,7 @@ first_pass(<<?OP_HAS_MAP_FIELDS, Rest0/binary>>, MMod, MSt0, State0) ->
             ),
             AccMSt4 = MMod:if_block(
                 AccMSt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    % TODO: previous implementation yielded a slightly smaller code as raise block was shared.
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
+                    raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
                 end
             ),
             AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
@@ -1945,9 +1935,7 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt3, PosReg1} = MMod:call_primitive(MSt2, ?PRIM_TERM_FIND_MAP_POS, [ctx, Src, {free, Key1}]),
     MSt4 = cond_jump_to_label({'(int)', PosReg1, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, MSt3),
     MSt5 = MMod:if_block(MSt4, {'(int)', PosReg1, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-        ])
+        raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
     end),
     {MSt6, SrcReg} = MMod:move_to_native_register(MSt5, Src),
     {MSt7, MapReg} = MMod:and_(MSt6, SrcReg, ?TERM_PRIMARY_CLEAR_MASK),
@@ -1968,10 +1956,7 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
             ),
             AccMSt4 = MMod:if_block(
                 AccMSt3, {'(int)', PosReg, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    % TODO: previous implementation yielded a slightly smaller code as raise block was shared.
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
+                    raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
                 end
             ),
             AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
@@ -2333,16 +2318,12 @@ first_pass(
     MSt5 =
         if
             is_integer(BinaryTotalSize) andalso BinaryTotalSize band 16#7 =/= 0 ->
-                MMod:call_primitive_last(MSt4, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                ]);
+                raise_error(MMod, MSt4, ?UNSUPPORTED_ATOM);
             is_integer(BinaryTotalSize) ->
                 MSt4;
             true ->
                 MMod:if_block(MSt4, {BinaryTotalSize, '&', 16#7, '!=', 0}, fun(BlockSt) ->
-                    MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                    ])
+                    raise_error(MMod, BlockSt, ?UNSUPPORTED_ATOM)
                 end)
         end,
     {MSt6, TrimResultReg} = MMod:call_primitive(MSt5, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
@@ -2386,9 +2367,7 @@ first_pass(
                 MSt16 = MMod:if_block(MSt15, {CreatedBinResult, '==', ?TERM_INVALID_TERM}, fun(
                     BSt0
                 ) ->
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
+                    raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
                 end),
                 {MSt16, CreatedBinResult};
             true ->
@@ -2636,9 +2615,7 @@ first_pass_bs_create_bin_compute_size(
             is_integer(SizeValue) andalso SizeValue > 0 ->
                 MSt3;
             is_integer(SizeValue) andalso Fail =:= 0 ->
-                MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARG_ATOM
-                ]);
+                raise_error(MMod, MSt3, ?BADARG_ATOM);
             is_integer(SizeValue) andalso Fail =/= 0 ->
                 MMod:jump_to_label(MSt3, Fail);
             true ->
@@ -2839,9 +2816,7 @@ first_pass_bs_create_bin_insert_value(
         ctx, {free, Src}, {free, BinaryTotalSizeInBytes}
     ]),
     MSt3 = MMod:if_block(MSt2, {CreatedBin, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-        ])
+        raise_error(MMod, BSt0, ?OUT_OF_MEMORY_ATOM)
     end),
     % Convert original size to bits and update offset
     MSt4 = MMod:shift_left(MSt3, OriginalSize, 3),
@@ -2965,9 +2940,7 @@ first_pass_bs_match_ensure_at_least(
     {Stride, Rest1} = decode_literal(Rest0),
     if
         Stride < 0 ->
-            MSt1 = MMod:call_primitive_last(MSt0, ?PRIM_RAISE_ERROR, [
-                ctx, jit_state, offset, ?BADARG_ATOM
-            ]),
+            MSt1 = raise_error(MMod, MSt0, ?BADARG_ATOM),
             {J0, Rest0, MatchState, BSOffsetReg, MSt1};
         true ->
             % TODO: check use of unit here (TODO is the same in opcodeswitch.h)
@@ -2989,9 +2962,7 @@ first_pass_bs_match_ensure_exactly(
     {Stride, Rest1} = decode_literal(Rest0),
     if
         Stride < 0 ->
-            MSt1 = MMod:call_primitive_last(MSt0, ?PRIM_RAISE_ERROR, [
-                ctx, jit_state, offset, ?BADARG_ATOM
-            ]),
+            MSt1 = raise_error(MMod, MSt0, ?BADARG_ATOM),
             {J0, Rest0, MatchState, BSOffsetReg, MSt1};
         true ->
             ?TRACE("{ensure_exactly,~p},", [Stride]),
@@ -3076,9 +3047,7 @@ first_pass_bs_match_binary(
             MatchedBits rem 8 =:= 0 ->
                 cond_raise_badarg({BSOffsetReg, '&', 2#111, '!=', 0}, MMod, MSt0);
             true ->
-                MMod:call_primitive_last(MSt0, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARG_ATOM
-                ])
+                raise_error(MMod, MSt0, ?BADARG_ATOM)
         end,
     MatchedBytes = MatchedBits div 8,
     {MSt2, BSOffseBytesReg} = MMod:shift_right(MSt1, BSOffsetReg, 3),
@@ -3434,7 +3403,11 @@ op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range}}, Arg2) when is_in
 % Fallback: use term_compare
 op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, unwrap_typed(Arg1)}, {free, unwrap_typed(Arg2)}, ?TERM_COMPARE_NO_OPTS
+        ctx,
+        jit_state,
+        {free, unwrap_typed(Arg1)},
+        {free, unwrap_typed(Arg2)},
+        ?TERM_COMPARE_NO_OPTS
     ]),
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
@@ -3661,9 +3634,7 @@ verify_is_binary(Arg1, FailLabel, MMod, MSt0) ->
 
 cond_raise_badarg(Cond, MMod, MSt0) ->
     MMod:if_block(MSt0, Cond, fun(BlockSt) ->
-        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?BADARG_ATOM
-        ])
+        raise_error(MMod, BlockSt, ?BADARG_ATOM)
     end).
 
 cond_raise_badarg_or_jump_to_fail_label(Cond, 0, MMod, MSt0) ->
@@ -3710,9 +3681,7 @@ first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
             first_pass(Rest4, MMod, MSt3, State0);
         true ->
             MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
-                MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARITH_ATOM
-                ])
+                raise_error(MMod, BlockSt, ?BADARITH_ATOM)
             end),
             ?ASSERT_ALL_NATIVE_FREE(MSt2),
             first_pass(Rest4, MMod, MSt2, State0)

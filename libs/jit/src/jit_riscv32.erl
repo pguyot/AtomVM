@@ -31,6 +31,8 @@
     available_regs/1,
     free_native_registers/2,
     assert_all_native_free/1,
+    tail_cache_lookup/2,
+    tail_cache_update/3,
     jump_table/2,
     update_branches/1,
     call_primitive/3,
@@ -40,6 +42,9 @@
     jump_to_label/2,
     jump_to_continuation/2,
     jump_to_offset/2,
+    call_to_offset/2,
+    set_lr_to_pc/1,
+    get_parameter_register/2,
     if_block/3,
     if_else_block/4,
     shift_right/3,
@@ -168,7 +173,8 @@
     available_regs :: [riscv32_register()],
     used_regs :: [riscv32_register()],
     labels :: [{integer() | reference(), integer()}],
-    variant :: non_neg_integer()
+    variant :: non_neg_integer(),
+    tail_cache :: [{any(), any()}]
 }).
 
 -type state() :: #state{}.
@@ -278,7 +284,8 @@ new(Variant, StreamModule, Stream) ->
         available_regs = ?AVAILABLE_REGS,
         used_regs = [],
         labels = [],
-        variant = Variant
+        variant = Variant,
+        tail_cache = []
     }.
 
 %%-----------------------------------------------------------------------------
@@ -385,6 +392,30 @@ assert_all_native_free(#state{
     available_regs = ?AVAILABLE_REGS, used_regs = []
 }) ->
     ok.
+
+%%-----------------------------------------------------------------------------
+%% @doc Lookup an entry in the tail cache.
+%% @end
+%% @param State current backend state
+%% @param Key the tail cache key
+%% @return `false` or `{Key, Value}`
+%%-----------------------------------------------------------------------------
+-spec tail_cache_lookup(state(), any()) -> false | {any(), any()}.
+tail_cache_lookup(#state{tail_cache = TC}, Key) ->
+    lists:keyfind(Key, 1, TC).
+
+%%-----------------------------------------------------------------------------
+%% @doc Update an entry in the tail cache.
+%% @end
+%% @param State current backend state
+%% @param Key the tail cache key
+%% @param Value value to put in the tail cache
+%% @return the updated state
+%%-----------------------------------------------------------------------------
+-spec tail_cache_update(state(), any(), any()) -> state().
+tail_cache_update(#state{tail_cache = TC0} = State, Key, Value) ->
+    TC1 = lists:keystore(Key, 1, TC0, {Key, Value}),
+    State#state{tail_cache = TC1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit the jump table at the beginning of the module. Branches will be
@@ -739,13 +770,54 @@ jump_to_label(
     Offset = StreamModule:offset(Stream0),
     {State1, CodeBlock} = branch_to_label_code(State0, Offset, Label, LabelLookupResult),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
-    State1#state{stream = Stream1}.
+    State1#state{stream = Stream1, available_regs = ?AVAILABLE_REGS, used_regs = []}.
 
 jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
     Offset = StreamModule:offset(Stream0),
     CodeBlock = branch_to_offset_code(State, Offset, TargetOffset),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
+    State#state{stream = Stream1, available_regs = ?AVAILABLE_REGS, used_regs = []}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Call to a specific offset (branch with link)
+%% @end
+%% @param State current backend state
+%% @param TargetOffset the absolute offset to call to
+%% @return the updated state
+%%-----------------------------------------------------------------------------
+-spec call_to_offset(state(), non_neg_integer()) -> state().
+call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
+    Offset = StreamModule:offset(Stream0),
+    Rel = TargetOffset - Offset,
+    I1 = jit_riscv32_asm:jal(ra, Rel),
+    Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Set link register (ra) to current PC + 4
+%% Used to capture the current instruction pointer
+%% @end
+%% @param State current backend state
+%% @return the updated state
+%%-----------------------------------------------------------------------------
+-spec set_lr_to_pc(state()) -> state().
+set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % jal ra, 4 will set ra = pc + 4 and then jump to pc + 4 (next instruction)
+    I1 = jit_riscv32_asm:jal(ra, 4),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get parameter register to optimize tail cache usage.
+%% @end
+%% @param State current backend state
+%% @param Index parameter index, 1-based
+%% @return a tuple with the updated state and the register
+%%-----------------------------------------------------------------------------
+get_parameter_register(State, Index) ->
+    % On riscv32, parameter registers are not used as temporaries
+    Register = lists:nth(Index, ?PARAMETER_REGS),
+    {State, Register}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to address in continuation pointer register
@@ -1753,6 +1825,18 @@ set_registers_args0(
     State, [ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
 ) ->
     set_registers_args0(State, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
+set_registers_args0(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    [lr | ArgsT],
+    [lr | ArgsRegs],
+    [ParamReg | ParamRegs],
+    AvailGP,
+    StackOffset
+) ->
+    I = jit_riscv32_asm:mv(ParamReg, ra),
+    Stream1 = StreamModule:append(Stream0, I),
+    State1 = State0#state{stream = Stream1},
+    set_registers_args0(State1, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 % Handle 64-bit arguments that need two registers according to ILP32
 set_registers_args0(
     State,

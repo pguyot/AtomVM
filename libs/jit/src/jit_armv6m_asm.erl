@@ -31,6 +31,7 @@
     b/1,
     bcc/2,
     bkpt/1,
+    bl/1,
     blx/1,
     bx/1,
     cmp/2,
@@ -225,6 +226,42 @@ b(Offset) when is_integer(Offset), Offset >= -2044, Offset =< 2050, (Offset rem 
     Offset11 = AdjustedOffset div 2,
     <<(16#E000 bor (Offset11 band 16#7FF)):16/little>>;
 b(Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
+
+%% Emit a branch with link (BL) instruction (Thumb-2 encoding)
+%% offset is in bytes, relative to the PC+4 (next instruction)
+%% BL is a 32-bit Thumb-2 instruction with ±16MB range
+-spec bl(integer()) -> binary().
+bl(Offset) when
+    is_integer(Offset), Offset >= -16777212, Offset =< 16777218, (Offset rem 2) =:= 0
+->
+    %% Thumb-2 BL encoding: 11110Siiiiiiiiiii 11J1KJ2iiiiiiiiiii
+    %% where imm24 = SignExtend(S:I1:I2:imm10:imm11:0)
+    %% I1 = NOT(J1 XOR S), I2 = NOT(J2 XOR S)
+    %% Adjust offset by -4 to match assembler behavior (PC+4 relative)
+    AdjustedOffset = Offset - 4,
+    %% Compute imm24 (offset / 2), which is a signed 24-bit value
+    Imm24 = AdjustedOffset div 2,
+    %% Extract sign bit (S) - bit 23
+    S = (Imm24 bsr 23) band 1,
+    %% Extract I1 (bit 22) and I2 (bit 21)
+    I1 = (Imm24 bsr 22) band 1,
+    I2 = (Imm24 bsr 21) band 1,
+    %% Compute J1 and J2: I1 = NOT(J1 XOR S), so J1 = NOT(I1 XOR S)
+    J1 = (bnot (I1 bxor S)) band 1,
+    J2 = (bnot (I2 bxor S)) band 1,
+    %% Extract imm10 (bits 20:11)
+    Imm10 = (Imm24 bsr 11) band 16#3FF,
+    %% Extract imm11 (bits 10:0)
+    Imm11 = Imm24 band 16#7FF,
+    %% Build the two 16-bit halves
+    %% First half: 11110Siiiiiiiiiii
+    FirstHalf = (16#F000 bor (S bsl 10) bor Imm10),
+    %% Second half: 11J1KJ2iiiiiiiiiii (K=1 for BL)
+    SecondHalf = (16#D000 bor (J1 bsl 13) bor (J2 bsl 11) bor Imm11),
+    %% Emit as little-endian 32-bit instruction
+    <<FirstHalf:16/little, SecondHalf:16/little>>;
+bl(Offset) when is_integer(Offset) ->
     error({unencodable_offset, Offset}).
 
 %% Emit a branch with link register (BLR) instruction (Thumb encoding)

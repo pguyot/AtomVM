@@ -27,6 +27,7 @@
     madd/4,
     b/1,
     bcc/2,
+    bl/1,
     blr/1,
     br/1,
     brk/1,
@@ -147,6 +148,19 @@ brk(Imm) when is_integer(Imm), Imm >= 0, Imm =< 16#FFFF ->
     %% AArch64 BRK encoding: 11010100 00100000 00000000 iiiiiiii iiiiiiii
     %% 0xd4200000 | Imm << 5
     <<(16#D4200000 bor ((Imm band 16#FFFF) bsl 5)):32/little>>.
+
+%% Emit a branch with link (BL) instruction with immediate offset (AArch64 encoding)
+%% Offset is a signed byte offset from the current instruction
+%% The offset must be 4-byte aligned and will be divided by 4 to get the instruction offset
+-spec bl(integer()) -> binary().
+bl(Offset) when is_integer(Offset) ->
+    %% AArch64 BL encoding: 100101iiiiiiiiiiiiiiiiiiiiiiiii
+    %% where i is the 26-bit signed immediate offset (in instructions, not bytes)
+    %% Offset is in bytes, so divide by 4 to get instruction offset
+    InstrOffset = Offset bsr 2,
+    %% Mask to 26 bits (signed)
+    Imm26 = InstrOffset band 16#3FFFFFF,
+    <<(16#94000000 bor Imm26):32/little>>.
 
 %% Emit a branch with link register (BLR) instruction (AArch64 encoding)
 %% Register is the register atom (r0-r15)

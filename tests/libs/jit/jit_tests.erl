@@ -122,7 +122,13 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
 
     % Compile with typed register support
     {_LabelsCount, Stream3} = jit:compile(
-        ?CODE_CHUNK_1, AtomResolver, LiteralResolver, TypeResolver, ImportResolver, jit_x86_64, Stream2
+        ?CODE_CHUNK_1,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_x86_64,
+        Stream2
     ),
     CompiledCode = jit_x86_64:stream(Stream3),
 
@@ -200,7 +206,13 @@ verify_is_function_typed_optimization_x86_64_test() ->
 
     % Compile with typed register support
     {_LabelsCount, Stream3} = jit:compile(
-        ?CODE_CHUNK_2, AtomResolver, LiteralResolver, TypeResolver, ImportResolver, jit_x86_64, Stream2
+        ?CODE_CHUNK_2,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_x86_64,
+        Stream2
     ),
     CompiledCode = jit_x86_64:stream(Stream3),
 
@@ -252,4 +264,350 @@ verify_is_function_typed_optimization_x86_64_test() ->
                 16#1e, 16#45, 16#8b, 16#1b, 16#49, 16#c1, 16#e3, 16#18>>
         )
     ),
+    ok.
+
+% Code chunk from raise_error.erl - tests tail cache optimization for error handlers
+% Contains two functions f/1 and g/1 that both raise function_clause errors
+% The second error handler should reuse cached code from the first
+-define(CODE_CHUNK_RAISE_ERROR,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#b1, 16#00,
+        16#00, 16#00, 16#05, 16#00, 16#00, 16#00, 16#02, 16#01, 16#10, 16#99, 16#10, 16#02, 16#12,
+        16#22, 16#10, 16#01, 16#20, 16#b1, 16#05, 16#00, 16#10, 16#08, 16#20, 16#03, 16#17, 16#60,
+        16#32, 16#10, 16#10, 16#02, 16#03, 16#09, 16#20, 16#13, 16#01, 16#30, 16#99, 16#20, 16#02,
+        16#12, 16#42, 16#10, 16#01, 16#40, 16#b1, 16#05, 16#00, 16#10, 16#08, 16#10, 16#03, 16#17,
+        16#60, 16#32, 16#10, 16#10, 16#02, 16#03, 16#09, 16#10, 16#13, 16#03>>
+).
+-define(ATU8_CHUNK_RAISE_ERROR,
+    <<16#ff, 16#ff, 16#ff, 16#fc, 16#b0, 16#72, 16#61, 16#69, 16#73, 16#65, 16#5f, 16#65, 16#72,
+        16#72, 16#6f, 16#72, 16#10, 16#66, 16#70, 16#69, 16#6e, 16#74, 16#65, 16#67, 16#65, 16#72,
+        16#10, 16#67>>
+).
+
+tail_cache_raise_error_x86_64_test() ->
+    Stream0 = jit_stream_binary:new(0),
+    <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> = ?CODE_CHUNK_RAISE_ERROR,
+    Stream1 = jit_stream_binary:append(
+        Stream0, jit:beam_chunk_header(LabelsCount, ?JIT_ARCH_X86_64, ?JIT_VARIANT_PIC)
+    ),
+    Stream2 = jit_x86_64:new(?JIT_VARIANT_PIC, jit_stream_binary, Stream1),
+
+    AtomResolver = jit_precompile:atom_resolver(?ATU8_CHUNK_RAISE_ERROR),
+    LiteralResolver = fun(_) -> undefined end,
+    TypeResolver = fun(_) -> any end,
+    ImportResolver = fun(_) -> undefined end,
+
+    {_LabelsCount, Stream3} = jit:compile(
+        ?CODE_CHUNK_RAISE_ERROR,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_x86_64,
+        Stream2
+    ),
+    CompiledCode = jit_x86_64:stream(Stream3),
+
+    % The test verifies that function g's error handler reuses the cached code from function f
+    % Both functions should generate function_clause errors with the same structure
+    %
+    % Find the first occurrence of call .+5 (e8 00 00 00 00) which is the start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#e8, 16#00, 16#00, 16#00, 16#00>>),
+
+    % Extract label 1 code (18 bytes: call=5 + mov=7 + mov=3 + pop=1 + jmp=2)
+    <<_Skip:Label1Offset/binary, Label1Code:18/binary, _/binary>> = CompiledCode,
+
+    % Verify label 1 matches expected disassembly
+    % The exact offsets in comments will vary, but the instruction bytes are what matter
+    Label1Dump = <<
+        "   0:    e8 00 00 00 00           callq  0x5\n"
+        "   5:    48 c7 c1 cb 01 00 00     mov    $0x1cb,%rcx\n"
+        "   c:    48 8b 02                 mov    (%rdx),%rax\n"
+        "   f:    5a                       pop    %rdx\n"
+        "  10:    ff e0                    jmpq   *%rax"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
+
+    % Find another factorized error handler that reuses part of label 1
+    % This should have: call .+5, mov with different error code, then jmp back to label 1's continuation
+    {FactorizedOffset, _} = binary:match(
+        binary:part(CompiledCode, Label1Offset + 18, byte_size(CompiledCode) - Label1Offset - 18),
+        <<16#e8, 16#00, 16#00, 16#00, 16#00>>
+    ),
+    ActualFactorizedOffset = Label1Offset + 18 + FactorizedOffset,
+
+    % Extract factorized code (14 bytes: call=5 + mov=7 + jmp=2)
+    % The jmp should be a short jump (eb) back to the continuation of label 1
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:14/binary, _/binary>> = CompiledCode,
+
+    % The factorized handler has a different error code but reuses label 1's tail
+    FactorizedDump = <<
+        "   0:    e8 00 00 00 00           callq  0x5\n"
+        "   5:    48 c7 c1 0b 01 00 00     mov    $0x10b,%rcx\n"
+        "   c:    eb ce                    jmp    0x-30"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
+
+    % Check that jump table entry for label 3 (function_clause for g) points to a call to the cached handler
+    % The header is 20 bytes, then jump table entries are 5 bytes each
+    % Entry for label 3 is at offset 20 + 3*5 = 35
+    JT3EntryOffset = 20 + 3 * 5,
+    <<_:JT3EntryOffset/binary, 16#e9, Entry3Offset:32/little-signed, _/binary>> = CompiledCode,
+    % Jump entry location + jmp size + relative offset
+    Entry3Target = JT3EntryOffset + 5 + Entry3Offset,
+
+    % Extract the code at entry 3 (should start with a call instruction)
+    <<_Skip3:Entry3Target/binary, Entry3Code:5/binary, _/binary>> = CompiledCode,
+
+    % Entry 3 should be a call that jumps back to the cached handler at label 1
+    % Call format: e8 <4-byte signed offset relative to next instruction>
+    <<16#e8, CallOffset:32/little-signed>> = Entry3Code,
+    CallTarget = Entry3Target + 5 + CallOffset,
+
+    % The call should target the first mov instruction in label 1 (after the initial call .+5)
+    % which is at Label1Offset + 5
+    ?assertEqual(Label1Offset + 5, CallTarget),
+    ok.
+
+tail_cache_raise_error_aarch64_test() ->
+    Stream0 = jit_stream_binary:new(0),
+    <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> = ?CODE_CHUNK_RAISE_ERROR,
+    Stream1 = jit_stream_binary:append(
+        Stream0, jit:beam_chunk_header(LabelsCount, ?JIT_ARCH_AARCH64, ?JIT_VARIANT_PIC)
+    ),
+    Stream2 = jit_aarch64:new(?JIT_VARIANT_PIC, jit_stream_binary, Stream1),
+
+    AtomResolver = jit_precompile:atom_resolver(?ATU8_CHUNK_RAISE_ERROR),
+    LiteralResolver = fun(_) -> undefined end,
+    TypeResolver = fun(_) -> any end,
+    ImportResolver = fun(_) -> undefined end,
+
+    {_LabelsCount, Stream3} = jit:compile(
+        ?CODE_CHUNK_RAISE_ERROR,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_aarch64,
+        Stream2
+    ),
+    CompiledCode = jit_aarch64:stream(Stream3),
+
+    % Find the first occurrence of bl .+4 (01 00 00 94) which is the start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#01, 16#00, 16#00, 16#94>>),
+
+    % Extract label 1 code (20 bytes: bl=4 + mov=4 + ldr=4 + mov=4 + br=4)
+    <<_Skip:Label1Offset/binary, Label1Code:20/binary, _/binary>> = CompiledCode,
+
+    % Verify label 1 matches expected disassembly
+    % AArch64: bl .+4, mov x3 #0x1cb, ldr x7 [x2], mov x2 x30, br x7
+    Label1Dump = <<
+        "   0:	94000001 	bl	0x4\n"
+        "   4:	d2803963 	mov	x3, #0x1cb\n"
+        "   8:	f9400047 	ldr	x7, [x2]\n"
+        "   c:	aa1e03e2 	mov	x2, x30\n"
+        "  10:	d61f00e0 	br	x7"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
+
+    % Find another factorized error handler that reuses part of label 1
+    {FactorizedOffset, _} = binary:match(
+        binary:part(CompiledCode, Label1Offset + 20, byte_size(CompiledCode) - Label1Offset - 20),
+        <<16#01, 16#00, 16#00, 16#94>>
+    ),
+    ActualFactorizedOffset = Label1Offset + 20 + FactorizedOffset,
+
+    % Extract factorized code (12 bytes: bl=4 + mov=4 + b=4)
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:12/binary, _/binary>> = CompiledCode,
+
+    % The factorized handler has a different error code but branches back to label 1's continuation
+    FactorizedDump = <<
+        "   0:	94000001 	bl	0x4\n"
+        "   4:	d2802163 	mov	x3, #0x10b\n"
+        "   8:	17fffff4 	b	0xffffffffffffffd8"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
+
+    % Check that jump table entry for label 3 (function_clause for g) points to a call to the cached handler
+    % The header is 20 bytes, then jump table entries are 4 bytes each
+    % Entry for label 3 is at offset 20 + 3*4 = 32
+    JT3EntryOffset = 20 + 3 * 4,
+    <<_:JT3EntryOffset/binary, JT3Entry:4/binary, _/binary>> = CompiledCode,
+
+    % Decode the branch instruction (b opcode = 0x14)
+    % Instruction format: bits [31:26]=opcode (000101), bits [25:0]=signed offset
+    <<JT3Instr:32/little>> = JT3Entry,
+    Opcode = (JT3Instr bsr 26) band 16#3F,
+    % Verify it's a B instruction
+    ?assertEqual(16#05, Opcode),
+    % Extract 26-bit signed offset
+    Offset = JT3Instr band 16#03FFFFFF,
+    % Sign-extend from 26 bits to full signed integer
+    SignExtendedOffset =
+        case Offset band 16#02000000 of
+            % Positive
+            0 -> Offset;
+            % Negative (two's complement)
+            _ -> Offset - 16#04000000
+        end,
+    Entry3Target = JT3EntryOffset + (SignExtendedOffset * 4),
+
+    % Extract the code at entry 3 (should start with a bl instruction)
+    <<_Skip3:Entry3Target/binary, Entry3Code:4/binary, _/binary>> = CompiledCode,
+
+    % Entry 3 should be a bl that jumps back to the cached handler at label 1
+    % BL instruction format: bits [31:26]=opcode (100101), bits [25:0]=signed offset
+    <<BlInstr:32/little>> = Entry3Code,
+    BlOpcode = (BlInstr bsr 26) band 16#3F,
+    % Verify it's a BL instruction
+    ?assertEqual(16#25, BlOpcode),
+    % Extract 26-bit signed offset
+    BlOffset = BlInstr band 16#03FFFFFF,
+    % Sign-extend from 26 bits to full signed integer
+    SignExtendedBlOffset =
+        case BlOffset band 16#02000000 of
+            % Positive
+            0 -> BlOffset;
+            % Negative (two's complement)
+            _ -> BlOffset - 16#04000000
+        end,
+    BlTarget = Entry3Target + (SignExtendedBlOffset * 4),
+
+    % The bl should target the first mov instruction in label 1 (after the initial bl .+4)
+    % which is at Label1Offset + 4
+    ?assertEqual(Label1Offset + 4, BlTarget),
+    ok.
+
+tail_cache_raise_error_riscv32_test() ->
+    Stream0 = jit_stream_binary:new(0),
+    <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> = ?CODE_CHUNK_RAISE_ERROR,
+    Stream1 = jit_stream_binary:append(
+        Stream0, jit:beam_chunk_header(LabelsCount, ?JIT_ARCH_RISCV32, ?JIT_VARIANT_PIC)
+    ),
+    Stream2 = jit_riscv32:new(?JIT_VARIANT_PIC, jit_stream_binary, Stream1),
+
+    AtomResolver = jit_precompile:atom_resolver(?ATU8_CHUNK_RAISE_ERROR),
+    LiteralResolver = fun(_) -> undefined end,
+    TypeResolver = fun(_) -> any end,
+    ImportResolver = fun(_) -> undefined end,
+
+    {_LabelsCount, Stream3} = jit:compile(
+        ?CODE_CHUNK_RAISE_ERROR,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_riscv32,
+        Stream2
+    ),
+    CompiledCode = jit_riscv32:stream(Stream3),
+
+    % Find the first occurrence of jal 4 (11 20) which is the start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#11, 16#20>>),
+
+    % Extract label 1 code (14 bytes: mix of compressed and standard RISC-V instructions)
+    % RISC-V32 uses: jal + li + lw + mv + jr
+    <<_Skip:Label1Offset/binary, Label1Code:14/binary, _/binary>> = CompiledCode,
+
+    % Verify label 1 matches expected disassembly
+    % RISC-V32 uses compressed (16-bit) and standard (32-bit) instructions
+    % jal 4 is encoded as 0x2011 (compressed c.jal instruction)
+    Label1Dump = <<
+        "   0:	2011                	jal	4\n"
+        "   2:	1cb00693          	li	a3,459\n"
+        "   6:	00062f83          	lw	t6,0(a2)\n"
+        "   a:	8606                	mv	a2,ra\n"
+        "   c:	8f82                	jr	t6"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
+
+    % Find another factorized error handler that reuses part of label 1
+    {FactorizedOffset, _} = binary:match(
+        binary:part(CompiledCode, Label1Offset + 14, byte_size(CompiledCode) - Label1Offset - 14),
+        <<16#11, 16#20>>
+    ),
+    ActualFactorizedOffset = Label1Offset + 14 + FactorizedOffset,
+
+    % Extract factorized code (8 bytes: jal + li + jump back)
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:8/binary, _/binary>> = CompiledCode,
+
+    % The factorized handler has a different error code (267) but jumps back to label 1's continuation
+    FactorizedDump = <<
+        "   0:	2011                	jal	4\n"
+        "   2:	10b00693          	li	a3,267\n"
+        "   6:	bfd9                	j	0xffffffffffffffdc"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
+
+    ok.
+
+tail_cache_raise_error_armv6m_test() ->
+    Stream0 = jit_stream_binary:new(0),
+    <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> = ?CODE_CHUNK_RAISE_ERROR,
+    Stream1 = jit_stream_binary:append(
+        Stream0, jit:beam_chunk_header(LabelsCount, ?JIT_ARCH_ARMV6M, ?JIT_VARIANT_PIC)
+    ),
+    Stream2 = jit_armv6m:new(?JIT_VARIANT_PIC, jit_stream_binary, Stream1),
+
+    AtomResolver = jit_precompile:atom_resolver(?ATU8_CHUNK_RAISE_ERROR),
+    LiteralResolver = fun(_) -> undefined end,
+    TypeResolver = fun(_) -> any end,
+    ImportResolver = fun(_) -> undefined end,
+
+    {_LabelsCount, Stream3} = jit:compile(
+        ?CODE_CHUNK_RAISE_ERROR,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        jit_armv6m,
+        Stream2
+    ),
+    CompiledCode = jit_armv6m:stream(Stream3),
+
+    % Find the first occurrence of mov lr, pc (FE 46) which is the start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#FE, 16#46>>),
+
+    % Extract label 1 code (24 bytes: 18 bytes instructions + 2 bytes alignment + 4 bytes literal)
+    % ARMv6-M uses: mov lr,pc + ldr r3,[pc,#N] + ldr r7,[r2,#0] + manipulation + pop + literal
+    <<_Skip:Label1Offset/binary, Label1Code:24/binary, _/binary>> = CompiledCode,
+
+    % Verify label 1 matches expected disassembly
+    % ARMv6-M Thumb instructions (16-bit each) with literal pool
+    % Note: the literal pool value at 0x14 is 4 bytes but objdump shows it as separate halfwords
+    Label1Dump = <<
+        "   0:	46fe      	mov	lr, pc\n"
+        "   2:	4b04      	ldr	r3, [pc, #16]\n"
+        "   4:	6817      	ldr	r7, [r2, #0]\n"
+        "   6:	03e2      	lsls	r2, r4, #15\n"
+        "   8:	aa0e      	add	r2, sp, #56\n"
+        "   a:	9e05      	ldr	r6, [sp, #20]\n"
+        "   c:	9705      	str	r7, [sp, #20]\n"
+        "   e:	46b6      	mov	lr, r6\n"
+        "  10:	bdf2      	pop	{r1, r4, r5, r6, r7, pc}\n"
+        "  12:	0000      	movs	r0, r0\n"
+        "  14:	01cb 0000 	.word	0x000001cb"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
+
+    % Find another factorized error handler that reuses part of label 1
+    {FactorizedOffset, _} = binary:match(
+        binary:part(CompiledCode, Label1Offset + 24, byte_size(CompiledCode) - Label1Offset - 24),
+        <<16#FE, 16#46>>
+    ),
+    ActualFactorizedOffset = Label1Offset + 24 + FactorizedOffset,
+
+    % Extract factorized code (10 bytes: 6 bytes instructions + 4 bytes literal)
+    % mov lr,pc + ldr r3,[pc,#0] + branch back + literal
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:10/binary, _/binary>> = CompiledCode,
+
+    % The factorized handler has a different error code but branches back to label 1's continuation
+    % The literal value 0x010b (267) is right after the branch instruction
+    FactorizedDump = <<
+        "   0:	46fe      	mov	lr, pc\n"
+        "   2:	4b00      	ldr	r3, [pc, #0]\n"
+        "   4:	e7e9      	b.n	0xffffffda\n"
+        "   6:	010b 0000 	.word	0x0000010b"
+    >>,
+    ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
+
     ok.

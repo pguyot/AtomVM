@@ -86,7 +86,7 @@ struct JITState
 struct ModuleNativeInterface
 {
     // Helpers
-    Context *(*raise_error)(Context *ctx, JITState *jit_state, int offset, term error_term);
+    Context *(*raise_error)(Context *ctx, JITState *jit_state, uintptr_t pc, term error_term);
     Context *(*do_return)(Context *ctx, JITState *jit_state);
     Context *(*schedule_next_cp)(Context *ctx, JITState *jit_state);
     term (*module_get_atom_term_by_id)(JITState *jit_state, int atom_index);
