@@ -112,7 +112,8 @@ uintptr_t jit_stream_flash_platform_ptr_to_executable(uintptr_t addr)
     // Convert data cache address to instruction cache address for RISC-V targets
     // On ESP32-C3/C6/H2, flash is mapped to both DBUS (0x3C...) and IBUS (0x42...)
     // but only IBUS addresses are executable
-#ifdef CONFIG_IDF_TARGET_ARCH_RISCV
+    // On ESP32-P4, I/D caches share the same vaddr range, so no conversion is needed
+#if defined(CONFIG_IDF_TARGET_ARCH_RISCV) && defined(SOC_MMU_DBUS_VADDR_BASE) && defined(SOC_MMU_IBUS_VADDR_BASE)
     if ((addr & ~SOC_MMU_VADDR_MASK) == SOC_MMU_DBUS_VADDR_BASE) {
         return (addr & SOC_MMU_VADDR_MASK) | SOC_MMU_IBUS_VADDR_BASE;
     }
@@ -126,7 +127,8 @@ uintptr_t jit_stream_flash_platform_executable_to_ptr(uintptr_t addr)
 {
     // Convert instruction cache address to data cache address for RISC-V targets
     // This is the reverse of ptr_to_executable
-#ifdef CONFIG_IDF_TARGET_ARCH_RISCV
+    // On ESP32-P4, I/D caches share the same vaddr range, so no conversion is needed
+#if defined(CONFIG_IDF_TARGET_ARCH_RISCV) && defined(SOC_MMU_DBUS_VADDR_BASE) && defined(SOC_MMU_IBUS_VADDR_BASE)
     if ((addr & ~SOC_MMU_VADDR_MASK) == SOC_MMU_IBUS_VADDR_BASE) {
         return (addr & SOC_MMU_VADDR_MASK) | SOC_MMU_DBUS_VADDR_BASE;
     }
