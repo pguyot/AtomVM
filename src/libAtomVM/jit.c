@@ -267,7 +267,7 @@ static void set_error(Context *ctx, JITState *jit_state, int offset, term error_
 
 static Context *jit_raise_error(Context *ctx, JITState *jit_state, uintptr_t pc, term error_type_atom)
 {
-    TRACE("jit_raise_error: ctx->process_id = %" PRId32 ", offset = " PRIxPTR "\n", ctx->process_id, pc);
+    TRACE("jit_raise_error: ctx->process_id = %" PRId32 ", offset = 0x%" PRIxPTR "\n", ctx->process_id, pc);
     int offset = pc - (uintptr_t) jit_state->module->native_code;
     set_error(ctx, jit_state, offset, error_type_atom);
     return jit_handle_error(ctx, jit_state, 0);
@@ -1321,7 +1321,7 @@ static term jit_term_create_empty_binary(Context *ctx, size_t len)
 
 static term jit_term_reuse_binary(Context *ctx, term src, size_t len)
 {
-    TRACE("jit_term_reuse_binary: src=0x%lx, len=%d\n", src, (int) len);
+    TRACE("jit_term_reuse_binary: src=0x%x, len=%zu\n", (unsigned int) src, len);
     return term_reuse_binary(src, len, &ctx->heap, ctx->global);
 }
 

@@ -38,6 +38,9 @@
 #include "term.h"
 #include "utils.h"
 
+//#define ENABLE_TRACE
+#include "trace.h"
+
 enum
 {
     OPERATION_LINK = 1,
@@ -291,6 +294,7 @@ const ErlNifResourceTypeInit dist_connection_resource_type_init = {
 
 static term nif_erlang_setnode_3(Context *ctx, int argc, term argv[])
 {
+    TRACE("nif_erlang_setnode_3: ctx->process_id = %" PRId32 "\n", ctx->process_id);
     UNUSED(argc);
 
     VALIDATE_VALUE(argv[0], term_is_atom);
@@ -362,6 +366,7 @@ static term nif_erlang_setnode_3(Context *ctx, int argc, term argv[])
 
 static term nif_erlang_dist_ctrl_get_data_notification(Context *ctx, int argc, term argv[])
 {
+    TRACE("nif_erlang_dist_ctrl_get_data_notification: ctx->process_id = %" PRId32 "\n", ctx->process_id);
     UNUSED(argc);
 
     void *rsrc_obj_ptr;
@@ -383,6 +388,7 @@ static term nif_erlang_dist_ctrl_get_data_notification(Context *ctx, int argc, t
 
 static term nif_erlang_dist_ctrl_get_data(Context *ctx, int argc, term argv[])
 {
+    TRACE("nif_erlang_dist_ctrl_get_data: ctx->process_id = %" PRId32 "\n", ctx->process_id);
     UNUSED(argc);
 
     void *rsrc_obj_ptr;
@@ -414,6 +420,7 @@ static term nif_erlang_dist_ctrl_get_data(Context *ctx, int argc, term argv[])
 
 term dist_monitor(struct DistConnection *conn_obj, term from_pid, term target_proc, term monitor_ref, Context *ctx)
 {
+    TRACE("dist_monitor: ctx->process_id = %" PRId32 ", from_pid=%p, target_proc=%p\n", ctx->process_id, (void *) from_pid, (void *) target_proc);
     int target_process_id = 0;
     term target_process_pid = target_proc;
     if (term_is_atom(target_process_pid)) {
@@ -447,6 +454,7 @@ term dist_monitor(struct DistConnection *conn_obj, term from_pid, term target_pr
 
 static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
 {
+    TRACE("nif_erlang_dist_ctrl_put_data: ctx->process_id = %" PRId32 "\n", ctx->process_id);
     UNUSED(argc);
     VALIDATE_VALUE(argv[1], term_is_binary);
     const uint8_t *data = (const uint8_t *) term_binary_data(argv[1]);
@@ -719,6 +727,7 @@ static void dist_net_kernel_send_connect(term net_kernel_proc, struct DistConnec
 
 term dist_send_message(term target, term payload, Context *ctx)
 {
+    TRACE("dist_send_message: ctx->process_id = %" PRId32 ", target=%p, payload=%p\n", ctx->process_id, (void *) target, (void *) payload);
     if (UNLIKELY(!term_is_external_pid(target) && !term_is_tuple(target))) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -806,6 +815,7 @@ void dist_spawn_reply(term req_id, term to_pid, bool link, bool monitor, term re
 
 void dist_send_payload_exit(struct LinkRemoteMonitor *monitor, term reason, Context *ctx)
 {
+    TRACE("dist_send_payload_exit: ctx->process_id = %" PRId32 ", reason=%p\n", ctx->process_id, (void *) reason);
     int node_atom_index = term_to_atom_index(monitor->node);
     uint32_t node_creation = monitor->creation;
 
@@ -826,6 +836,7 @@ void dist_send_payload_exit(struct LinkRemoteMonitor *monitor, term reason, Cont
 
 term dist_send_link(term from_pid, term to_pid, Context *ctx)
 {
+    TRACE("dist_send_link: ctx->process_id = %" PRId32 ", from_pid=%p, to_pid=%p\n", ctx->process_id, (void *) from_pid, (void *) to_pid);
     int node_atom_index = term_to_atom_index(term_get_external_node(to_pid));
     uint32_t node_creation = term_get_external_node_creation(to_pid);
 

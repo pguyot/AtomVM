@@ -1952,10 +1952,24 @@ schedule_in:
             jit_state.continuation = NULL;
             jit_state.module = mod;
             jit_state.remaining_reductions = remaining_reductions;
+#ifdef ENABLE_TRACE
+            size_t module_name_len;
+            const uint8_t *module_name = atom_table_get_atom_string(ctx->global->atom_table, term_to_atom_index(module_get_name(mod)), &module_name_len);
+            TRACE("calling native code at %p (offset %ti in module %.*s), ctx = %p\n",
+                  (void *) native_pc,
+                  (const uint8_t *) native_pc - (const uint8_t *) mod->native_code,
+                  (int) module_name_len, module_name,
+                  (void *) ctx);
+#endif
             // __asm__ volatile("int $0x03");
-            TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
-            TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
+#ifdef ENABLE_TRACE
+            TRACE("returning from native code at %p (offset %ti in module %.*s), ctx = %p, new_ctx = %p, jit_state.continuation = %p\n",
+                  (void *) native_pc,
+                  (const uint8_t *) native_pc - (const uint8_t *) mod->native_code,
+                  (int) module_name_len, module_name,
+                  (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
+#endif
             remaining_reductions = jit_state.remaining_reductions;
             if (UNLIKELY(new_ctx != ctx)) {
                 ctx = new_ctx;
