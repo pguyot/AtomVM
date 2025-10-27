@@ -43,7 +43,8 @@
     jump_to_continuation/2,
     jump_to_offset/2,
     call_to_offset/2,
-    set_lr_to_pc/1,
+    save_lr/1,
+    get_pc_to_register/1,
     get_parameter_register/2,
     if_block/3,
     if_else_block/4,
@@ -828,10 +829,31 @@ call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
 
-set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
-    I1 = jit_armv6m_asm:mov(r14, r15),
+%%-----------------------------------------------------------------------------
+%% @doc Save link register (lr/r14) to scratch register (ip/r12) before capturing PC.
+%% @end
+%% @param State current backend state
+%% @return updated state
+%%-----------------------------------------------------------------------------
+-spec save_lr(state()) -> state().
+save_lr(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % Save lr (r14) to ip (r12) - scratch register
+    I1 = jit_armv6m_asm:mov(?IP_REG, r14),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get PC into register lr. lr will later be restored from ip.
+%% @end
+%% @param State current backend state
+%% @return tuple with updated state and register containing PC (lr)
+%%-----------------------------------------------------------------------------
+-spec get_pc_to_register(state()) -> {state(), armv6m_register()}.
+get_pc_to_register(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % mov lr, pc loads PC into lr (note: PC is current instruction + 4)
+    I1 = jit_armv6m_asm:mov(r14, r15),
+    Stream1 = StreamModule:append(Stream0, I1),
+    {State#state{stream = Stream1}, r14}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Get parameter register to optimize tail cache usage.
@@ -1939,18 +1961,6 @@ set_registers_args0(
     State, [ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
 ) ->
     set_registers_args0(State, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
-set_registers_args0(
-    #state{stream_module = StreamModule, stream = Stream0} = State0,
-    [lr | ArgsT],
-    [lr | ArgsRegs],
-    [ParamReg | ParamRegs],
-    AvailGP,
-    StackOffset
-) ->
-    I = jit_aarch64_asm:mov(ParamReg, r14),
-    Stream1 = StreamModule:append(Stream0, I),
-    State1 = State0#state{stream = Stream1},
-    set_registers_args0(State1, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 % Handle 64-bit arguments that need two registers according to AAPCS32
 set_registers_args0(
     State,
@@ -2010,6 +2020,20 @@ set_registers_args1(
 % For tail calls, jit_state will be restored by pop - skip generating load instruction
 set_registers_args1(State, jit_state_tail_call, r1, _StackOffset) ->
     State;
+% Handle r14 (link register with saved PC) - move to parameter register and restore lr from ip
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    r14,
+    ParamReg,
+    _StackOffset
+) ->
+    % Move r14 (containing PC) to parameter register
+    I1 = jit_armv6m_asm:mov(ParamReg, r14),
+    Stream1 = StreamModule:append(Stream0, I1),
+    % Restore r14 from ip (r12) (where it was saved by save_lr)
+    I2 = jit_armv6m_asm:mov(r14, ?IP_REG),
+    Stream2 = StreamModule:append(Stream1, I2),
+    State#state{stream = Stream2};
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {x_reg, extra},

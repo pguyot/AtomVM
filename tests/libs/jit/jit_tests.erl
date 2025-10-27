@@ -392,38 +392,41 @@ tail_cache_raise_error_aarch64_test() ->
     ),
     CompiledCode = jit_aarch64:stream(Stream3),
 
-    % Find the first occurrence of bl .+4 (01 00 00 94) which is the start of label 1
-    {Label1Offset, _} = binary:match(CompiledCode, <<16#01, 16#00, 16#00, 16#94>>),
+    % Find the first occurrence of mov x16, x30 (f0 03 1e aa in little-endian) which is save_lr at start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#f0, 16#03, 16#1e, 16#aa>>),
 
-    % Extract label 1 code (20 bytes: bl=4 + mov=4 + ldr=4 + mov=4 + br=4)
-    <<_Skip:Label1Offset/binary, Label1Code:20/binary, _/binary>> = CompiledCode,
+    % Extract label 1 code (28 bytes: mov x16,x30=4 + adr x30=4 + mov x3=4 + ldr x7=4 + mov x2,x30=4 + mov x30,x16=4 + br x7=4)
+    <<_Skip:Label1Offset/binary, Label1Code:28/binary, _/binary>> = CompiledCode,
 
     % Verify label 1 matches expected disassembly
-    % AArch64: bl .+4, mov x3 #0x1cb, ldr x7 [x2], mov x2 x30, br x7
+    % AArch64: mov x16,x30 (save lr), adr x30,0 (get PC), mov x3 #0x1cb, ldr x7 [x2], mov x2,x30 (move PC to param), mov x30,x16 (restore lr), br x7
     Label1Dump = <<
-        "   0:	94000001 	bl	0x4\n"
-        "   4:	d2803963 	mov	x3, #0x1cb\n"
-        "   8:	f9400047 	ldr	x7, [x2]\n"
-        "   c:	aa1e03e2 	mov	x2, x30\n"
-        "  10:	d61f00e0 	br	x7"
+        "   0:	aa1e03f0 	mov	x16, x30\n"
+        "   4:	1000001e 	adr	x30, 0x4\n"
+        "   8:	d2803963 	mov	x3, #0x1cb\n"
+        "   c:	f9400047 	ldr	x7, [x2]\n"
+        "  10:	aa1e03e2 	mov	x2, x30\n"
+        "  14:	aa1003fe 	mov	x30, x16\n"
+        "  18:	d61f00e0 	br	x7"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
 
     % Find another factorized error handler that reuses part of label 1
     {FactorizedOffset, _} = binary:match(
-        binary:part(CompiledCode, Label1Offset + 20, byte_size(CompiledCode) - Label1Offset - 20),
-        <<16#01, 16#00, 16#00, 16#94>>
+        binary:part(CompiledCode, Label1Offset + 28, byte_size(CompiledCode) - Label1Offset - 28),
+        <<16#f0, 16#03, 16#1e, 16#aa>>
     ),
-    ActualFactorizedOffset = Label1Offset + 20 + FactorizedOffset,
+    ActualFactorizedOffset = Label1Offset + 28 + FactorizedOffset,
 
-    % Extract factorized code (12 bytes: bl=4 + mov=4 + b=4)
-    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:12/binary, _/binary>> = CompiledCode,
+    % Extract factorized code (16 bytes: mov x16,x30=4 + adr x30=4 + mov x3=4 + b=4)
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:16/binary, _/binary>> = CompiledCode,
 
-    % The factorized handler has a different error code but branches back to label 1's continuation
+    % The factorized handler has a different error code but branches back to label 1's continuation (ldr instruction)
     FactorizedDump = <<
-        "   0:	94000001 	bl	0x4\n"
-        "   4:	d2802163 	mov	x3, #0x10b\n"
-        "   8:	17fffff4 	b	0xffffffffffffffd8"
+        "   0:	aa1e03f0 	mov	x16, x30\n"
+        "   4:	1000001e 	adr	x30, 0x4\n"
+        "   8:	d2802163 	mov	x3, #0x10b\n"
+        "   c:	17fffff2 	b	0xffffffffffffffc8"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
 
@@ -451,14 +454,16 @@ tail_cache_raise_error_aarch64_test() ->
         end,
     Entry3Target = JT3EntryOffset + (SignExtendedOffset * 4),
 
-    % Extract the code at entry 3 (should start with a bl instruction)
-    <<_Skip3:Entry3Target/binary, Entry3Code:4/binary, _/binary>> = CompiledCode,
+    % Extract the code at entry 3 (should start with save_lr then bl instruction)
+    <<_Skip3:Entry3Target/binary, Entry3Code:8/binary, _/binary>> = CompiledCode,
 
-    % Entry 3 should be a bl that jumps back to the cached handler at label 1
+    % Entry 3 should start with save_lr (mov x16, x30) then bl to cached handler
+    <<SaveLrInstr:32/little, BlInstr:32/little>> = Entry3Code,
+    % Verify it's save_lr (mov x16, x30) - bytes are f0 03 1e aa in little-endian
+    ?assertEqual(16#aa1e03f0, SaveLrInstr),
+    % Verify second instruction is BL
     % BL instruction format: bits [31:26]=opcode (100101), bits [25:0]=signed offset
-    <<BlInstr:32/little>> = Entry3Code,
     BlOpcode = (BlInstr bsr 26) band 16#3F,
-    % Verify it's a BL instruction
     ?assertEqual(16#25, BlOpcode),
     % Extract 26-bit signed offset
     BlOffset = BlInstr band 16#03FFFFFF,
@@ -470,11 +475,11 @@ tail_cache_raise_error_aarch64_test() ->
             % Negative (two's complement)
             _ -> BlOffset - 16#04000000
         end,
-    BlTarget = Entry3Target + (SignExtendedBlOffset * 4),
+    BlTarget = Entry3Target + 4 + (SignExtendedBlOffset * 4),
 
-    % The bl should target the first mov instruction in label 1 (after the initial bl .+4)
-    % which is at Label1Offset + 4
-    ?assertEqual(Label1Offset + 4, BlTarget),
+    % The bl should target the first mov instruction in label 1 (after save_lr and get_pc_to_register)
+    % which is at Label1Offset + 8
+    ?assertEqual(Label1Offset + 8, BlTarget),
     ok.
 
 tail_cache_raise_error_riscv32_test() ->
@@ -501,40 +506,41 @@ tail_cache_raise_error_riscv32_test() ->
     ),
     CompiledCode = jit_riscv32:stream(Stream3),
 
-    % Find the first occurrence of jal 4 (11 20) which is the start of label 1
-    {Label1Offset, _} = binary:match(CompiledCode, <<16#11, 16#20>>),
+    % Find the first occurrence of mv a7,ra (88 86) which is save_lr at start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#86, 16#88>>),
 
-    % Extract label 1 code (14 bytes: mix of compressed and standard RISC-V instructions)
-    % RISC-V32 uses: jal + li + lw + mv + jr
-    <<_Skip:Label1Offset/binary, Label1Code:14/binary, _/binary>> = CompiledCode,
+    % Extract label 1 code (20 bytes: mv a7,ra + auipc a7,0 + li + lw + mv a2,ra + mv ra,a7 + jr)
+    % RISC-V32 uses compressed (16-bit) and standard (32-bit) instructions
+    <<_Skip:Label1Offset/binary, Label1Code:20/binary, _/binary>> = CompiledCode,
 
     % Verify label 1 matches expected disassembly
-    % RISC-V32 uses compressed (16-bit) and standard (32-bit) instructions
-    % jal 4 is encoded as 0x2011 (compressed c.jal instruction)
     Label1Dump = <<
-        "   0:	2011                	jal	4\n"
-        "   2:	1cb00693          	li	a3,459\n"
-        "   6:	00062f83          	lw	t6,0(a2)\n"
-        "   a:	8606                	mv	a2,ra\n"
-        "   c:	8f82                	jr	t6"
+        "   0:	8886                	mv	a7,ra\n"
+        "   2:	00000097          	auipc	ra,0x0\n"
+        "   6:	1cb00693          	li	a3,459\n"
+        "   a:	00062f83          	lw	t6,0(a2)\n"
+        "   e:	8606                	mv	a2,ra\n"
+        "  10:	80c6                	mv	ra,a7\n"
+        "  12:	8f82                	jr	t6"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
 
     % Find another factorized error handler that reuses part of label 1
     {FactorizedOffset, _} = binary:match(
-        binary:part(CompiledCode, Label1Offset + 14, byte_size(CompiledCode) - Label1Offset - 14),
-        <<16#11, 16#20>>
+        binary:part(CompiledCode, Label1Offset + 20, byte_size(CompiledCode) - Label1Offset - 20),
+        <<16#86, 16#88>>
     ),
-    ActualFactorizedOffset = Label1Offset + 14 + FactorizedOffset,
+    ActualFactorizedOffset = Label1Offset + 20 + FactorizedOffset,
 
-    % Extract factorized code (8 bytes: jal + li + jump back)
-    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:8/binary, _/binary>> = CompiledCode,
+    % Extract factorized code (12 bytes: mv a7,ra + auipc + li + jump back)
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:12/binary, _/binary>> = CompiledCode,
 
-    % The factorized handler has a different error code (267) but jumps back to label 1's continuation
+    % The factorized handler has a different error code (267) but jumps back to label 1's continuation (lw instruction)
     FactorizedDump = <<
-        "   0:	2011                	jal	4\n"
-        "   2:	10b00693          	li	a3,267\n"
-        "   6:	bfd9                	j	0xffffffffffffffdc"
+        "   0:	8886                	mv	a7,ra\n"
+        "   2:	00000097          	auipc	ra,0x0\n"
+        "   6:	10b00693          	li	a3,267\n"
+        "   a:	bfc1                	j	0xffffffffffffffda"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
 
@@ -564,49 +570,49 @@ tail_cache_raise_error_armv6m_test() ->
     ),
     CompiledCode = jit_armv6m:stream(Stream3),
 
-    % Find the first occurrence of mov lr, pc (FE 46) which is the start of label 1
-    {Label1Offset, _} = binary:match(CompiledCode, <<16#FE, 16#46>>),
+    % Find the first occurrence of mov ip,lr (F4 46) which is save_lr at start of label 1
+    {Label1Offset, _} = binary:match(CompiledCode, <<16#F4, 16#46>>),
 
-    % Extract label 1 code (24 bytes: 18 bytes instructions + 2 bytes alignment + 4 bytes literal)
-    % ARMv6-M uses: mov lr,pc + ldr r3,[pc,#N] + ldr r7,[r2,#0] + manipulation + pop + literal
-    <<_Skip:Label1Offset/binary, Label1Code:24/binary, _/binary>> = CompiledCode,
+    % Extract label 1 code (26 bytes: mov ip,lr + mov lr,pc + ldr r3 + ldr r7 + mov r2,lr + mov lr,ip + pop + literal)
+    % ARMv6-M uses 16-bit Thumb instructions with literal pool
+    <<_Skip:Label1Offset/binary, Label1Code:26/binary, _/binary>> = CompiledCode,
 
     % Verify label 1 matches expected disassembly
-    % ARMv6-M Thumb instructions (16-bit each) with literal pool
-    % Note: the literal pool value at 0x14 is 4 bytes but objdump shows it as separate halfwords
+    % Note: the literal pool value at the end is 4 bytes
     Label1Dump = <<
-        "   0:	46fe      	mov	lr, pc\n"
-        "   2:	4b04      	ldr	r3, [pc, #16]\n"
-        "   4:	6817      	ldr	r7, [r2, #0]\n"
-        "   6:	03e2      	lsls	r2, r4, #15\n"
-        "   8:	aa0e      	add	r2, sp, #56\n"
-        "   a:	9e05      	ldr	r6, [sp, #20]\n"
-        "   c:	9705      	str	r7, [sp, #20]\n"
-        "   e:	46b6      	mov	lr, r6\n"
-        "  10:	bdf2      	pop	{r1, r4, r5, r6, r7, pc}\n"
-        "  12:	0000      	movs	r0, r0\n"
-        "  14:	01cb 0000 	.word	0x000001cb"
+        "   0:	46f4      	mov	ip, lr\n"
+        "   2:	46fe      	mov	lr, pc\n"
+        "   4:	4b03      	ldr	r3, [pc, #12]\n"
+        "   6:	6817      	ldr	r7, [r2, #0]\n"
+        "   8:	4672      	mov	r2, lr\n"
+        "   a:	46e6      	mov	lr, ip\n"
+        "   c:	9e05      	ldr	r6, [sp, #20]\n"
+        "   e:	9705      	str	r7, [sp, #20]\n"
+        "  10:	46b6      	mov	lr, r6\n"
+        "  12:	bdf2      	pop	{r1, r4, r5, r6, r7, pc}\n"
+        "  14:	01cb 0000 	.word	0x000001cb\n"
+        "  18:	6987      	ldr	r7, [r0, #24]"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(Label1Dump), Label1Code),
 
     % Find another factorized error handler that reuses part of label 1
     {FactorizedOffset, _} = binary:match(
-        binary:part(CompiledCode, Label1Offset + 24, byte_size(CompiledCode) - Label1Offset - 24),
-        <<16#FE, 16#46>>
+        binary:part(CompiledCode, Label1Offset + 26, byte_size(CompiledCode) - Label1Offset - 26),
+        <<16#F4, 16#46>>
     ),
-    ActualFactorizedOffset = Label1Offset + 24 + FactorizedOffset,
+    ActualFactorizedOffset = Label1Offset + 26 + FactorizedOffset,
 
-    % Extract factorized code (10 bytes: 6 bytes instructions + 4 bytes literal)
-    % mov lr,pc + ldr r3,[pc,#0] + branch back + literal
-    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:10/binary, _/binary>> = CompiledCode,
+    % Extract factorized code (14 bytes: mov ip,lr + mov lr,pc + ldr r3 + branch back + literal)
+    <<_Skip2:ActualFactorizedOffset/binary, FactorizedCode:14/binary, _/binary>> = CompiledCode,
 
-    % The factorized handler has a different error code but branches back to label 1's continuation
-    % The literal value 0x010b (267) is right after the branch instruction
+    % The factorized handler has a different error code but branches back to label 1's continuation (ldr r7)
     FactorizedDump = <<
-        "   0:	46fe      	mov	lr, pc\n"
-        "   2:	4b00      	ldr	r3, [pc, #0]\n"
-        "   4:	e7e9      	b.n	0xffffffda\n"
-        "   6:	010b 0000 	.word	0x0000010b"
+        "   0:	46f4      	mov	ip, lr\n"
+        "   2:	46fe      	mov	lr, pc\n"
+        "   4:	4b01      	ldr	r3, [pc, #4]\n"
+        "   6:	e7e9      	b.n	0xffffffd4\n"
+        "   8:	0000 010b 	.word	0x0b010000\n"
+        "   c:	0000      	movs	r0, r0"
     >>,
     ?assertEqual(jit_tests_common:dump_to_bin(FactorizedDump), FactorizedCode),
 

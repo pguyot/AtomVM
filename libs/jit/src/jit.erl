@@ -178,40 +178,6 @@ compile(
 compile(CodeChunk, _AtomResolver, _LiteralResolver, _TypeResolver, _ImportResolver, _MMod, _MSt) ->
     error(badarg, [CodeChunk]).
 
-raise_error(MMod, MSt0, Atom) ->
-    TailCacheKey0 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, Atom]},
-    case MMod:tail_cache_lookup(MSt0, TailCacheKey0) of
-        false ->
-            {MSt1, AtomReg} = MMod:get_parameter_register(MSt0, 4),
-            TailCacheKey1 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, AtomReg]},
-            case MMod:tail_cache_lookup(MSt1, TailCacheKey1) of
-                false ->
-                    % None are present.
-                    %% Set LR to PC, will be used as a parameter
-                    MSt2 = MMod:set_lr_to_pc(MSt1),
-                    CacheOffset0 = MMod:offset(MSt2),
-                    MSt3 = MMod:move_to_native_register(MSt2, Atom, AtomReg),
-                    CacheOffset1 = MMod:offset(MSt3),
-                    MSt4 = MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, lr, {free, AtomReg}
-                    ]),
-                    MSt5 = MMod:tail_cache_update(MSt4, TailCacheKey1, CacheOffset1),
-                    MMod:tail_cache_update(MSt5, TailCacheKey0, CacheOffset0);
-                {TailCacheKey1, CacheOffsetC1} ->
-                    %% Set LR to PC, will be used as a parameter
-                    MSt2 = MMod:set_lr_to_pc(MSt1),
-                    CacheOffset0 = MMod:offset(MSt2),
-                    MSt3 = MMod:move_to_native_register(MSt2, Atom, AtomReg),
-                    MSt4 = MMod:jump_to_offset(MSt3, CacheOffsetC1),
-                    MMod:tail_cache_update(MSt4, TailCacheKey0, CacheOffset0)
-            end;
-        {TailCacheKey0, CacheOffsetC0} ->
-            %% This is not a real call, we just save PC to LR and
-            %% pass it the function.
-            MSt2 = MMod:call_to_offset(MSt0, CacheOffsetC0),
-            MMod:free_native_registers(MSt2, MMod:used_regs(MSt2))
-    end.
-
 % 1
 first_pass(
     <<?OP_LABEL, Rest0/binary>>, MMod, MSt0, State0
@@ -3158,6 +3124,92 @@ first_pass_bs_match_skip(MatchState, BSOffsetReg, J0, Rest0, MMod, MSt0) ->
     MSt1 = MMod:add(MSt0, BSOffsetReg, Stride),
     ?TRACE("{skip,~p},", [Stride]),
     {J0 - 1, Rest1, MatchState, BSOffsetReg, MSt1}.
+
+%% raise_error function is called with lr passed as one of the arguments.
+%%
+%% Implementation pseudo code on an arch with LR:
+%% ```
+%% mov ip, lr
+%% mov lr, pc
+%% cache_0_atom:
+%% mov r3, #Atom
+%% cache_1:
+%% ldr r4, r2[PRIM_RAISE_ERROR]
+%% mov r2, lr
+%% mov lr, ip
+%% b r4
+%% ```
+%% cache call with same atom:
+%% ```
+%% mov ip, lr
+%% bl cache_0
+%% ```
+%% cache call with distinct atom:
+%% ```
+%% mov ip, lr
+%% mov lr, pc
+%% cache_0_bis:
+%% mov r3, #Atom
+%% b cache_1
+%% ```
+%%
+%% Implementation on a stack-based arch:
+%% ```
+%% call next:   % pushes pc to stack
+%% next:
+%% cache_0_atom:
+%% mov r3, #Atom
+%% cache_1:
+%% ldr r4, r2[PRIM_RAISE_ERROR]
+%% pop r2       % gets pc back
+%% jmp r4
+%% cache call with same atom:
+%% ```
+%% call cache_0 % pushes pc to stack
+%% ```
+%% cache call with distinct atom:
+%% ```
+%% call next:   % pushes pc to stack
+%% next:
+%% cache_0_atom2:
+%% mov r3, #Atom2
+%% jump cache_1
+%% ```
+raise_error(MMod, MSt0, Atom) ->
+    % Save LR to scratch register (or do nothing on x86_64) - always needed
+    MSt1 = MMod:save_lr(MSt0),
+    % Get register for atom parameter
+    {MSt2, AtomReg} = MMod:get_parameter_register(MSt1, 4),
+
+    % Use lr in cache keys (backend-agnostic placeholder)
+    TailCacheKey0 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, Atom]},
+    TailCacheKey1 = {call_primitive_last, ?PRIM_RAISE_ERROR, [lr, AtomReg]},
+
+    case MMod:tail_cache_lookup(MSt2, TailCacheKey0) of
+        false ->
+            {MSt3, PCReg} = MMod:get_pc_to_register(MSt2),
+            CacheOffset0 = MMod:offset(MSt3),
+            case MMod:tail_cache_lookup(MSt3, TailCacheKey1) of
+                false ->
+                    % None are present - generate full sequence with get_pc
+                    MSt4 = MMod:move_to_native_register(MSt3, Atom, AtomReg),
+                    CacheOffset1 = MMod:offset(MSt4),
+                    MSt5 = MMod:call_primitive_last(MSt4, ?PRIM_RAISE_ERROR, [
+                        ctx, jit_state, PCReg, {free, AtomReg}
+                    ]),
+                    MSt6 = MMod:tail_cache_update(MSt5, TailCacheKey1, CacheOffset1),
+                    MMod:tail_cache_update(MSt6, TailCacheKey0, CacheOffset0);
+                {TailCacheKey1, CacheOffsetC1} ->
+                    % Cache entry for [lr, AtomReg] exists - load atom and call to cache
+                    MSt4 = MMod:move_to_native_register(MSt3, Atom, AtomReg),
+                    MSt5 = MMod:jump_to_offset(MSt4, CacheOffsetC1),
+                    MMod:tail_cache_update(MSt5, TailCacheKey0, CacheOffset0)
+            end;
+        {TailCacheKey0, CacheOffsetC0} ->
+            % Cache entry for [lr, Atom] exists - just call to cached sequence
+            MSt3 = MMod:call_to_offset(MSt2, CacheOffsetC0),
+            MMod:free_native_registers(MSt3, MMod:used_regs(MSt3))
+    end.
 
 op_gc_bif2(
     MMod,

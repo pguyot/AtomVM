@@ -43,7 +43,8 @@
     jump_to_continuation/2,
     jump_to_offset/2,
     call_to_offset/2,
-    set_lr_to_pc/1,
+    save_lr/1,
+    get_pc_to_register/1,
     get_parameter_register/2,
     if_block/3,
     if_else_block/4,
@@ -645,10 +646,31 @@ call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
 
-set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
-    I1 = jit_aarch64_asm:bl(4),
+%%-----------------------------------------------------------------------------
+%% @doc Save link register (lr/r30) to scratch register (ip0/r16) before capturing PC.
+%% @end
+%% @param State current backend state
+%% @return updated state
+%%-----------------------------------------------------------------------------
+-spec save_lr(state()) -> state().
+save_lr(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % Save lr (r30) to ip0 (r16) - intra-procedure-call scratch register
+    I1 = jit_aarch64_asm:mov(?IP0_REG, ?LR_REG),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get PC into register lr. lr will later be restored from ip0.
+%% @end
+%% @param State current backend state
+%% @return tuple with updated state and register containing PC (lr)
+%%-----------------------------------------------------------------------------
+-spec get_pc_to_register(state()) -> {state(), aarch64_register()}.
+get_pc_to_register(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % adr lr, 0 loads PC into lr
+    I1 = jit_aarch64_asm:adr(?LR_REG, 0),
+    Stream1 = StreamModule:append(Stream0, I1),
+    {State#state{stream = Stream1}, ?LR_REG}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Get parameter register to optimize tail cache usage.
@@ -1347,7 +1369,7 @@ parameter_regs(Args) ->
 parameter_regs0([], _, Acc) ->
     lists:reverse(Acc);
 parameter_regs0([Special | T], [GPReg | GPRegsT], Acc) when
-    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset orelse Special =:= lr
+    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset orelse Special =:= ?LR_REG
 ->
     parameter_regs0(T, GPRegsT, [GPReg | Acc]);
 parameter_regs0([{free, Free} | T], GPRegs, Acc) ->
@@ -1389,9 +1411,13 @@ set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc) ->
     set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc);
 set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, Acc) ->
     set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, Acc);
-set_args0([lr | ArgsT], [lr | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc) ->
-    I = jit_aarch64_asm:mov(ParamReg, r30),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [I | Acc]);
+% Handle lr (link register with saved PC) - move to parameter register and restore lr from ip0
+set_args0([?LR_REG | ArgsT], [?LR_REG | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc) ->
+    % Move lr (containing PC) to parameter register
+    I1 = jit_aarch64_asm:mov(ParamReg, ?LR_REG),
+    % Restore lr from ip0 (where it was saved by save_lr)
+    I2 = jit_aarch64_asm:mov(?LR_REG, ?IP0_REG),
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [I2, I1 | Acc]);
 set_args0(
     [jit_state | ArgsT],
     [?JITSTATE_REG | ArgsRegs],

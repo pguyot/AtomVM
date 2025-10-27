@@ -43,7 +43,8 @@
     jump_to_continuation/2,
     jump_to_offset/2,
     call_to_offset/2,
-    set_lr_to_pc/1,
+    save_lr/1,
+    get_pc_to_register/1,
     get_parameter_register/2,
     if_block/3,
     if_else_block/4,
@@ -800,12 +801,30 @@ call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
 %% @param State current backend state
 %% @return the updated state
 %%-----------------------------------------------------------------------------
--spec set_lr_to_pc(state()) -> state().
-set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
-    % jal ra, 4 will set ra = pc + 4 and then jump to pc + 4 (next instruction)
-    I1 = jit_riscv32_asm:jal(ra, 4),
+%% @doc Save link register (ra) to scratch register (a7) before capturing PC.
+%% @end
+%% @param State current backend state
+%% @return updated state
+%%-----------------------------------------------------------------------------
+-spec save_lr(state()) -> state().
+save_lr(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % Save ra to a7 (scratch register)
+    I1 = jit_riscv32_asm:mv(a7, ra),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get PC into register ra. ra will later be restored from a7.
+%% @end
+%% @param State current backend state
+%% @return tuple with updated state and register containing PC (ra)
+%%-----------------------------------------------------------------------------
+-spec get_pc_to_register(state()) -> {state(), riscv32_register()}.
+get_pc_to_register(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % auipc ra, 0 will set ra = pc (current PC)
+    I1 = jit_riscv32_asm:auipc(ra, 0),
+    Stream1 = StreamModule:append(Stream0, I1),
+    {State#state{stream = Stream1}, ra}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Get parameter register to optimize tail cache usage.
@@ -1829,18 +1848,6 @@ set_registers_args0(
     State, [ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
 ) ->
     set_registers_args0(State, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
-set_registers_args0(
-    #state{stream_module = StreamModule, stream = Stream0} = State0,
-    [lr | ArgsT],
-    [lr | ArgsRegs],
-    [ParamReg | ParamRegs],
-    AvailGP,
-    StackOffset
-) ->
-    I = jit_riscv32_asm:mv(ParamReg, ra),
-    Stream1 = StreamModule:append(Stream0, I),
-    State1 = State0#state{stream = Stream1},
-    set_registers_args0(State1, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 % Handle 64-bit arguments that need two registers according to ILP32
 set_registers_args0(
     State,
@@ -1919,6 +1926,20 @@ set_registers_args1(
 % For tail calls, jit_state is already in a1
 set_registers_args1(State, jit_state_tail_call, a1, _StackOffset) ->
     State;
+% Handle ra (link register with saved PC) - move to parameter register and restore ra from a7
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    ra,
+    ParamReg,
+    _StackOffset
+) ->
+    % Move ra (containing PC) to parameter register
+    I1 = jit_riscv32_asm:mv(ParamReg, ra),
+    Stream1 = StreamModule:append(Stream0, I1),
+    % Restore ra from a7 (where it was saved by save_lr)
+    I2 = jit_riscv32_asm:mv(ra, a7),
+    Stream2 = StreamModule:append(Stream1, I2),
+    State#state{stream = Stream2};
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {x_reg, extra},

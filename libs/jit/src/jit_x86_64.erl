@@ -43,7 +43,8 @@
     jump_to_continuation/2,
     jump_to_offset/2,
     call_to_offset/2,
-    set_lr_to_pc/1,
+    save_lr/1,
+    get_pc_to_register/1,
     get_parameter_register/2,
     if_block/3,
     if_else_block/4,
@@ -639,11 +640,29 @@ call_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
 
-set_lr_to_pc(#state{stream_module = StreamModule, stream = Stream0} = State) ->
-    % push xip to the stack
+%%-----------------------------------------------------------------------------
+%% @doc Save link register (no-op on x86_64, return address is on stack).
+%% @end
+%% @param State current backend state
+%% @return updated state (unchanged on x86_64)
+%%-----------------------------------------------------------------------------
+-spec save_lr(state()) -> state().
+save_lr(State) ->
+    % On x86_64, return address is on stack, no need to save it
+    State.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get PC by pushing it to stack.
+%% @end
+%% @param State current backend state
+%% @return tuple with updated state and stack_0 indicator
+%%-----------------------------------------------------------------------------
+-spec get_pc_to_register(state()) -> {state(), stack_0}.
+get_pc_to_register(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    % call .+5 pushes return address (PC) to stack
     I1 = jit_x86_64_asm:call(5),
     Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1}.
+    {State#state{stream = Stream1}, stack_0}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Get parameter register to optimize tail cache usage.
@@ -1266,7 +1285,7 @@ parameter_regs(Args) ->
 parameter_regs0([], _, Acc) ->
     lists:reverse(Acc);
 parameter_regs0([Special | T], [GPReg | GPRegsT], Acc) when
-    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset orelse Special =:= lr
+    Special =:= ctx orelse Special =:= jit_state orelse Special =:= offset orelse Special =:= stack_0
 ->
     parameter_regs0(T, GPRegsT, [GPReg | Acc]);
 parameter_regs0([{free, Free} | T], GPRegs, Acc) ->
@@ -1312,7 +1331,8 @@ set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc) ->
     set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc);
 set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, Acc) ->
     set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, Acc);
-set_args0([lr | ArgsT], [lr | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc) ->
+% Handle stack_0 (PC on stack) - pop into parameter register
+set_args0([stack_0 | ArgsT], [stack_0 | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc) ->
     Pop = jit_x86_64_asm:popq(ParamReg),
     set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [Pop | Acc]);
 set_args0(
