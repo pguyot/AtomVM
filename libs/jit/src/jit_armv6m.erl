@@ -1245,6 +1245,20 @@ if_block_cond(
     {State3, CC, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {{free, RegA}, '<', {free, RegB}}
+) ->
+    % Compare two free registers
+    I1 = jit_armv6m_asm:cmp(RegA, RegB),
+    % ge = greater than or equal
+    CC = ge,
+    ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
+    State1 = if_block_free_reg({free, RegA}, State0),
+    State2 = if_block_free_reg({free, RegB}, State1),
+    State3 = State2#state{stream = Stream1},
+    {State3, CC, byte_size(I1)};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', RegB}
 ) when is_atom(RegB) ->
     Reg =

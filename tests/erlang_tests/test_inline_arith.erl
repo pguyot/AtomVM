@@ -20,7 +20,7 @@
 
 -module(test_inline_arith).
 
--export([start/0, add_small/1, sub_small/1, add_large/1, sub_large/1]).
+-export([start/0, add_small/1, sub_small/1, add_large/1, sub_large/1, sub_very_large/1]).
 
 % Test inline addition with safe ranges - SHOULD BE INLINED
 add_small(X) when is_integer(X), X >= 0, X < 100 ->
@@ -36,6 +36,12 @@ add_large(X) when is_integer(X), X >= 0, X < (1 bsl 60) ->
 
 % Test subtraction with large range - SHOULD NOT BE INLINED (uses BIF)
 sub_large(X) when is_integer(X), X >= -(1 bsl 60), X < 100 ->
+    X - 1.
+
+% Test subtraction with very large range that's boxed on all platforms
+% On 64-bit: -(1 bsl 59) - 1 < MIN_NOT_BOXED_INT, value is boxed, exposes bug
+% On 32-bit: -(1 bsl 59) - 1 << MIN_NOT_BOXED_INT, also boxed
+sub_very_large(X) when is_integer(X), X >= -(1 bsl 59) - 1, X < 100 ->
     X - 1.
 
 start() ->
@@ -60,5 +66,11 @@ start() ->
     -1 = ?MODULE:sub_large(0),
     -100000001 = ?MODULE:sub_large(-100000000),
     -(1 bsl 59) - 1 = ?MODULE:sub_large(-(1 bsl 59)),
+
+    % Test very large subtraction at MIN_NOT_BOXED_INT boundary
+    % This tests the fallback path where Arg2 <= MIN_NOT_BOXED_INT on 64-bit
+    % The guard value -(1 bsl 59) - 1 is boxed, testing should trigger the buggy optimization
+    -(1 bsl 59) - 2 = ?MODULE:sub_very_large(-(1 bsl 59) - 1),
+    -1 = ?MODULE:sub_very_large(0),
 
     0.

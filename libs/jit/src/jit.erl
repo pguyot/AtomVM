@@ -3401,64 +3401,155 @@ op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
 
-% Helper to unwrap typed arguments
-unwrap_typed({typed, Arg, _Type}) -> Arg;
-unwrap_typed(Arg) -> Arg.
+-define(INT_MIN_NOT_BOXED_32, -(1 bsl 27)).
+-define(INT_MAX_NOT_BOXED_32, (1 bsl 27) - 1).
+-define(INT32T_MIN, -(1 bsl 31)).
+-define(INT32T_MAX, (1 bsl 31) - 1).
 
-% Optimized >= comparison for typed integers
-% Test if Arg1 >= Arg2, jump to Label if false (i.e., if Arg1 < Arg2)
-op_is_ge(MMod, MSt0, Label, Arg1, {typed, Arg2, {t_integer, _Range}}) when is_integer(Arg1) ->
-    % Arg1 is integer literal (already tagged by decode_compact_term), Arg2 is typed integer
-    % If Arg2 is boxed (bignum), the comparison result depends on the sign
-    {MSt1, Arg2Reg} = MMod:move_to_native_register(MSt0, Arg2),
-    % Check if Arg2 is a small integer (tagged with 0xF)
-    MSt2 = MMod:if_block(MSt1, {Arg2Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
-        BSt0
-    ) ->
-        % Arg2 is boxed (bignum) - need to determine comparison result
-        % For small Arg1, if Arg2 is positive bignum -> Arg1 < Arg2 (fail)
-        % For small Arg1, if Arg2 is negative bignum -> Arg1 > Arg2 (pass)
-        % We need to check the sign of the boxed integer
-        {BSt1, BoxedReg} = MMod:and_(BSt0, Arg2Reg, bnot (?TERM_PRIMARY_MASK)),
-        BSt2 = MMod:move_array_element(BSt1, BoxedReg, 0, BoxedReg),
-        {BSt3, TagReg} = MMod:and_(BSt2, {free, BoxedReg}, ?TERM_BOXED_TAG_MASK),
-        % Jump to label if it's a positive bignum (tag = 0x8)
-        % For negative bignum (tag = 0x28), Arg1 >= Arg2 is true, so don't jump
-        cond_jump_to_label({{free, TagReg}, '==', ?TERM_BOXED_POSITIVE_INTEGER}, Label, MMod, BSt3)
-    end),
-    % If we're here, Arg2 is a small integer - do inline comparison
-    % is_ge tests Arg1 >= Arg2, jump to Label if Arg1 < Arg2
-    % Arg1 is already tagged, use it directly
-    cond_jump_to_label({Arg1, '<', {free, Arg2Reg}}, Label, MMod, MSt2);
-op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range}}, Arg2) when is_integer(Arg2) ->
-    % Arg1 is typed integer, Arg2 is integer literal (already tagged by decode_compact_term)
-    % If Arg1 is boxed (bignum), the comparison result depends on the sign
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
-    % Check if Arg1 is a small integer (tagged with 0xF)
-    MSt2 = MMod:if_block(MSt1, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
-        BSt0
-    ) ->
-        % Arg1 is boxed (bignum) - need to determine comparison result
-        % For small Arg2, if Arg1 is positive bignum -> Arg1 > Arg2 (pass), don't jump
-        % For small Arg2, if Arg1 is negative bignum -> Arg1 < Arg2 (fail), jump
-        {BSt1, BoxedReg} = MMod:and_(BSt0, Arg1Reg, bnot (?TERM_PRIMARY_MASK)),
-        BSt2 = MMod:move_array_element(BSt1, BoxedReg, 0, BoxedReg),
-        {BSt3, TagReg} = MMod:and_(BSt2, {free, BoxedReg}, ?TERM_BOXED_TAG_MASK),
-        % Jump to label if it's a negative bignum (tag = 0x28)
-        % For positive bignum (tag = 0x8), Arg1 >= Arg2 is true, so don't jump
-        cond_jump_to_label({{free, TagReg}, '!=', ?TERM_BOXED_POSITIVE_INTEGER}, Label, MMod, BSt3)
-    end),
-    % If we're here, Arg1 is a small integer - do inline comparison
-    % is_ge tests Arg1 >= Arg2, jump to Label if Arg1 < Arg2
-    % Arg2 is already tagged, use it directly
-    cond_jump_to_label({{free, Arg1Reg}, '<', Arg2}, Label, MMod, MSt2);
-% Fallback: use term_compare
+-define(INT_MIN_NOT_BOXED_64, -(1 bsl 59)).
+-define(INT_MAX_NOT_BOXED_64, (1 bsl 59) - 1).
+-define(INT64T_MIN, -(1 bsl 63)).
+-define(INT64T_MAX, (1 bsl 63) - 1).
+
 op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
+    {MinNotBoxedInt, MaxNotBoxedInt} = case MMod:word_size() of
+        4 -> {?INT_MIN_NOT_BOXED_32, ?INT_MAX_NOT_BOXED_32};
+        8 -> {?INT_MIN_NOT_BOXED_64, ?INT_MAX_NOT_BOXED_64}
+    end,
+    op_is_ge(MMod, MSt0, Label, Arg1, Arg2, MinNotBoxedInt, MaxNotBoxedInt).
+
+% Cases where types tell us that both arguments are unboxed integers
+op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, {Arg1Min, Arg1Max}}}, {typed, Arg2, {t_integer, {Arg2Min, Arg2Max}}}, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg1Min) andalso Arg1Min >= MinNotBoxedInt
+    andalso is_integer(Arg1Max) andalso Arg1Max =< MaxNotBoxedInt
+    andalso is_integer(Arg2Min) andalso Arg2Min >= MinNotBoxedInt
+    andalso is_integer(Arg2Max) andalso Arg2Max =< MaxNotBoxedInt ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+    cond_jump_to_label({{free, Arg1Reg}, '<', {free, Arg2Reg}}, Label, MMod, MSt2);
+
+op_is_ge(MMod, MSt0, Label, Arg1, {typed, Arg2, {t_integer, {Arg2Min, Arg2Max}}}, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg1) andalso (Arg1 bsr 4) >= MinNotBoxedInt andalso (Arg1 bsr 4) =< MaxNotBoxedInt
+    andalso is_integer(Arg2Min) andalso Arg2Min >= MinNotBoxedInt
+    andalso is_integer(Arg2Max) andalso Arg2Max =< MaxNotBoxedInt ->
+    {MSt1, Arg2Reg} = MMod:move_to_native_register(MSt0, Arg2),
+    cond_jump_to_label({Arg1, '<', {free, Arg2Reg}}, Label, MMod, MSt1);
+
+op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, {Arg1Min, Arg1Max}}}, Arg2, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg1Min) andalso Arg1Min >= MinNotBoxedInt
+    andalso is_integer(Arg1Max) andalso Arg1Max =< MaxNotBoxedInt
+    andalso is_integer(Arg2) andalso (Arg2 bsr 4) >= MinNotBoxedInt andalso (Arg2 bsr 4) =< MaxNotBoxedInt ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    cond_jump_to_label({{free, Arg1Reg}, '<', Arg2}, Label, MMod, MSt1);
+
+% Cases where types tell us that one argument is unboxed integer, and we test the other
+op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, {Arg1Min, Arg1Max}}}, Arg2Tupled, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg1Min) andalso Arg1Min >= MinNotBoxedInt
+    andalso is_integer(Arg1Max) andalso Arg1Max =< MaxNotBoxedInt
+    andalso is_tuple(Arg2Tupled) ->
+    Arg2 = case Arg2Tupled of
+        {typed, TypedArg2, _Type} -> TypedArg2;
+        _ -> Arg2Tupled
+    end,
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+    MMod:if_else_block(MSt2, {Arg2Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(BSt0) ->
+        {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_COMPARE, [
+            ctx,
+            jit_state,
+            {free, Arg1Reg},
+            {free, Arg2Reg},
+            ?TERM_COMPARE_NO_OPTS
+        ]),
+        BSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt1),
+        cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, BSt2)
+    end, fun(BSt0) ->
+        cond_jump_to_label({{free, Arg1Reg}, '<', {free, Arg2Reg}}, Label, MMod, BSt0)
+    end);
+op_is_ge(MMod, MSt0, Label, Arg1, Arg2Tupled, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg1) andalso (Arg1 bsr 4) >= MinNotBoxedInt andalso (Arg1 bsr 4) =< MaxNotBoxedInt
+    andalso is_tuple(Arg2Tupled) ->
+    Arg2 = case Arg2Tupled of
+        {typed, TypedArg2, _Type} -> TypedArg2;
+        _ -> Arg2Tupled
+    end,
+    {MSt1, Arg2Reg} = MMod:move_to_native_register(MSt0, Arg2),
+    MMod:if_else_block(MSt1, {Arg2Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(BSt0) ->
+        {BSt1, Arg1Reg} = MMod:move_to_native_register(BSt0, Arg1),
+        {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
+            ctx,
+            jit_state,
+            {free, Arg1Reg},
+            {free, Arg2Reg},
+            ?TERM_COMPARE_NO_OPTS
+        ]),
+        BSt3 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt2),
+        cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, BSt3)
+    end, fun(BSt0) ->
+        cond_jump_to_label({Arg1, '<', {free, Arg2Reg}}, Label, MMod, BSt0)
+    end);
+
+op_is_ge(MMod, MSt0, Label, Arg1Tupled, {typed, Arg2, {t_integer, {Arg2Min, Arg2Max}}}, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg2Min) andalso Arg2Min >= MinNotBoxedInt
+    andalso is_integer(Arg2Max) andalso Arg2Max =< MaxNotBoxedInt
+    andalso is_tuple(Arg1Tupled) ->
+    Arg1 = case Arg1Tupled of
+        {typed, TypedArg1, _Type} -> TypedArg1;
+        _ -> Arg1Tupled
+    end,
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+    MMod:if_else_block(MSt2, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(BSt0) ->
+        {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_COMPARE, [
+            ctx,
+            jit_state,
+            {free, Arg1Reg},
+            {free, Arg2Reg},
+            ?TERM_COMPARE_NO_OPTS
+        ]),
+        BSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt1),
+        cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, BSt2)
+    end, fun(BSt0) ->
+        cond_jump_to_label({{free, Arg1Reg}, '<', {free, Arg2Reg}}, Label, MMod, BSt0)
+    end);
+op_is_ge(MMod, MSt0, Label, Arg1Tupled, Arg2, MinNotBoxedInt, MaxNotBoxedInt)
+    when is_integer(Arg2) andalso (Arg2 bsr 4) >= MinNotBoxedInt andalso (Arg2 bsr 4) =< MaxNotBoxedInt
+    andalso is_tuple(Arg1Tupled) ->
+    Arg1 = case Arg1Tupled of
+        {typed, TypedArg1, _Type} -> TypedArg1;
+        _ -> Arg1Tupled
+    end,
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    MMod:if_else_block(MSt1, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(BSt0) ->
+        {BSt1, Arg2Reg} = MMod:move_to_native_register(BSt0, Arg2),
+        {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
+            ctx,
+            jit_state,
+            {free, Arg1Reg},
+            {free, Arg2Reg},
+            ?TERM_COMPARE_NO_OPTS
+        ]),
+        BSt3 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt2),
+        cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, BSt3)
+    end, fun(BSt0) ->
+        cond_jump_to_label({{free, Arg1Reg}, '<', Arg2}, Label, MMod, BSt0)
+    end);
+
+op_is_ge(MMod, MSt0, Label, Arg1, Arg2, _MinNotBoxedInt, _MaxNotBoxedInt) ->
+    op_is_ge_fallback(MMod, MSt0, Label, Arg1, Arg2).
+
+op_is_ge_fallback(MMod, MSt0, Label, {typed, Arg1, _Type1}, {typed, Arg2, _Type2}) ->
+    op_is_ge_fallback(MMod, MSt0, Label, Arg1, Arg2);
+op_is_ge_fallback(MMod, MSt0, Label, {typed, Arg1, _Type1}, Arg2) ->
+    op_is_ge_fallback(MMod, MSt0, Label, Arg1, Arg2);
+op_is_ge_fallback(MMod, MSt0, Label, Arg1, {typed, Arg2, _Type2}) ->
+    op_is_ge_fallback(MMod, MSt0, Label, Arg1, Arg2);
+op_is_ge_fallback(MMod, MSt0, Label, Arg1, Arg2) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
         ctx,
         jit_state,
-        {free, unwrap_typed(Arg1)},
-        {free, unwrap_typed(Arg2)},
+        {free, Arg1},
+        {free, Arg2},
         ?TERM_COMPARE_NO_OPTS
     ]),
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),

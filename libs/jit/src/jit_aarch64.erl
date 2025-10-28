@@ -903,6 +903,23 @@ if_block_cond(
     {State2, ge, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {{free, RegA}, '<', {free, RegB}}
+) ->
+    % Compare two free registers
+    I1 = jit_aarch64_asm:cmp(RegA, RegB),
+    % ge = greater than or equal
+    I2 = jit_aarch64_asm:bcc(ge, 0),
+    Code = <<
+        I1/binary,
+        I2/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State1 = if_block_free_reg({free, RegA}, State0),
+    State2 = if_block_free_reg({free, RegB}, State1),
+    State3 = State2#state{stream = Stream1},
+    {State3, ge, byte_size(I1)};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', RegB}
 ) when is_atom(RegB) ->
     Reg =

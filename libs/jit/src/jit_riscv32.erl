@@ -1141,6 +1141,18 @@ if_block_cond(
     {State3, {bge, Temp, Reg}, BranchDelta};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {{free, RegA}, '<', {free, RegB}}
+) ->
+    % Compare two free registers
+    % RISC-V: bge RegA, RegB, offset (branch if RegA >= RegB, i.e., NOT less than)
+    BranchInstr = <<16#FFFFFFFF:32/little>>,
+    Stream1 = StreamModule:append(Stream0, BranchInstr),
+    State1 = if_block_free_reg({free, RegA}, State0),
+    State2 = if_block_free_reg({free, RegB}, State1),
+    State3 = State2#state{stream = Stream1},
+    {State3, {bge, RegA, RegB}, 0};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', RegB}
 ) when is_atom(RegB) ->
     Reg =

@@ -871,6 +871,13 @@ if_block_cond0(State0, {RegOrTuple, '<', Value}) when ?IS_SINT32_T(Value) ->
     {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
+if_block_cond0(State0, {{free, RegA}, '<', {free, RegB}}) ->
+    % Compare two free registers
+    I1 = jit_x86_64_asm:cmpq(RegB, RegA),
+    {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
+    State1 = if_block_free_reg({free, RegA}, State0),
+    State2 = if_block_free_reg({free, RegB}, State1),
+    {State2, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
 if_block_cond0(State0, {RegOrTuple, '<', RegB}) when is_atom(RegB) ->
     Reg =
         case RegOrTuple of
