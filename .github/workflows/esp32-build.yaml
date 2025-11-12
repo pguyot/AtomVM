@@ -46,13 +46,13 @@ jobs:
 
       matrix:
         esp-idf-target: ["esp32", "esp32c3", "esp32p4"]
-        language: ['cpp']
         idf-version:
          - 'v5.1.6'
          - 'v5.2.6'
          - 'v5.3.4'
          - 'v5.4.3'
          - 'v5.5.1'
+        sdkconfig: [""]
 
         exclude:
         - esp-idf-target: "esp32c3"
@@ -61,6 +61,59 @@ jobs:
           idf-version: 'v5.1.6'
         - esp-idf-target: "esp32p4"
           idf-version: 'v5.2.6'
+
+        include:
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_ADC_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_GPIO_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_LEDC_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_NVS_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_RTC_SLOW_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_STORAGE_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_GPIO_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_I2C_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_I2C_RESOURCE_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_NETWORK_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_SOCKET_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_SPI_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_UART_PORT_DRIVER=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_OTP_CRYPTO_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_OTP_SOCKET_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_OTP_NET_NIFS=n"
+        - esp-idf-target: "esp32"
+          idf-version: "v5.5.1"
+          sdkconfig: "CONFIG_AVM_ENABLE_OTP_SSL_NIFS=n"
 
     steps:
     - name: Checkout repo
@@ -72,7 +125,7 @@ jobs:
     - name: "Initialize CodeQL"
       uses: github/codeql-action/init@v3
       with:
-        languages: ${{matrix.language}}
+        languages: "cpp"
         build-mode: manual
         queries: +./code-queries/term-to-non-term-func.ql,./code-queries/non-term-to-term-func.ql
 
@@ -82,6 +135,7 @@ jobs:
       run: |
         . $IDF_PATH/export.sh
         export IDF_TARGET=${{matrix.esp-idf-target}}
+        echo ${{matrix.sdk_config}} >> sdkconfig
         idf.py set-target ${{matrix.esp-idf-target}}
         idf.py build
         idf.py size
