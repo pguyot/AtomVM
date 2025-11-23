@@ -30,13 +30,8 @@
 ]).
 
 start() ->
-    case at_least(24) of
-        true ->
-            ok = mbedtls_conditional_run(test_generate_and_compute_key, 16#03000000),
-            ok = mbedtls_conditional_run(test_sign_and_verify, 16#03060100);
-        false ->
-            ok
-    end,
+    ok = mbedtls_conditional_run(test_generate_and_compute_key, 16#03000000),
+    ok = mbedtls_conditional_run(test_sign_and_verify, 16#03060100),
     case at_least(27) of
         true ->
             ok = mbedtls_conditional_run(test_sign_bad_algorithm, 16#03060100),
