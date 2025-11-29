@@ -99,16 +99,10 @@ ensure_epmd_connect_loop(0) ->
     io:format("Coult not connect to epmd\n"),
     exit(timeout);
 ensure_epmd_connect_loop(N) ->
-    {ok, Socket} = socket:open(inet, stream, tcp),
-    Result = socket:connect(Socket, #{addr => {127, 0, 0, 1}, port => ?EPMD_PORT, family => inet}),
-    socket:close(Socket),
-    case Result of
-        ok ->
+    case erl_epmd:names("127.0.0.1") of
+        {ok, _} ->
             ok;
-        {error, econnrefused} ->
-            timer:sleep(100),
-            ensure_epmd_connect_loop(N - 1);
-        {error, closed} ->
+        {error, _} ->
             timer:sleep(100),
             ensure_epmd_connect_loop(N - 1)
     end.
