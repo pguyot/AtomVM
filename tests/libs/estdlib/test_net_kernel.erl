@@ -129,7 +129,15 @@ test_rpc_from_beam(Platform) ->
         "erl -sname otp -setcookie AtomVM -eval \"R = rpc:call('" ++ atom_to_list(Node) ++
             "', erlang, system_info, [machine]), erlang:display(R).\" -s init stop -noshell"
     ),
-    true = Result =:= lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    Expected = lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    ok =
+        if
+            Result =:= Expected ->
+                ok;
+            true ->
+                erlang:display({?MODULE, ?LINE, Result, Expected}),
+                mismatch
+        end,
     net_kernel:stop(),
     ok.
 
@@ -143,7 +151,15 @@ test_rpc_loop_from_beam(Platform) ->
             atom_to_list(Node) ++
             "', erlang, system_info, [machine]), if Acc =:= R -> Acc; Acc =:= undefined -> R end end, undefined, lists:seq(1, 10)), erlang:display(R).\" -s init stop -noshell"
     ),
-    true = Result =:= lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    Expected = lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    ok =
+        if
+            Result =:= Expected ->
+                ok;
+            true ->
+                erlang:display({?MODULE, ?LINE, Result, Expected}),
+                mismatch
+        end,
     net_kernel:stop(),
     ok.
 
