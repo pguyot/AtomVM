@@ -616,10 +616,10 @@ try_again_restart() ->
     ChildPid1 ! stop,
     Arbitrator1 ! shutdown,
     exit(SupPid1, normal),
-    ok =
+    normal =
         receive
-            {'EXIT', SupPid1, normal} ->
-                ok
+            {'EXIT', SupPid1, Reason} ->
+                Reason
         after 2000 ->
             error({supervisor_not_stopped, normal})
         end,
