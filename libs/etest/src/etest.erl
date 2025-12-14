@@ -36,6 +36,8 @@
     assert_exception/3
 ]).
 
+-define(TEST_TIMEOUT, 5 * 60000).
+
 %%-----------------------------------------------------------------------------
 %% @param   Tests a list of test modules
 %% @returns ok if all of the tests pass, or the atom fail, if any of the tests
@@ -159,6 +161,7 @@ flush_msg_queue() ->
 
 %% @private
 run_test(Test) ->
+    io:format("~s: ", [Test]),
     Parent = self(),
     {Pid, Ref} = spawn_opt(
         fun() ->
@@ -176,6 +179,11 @@ run_test(Test) ->
             Result;
         {'DOWN', Ref, process, Pid, Reason} ->
             {error, Reason}
+    after ?TEST_TIMEOUT ->
+        io:format("Test ~s timed out out after ~pms~n", [Test, ?TEST_TIMEOUT]),
+        exit(Pid, kill),
+        erlang:demonitor(Ref, [flush]),
+        {error, timeout}
     end.
 
 do_run_test(Test) ->
