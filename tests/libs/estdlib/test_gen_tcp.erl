@@ -92,18 +92,21 @@ test_send_receive(Port, N, SpawnControllingProcess) ->
         false ->
             loop(Socket, N);
         true ->
-            Pid = spawn(fun() ->
+            Pid = spawn_link(fun() ->
                 receive
                     {Parent, go} ->
                         loop(Socket, N),
                         Parent ! done
                 end
             end),
-            gen_tcp:controlling_process(Socket, Pid),
+            ok = gen_tcp:controlling_process(Socket, Pid),
             Pid ! {self(), go},
-            receive
-                done -> ok
-            end
+            ok =
+                receive
+                    done -> ok
+                after 5000 ->
+                    timeout
+                end
     end,
 
     gen_tcp:close(Socket),
