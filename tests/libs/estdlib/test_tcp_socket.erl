@@ -514,7 +514,24 @@ test_accept_nowait(NoWaitRef, _Version) ->
         after 5000 -> timeout
         end,
     {ok, ClientSocket} = socket:open(inet, stream, tcp),
-    ok = socket:connect(ClientSocket, #{family => inet, addr => loopback, port => Port}),
+    ConnectFun = fun
+        (F, 0) ->
+            ok = socket:connect(ClientSocket, #{family => inet, addr => loopback, port => Port});
+        (F, N) ->
+            case socket:connect(ClientSocket, #{family => inet, addr => loopback, port => Port}) of
+                ok ->
+                    ok;
+                {error, closed} ->
+                    timer:sleep(10),
+                    F(F, N - 1);
+                {error, econnrefused} ->
+                    timer:sleep(10),
+                    F(F, N - 1);
+                Error ->
+                    ok = Error
+            end
+    end,
+    ok = ConnectFun(ConnectFun, 100),
     {ok, <<"hello">>} = socket:recv(ClientSocket, 5),
 
     socket:close(ClientSocket),

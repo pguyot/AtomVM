@@ -98,9 +98,9 @@ test_ping_from_beam(Platform) ->
     erlang:set_cookie(Node, 'AtomVM'),
     Result = execute_command(
         Platform,
-        "erl -sname otp -setcookie AtomVM -eval \"R = net_adm:ping('" ++
+        "erl -sname otp -setcookie AtomVM -eval \"WaitPing = fun(F, 0) -> pang; (F, N) -> case net_adm:ping('" ++
             atom_to_list(Node) ++
-            "'), erlang:display(R).\" -s init stop -noshell"
+            "') of pong -> pong; pang -> timer:sleep(100), F(F, N-1) end end, R = WaitPing(WaitPing, 50), erlang:display(R).\" -s init stop -noshell"
     ),
     "pong" ++ _ = Result,
     net_kernel:stop(),
