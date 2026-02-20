@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added RISC-V 64-bit (RV64IMAC) JIT backend
 - Added arm32 JIT backend
 - Added DWARF debug information support for JIT-compiled code
-- Added I2C and SPI APIs to rp2 platform
+- Added I2C, SPI and UART APIs to rp2 platform
 - Added `code:get_object_code/1`
 
 ### Changed
