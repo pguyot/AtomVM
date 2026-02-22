@@ -2911,7 +2911,7 @@ get_array_element_test_() ->
                         "   2:	4426      	add	r6, r4\n"
                         "   4:	6ff7      	ldr	r7, [r6, #124]	; 0x7c"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(arm, Dump, Stream),
                     ?assertEqual(r7, Reg)
                 end)
             ]
@@ -2944,7 +2944,7 @@ move_to_array_element_test_() ->
                         "   4:	441e      	add	r6, r3\n"
                         "   6:	67f7      	str	r7, [r6, #124]	; 0x7c"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(arm, Dump, Stream)
                 end),
                 %% move_to_array_element/4: x_reg to reg[reg]
                 ?_test(begin

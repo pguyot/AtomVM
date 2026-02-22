@@ -846,7 +846,7 @@ if_block_test_() ->
                         "   c:	5400004d 	b.le	0x14\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -865,7 +865,7 @@ if_block_test_() ->
                         "   c:	5400004d 	b.le	0x14\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -884,7 +884,7 @@ if_block_test_() ->
                         "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -903,7 +903,7 @@ if_block_test_() ->
                         "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end)
             ]

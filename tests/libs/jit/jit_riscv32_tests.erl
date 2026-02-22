@@ -1093,7 +1093,7 @@ if_block_test_() ->
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(riscv32, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -1112,7 +1112,7 @@ if_block_test_() ->
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(riscv32, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -1131,7 +1131,7 @@ if_block_test_() ->
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(riscv32, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -1150,7 +1150,7 @@ if_block_test_() ->
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(riscv32, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end)
             ]

@@ -806,7 +806,7 @@ if_block_test_() ->
                         "   c:	7e 04                	jle    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -825,7 +825,7 @@ if_block_test_() ->
                         "   c:	7e 04                	jle    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -844,7 +844,7 @@ if_block_test_() ->
                         "   c:	7d 04                	jge    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -863,7 +863,7 @@ if_block_test_() ->
                         "   c:	7d 04                	jge    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -884,7 +884,7 @@ if_block_test_() ->
                         "  15:	7d 04                	jge    0x1b\n"
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -905,7 +905,7 @@ if_block_test_() ->
                         "  15:	7d 04                	jge    0x1b\n"
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -926,7 +926,7 @@ if_block_test_() ->
                         "  15:	7e 04                	jle    0x1b\n"
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -947,7 +947,7 @@ if_block_test_() ->
                         "  15:	7e 04                	jle    0x1b\n"
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(x86_64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end)
             ]
