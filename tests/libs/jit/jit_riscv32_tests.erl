@@ -1087,8 +1087,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	01852f83          	lw	t6,24(a0)\n"
-                        "   4:	01c52f03          	lw	t5,28(a0)\n"
+                        "   0:	02c52f83          	lw	t6,44(a0)\n"
+                        "   4:	03052f03          	lw	t5,48(a0)\n"
                         "   8:	06400e93          	li	t4,100\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1106,8 +1106,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	01852f83          	lw	t6,24(a0)\n"
-                        "   4:	01c52f03          	lw	t5,28(a0)\n"
+                        "   0:	02c52f83          	lw	t6,44(a0)\n"
+                        "   4:	03052f03          	lw	t5,48(a0)\n"
                         "   8:	06400e93          	li	t4,100\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1125,8 +1125,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	01852f83          	lw	t6,24(a0)\n"
-                        "   4:	01c52f03          	lw	t5,28(a0)\n"
+                        "   0:	02c52f83          	lw	t6,44(a0)\n"
+                        "   4:	03052f03          	lw	t5,48(a0)\n"
                         "   8:	40000e93          	li	t4,1024\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1144,8 +1144,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	01852f83          	lw	t6,24(a0)\n"
-                        "   4:	01c52f03          	lw	t5,28(a0)\n"
+                        "   0:	02c52f83          	lw	t6,44(a0)\n"
+                        "   4:	03052f03          	lw	t5,48(a0)\n"
                         "   8:	40000e93          	li	t4,1024\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"

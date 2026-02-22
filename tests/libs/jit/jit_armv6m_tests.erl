@@ -2859,7 +2859,7 @@ move_array_element_test_() ->
                         "   0:	2704      	movs	r7, #4\n"
                         "   2:	441f      	add	r7, r3\n"
                         "   4:	6ffe      	ldr	r6, [r7, #124]	; 0x7c\n"
-                        "   6:	6186      	str	r6, [r0, #24]"
+                        "   6:	62c6      	str	r6, [r0, #44]"
                     >>)
                 end),
                 %% move_array_element: reg[32] to ptr (large offset)
@@ -2877,7 +2877,7 @@ move_array_element_test_() ->
                         "   0:	2604      	movs	r6, #4\n"
                         "   2:	441e      	add	r6, r3\n"
                         "   4:	6ff6      	ldr	r6, [r6, #124]	; 0x7c\n"
-                        "   6:	6947      	ldr	r7, [r0, #20]\n"
+                        "   6:	6a87      	ldr	r7, [r0, #40]\n"
                         "   8:	60be      	str	r6, [r7, #8]"
                     >>)
                 end)
@@ -2939,7 +2939,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, 32),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	6987      	ldr	r7, [r0, #24]\n"
+                        "   0:	6ac7      	ldr	r7, [r0, #44]\n"
                         "   2:	2604      	movs	r6, #4\n"
                         "   4:	441e      	add	r6, r3\n"
                         "   6:	67f7      	str	r7, [r6, #124]	; 0x7c"

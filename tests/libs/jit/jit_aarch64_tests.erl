@@ -840,8 +840,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
-                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
                         "   8:	f10190ff 	cmp	x7, #0x64\n"
                         "   c:	5400004d 	b.le	0x14\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
@@ -859,8 +859,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
-                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
                         "   8:	f10190ff 	cmp	x7, #0x64\n"
                         "   c:	5400004d 	b.le	0x14\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
@@ -878,8 +878,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
-                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
                         "   8:	f10190ff 	cmp	x7, #0x64\n"
                         "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
@@ -897,8 +897,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
-                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
                         "   8:	f10190ff 	cmp	x7, #0x64\n"
                         "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
                         "  10:	91000908 	add	x8, x8, #0x2"

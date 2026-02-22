@@ -800,8 +800,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	48 83 f8 64          	cmp    $0x64,%rax\n"
                         "   c:	7e 04                	jle    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
@@ -819,8 +819,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	48 83 f8 64          	cmp    $0x64,%rax\n"
                         "   c:	7e 04                	jle    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
@@ -838,8 +838,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	48 83 f8 64          	cmp    $0x64,%rax\n"
                         "   c:	7d 04                	jge    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
@@ -857,8 +857,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	48 83 f8 64          	cmp    $0x64,%rax\n"
                         "   c:	7d 04                	jge    0x12\n"
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
@@ -876,8 +876,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	49 ba 00 00 00 00 01 	movabs $0x100000000,%r10\n"
                         "   f:	00 00 00 \n"
                         "  12:	4c 39 d0             	cmp    %r10,%rax\n"
@@ -897,8 +897,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	49 ba 00 00 00 00 01 	movabs $0x100000000,%r10\n"
                         "   f:	00 00 00 \n"
                         "  12:	4c 39 d0             	cmp    %r10,%rax\n"
@@ -918,8 +918,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	49 ba 00 00 00 00 01 	movabs $0x100000000,%r10\n"
                         "   f:	00 00 00 \n"
                         "  12:	4c 39 d0             	cmp    %r10,%rax\n"
@@ -939,8 +939,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
-                        "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11\n"
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
                         "   8:	49 ba 00 00 00 00 01 	movabs $0x100000000,%r10\n"
                         "   f:	00 00 00 \n"
                         "  12:	4c 39 d0             	cmp    %r10,%rax\n"
