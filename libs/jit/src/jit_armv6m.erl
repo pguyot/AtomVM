@@ -3078,6 +3078,23 @@ xor_(
     Stream2 = StreamModule:append(Stream1, I),
     State1#state{available_regs = Avail, stream = Stream2}.
 
+xor_(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:eors(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    State0#state{stream = Stream1};
+xor_(
+    #state{stream_module = StreamModule, available_regs = [Temp | AT]} = State0,
+    Reg,
+    Val
+) ->
+    State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
+    Stream1 = State1#state.stream,
+    I = jit_armv6m_asm:eors(Reg, Temp),
+    Stream2 = StreamModule:append(Stream1, I),
+    State1#state{available_regs = [Temp | AT], stream = Stream2}.
+
 add(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, Val) when
     (Val >= 0 andalso Val =< 255) orelse is_atom(Val)
 ->
