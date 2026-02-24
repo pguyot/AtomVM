@@ -386,7 +386,7 @@ if_block_test_() ->
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -405,7 +405,7 @@ if_block_test_() ->
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -424,7 +424,7 @@ if_block_test_() ->
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -462,7 +462,7 @@ if_block_test_() ->
                         "   c:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -500,7 +500,7 @@ if_block_test_() ->
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -538,7 +538,7 @@ if_block_test_() ->
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -576,7 +576,7 @@ if_block_test_() ->
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -614,7 +614,7 @@ if_block_test_() ->
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -652,7 +652,7 @@ if_block_test_() ->
                         "   c:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -690,7 +690,7 @@ if_block_test_() ->
                         "   c:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -728,7 +728,7 @@ if_block_test_() ->
                         "   c:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -768,7 +768,7 @@ if_block_test_() ->
                         "  15:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -807,7 +807,7 @@ if_block_test_() ->
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -845,7 +845,7 @@ if_block_test_() ->
                         "   e:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -885,7 +885,7 @@ if_block_test_() ->
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -927,7 +927,7 @@ if_block_test_() ->
                         "  17:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     jit_tests_common:assert_stream(x86_64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(

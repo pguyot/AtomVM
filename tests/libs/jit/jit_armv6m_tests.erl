@@ -487,7 +487,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -506,7 +506,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -525,7 +525,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -548,7 +548,7 @@ if_block_test_() ->
                         "   e:	e077      	b.n	0x100"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -567,7 +567,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -607,7 +607,7 @@ if_block_test_() ->
                         "   c:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -626,7 +626,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -664,7 +664,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -702,7 +702,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     % Test large immediate (1995) that requires temporary register
@@ -765,7 +765,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -803,7 +803,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -841,7 +841,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -879,7 +879,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -917,7 +917,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -937,7 +937,7 @@ if_block_test_() ->
                         "   a:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -976,7 +976,7 @@ if_block_test_() ->
                         "   a:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1018,7 +1018,7 @@ if_block_test_() ->
                         "   e:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1083,7 +1083,7 @@ if_block_test_() ->
                         "   8:	3602      	adds	r6, #2"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1125,7 +1125,7 @@ if_block_test_() ->
                         "   e:	e077      	b.n	0x100"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1173,7 +1173,7 @@ if_block_test_() ->
                         "  12:	0000      	movs	r0, r0"
                     >>,
                     jit_tests_common:assert_stream(arm, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1227,7 +1227,7 @@ bitwise_and_optimization_test_() ->
                 "   8:	3602      	adds	r6, #2"
             >>,
             jit_tests_common:assert_stream(arm, Dump, Stream),
-            ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State3))
+            ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State3))
         end),
         %% Test optimized case: 16#F (low bits mask, 4 bits) - lsls r5, r7, #28
         ?_test(begin
@@ -1247,7 +1247,7 @@ bitwise_and_optimization_test_() ->
                 "   8:	3602      	adds	r6, #2"
             >>,
             jit_tests_common:assert_stream(arm, Dump, Stream),
-            ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State3))
+            ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State3))
         end),
         %% Test optimized case: 16#3F (low bits mask, 6 bits) - lsls r5, r7, #26
         ?_test(begin
@@ -1267,7 +1267,7 @@ bitwise_and_optimization_test_() ->
                 "   8:	3602      	adds	r6, #2"
             >>,
             jit_tests_common:assert_stream(arm, Dump, Stream),
-            ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State3))
+            ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State3))
         end),
         %% Test non-optimized case: 5 (neither single bit nor low bits mask) - mov+tst
         ?_test(begin
@@ -1288,7 +1288,7 @@ bitwise_and_optimization_test_() ->
                 "   a:	3602      	adds	r6, #2"
             >>,
             jit_tests_common:assert_stream(arm, Dump, Stream),
-            ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State3))
+            ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State3))
         end)
     ].
 
@@ -2995,9 +2995,11 @@ move_to_array_element_test_() ->
                 end),
                 %% move_to_array_element/5: x_reg to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r3, r4]),
-                    State2 = setelement(8, State1, [r3, r4]),
-                    [r3, r4] = ?BACKEND:used_regs(State2),
+                    %% r4 = 16#008, r3 = 16#010 in bitmap
+                    UsedBits_ = 16#018,
+                    State1 = setelement(7, State0, element(7, State0) band (bnot UsedBits_)),
+                    State2 = setelement(8, State1, element(8, State1) bor UsedBits_),
+                    [r4, r3] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, {x_reg, 0}, r3, r4, 1),
                     Stream = ?BACKEND:stream(State3),
                     Dump = <<
@@ -3010,9 +3012,11 @@ move_to_array_element_test_() ->
                 end),
                 %% move_to_array_element/5: imm to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r3, r4]),
-                    State2 = setelement(8, State1, [r3, r4]),
-                    [r3, r4] = ?BACKEND:used_regs(State2),
+                    %% r4 = 16#008, r3 = 16#010 in bitmap
+                    UsedBits_ = 16#018,
+                    State1 = setelement(7, State0, element(7, State0) band (bnot UsedBits_)),
+                    State2 = setelement(8, State1, element(8, State1) bor UsedBits_),
+                    [r4, r3] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, 42, r3, r4, 1),
                     Stream = ?BACKEND:stream(State3),
                     Dump = <<

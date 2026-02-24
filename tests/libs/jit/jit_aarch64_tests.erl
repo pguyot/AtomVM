@@ -415,7 +415,7 @@ if_block_test_() ->
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -434,7 +434,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -452,7 +452,7 @@ if_block_test_() ->
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -488,7 +488,7 @@ if_block_test_() ->
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -525,7 +525,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -563,7 +563,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -601,7 +601,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -639,7 +639,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -676,7 +676,7 @@ if_block_test_() ->
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -712,7 +712,7 @@ if_block_test_() ->
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -749,7 +749,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -769,7 +769,7 @@ if_block_test_() ->
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -808,7 +808,7 @@ if_block_test_() ->
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -847,7 +847,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -885,7 +885,7 @@ if_block_test_() ->
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
                     jit_tests_common:assert_stream(aarch64, Dump, Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -1962,8 +1962,10 @@ move_to_array_element_test_() ->
                 end),
                 %% move_to_array_element/5: x_reg to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r8, r9]),
-                    State2 = setelement(8, State1, [r8, r9]),
+                    %% r8 = 16#0002, r9 = 16#0004 in bitmap
+                    UsedBits_ = 16#0006,
+                    State1 = setelement(7, State0, element(7, State0) band (bnot UsedBits_)),
+                    State2 = setelement(8, State1, element(8, State1) bor UsedBits_),
                     [r8, r9] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, {x_reg, 0}, r8, r9, 1),
                     Stream = ?BACKEND:stream(State3),
@@ -1976,8 +1978,10 @@ move_to_array_element_test_() ->
                 end),
                 %% move_to_array_element/5: imm to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r8, r9]),
-                    State2 = setelement(8, State1, [r8, r9]),
+                    %% r8 = 16#0002, r9 = 16#0004 in bitmap
+                    UsedBits_ = 16#0006,
+                    State1 = setelement(7, State0, element(7, State0) band (bnot UsedBits_)),
+                    State2 = setelement(8, State1, element(8, State1) bor UsedBits_),
                     [r8, r9] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, 42, r8, r9, 1),
                     Stream = ?BACKEND:stream(State3),
