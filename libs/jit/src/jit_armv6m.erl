@@ -73,7 +73,8 @@
     add_label/3,
     set_type_tracking/3,
     get_type_tracking/2,
-    get_regs_tracking/1
+    get_regs_tracking/1,
+    xor_/3
 ]).
 
 -include_lib("jit.hrl").
@@ -2770,6 +2771,12 @@ get_module_index(
 %% JIT currentl calls this with two values: ?TERM_PRIMARY_CLEAR_MASK (-4) to
 %% clear bits and ?TERM_BOXED_TAG_MASK (0x3F). We can avoid any literal pool
 %% by using BICS for -4.
+and_(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Reg}, SrcReg) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:ands(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, Reg};
 and_(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Reg}, 16#FFFFFF) ->
     I1 = jit_armv6m_asm:lsls(Reg, Reg, 8),
     I2 = jit_armv6m_asm:lsrs(Reg, Reg, 8),
@@ -2846,6 +2853,12 @@ and_(
     Stream1 = StreamModule:append(State0#state.stream, <<I1/binary, I2/binary>>),
     {State0#state{stream = Stream1, available_regs = AT, used_regs = [ResultReg | UR]}, ResultReg}.
 
+or_(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:orrs(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    State0#state{stream = Stream1};
 or_(
     #state{stream_module = StreamModule, available_regs = [Temp | AT]} = State0,
     Reg,
@@ -2854,6 +2867,23 @@ or_(
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:orrs(Reg, Temp),
+    Stream2 = StreamModule:append(Stream1, I),
+    State1#state{available_regs = [Temp | AT], stream = Stream2}.
+
+xor_(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:eors(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    State0#state{stream = Stream1};
+xor_(
+    #state{stream_module = StreamModule, available_regs = [Temp | AT]} = State0,
+    Reg,
+    Val
+) ->
+    State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
+    Stream1 = State1#state.stream,
+    I = jit_armv6m_asm:eors(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
     State1#state{available_regs = [Temp | AT], stream = Stream2}.
 

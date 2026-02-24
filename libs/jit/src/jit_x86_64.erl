@@ -73,7 +73,8 @@
     add_label/3,
     get_regs_tracking/1,
     set_type_tracking/3,
-    get_type_tracking/2
+    get_type_tracking/2,
+    xor_/3
 ]).
 
 -include_lib("jit.hrl").
@@ -1914,7 +1915,12 @@ move_to_native_register_emit(
 ) when
     is_integer(Imm)
 ->
-    I1 = jit_x86_64_asm:movq(Imm, Reg),
+    I1 =
+        if
+            ?IS_SINT32_T(Imm) -> jit_x86_64_asm:movq(Imm, Reg);
+            Imm >= 0, Imm =< 16#FFFFFFFF -> jit_x86_64_asm:movl(Imm, Reg);
+            true -> jit_x86_64_asm:movabsq(Imm, Reg)
+        end,
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
@@ -2002,7 +2008,13 @@ value_to_contents(_) -> unknown.
 move_to_native_register(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, RegSrc, RegDst
 ) when is_atom(RegSrc) orelse is_integer(RegSrc) ->
-    I = jit_x86_64_asm:movq(RegSrc, RegDst),
+    I =
+        if
+            is_atom(RegSrc) -> jit_x86_64_asm:movq(RegSrc, RegDst);
+            ?IS_SINT32_T(RegSrc) -> jit_x86_64_asm:movq(RegSrc, RegDst);
+            RegSrc >= 0, RegSrc =< 16#FFFFFFFF -> jit_x86_64_asm:movl(RegSrc, RegDst);
+            true -> jit_x86_64_asm:movabsq(RegSrc, RegDst)
+        end,
     Stream1 = StreamModule:append(Stream0, I),
     %% Copy the source's tracking to the destination, or set imm if integer
     Regs1 =
@@ -2153,6 +2165,17 @@ get_module_index(
     }.
 
 and_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    {free, Reg},
+    SrcReg
+) when
+    ?IS_GPR(Reg), is_atom(SrcReg)
+->
+    I1 = jit_x86_64_asm:andq(SrcReg, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = Regs1}, Reg};
+and_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, {free, Reg}, Val
 ) when
     ?IS_GPR(Reg)
@@ -2189,8 +2212,28 @@ and_(
     Stream2 = StreamModule:append(Stream1, I2),
     {State#state{stream = Stream2, available_regs = T, used_regs = [ResultReg | UR]}, ResultReg}.
 
+or_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I1 = jit_x86_64_asm:orq(SrcReg, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
 or_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val) ->
     I1 = jit_x86_64_asm:orq(Val, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+xor_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I1 = jit_x86_64_asm:xorq(SrcReg, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
+xor_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val) ->
+    I1 = jit_x86_64_asm:xorq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.

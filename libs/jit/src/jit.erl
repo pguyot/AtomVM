@@ -3229,6 +3229,93 @@ op_gc_bif2(
     Arg2Value = Arg2 bsr 4,
     Range2 = {Arg2Value, Arg2Value},
     op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% band - both typed integers with range: inline if proven small
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'band',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_band(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'band',
+    {typed, Arg1, {t_integer, Range1}},
+    Arg2,
+    Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_band(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% bor - both typed integers with range: inline if proven small
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'bor',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_bor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'bor',
+    {typed, Arg1, {t_integer, Range1}},
+    Arg2,
+    Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_bor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% bxor - both typed integers with range: inline if proven small, XOR zeroes tag
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'bxor',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_bxor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'bxor',
+    {typed, Arg1, {t_integer, Range1}},
+    Arg2,
+    Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_bxor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
 % Default case
 op_gc_bif2(
     MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
@@ -3376,6 +3463,63 @@ op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MMod:free_native_registers(MSt5, [Reg1, Reg2Stripped, Dest]);
         false ->
             % Cannot prove safety, use default BIF call
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+% Check if both ranges are guaranteed to be small integers
+is_small_integer_range(Range1, Range2, MMod) ->
+    {MinSafe, MaxSafe} =
+        case MMod:word_size() of
+            4 -> {-(1 bsl 27), (1 bsl 27) - 1};
+            8 -> {-(1 bsl 59), (1 bsl 59) - 1}
+        end,
+    case {Range1, Range2} of
+        {{Min1, Max1}, {Min2, Max2}} when
+            is_integer(Min1),
+            is_integer(Max1),
+            is_integer(Min2),
+            is_integer(Max2)
+        ->
+            Min1 >= MinSafe andalso Max1 =< MaxSafe andalso
+                Min2 >= MinSafe andalso Max2 =< MaxSafe;
+        _ ->
+            false
+    end.
+
+op_gc_bif2_band(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, Reg2),
+            MSt4 = MMod:move_to_vm_register(MSt3, Reg1, Dest),
+            MMod:free_native_registers(MSt4, [Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+op_gc_bif2_bor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            MSt3 = MMod:or_(MSt2, Reg1, Reg2),
+            MSt4 = MMod:move_to_vm_register(MSt3, Reg1, Dest),
+            MMod:free_native_registers(MSt4, [Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+op_gc_bif2_bxor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            MSt3 = MMod:xor_(MSt2, Reg1, Reg2),
+            MSt4 = MMod:or_(MSt3, Reg1, ?TERM_INTEGER_TAG),
+            MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
+            MMod:free_native_registers(MSt5, [Reg1, Reg2, Dest]);
+        false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
 
