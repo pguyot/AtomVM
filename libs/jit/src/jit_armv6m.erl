@@ -74,7 +74,8 @@
     add_label/3,
     set_type_tracking/3,
     get_type_tracking/2,
-    get_regs_tracking/1
+    get_regs_tracking/1,
+    xor_/3
 ]).
 
 -include_lib("jit.hrl").
@@ -3294,6 +3295,29 @@ or_(
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:orrs(Reg, Temp),
+    Stream2 = StreamModule:append(Stream1, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
+
+xor_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Reg, SrcReg
+) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:eors(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State0#state{stream = Stream1, regs = Regs1};
+xor_(
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
+    Reg,
+    Val
+) ->
+    Temp = first_avail(Avail),
+    AT = Avail band (bnot reg_bit(Temp)),
+    State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
+    Stream1 = State1#state.stream,
+    I = jit_armv6m_asm:eors(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
