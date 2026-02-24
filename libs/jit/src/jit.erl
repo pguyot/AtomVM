@@ -666,8 +666,10 @@ first_pass(<<?OP_IS_INTEGER, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_INTEGER ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_any_integer({free, Arg1}, Label, MMod, MSt1),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    %% After successful type guard, record the known type
+    MSt3 = set_type_after_guard(MMod, MSt2, Arg1, any_integer),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    first_pass(Rest2, MMod, MSt3, State0);
 % 46
 first_pass(<<?OP_IS_FLOAT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -675,8 +677,9 @@ first_pass(<<?OP_IS_FLOAT, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_FLOAT ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_boxed_with_tag(Label, Arg1, ?TERM_BOXED_FLOAT, MMod, MSt1),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    MSt3 = set_type_after_guard(MMod, MSt2, Arg1, float),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    first_pass(Rest2, MMod, MSt3, State0);
 % 47
 first_pass(<<?OP_IS_NUMBER, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -692,8 +695,9 @@ first_pass(<<?OP_IS_NUMBER, Rest0/binary>>, MMod, MSt0, State0) ->
         MMod,
         MSt1
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    MSt3 = set_type_after_guard(MMod, MSt2, Arg1, number),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    first_pass(Rest2, MMod, MSt3, State0);
 % 48
 first_pass(<<?OP_IS_ATOM, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -704,8 +708,9 @@ first_pass(<<?OP_IS_ATOM, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt3 = cond_jump_to_label(
         {{free, Reg}, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM}, Label, MMod, MSt2
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest2, MMod, MSt3, State0);
+    MSt4 = set_type_after_guard(MMod, MSt3, Arg1, atom),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest2, MMod, MSt4, State0);
 % 49
 first_pass(<<?OP_IS_PID, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -715,8 +720,9 @@ first_pass(<<?OP_IS_PID, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt2 = verify_is_immediate_or_boxed(
         {free, Arg1}, ?TERM_PID_TAG, ?TERM_BOXED_EXTERNAL_PID, Label, MMod, MSt1
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    MSt3 = set_type_after_guard(MMod, MSt2, Arg1, pid),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    first_pass(Rest2, MMod, MSt3, State0);
 % 50
 first_pass(<<?OP_IS_REFERENCE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -759,8 +765,9 @@ first_pass(<<?OP_IS_NIL, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
     MSt3 = cond_jump_to_label({Reg, '!=', ?TERM_NIL}, Label, MMod, MSt2),
     MSt4 = MMod:free_native_registers(MSt3, [Reg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt4),
-    first_pass(Rest2, MMod, MSt4, State0);
+    MSt5 = set_type_after_guard(MMod, MSt4, Arg1, nil),
+    ?ASSERT_ALL_NATIVE_FREE(MSt5),
+    first_pass(Rest2, MMod, MSt5, State0);
 % 53
 first_pass(<<?OP_IS_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -769,8 +776,9 @@ first_pass(<<?OP_IS_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_IS_BINARY ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_binary(Arg1, Label, MMod, MSt1),
     MSt3 = MMod:free_native_registers(MSt2, [Arg1]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest2, MMod, MSt3, State0);
+    MSt4 = set_type_after_guard(MMod, MSt3, Arg1, binary),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest2, MMod, MSt4, State0);
 % 55
 first_pass(<<?OP_IS_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -787,8 +795,9 @@ first_pass(<<?OP_IS_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
         MMod,
         MSt2
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest2, MMod, MSt3, State0);
+    MSt4 = set_type_after_guard(MMod, MSt3, Arg1, list),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest2, MMod, MSt4, State0);
 % 56
 first_pass(<<?OP_IS_NONEMPTY_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -799,8 +808,9 @@ first_pass(<<?OP_IS_NONEMPTY_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt3 = cond_jump_to_label(
         {{free, Reg}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}, Label, MMod, MSt2
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest2, MMod, MSt3, State0);
+    MSt4 = set_type_after_guard(MMod, MSt3, Arg1, nonempty_list),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest2, MMod, MSt4, State0);
 % 57
 first_pass(<<?OP_IS_TUPLE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -808,8 +818,9 @@ first_pass(<<?OP_IS_TUPLE, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_TUPLE ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_boxed_with_tag(Label, Arg1, ?TERM_BOXED_TUPLE, MMod, MSt1),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    MSt3 = set_type_after_guard(MMod, MSt2, Arg1, tuple),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    first_pass(Rest2, MMod, MSt3, State0);
 % 58
 first_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -3371,6 +3382,16 @@ op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
 % Helper to unwrap typed arguments
 unwrap_typed({typed, Arg, _Type}) -> Arg;
 unwrap_typed(Arg) -> Arg.
+
+%% @doc Record type information for a VM register after a successful type guard.
+%% Only records type for x_reg and y_reg sources (not intermediates or immediates).
+set_type_after_guard(MMod, MSt, {x_reg, X}, Type) when is_integer(X) ->
+    MMod:set_type_tracking(MSt, {x_reg, X}, Type);
+set_type_after_guard(MMod, MSt, {y_reg, Y}, Type) ->
+    MMod:set_type_tracking(MSt, {y_reg, Y}, Type);
+set_type_after_guard(_MMod, MSt, _Arg, _Type) ->
+    %% Argument is not a VM register (immediate, native reg, etc.) - nothing to track
+    MSt.
 
 % Optimized >= comparison for typed integers
 % Test if Arg1 >= Arg2, jump to Label if false (i.e., if Arg1 < Arg2)
