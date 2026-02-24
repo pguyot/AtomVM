@@ -73,7 +73,8 @@
     add_label/3,
     set_type_tracking/3,
     get_type_tracking/2,
-    get_regs_tracking/1
+    get_regs_tracking/1,
+    xor_/3
 ]).
 
 -include_lib("jit.hrl").
@@ -2067,6 +2068,12 @@ op_imm(#state{stream_module = StreamModule, stream = Stream0} = State, Op, RegA,
 %% @param Val immediate value to AND
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+and_(#state{stream_module = StreamModule, stream = Stream0} = State, {free, Reg}, SrcReg) when
+    is_atom(SrcReg)
+->
+    I1 = jit_aarch64_asm:and_(Reg, Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    {State#state{stream = Stream1}, Reg};
 and_(State, {free, Reg}, Val) ->
     NewState = op_imm(State, and_, Reg, Reg, Val),
     {NewState, Reg};
@@ -2088,9 +2095,23 @@ and_(
 %% @param Val immediate value to OR
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
--spec or_(state(), aarch64_register(), integer()) -> state().
+or_(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I1 = jit_aarch64_asm:orr(Reg, Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1};
 or_(State, Reg, Val) ->
     op_imm(State, orr, Reg, Reg, Val).
+
+xor_(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, SrcReg) when
+    is_atom(SrcReg)
+->
+    I1 = jit_aarch64_asm:eor(Reg, Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1};
+xor_(State, Reg, Val) ->
+    op_imm(State, eor, Reg, Reg, Val).
 
 %%-----------------------------------------------------------------------------
 %% @doc Add an immediate value to a register.

@@ -44,7 +44,7 @@ test() ->
             ok = test_link_remote_exit_local(Platform),
             ok = test_link_local_unlink_remote(Platform),
             ok = test_link_local_unlink_local(Platform),
-            ok = test_is_alive(Platform),
+            ok = test_is_alive(),
             ok = test_ping_with_avm_dist_opts(Platform),
             ok;
         false ->
