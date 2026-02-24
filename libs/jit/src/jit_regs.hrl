@@ -137,10 +137,18 @@ regs_to_list(Bitmap) ->
     [bit_to_reg(Bit) | regs_to_list(Bitmap bxor Bit)].
 
 %% @doc Convert a list of register atoms to a bitmap.
+%% Non-register atoms (e.g. imm, jit_state, stack) are silently skipped,
+%% matching the semantics of the old list subtraction approach where
+%% non-matching elements were simply ignored.
 %% Requires reg_to_bit/1 to be defined in the including module.
 -spec list_to_regs([atom()]) -> non_neg_integer().
 list_to_regs([]) -> 0;
-list_to_regs([Reg | T]) -> reg_to_bit(Reg) bor list_to_regs(T).
+list_to_regs([Reg | T]) ->
+    try reg_to_bit(Reg) of
+        Bit -> Bit bor list_to_regs(T)
+    catch
+        error:function_clause -> list_to_regs(T)
+    end.
 
 %% @doc Peek at first two available registers from bitmap (returns {Reg1, Reg2}).
 -spec regs_peek2(non_neg_integer()) -> {atom(), atom()}.
