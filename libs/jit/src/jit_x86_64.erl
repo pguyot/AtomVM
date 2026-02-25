@@ -64,6 +64,7 @@
     add/3,
     sub/3,
     mul/3,
+    mul_reg/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2525,6 +2526,15 @@ mul(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     I1 = jit_x86_64_asm:imulq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+-spec mul_reg(state(), x86_64_register(), x86_64_register()) -> state().
+mul_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DestReg, SrcReg
+) ->
+    I1 = jit_x86_64_asm:imulq(SrcReg, DestReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
     State#state{stream = Stream1, regs = Regs1}.
 
 %% Signed integer division: quotient = DividendReg / DivisorReg
