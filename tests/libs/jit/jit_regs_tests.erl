@@ -153,3 +153,24 @@ invalidate_volatile_test() ->
     ?assertEqual(unknown, jit_regs:get_contents(Regs4, rax)),
     ?assertEqual(cp, jit_regs:get_contents(Regs4, rdi)),
     ?assertEqual(unknown, jit_regs:get_contents(Regs4, r11)).
+
+value_to_contents_test() ->
+    MaxReg = 16,
+    ?assertEqual(cp, jit_regs:value_to_contents(cp, MaxReg)),
+    ?assertEqual({x_reg, 0}, jit_regs:value_to_contents({x_reg, 0}, MaxReg)),
+    ?assertEqual({x_reg, 5}, jit_regs:value_to_contents({x_reg, 5}, MaxReg)),
+    ?assertEqual({x_reg, MaxReg}, jit_regs:value_to_contents({x_reg, extra}, MaxReg)),
+    ?assertEqual({y_reg, 3}, jit_regs:value_to_contents({y_reg, 3}, MaxReg)),
+    ?assertEqual({imm, 42}, jit_regs:value_to_contents(42, MaxReg)),
+    ?assertEqual({imm, 0}, jit_regs:value_to_contents(0, MaxReg)),
+    ?assertEqual(unknown, jit_regs:value_to_contents({ptr, rax}, MaxReg)),
+    ?assertEqual(unknown, jit_regs:value_to_contents({fp_reg, 0}, MaxReg)).
+
+vm_dest_to_contents_test() ->
+    MaxReg = 16,
+    ?assertEqual({x_reg, 0}, jit_regs:vm_dest_to_contents({x_reg, 0}, MaxReg)),
+    ?assertEqual({x_reg, 15}, jit_regs:vm_dest_to_contents({x_reg, 15}, MaxReg)),
+    ?assertEqual({x_reg, MaxReg}, jit_regs:vm_dest_to_contents({x_reg, extra}, MaxReg)),
+    ?assertEqual({y_reg, 5}, jit_regs:vm_dest_to_contents({y_reg, 5}, MaxReg)),
+    ?assertEqual(unknown, jit_regs:vm_dest_to_contents({fp_reg, 0}, MaxReg)),
+    ?assertEqual(unknown, jit_regs:vm_dest_to_contents({ptr, rax}, MaxReg)).

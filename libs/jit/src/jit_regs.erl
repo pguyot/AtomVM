@@ -53,7 +53,9 @@
     stack_push/2,
     stack_pop/1,
     stack_clear/1,
-    stack_contents/1
+    stack_contents/1,
+    value_to_contents/2,
+    vm_dest_to_contents/2
 ]).
 
 -export_type([regs/0, contents/0, term_type/0]).
@@ -233,3 +235,23 @@ stack_clear(Regs) ->
 %% @doc Get the current C stack contents.
 -spec stack_contents(regs()) -> [atom() | contents()].
 stack_contents(#regs{stack = S}) -> S.
+
+%% @doc Convert a backend value to a contents descriptor for tracking.
+%% This is shared across all backends since the value types are the same.
+%% MaxReg is the maximum number of x registers (typically ?MAX_REG from jit.hrl).
+-spec value_to_contents(term(), non_neg_integer()) -> contents().
+value_to_contents(cp, _MaxReg) -> cp;
+value_to_contents({x_reg, N}, _MaxReg) when is_integer(N) -> {x_reg, N};
+value_to_contents({x_reg, extra}, MaxReg) -> {x_reg, MaxReg};
+value_to_contents({y_reg, N}, _MaxReg) -> {y_reg, N};
+value_to_contents(Imm, _MaxReg) when is_integer(Imm) -> {imm, Imm};
+value_to_contents({ptr, _}, _MaxReg) -> unknown;
+value_to_contents(_, _MaxReg) -> unknown.
+
+%% @doc Convert a VM destination register to a contents descriptor for tracking.
+%% MaxReg is the maximum number of x registers (typically ?MAX_REG from jit.hrl).
+-spec vm_dest_to_contents(term(), non_neg_integer()) -> contents().
+vm_dest_to_contents({x_reg, X}, MaxReg) when is_integer(X), X < MaxReg -> {x_reg, X};
+vm_dest_to_contents({x_reg, extra}, MaxReg) -> {x_reg, MaxReg};
+vm_dest_to_contents({y_reg, Y}, _MaxReg) -> {y_reg, Y};
+vm_dest_to_contents(_, _MaxReg) -> unknown.
