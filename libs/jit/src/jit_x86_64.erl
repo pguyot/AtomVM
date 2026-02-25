@@ -1450,10 +1450,7 @@ move_to_vm_register(#state{regs = Regs0} = State, Src, Dest) ->
     end.
 
 %% Convert a VM register destination to a contents descriptor.
-vm_dest_to_contents({x_reg, X}) when is_integer(X), X < ?MAX_REG -> {x_reg, X};
-vm_dest_to_contents({x_reg, extra}) -> {x_reg, ?MAX_REG};
-vm_dest_to_contents({y_reg, Y}) -> {y_reg, Y};
-vm_dest_to_contents(_) -> unknown.
+vm_dest_to_contents(Dest) -> jit_regs:vm_dest_to_contents(Dest, ?MAX_REG).
 
 % Src = 0, we can andq as an optimization
 move_to_vm_register_emit(State, 0, {x_reg, X}) when X < ?MAX_REG ->
@@ -1628,7 +1625,8 @@ move_to_vm_register_emit(
     Dest :: vm_register() | x86_64_register()
 ) -> state().
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     Reg,
     Index,
     {x_reg, X}
@@ -1637,9 +1635,12 @@ move_array_element(
     I1 = jit_x86_64_asm:movq({Index * 8, Reg}, Temp),
     I2 = jit_x86_64_asm:movq(Temp, ?X_REG(X)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    State#state{stream = Stream1, regs = Regs2};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     Reg,
     Index,
     {ptr, Dest}
@@ -1648,9 +1649,10 @@ move_array_element(
     I1 = jit_x86_64_asm:movq({Index * 8, Reg}, Temp),
     I2 = jit_x86_64_asm:movq(Temp, {0, Dest}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
         State,
     Reg,
     Index,
@@ -1663,7 +1665,10 @@ move_array_element(
     I3 = jit_x86_64_asm:movq(Temp2, {Y * 8, Temp1}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp1),
+    Regs3 = jit_regs:invalidate_reg(Regs2, Temp2),
+    State#state{stream = Stream1, regs = Regs3};
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
 ) when is_atom(Dest) andalso is_integer(Index) ->
@@ -1676,7 +1681,8 @@ move_array_element(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1688,17 +1694,21 @@ move_array_element(
     I4 = jit_x86_64_asm:movq(IndexReg, ?X_REG(X)),
     IndexBit = reg_bit(IndexReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, IndexReg),
     State#state{
         available_regs = AvailableRegs0 bor IndexBit,
         used_regs = UsedRegs0 band (bnot IndexBit),
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs2
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1710,17 +1720,20 @@ move_array_element(
     I4 = jit_x86_64_asm:movq(IndexReg, {0, PtrReg}),
     IndexBit = reg_bit(IndexReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, IndexReg),
     State#state{
         available_regs = AvailableRegs0 bor IndexBit,
         used_regs = UsedRegs0 band (bnot IndexBit),
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs1
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1736,10 +1749,14 @@ move_array_element(
     Stream1 = StreamModule:append(
         Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
     ),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    Regs3 = jit_regs:invalidate_reg(Regs2, IndexReg),
     State#state{
         available_regs = AvailableRegs0 bor IndexBit,
         used_regs = UsedRegs0 band (bnot IndexBit),
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs3
     }.
 
 %%-----------------------------------------------------------------------------
@@ -2102,13 +2119,7 @@ move_to_native_register_emit(
 
 %% Convert a value to a contents descriptor for tracking.
 -spec value_to_contents(value() | cp) -> jit_regs:contents().
-value_to_contents(cp) -> cp;
-value_to_contents({x_reg, N}) when is_integer(N) -> {x_reg, N};
-value_to_contents({x_reg, extra}) -> {x_reg, ?MAX_REG};
-value_to_contents({y_reg, N}) -> {y_reg, N};
-value_to_contents(Imm) when is_integer(Imm) -> {imm, Imm};
-value_to_contents({ptr, _}) -> unknown;
-value_to_contents(_) -> unknown.
+value_to_contents(Value) -> jit_regs:value_to_contents(Value, ?MAX_REG).
 
 -spec move_to_native_register(state(), integer() | x86_64_register(), x86_64_register()) -> state().
 move_to_native_register(
