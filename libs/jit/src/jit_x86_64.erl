@@ -487,7 +487,7 @@ call_primitive(
 ) ->
     % We need a register for the function pointer that should not be used as a parameter
     ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
-    ParamMask = regs_to_mask(ParamRegs),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
     FreeFromParams = AvailableRegs0 band (bnot ParamMask),
     case FreeFromParams of
         0 ->
@@ -539,8 +539,8 @@ call_primitive_last(
     % registers used for parameters
     ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
     ArgsRegs = args_regs(Args),
-    ParamMask = regs_to_mask(ParamRegs),
-    ArgsMask = regs_to_mask(ArgsRegs),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
+    ArgsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
     ScratchMask =
         ?AVAILABLE_REGS_MASK band (bnot (ArgsMask bor ParamMask)),
     Temp = first_avail(ScratchMask),
@@ -1250,8 +1250,8 @@ call_func_ptr(
 set_args(State0, Args) ->
     ParamRegs = parameter_regs(Args),
     ArgsRegs = args_regs(Args),
-    ParamMask = regs_to_mask(ParamRegs),
-    ArgsMask = regs_to_mask(ArgsRegs),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
+    ArgsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
     set_args2(State0, Args, ParamRegs, ArgsRegs, ParamMask, ArgsMask).
 
 set_args2(
@@ -2629,10 +2629,6 @@ reg_bit(r8) -> ?REG_BIT_R8;
 reg_bit(r9) -> ?REG_BIT_R9;
 reg_bit(r10) -> ?REG_BIT_R10;
 reg_bit(r11) -> ?REG_BIT_R11.
-
-regs_to_mask([]) -> 0;
-regs_to_mask([imm | T]) -> regs_to_mask(T);
-regs_to_mask([Reg | T]) -> reg_bit(Reg) bor regs_to_mask(T).
 
 first_avail(Mask) when Mask band ?REG_BIT_RAX =/= 0 -> rax;
 first_avail(Mask) when Mask band ?REG_BIT_R11 =/= 0 -> r11;

@@ -549,8 +549,8 @@ call_primitive_last(
     % registers used for parameters
     ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
     ArgsRegs = args_regs(Args),
-    ArgsMask = regs_to_mask(ArgsRegs),
-    ParamMask = regs_to_mask(ParamRegs),
+    ArgsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
     ScratchMask = ?AVAILABLE_REGS_MASK band (bnot (ArgsMask bor ParamMask)),
     Temp = first_avail(ScratchMask),
     TempBit = reg_bit(Temp),
@@ -1223,7 +1223,7 @@ call_func_ptr(
         end,
         [FuncPtrTuple | Args]
     ),
-    FreeMask = regs_to_mask(FreeRegs),
+    FreeMask = jit_regs:regs_to_mask(FreeRegs, fun reg_bit/1),
     UsedRegs1 = UsedRegs0 band (bnot FreeMask),
     SavedRegs = [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)],
     {SavedRegsOdd, Stream1} = push_registers(SavedRegs, StreamModule, Stream0),
@@ -1311,8 +1311,8 @@ set_args(
 ) ->
     ParamRegs = parameter_regs(Args),
     ArgsRegs = args_regs(Args),
-    ParamMask = regs_to_mask(ParamRegs),
-    ArgsMask = regs_to_mask(ArgsRegs),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
+    ArgsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
     AvailableScratchMask =
         ?SCRATCH_REGS_MASK band (bnot (ParamMask bor ArgsMask bor UsedRegs)),
     AvailableScratchGP = mask_to_list(AvailableScratchMask),
@@ -2711,10 +2711,6 @@ reg_bit(r14) -> ?REG_BIT_R14;
 reg_bit(r15) -> ?REG_BIT_R15;
 reg_bit(r16) -> ?REG_BIT_R16;
 reg_bit(r17) -> ?REG_BIT_R17.
-
-regs_to_mask([]) -> 0;
-regs_to_mask([imm | T]) -> regs_to_mask(T);
-regs_to_mask([Reg | T]) -> reg_bit(Reg) bor regs_to_mask(T).
 
 %% first_avail returns the first available register from a bitmask.
 %% Order matches ?AVAILABLE_REGS = [r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6]

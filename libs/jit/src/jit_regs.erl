@@ -55,7 +55,8 @@
     stack_clear/1,
     stack_contents/1,
     value_to_contents/2,
-    vm_dest_to_contents/2
+    vm_dest_to_contents/2,
+    regs_to_mask/2
 ]).
 
 -export_type([regs/0, contents/0, term_type/0]).
@@ -255,3 +256,13 @@ vm_dest_to_contents({x_reg, X}, MaxReg) when is_integer(X), X < MaxReg -> {x_reg
 vm_dest_to_contents({x_reg, extra}, MaxReg) -> {x_reg, MaxReg};
 vm_dest_to_contents({y_reg, Y}, _MaxReg) -> {y_reg, Y};
 vm_dest_to_contents(_, _MaxReg) -> unknown.
+
+%% @doc Convert a list of register atoms to a bitmask.
+%% Skips non-register entries like `imm`, `jit_state`, and `stack`.
+%% RegBitFn maps register atoms to their bit positions.
+-spec regs_to_mask([atom()], fun((atom()) -> non_neg_integer())) -> non_neg_integer().
+regs_to_mask([], _RegBitFn) -> 0;
+regs_to_mask([imm | T], RegBitFn) -> regs_to_mask(T, RegBitFn);
+regs_to_mask([jit_state | T], RegBitFn) -> regs_to_mask(T, RegBitFn);
+regs_to_mask([stack | T], RegBitFn) -> regs_to_mask(T, RegBitFn);
+regs_to_mask([Reg | T], RegBitFn) -> RegBitFn(Reg) bor regs_to_mask(T, RegBitFn).
