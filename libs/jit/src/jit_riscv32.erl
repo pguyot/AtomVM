@@ -3205,6 +3205,16 @@ mul_reg(
     Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
     State#state{stream = Stream1, regs = Regs1}.
 
+%% Register-register multiply: DestReg = DestReg * SrcReg
+-spec mul_reg(state(), riscv32_register(), riscv32_register()) -> state().
+mul_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DestReg, SrcReg
+) ->
+    I = jit_riscv32_asm:mul(DestReg, DestReg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
+    State#state{stream = Stream1, regs = Regs1}.
+
 %%
 %% Analysis of AArch64 pattern and RISC-V32 implementation:
 %%
