@@ -64,6 +64,7 @@
     add/3,
     sub/3,
     mul/3,
+    mul_reg/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2432,10 +2433,32 @@ mul(State, Reg, 32) ->
     shift_left(State, Reg, 5);
 mul(State, Reg, 64) ->
     shift_left(State, Reg, 6);
+mul(
+    #state{
+        stream_module = StreamModule, stream = Stream0, regs = Regs0, available_regs = Avail
+    } = State,
+    Reg,
+    Val
+) when Val < -16#80000000 orelse Val > 16#7FFFFFFF ->
+    TempReg = first_avail(Avail),
+    I1 = jit_x86_64_asm:movabsq(Val, TempReg),
+    I2 = jit_x86_64_asm:imulq(TempReg, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val) ->
     I1 = jit_x86_64_asm:imulq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+-spec mul_reg(state(), x86_64_register(), x86_64_register()) -> state().
+mul_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DestReg, SrcReg
+) ->
+    I1 = jit_x86_64_asm:imulq(SrcReg, DestReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
     State#state{stream = Stream1, regs = Regs1}.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
