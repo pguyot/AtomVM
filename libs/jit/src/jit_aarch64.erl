@@ -64,6 +64,7 @@
     add/3,
     sub/3,
     mul/3,
+    mul_reg/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2205,6 +2206,12 @@ mul(
     I1 = jit_aarch64_asm:mov(Temp, Val),
     I2 = jit_aarch64_asm:mul(Reg, Reg, Temp),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    State#state{stream = Stream1}.
+
+-spec mul_reg(state(), aarch64_register(), aarch64_register()) -> state().
+mul_reg(#state{stream_module = StreamModule, stream = Stream0} = State, DestReg, SrcReg) ->
+    I1 = jit_aarch64_asm:mul(DestReg, DestReg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
