@@ -43,6 +43,7 @@
     if_block/3,
     if_else_block/4,
     shift_right/3,
+    shift_right_arith/3,
     shift_left/3,
     move_to_vm_register/3,
     move_to_native_register/2,
@@ -1601,6 +1602,39 @@ shift_right(
     ResultReg = first_avail(Avail),
     Bit = reg_bit(ResultReg),
     I = jit_armv6m_asm:lsrs(ResultReg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {
+        State#state{
+            stream = Stream1, available_regs = Avail band (bnot Bit), used_regs = UR bor Bit
+        },
+        ResultReg
+    }.
+
+-spec shift_right_arith(#state{}, maybe_free_armv6m_register(), non_neg_integer()) ->
+    {#state{}, armv6m_register()}.
+shift_right_arith(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {free, Reg}, Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    I = jit_armv6m_asm:asrs(Reg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State#state{stream = Stream1}, Reg};
+shift_right_arith(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        used_regs = UR
+    } = State,
+    Reg,
+    Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    ResultReg = first_avail(Avail),
+    Bit = reg_bit(ResultReg),
+    I = jit_armv6m_asm:asrs(ResultReg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
     {
         State#state{

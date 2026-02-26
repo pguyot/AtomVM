@@ -74,7 +74,10 @@
     set_type_tracking/3,
     get_type_tracking/2,
     get_regs_tracking/1,
-    xor_/3
+    xor_/3,
+    shift_right_arith/3,
+    div_reg/3,
+    rem_reg/3
 ]).
 
 -ifdef(JIT_DWARF).
@@ -1546,6 +1549,53 @@ shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, 
     I = jit_riscv32_asm:slli(Reg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
     State#state{stream = Stream1}.
+
+shift_right_arith(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {free, Reg}, Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    I = jit_riscv32_asm:srai(Reg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State#state{stream = Stream1}, Reg};
+shift_right_arith(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        used_regs = UR
+    } = State,
+    Reg,
+    Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    ResultReg = first_avail(Avail),
+    ResultBit = reg_bit(ResultReg),
+    I = jit_riscv32_asm:srai(ResultReg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {
+        State#state{
+            stream = Stream1,
+            available_regs = Avail band (bnot ResultBit),
+            used_regs = UR bor ResultBit
+        },
+        ResultReg
+    }.
+
+div_reg(
+    #state{stream_module = StreamModule, stream = Stream0} = State, DividendReg, DivisorReg
+) ->
+    I = jit_riscv32_asm:'div'(DividendReg, DividendReg, DivisorReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State#state{stream = Stream1}, DividendReg}.
+
+rem_reg(
+    #state{stream_module = StreamModule, stream = Stream0} = State, DividendReg, DivisorReg
+) ->
+    I = jit_riscv32_asm:'rem'(DividendReg, DividendReg, DivisorReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State#state{stream = Stream1}, DividendReg}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a call to a function pointer with arguments. This function converts

@@ -65,6 +65,9 @@
     sub/3,
     mul/3,
     mul_reg/3,
+    div_reg/3,
+    rem_reg/3,
+    shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -1169,6 +1172,39 @@ shift_right(
     ResultReg = first_avail(Available),
     Bit = reg_bit(ResultReg),
     I = jit_aarch64_asm:lsr(ResultReg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {
+        State#state{
+            stream = Stream1, available_regs = Available band (bnot Bit), used_regs = Used bor Bit
+        },
+        ResultReg
+    }.
+
+-spec shift_right_arith(#state{}, maybe_free_aarch64_register(), non_neg_integer()) ->
+    {#state{}, aarch64_register()}.
+shift_right_arith(
+    #state{stream_module = StreamModule, stream = Stream0} = State, {free, Reg}, Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    I = jit_aarch64_asm:asr(Reg, Reg, Shift),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State#state{stream = Stream1}, Reg};
+shift_right_arith(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Available,
+        used_regs = Used
+    } = State,
+    Reg,
+    Shift
+) when
+    ?IS_GPR(Reg) andalso is_integer(Shift)
+->
+    ResultReg = first_avail(Available),
+    Bit = reg_bit(ResultReg),
+    I = jit_aarch64_asm:asr(ResultReg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
     {
         State#state{
@@ -2481,6 +2517,29 @@ mul_reg(#state{stream_module = StreamModule, stream = Stream0} = State, DestReg,
     I1 = jit_aarch64_asm:mul(DestReg, DestReg, SrcReg),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+-spec div_reg(state(), aarch64_register(), aarch64_register()) -> {state(), aarch64_register()}.
+div_reg(
+    #state{stream_module = StreamModule, stream = Stream0} = State, DividendReg, DivisorReg
+) ->
+    I1 = jit_aarch64_asm:sdiv(DividendReg, DividendReg, DivisorReg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    {State#state{stream = Stream1}, DividendReg}.
+
+-spec rem_reg(state(), aarch64_register(), aarch64_register()) -> {state(), aarch64_register()}.
+rem_reg(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    DividendReg,
+    DivisorReg
+) ->
+    %% rem = dividend - (dividend / divisor) * divisor
+    %% Use msub: Rd = Ra - (Rn * Rm)
+    %% First sdiv into a temp, then msub
+    TempReg = first_avail(Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(DivisorReg))),
+    I1 = jit_aarch64_asm:sdiv(TempReg, DividendReg, DivisorReg),
+    I2 = jit_aarch64_asm:msub(DividendReg, TempReg, DivisorReg, DividendReg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    {State#state{stream = Stream1}, DividendReg}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it

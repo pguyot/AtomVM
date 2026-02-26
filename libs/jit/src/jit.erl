@@ -3345,6 +3345,60 @@ op_gc_bif2(
     Arg2Value = Arg2 bsr 4,
     Range2 = {Arg2Value, Arg2Value},
     op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% div - both typed integers: inline if divisor provably non-zero and result fits
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'div',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod, MSt0, FailLabel, Live, Bif, erlang, 'div', {typed, Arg1, {t_integer, Range1}}, Arg2, Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% rem - both typed integers: inline if divisor provably non-zero and result fits
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    'rem',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod, MSt0, FailLabel, Live, Bif, erlang, 'rem', {typed, Arg1, {t_integer, Range1}}, Arg2, Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% element - typed integer index with literal index >= 1
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    _Live,
+    _Bif,
+    erlang,
+    element,
+    Arg1,
+    {typed, Arg2, _TupleType},
+    Dest
+) when is_integer(Arg1), Arg1 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG, Arg1 bsr 4 >= 1 ->
+    op_gc_bif2_element_literal(MMod, MSt0, FailLabel, Arg1, Arg2, Dest);
 % bsl - typed integer with literal shift amount: inline if result fits
 op_gc_bif2(
     MMod,
@@ -3749,6 +3803,122 @@ op_gc_bif2_bsr(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
+
+can_inline_div(Range1, Range2, MMod) ->
+    case erlang:function_exported(MMod, div_reg, 3) of
+        false ->
+            false;
+        true ->
+            {MinSafe, MaxSafe} =
+                case MMod:word_size() of
+                    4 -> {-(1 bsl 27), (1 bsl 27) - 1};
+                    8 -> {-(1 bsl 59), (1 bsl 59) - 1}
+                end,
+            case {Range1, Range2} of
+                {{Min1, Max1}, {Min2, Max2}} when
+                    is_integer(Min1),
+                    is_integer(Max1),
+                    is_integer(Min2),
+                    is_integer(Max2),
+                    Min1 >= MinSafe,
+                    Max1 =< MaxSafe,
+                    Min2 >= MinSafe,
+                    Max2 =< MaxSafe,
+                    (Min2 > 0 orelse Max2 < 0)
+                ->
+                    % Guard against MinSafe div -1 = -MinSafe which overflows
+                    not (Min1 =:= MinSafe andalso Min2 =< -1 andalso Max2 >= -1);
+                _ ->
+                    false
+            end
+    end.
+
+op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
+    is_integer(Arg2)
+->
+    case can_inline_div(Range1, Range2, MMod) of
+        true ->
+            Arg2Value = Arg2 bsr 4,
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg1} = MMod:and_(MSt1, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+            {MSt4, Reg2} = MMod:move_to_native_register(MSt3, Arg2Value),
+            {MSt5, QuotientReg} = MMod:div_reg(MSt4, Reg1, Reg2),
+            MSt6 = MMod:shift_left(MSt5, QuotientReg, 4),
+            MSt7 = MMod:or_(MSt6, QuotientReg, ?TERM_INTEGER_TAG),
+            MSt8 = MMod:move_to_vm_register(MSt7, QuotientReg, Dest),
+            MMod:free_native_registers(MSt8, [QuotientReg, Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end;
+op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case can_inline_div(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt4, Reg1} = MMod:shift_right_arith(MSt3, {free, Reg1}, 4),
+            {MSt5, Reg2} = MMod:and_(MSt4, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt6, Reg2} = MMod:shift_right_arith(MSt5, {free, Reg2}, 4),
+            {MSt7, QuotientReg} = MMod:div_reg(MSt6, Reg1, Reg2),
+            MSt8 = MMod:shift_left(MSt7, QuotientReg, 4),
+            MSt9 = MMod:or_(MSt8, QuotientReg, ?TERM_INTEGER_TAG),
+            MSt10 = MMod:move_to_vm_register(MSt9, QuotientReg, Dest),
+            MMod:free_native_registers(MSt10, [QuotientReg, Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
+    is_integer(Arg2)
+->
+    case can_inline_div(Range1, Range2, MMod) of
+        true ->
+            Arg2Value = Arg2 bsr 4,
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg1} = MMod:and_(MSt1, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+            {MSt4, Reg2} = MMod:move_to_native_register(MSt3, Arg2Value),
+            {MSt5, RemReg} = MMod:rem_reg(MSt4, Reg1, Reg2),
+            MSt6 = MMod:shift_left(MSt5, RemReg, 4),
+            MSt7 = MMod:or_(MSt6, RemReg, ?TERM_INTEGER_TAG),
+            MSt8 = MMod:move_to_vm_register(MSt7, RemReg, Dest),
+            MMod:free_native_registers(MSt8, [RemReg, Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end;
+op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case can_inline_div(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt4, Reg1} = MMod:shift_right_arith(MSt3, {free, Reg1}, 4),
+            {MSt5, Reg2} = MMod:and_(MSt4, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt6, Reg2} = MMod:shift_right_arith(MSt5, {free, Reg2}, 4),
+            {MSt7, RemReg} = MMod:rem_reg(MSt6, Reg1, Reg2),
+            MSt8 = MMod:shift_left(MSt7, RemReg, 4),
+            MSt9 = MMod:or_(MSt8, RemReg, ?TERM_INTEGER_TAG),
+            MSt10 = MMod:move_to_vm_register(MSt9, RemReg, Dest),
+            MMod:free_native_registers(MSt10, [RemReg, Reg1, Reg2, Dest]);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+op_gc_bif2_element_literal(MMod, MSt0, FailLabel, Arg1, Arg2, Dest) ->
+    Index = Arg1 bsr 4,
+    {MSt1, TupleReg} = MMod:move_to_native_register(MSt0, Arg2),
+    {MSt2, TupleReg} = MMod:and_(MSt1, {free, TupleReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    % Load arity from tuple header word (element 0)
+    {MSt3, ArityReg} = MMod:get_array_element(MSt2, TupleReg, 0),
+    {MSt4, ArityReg} = MMod:shift_right(MSt3, {free, ArityReg}, 6),
+    % Bounds check: fail if arity < index
+    MSt5 = cond_raise_badarg_or_jump_to_fail_label(
+        {{free, ArityReg}, '<', Index}, FailLabel, MMod, MSt4
+    ),
+    % Load element at 1-based index (element 0 is the header)
+    MSt6 = MMod:move_array_element(MSt5, TupleReg, Index, Dest),
+    MMod:free_native_registers(MSt6, [TupleReg, ArityReg, Dest]).
 
 % Helper to unwrap typed arguments
 unwrap_typed({typed, Arg, _Type}) -> Arg;
