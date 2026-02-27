@@ -60,6 +60,7 @@
     retq/0,
     cmpb/2,
     xchgq/2,
+    xorl/2,
     xorq/2,
     cqo/0,
     idivq/1,
@@ -560,6 +561,14 @@ orq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#09, 3:2, MODRM_REG:3, MODRM_RM:3>>.
 
+xorl(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
+    (case {REX_R, REX_B} of
+        {0, 0} -> <<16#31, 3:2, MODRM_REG:3, MODRM_RM:3>>;
+        _ -> <<(16#40 bor (REX_R bsl 2) bor REX_B), 16#31, 3:2, MODRM_REG:3, MODRM_RM:3>>
+    end).
+
 xorq(Imm, DestReg) when ?IS_SINT8_T(Imm) andalso is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 3:2, 6:3, MODRM_RM:3, Imm>>;
@@ -613,6 +622,18 @@ popq(Reg) ->
         {1, Index} -> <<16#41, (16#58 + Index)>>
     end.
 
+jmpq({0, Reg}) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    (case {REX_B, MODRM_RM} of
+        {0, RM} -> <<16#FF, 0:2, 4:3, RM:3>>;
+        {1, RM} -> <<16#41, 16#FF, 0:2, 4:3, RM:3>>
+    end);
+jmpq({Offset, Reg}) when ?IS_SINT8_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    (case REX_B of
+        0 -> <<16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>;
+        1 -> <<16#41, 16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>
+    end);
 jmpq({Reg}) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#FF, (16#E0 + Index)>>;

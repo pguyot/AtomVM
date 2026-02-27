@@ -830,6 +830,43 @@ xorq_test_() ->
         )
     ].
 
+xorl_test_() ->
+    [
+        % xorl reg, reg (rax-rdi: 2 bytes, no REX)
+        ?_assertAsmEqual(
+            <<16#31, 16#C0>>,
+            "xor %eax,%eax",
+            jit_x86_64_asm:xorl(rax, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#31, 16#C9>>,
+            "xor %ecx,%ecx",
+            jit_x86_64_asm:xorl(rcx, rcx)
+        ),
+        % xorl with r8-r15 (3 bytes, needs REX)
+        ?_assertAsmEqual(
+            <<16#45, 16#31, 16#C0>>,
+            "xor %r8d,%r8d",
+            jit_x86_64_asm:xorl(r8, r8)
+        ),
+        ?_assertAsmEqual(
+            <<16#45, 16#31, 16#DB>>,
+            "xor %r11d,%r11d",
+            jit_x86_64_asm:xorl(r11, r11)
+        ),
+        % cross-register xorl
+        ?_assertAsmEqual(
+            <<16#31, 16#C8>>,
+            "xor %ecx,%eax",
+            jit_x86_64_asm:xorl(rcx, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#44, 16#31, 16#C0>>,
+            "xor %r8d,%eax",
+            jit_x86_64_asm:xorl(r8, rax)
+        )
+    ].
+
 pushq_test_() ->
     [
         ?_assertAsmEqual(<<16#50>>, "push %rax", jit_x86_64_asm:pushq(rax)),
@@ -865,7 +902,18 @@ jmpq_test_() ->
         ?_assertAsmEqual(<<16#41, 16#FF, 16#E0>>, "jmp *%r8", jit_x86_64_asm:jmpq({r8})),
         ?_assertAsmEqual(<<16#41, 16#FF, 16#E1>>, "jmp *%r9", jit_x86_64_asm:jmpq({r9})),
         ?_assertAsmEqual(<<16#41, 16#FF, 16#E2>>, "jmp *%r10", jit_x86_64_asm:jmpq({r10})),
-        ?_assertAsmEqual(<<16#41, 16#FF, 16#E3>>, "jmp *%r11", jit_x86_64_asm:jmpq({r11}))
+        ?_assertAsmEqual(<<16#41, 16#FF, 16#E3>>, "jmp *%r11", jit_x86_64_asm:jmpq({r11})),
+        % jmpq memory-indirect with zero offset
+        ?_assertAsmEqual(<<16#FF, 16#22>>, "jmp *(%rdx)", jit_x86_64_asm:jmpq({0, rdx})),
+        ?_assertAsmEqual(<<16#FF, 16#20>>, "jmp *(%rax)", jit_x86_64_asm:jmpq({0, rax})),
+        ?_assertAsmEqual(<<16#41, 16#FF, 16#20>>, "jmp *(%r8)", jit_x86_64_asm:jmpq({0, r8})),
+        % jmpq memory-indirect with sint8 offset
+        ?_assertAsmEqual(
+            <<16#FF, 16#62, 16#10>>, "jmp *0x10(%rdx)", jit_x86_64_asm:jmpq({16, rdx})
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 16#FF, 16#60, 16#08>>, "jmp *0x8(%r8)", jit_x86_64_asm:jmpq({8, r8})
+        )
     ].
 
 leaq_rel32_test_() ->
