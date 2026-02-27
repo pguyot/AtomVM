@@ -1892,7 +1892,7 @@ cached_load_cp_test() ->
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
-%% After freeing a register, tracking is invalidated so it must reload
+%% After freeing a register, cache is preserved so reload is elided
 cached_load_after_free_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, rax} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
@@ -1901,7 +1901,6 @@ cached_load_after_free_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-            "   4:	48 8b 47 58          	mov    0x58(%rdi),%rax"
+            "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).

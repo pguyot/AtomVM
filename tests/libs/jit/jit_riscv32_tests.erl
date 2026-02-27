@@ -3553,3 +3553,16 @@ add_beam_test() ->
             "  e4:  8f82                jr  t6"
         >>,
     jit_tests_common:assert_stream(riscv32, Dump, Stream).
+
+%% After freeing a register, cache is preserved so reload is elided
+cached_load_after_free_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, t6} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:free_native_registers(State1, [t6]),
+    {State3, t6} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:  02c52f83            lw  t6,44(a0)"
+        >>,
+    jit_tests_common:assert_stream(riscv32, Dump, Stream).
