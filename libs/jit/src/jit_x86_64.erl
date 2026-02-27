@@ -40,6 +40,7 @@
     jump_to_label/2,
     jump_to_continuation/2,
     jump_to_offset/2,
+    cond_jump_to_label/3,
     if_block/3,
     if_else_block/4,
     shift_right/3,
@@ -696,6 +697,44 @@ jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     State#state{stream = Stream1, regs = jit_regs:invalidate_all(State#state.regs)}.
 
 %%-----------------------------------------------------------------------------
+%% @doc Emit a conditional jump to a label. Uses a single conditional jump
+%% instruction instead of the if_block+jump_to_label combo, saving 1 byte
+%% for forward jumps (6 vs 7 bytes) and up to 2 bytes for backward jumps.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec cond_jump_to_label(state(), condition(), integer()) -> state().
+cond_jump_to_label(State0, {'and', _CondList} = Cond, Label) ->
+    if_block(State0, Cond, fun(S) -> jump_to_label(S, Label) end);
+cond_jump_to_label(
+    #state{stream_module = StreamModule, branches = AccBranches, labels = Labels} =
+        State0,
+    Cond,
+    Label
+) ->
+    {State1, CompareCode, CondCode} = cond_emit(State0, Cond),
+    Stream1 = StreamModule:append(State1#state.stream, CompareCode),
+    JccOffset = StreamModule:offset(Stream1),
+    %% Clear register value cache to match if_block+jump_to_label behavior.
+    %% Types tracking is preserved (same as merge with invalidated regs).
+    Regs1 = jit_regs:invalidate_all(State1#state.regs),
+    case lists:keyfind(Label, 1, Labels) of
+        {Label, LabelOffset} ->
+            RelOffset = LabelOffset - JccOffset,
+            I = jit_x86_64_asm:jcc(CondCode, RelOffset),
+            Stream2 = StreamModule:append(Stream1, I),
+            State1#state{stream = Stream2, regs = Regs1};
+        false ->
+            {RelocByteOffset, I} = jit_x86_64_asm:jcc_rel32(CondCode, 2),
+            Reloc = {Label, JccOffset + RelocByteOffset, 32},
+            Stream2 = StreamModule:append(Stream1, I),
+            State1#state{
+                stream = Stream2,
+                branches = [Reloc | AccBranches],
+                regs = Regs1
+            }
+    end.
+
+%%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.
 %% This is used for optimized intra-module returns.
 %% @end
@@ -848,35 +887,45 @@ if_else_block(
 
 -spec if_block_cond(state(), condition()) -> {state(), non_neg_integer()}.
 if_block_cond(#state{stream_module = StreamModule} = State0, Cond) ->
-    {State1, Code, ReplaceDelta} = if_block_cond0(State0, Cond),
+    {State1, CompareCode, DirectCondCode} = cond_emit(State0, Cond),
+    InverseCondCode = DirectCondCode bxor 1,
+    %% Short conditional jump with placeholder offset (2 bytes: opcode + rel8)
+    JccCode = <<(16#70 bor InverseCondCode), 16#FF>>,
+    Code = <<CompareCode/binary, JccCode/binary>>,
     Stream1 = StreamModule:append(State1#state.stream, Code),
     State2 = State1#state{stream = Stream1},
-    {State2, ReplaceDelta}.
+    {State2, byte_size(CompareCode) + 1}.
 
--spec if_block_cond0(state(), condition()) -> {state(), binary(), non_neg_integer()}.
-if_block_cond0(State0, {RegOrTuple, '<', 0}) ->
+%% x86 condition codes for conditional jumps
+-define(COND_Z, 16#4).
+-define(COND_NZ, 16#5).
+-define(COND_L, 16#C).
+-define(COND_GE, 16#D).
+-define(COND_LE, 16#E).
+-define(COND_G, 16#F).
+
+%% Returns {State, CompareCode, DirectCondCode} where DirectCondCode is the
+%% x86 condition code for when the condition is TRUE (for direct conditional jumps).
+-spec cond_emit(state(), condition()) -> {state(), binary(), 0..15}.
+cond_emit(State0, {RegOrTuple, '<', 0}) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testq(Reg, Reg),
-    {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
-% Handle {Value, '<', Reg} - means Value < Reg, jump if false (i.e., if Value >= Reg or Reg <= Value)
-if_block_cond0(State0, {Value, '<', RegOrTuple}) when ?IS_SINT32_T(Value) ->
+    {State1, I1, ?COND_L};
+cond_emit(State0, {Value, '<', RegOrTuple}) when ?IS_SINT32_T(Value) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpq(Value, Reg),
-    {RelocJLEOffset, I2} = jit_x86_64_asm:jle_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJLEOffset};
-% Catch-all for large values outside SINT32_T range
-if_block_cond0(
+    {State1, I1, ?COND_G};
+cond_emit(
     #state{available_regs = Avail} = State0, {Value, '<', RegOrTuple}
 ) when is_integer(Value) ->
     Temp = first_avail(Avail),
@@ -887,31 +936,27 @@ if_block_cond0(
         end,
     I1 = jit_x86_64_asm:movabsq(Value, Temp),
     I2 = jit_x86_64_asm:cmpq(Temp, Reg),
-    {RelocJLEOffset, I3} = jit_x86_64_asm:jle_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJLEOffset};
-if_block_cond0(State0, {RegOrTuple, '<', Value}) when ?IS_SINT32_T(Value) ->
+    {State1, <<I1/binary, I2/binary>>, ?COND_G};
+cond_emit(State0, {RegOrTuple, '<', Value}) when ?IS_SINT32_T(Value) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpq(Value, Reg),
-    {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
-if_block_cond0(State0, {RegOrTuple, '<', RegB}) when is_atom(RegB) ->
+    {State1, I1, ?COND_L};
+cond_emit(State0, {RegOrTuple, '<', RegB}) when is_atom(RegB) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpq(RegB, Reg),
-    {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
-% Catch-all for large values outside SINT32_T range
-if_block_cond0(
+    {State1, I1, ?COND_L};
+cond_emit(
     #state{available_regs = Avail} = State0, {RegOrTuple, '<', Value}
 ) when is_integer(Value) ->
     Temp = first_avail(Avail),
@@ -922,30 +967,27 @@ if_block_cond0(
         end,
     I1 = jit_x86_64_asm:movabsq(Value, Temp),
     I2 = jit_x86_64_asm:cmpq(Temp, Reg),
-    {RelocJGEOffset, I3} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJGEOffset};
-if_block_cond0(State0, {RegOrTuple, '==', 0}) ->
+    {State1, <<I1/binary, I2/binary>>, ?COND_L};
+cond_emit(State0, {RegOrTuple, '==', 0}) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testq(Reg, Reg),
-    {RelocJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJNZOffset};
-if_block_cond0(State0, {'(int)', RegOrTuple, '==', 0}) ->
+    {State1, I1, ?COND_Z};
+cond_emit(State0, {'(int)', RegOrTuple, '==', 0}) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testl(Reg, Reg),
-    {RelocJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJNZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_Z};
+cond_emit(
     State0,
     {RegOrTuple, '!=', Val}
 ) when ?IS_SINT32_T(Val) orelse ?IS_GPR(Val) ->
@@ -955,10 +997,9 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpq(Val, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_NZ};
+cond_emit(
     #state{available_regs = Avail} = State0,
     {RegOrTuple, '!=', Val}
 ) when is_integer(Val) orelse ?IS_GPR(Val) ->
@@ -970,10 +1011,9 @@ if_block_cond0(
         end,
     I1 = jit_x86_64_asm:movabsq(Val, Temp),
     I2 = jit_x86_64_asm:cmpq(Temp, Reg),
-    {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
-if_block_cond0(
+    {State1, <<I1/binary, I2/binary>>, ?COND_NZ};
+cond_emit(
     State0,
     {'(int)', RegOrTuple, '!=', Val}
 ) when is_integer(Val) orelse ?IS_GPR(Val) ->
@@ -983,10 +1023,9 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpl(Val, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_NZ};
+cond_emit(
     State0,
     {RegOrTuple, '==', Val}
 ) when ?IS_SINT32_T(Val) orelse ?IS_GPR(Val) ->
@@ -996,10 +1035,9 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpq(Val, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_Z};
+cond_emit(
     #state{available_regs = Avail} = State0,
     {RegOrTuple, '==', Val}
 ) when is_integer(Val) orelse ?IS_GPR(Val) ->
@@ -1011,18 +1049,14 @@ if_block_cond0(
         end,
     I1 = jit_x86_64_asm:movabsq(Val, Temp),
     I2 = jit_x86_64_asm:cmpq(Temp, Reg),
-    {RelocJZOffset, I3} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
-if_block_cond0(State0, {{free, Reg1}, '==', {free, Reg2}}) ->
-    % Compare two free registers
+    {State1, <<I1/binary, I2/binary>>, ?COND_Z};
+cond_emit(State0, {{free, Reg1}, '==', {free, Reg2}}) ->
     I1 = jit_x86_64_asm:cmpq(Reg2, Reg1),
-    {RelocJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
-    % Free both registers
     State1 = if_block_free_reg({free, Reg1}, State0),
     State2 = if_block_free_reg({free, Reg2}, State1),
-    {State2, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJNZOffset};
-if_block_cond0(
+    {State2, I1, ?COND_Z};
+cond_emit(
     State0,
     {'(int)', RegOrTuple, '==', Val}
 ) when is_integer(Val) orelse ?IS_GPR(Val) ->
@@ -1032,10 +1066,9 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:cmpl(Val, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_Z};
+cond_emit(
     State0,
     {'(bool)', RegOrTuple, '==', false}
 ) ->
@@ -1045,10 +1078,9 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testb(Reg, Reg),
-    {RelocJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJNZOffset};
-if_block_cond0(
+    {State1, I1, ?COND_Z};
+cond_emit(
     State0,
     {'(bool)', RegOrTuple, '!=', false}
 ) ->
@@ -1058,33 +1090,28 @@ if_block_cond0(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testb(Reg, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) ->
+    {State1, I1, ?COND_NZ};
+cond_emit(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testb(Mask, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
+    {State1, I1, ?COND_NZ};
+cond_emit(State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
     I1 = jit_x86_64_asm:andb(Mask, Reg),
     I2 = jit_x86_64_asm:cmpb(Val, Reg),
-    {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegTuple, State0),
-    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
-if_block_cond0(State0, {Reg, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
+    {State1, <<I1/binary, I2/binary>>, ?COND_NZ};
+cond_emit(State0, {Reg, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
     Temp = first_avail(State0#state.available_regs),
     I1 = jit_x86_64_asm:movq(Reg, Temp),
     I2 = jit_x86_64_asm:andb(Mask, Temp),
     I3 = jit_x86_64_asm:cmpb(Val, Temp),
-    {RelocJZOffset, I4} = jit_x86_64_asm:jz_rel8(1),
-    {State0, <<I1/binary, I2/binary, I3/binary, I4/binary>>,
-        byte_size(I1) + byte_size(I2) + byte_size(I3) + RelocJZOffset}.
+    {State0, <<I1/binary, I2/binary, I3/binary>>, ?COND_NZ}.
 
 -spec if_block_free_reg(x86_64_register() | {free, x86_64_register()}, state()) -> state().
 if_block_free_reg({free, Reg}, #state{available_regs = AvR0, used_regs = UR0} = State0) ->

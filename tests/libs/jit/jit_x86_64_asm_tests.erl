@@ -1311,3 +1311,71 @@ sarq_test_() ->
             <<16#49, 16#C1, 16#FB, 16#04>>, "sarq $0x4,%r11", jit_x86_64_asm:sarq(4, r11)
         )
     ].
+
+jcc_test_() ->
+    [
+        %% Short conditional jumps (2 bytes)
+        ?_assertAsmEqual(
+            <<16#74, 16#FE>>, "je .", jit_x86_64_asm:jcc(16#4, 0)
+        ),
+        ?_assertAsmEqual(
+            <<16#75, 16#0A>>, "jne .+12", jit_x86_64_asm:jcc(16#5, 12)
+        ),
+        ?_assertAsmEqual(
+            <<16#7C, 16#F4>>, "jl .-10", jit_x86_64_asm:jcc(16#C, -10)
+        ),
+        ?_assertAsmEqual(
+            <<16#7D, 16#0A>>, "jge .+12", jit_x86_64_asm:jcc(16#D, 12)
+        ),
+        ?_assertAsmEqual(
+            <<16#7E, 16#F4>>, "jle .-10", jit_x86_64_asm:jcc(16#E, -10)
+        ),
+        ?_assertAsmEqual(
+            <<16#7F, 16#0A>>, "jg .+12", jit_x86_64_asm:jcc(16#F, 12)
+        ),
+        %% Near conditional jumps (6 bytes)
+        ?_assertAsmEqual(
+            <<16#0F, 16#84, 16#FA, 16#00, 16#00, 16#00>>,
+            "je .+256",
+            jit_x86_64_asm:jcc(16#4, 256)
+        ),
+        ?_assertAsmEqual(
+            <<16#0F, 16#85, 16#FA, 16#00, 16#00, 16#00>>,
+            "jne .+256",
+            jit_x86_64_asm:jcc(16#5, 256)
+        ),
+        ?_assertAsmEqual(
+            <<16#0F, 16#8C, 16#FA, 16#00, 16#00, 16#00>>,
+            "jl .+256",
+            jit_x86_64_asm:jcc(16#C, 256)
+        )
+    ].
+
+jcc_rel32_test_() ->
+    [
+        %% jcc_rel32 returns {RelocOffset, Binary}
+        ?_assertEqual(
+            {2, <<16#0F, 16#84, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#4, 2)
+        ),
+        ?_assertEqual(
+            {2, <<16#0F, 16#85, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#5, 2)
+        ),
+        ?_assertEqual(
+            {2, <<16#0F, 16#8C, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#C, 2)
+        ),
+        ?_assertEqual(
+            {2, <<16#0F, 16#8D, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#D, 2)
+        ),
+        ?_assertEqual(
+            {2, <<16#0F, 16#8E, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#E, 2)
+        ),
+        ?_assertEqual(
+            {2, <<16#0F, 16#8F, 16#FC, 16#FF, 16#FF, 16#FF>>},
+            jit_x86_64_asm:jcc_rel32(16#F, 2)
+        )
+    ].

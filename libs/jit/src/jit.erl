@@ -4932,9 +4932,7 @@ handle_error_if(Cond, MMod, MSt0) ->
     end).
 
 cond_jump_to_label(Cond, Label, MMod, MSt0) ->
-    MMod:if_block(MSt0, Cond, fun(BSt0) ->
-        MMod:jump_to_label(BSt0, Label)
-    end).
+    MMod:cond_jump_to_label(MSt0, Cond, Label).
 
 term_binary_heap_size(Size, MMod) when is_integer(Size) ->
     case MMod:word_size() of

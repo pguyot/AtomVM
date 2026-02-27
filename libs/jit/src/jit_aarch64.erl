@@ -40,6 +40,7 @@
     jump_to_label/2,
     jump_to_continuation/2,
     jump_to_offset/2,
+    cond_jump_to_label/3,
     if_block/3,
     if_else_block/4,
     shift_right/3,
@@ -674,6 +675,9 @@ jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, T
     I1 = jit_aarch64_asm:b(Rel),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
+
+cond_jump_to_label(State, Cond, Label) ->
+    if_block(State, Cond, fun(S) -> jump_to_label(S, Label) end).
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.

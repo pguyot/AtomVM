@@ -76,6 +76,8 @@
     | cp
     %% Register holds the module index
     | module_index
+    %% Register holds ctx->e (y_regs base pointer)
+    | y_regs_ptr
     %% Unknown / clobbered
     | unknown.
 

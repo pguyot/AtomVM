@@ -64,7 +64,9 @@
     xorq/2,
     cqo/0,
     idivq/1,
-    sarq/2
+    sarq/2,
+    jcc/2,
+    jcc_rel32/2
 ]).
 
 -define(IS_SINT8_T(X), is_integer(X) andalso X >= -128 andalso X =< 127).
@@ -398,6 +400,19 @@ jmp_rel32(Offset) when ?IS_SINT32_T(Offset) ->
     % Adjust for 5-byte near jump instruction size
     AdjustedOffset = Offset - 5,
     {1, <<16#E9, AdjustedOffset:32/little>>}.
+
+%% Generic conditional jump: auto-selects short (2 bytes) or near (6 bytes)
+jcc(CondCode, Offset) when Offset >= -126 andalso Offset =< 129 ->
+    AdjustedOffset = Offset - 2,
+    <<(16#70 bor CondCode), AdjustedOffset>>;
+jcc(CondCode, Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    <<16#0F, (16#80 bor CondCode), AdjustedOffset:32/little>>.
+
+%% Generic near conditional jump with relocation placeholder (6 bytes)
+jcc_rel32(CondCode, Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, (16#80 bor CondCode), AdjustedOffset:32/little>>}.
 
 andq(Imm, DestReg) when ?IS_SINT8_T(Imm) andalso is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),

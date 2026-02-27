@@ -1694,8 +1694,21 @@ get_list_test() ->
         "   8:	6a86      	ldr	r6, [r0, #40]\n"
         "   a:	6075      	str	r5, [r6, #4]\n"
         "   c:	683d      	ldr	r5, [r7, #0]\n"
-        "   e:	6a86      	ldr	r6, [r0, #40]\n"
-        "  10:	6035      	str	r5, [r6, #0]"
+        "   e:	6035      	str	r5, [r6, #0]"
+    >>,
+    jit_tests_common:assert_stream(arm, Dump, Stream).
+
+y_to_y_move_caches_ctx_e_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:move_to_vm_register(State0, {y_reg, 0}, {y_reg, 1}),
+    State2 = ?BACKEND:move_to_vm_register(State1, {y_reg, 2}, {y_reg, 3}),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        "   0:	6a86      	ldr	r6, [r0, #40]\n"
+        "   2:	6837      	ldr	r7, [r6, #0]\n"
+        "   4:	6077      	str	r7, [r6, #4]\n"
+        "   6:	68b7      	ldr	r7, [r6, #8]\n"
+        "   8:	60f7      	str	r7, [r6, #12]"
     >>,
     jit_tests_common:assert_stream(arm, Dump, Stream).
 
