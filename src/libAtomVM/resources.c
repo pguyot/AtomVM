@@ -381,6 +381,9 @@ int enif_monitor_process(ErlNifEnv *env, void *obj, const ErlNifPid *target_pid,
     if (resource_type == NULL || resource_type->down == NULL) {
         return -1;
     }
+    if (UNLIKELY(((resource->ref_count & REFC_MONITOR_MASK) >> REFC_COUNT_BITS) >= REFC_MONITOR_MAX)) {
+        return -1;
+    }
 
     struct ResourceMonitor *resource_monitor = malloc(sizeof(struct ResourceMonitor));
     if (IS_NULL_PTR(resource_monitor)) {
@@ -406,6 +409,7 @@ int enif_monitor_process(ErlNifEnv *env, void *obj, const ErlNifPid *target_pid,
     }
 
     synclist_append(&resource_type->monitors, &resource_monitor->resource_list_head);
+    resource->ref_count += REFC_MONITOR_INC;
     mailbox_send_monitor_signal(target, MonitorSignal, monitor);
     globalcontext_get_process_unlock(env->global, target);
 
@@ -420,14 +424,14 @@ int enif_monitor_process(ErlNifEnv *env, void *obj, const ErlNifPid *target_pid,
 void resource_type_fire_monitor(struct ResourceType *resource_type, ErlNifEnv *env, int32_t process_id, uint64_t ref_ticks)
 {
     struct RefcBinary *refc = NULL;
+    bool is_dying = false;
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
     struct ListHead *item;
     LIST_FOR_EACH (item, monitors) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         if (monitor->ref_ticks == ref_ticks) {
-            // Resource still exists.
             refc = monitor->resource;
-            refc_binary_increment_refcount(refc);
+            is_dying = refc->ref_count & REFC_DYING_FLAG;
             list_remove(&monitor->resource_list_head);
             free(monitor);
             break;
@@ -436,12 +440,25 @@ void resource_type_fire_monitor(struct ResourceType *resource_type, ErlNifEnv *e
 
     synclist_unlock(&resource_type->monitors);
 
-    if (refc) {
+    if (refc == NULL) {
+        return;
+    }
+
+    if (!is_dying) {
         ErlNifMonitor monitor;
         monitor.ref_ticks = ref_ticks;
         monitor.resource_type = resource_type;
         resource_type->down(env, refc->data, &process_id, &monitor);
-        refc_binary_decrement_refcount(refc, env->global);
+    }
+
+    // Balance the increment from enif_monitor_process.
+    // Re-read dying: down callback may have released the resource.
+    refc->ref_count -= REFC_MONITOR_INC;
+    size_t val = refc->ref_count;
+    if ((val & REFC_DYING_FLAG) && !(val & REFC_MONITOR_MASK)) {
+        resource_unmark_serialized(refc->data, refc->resource_type);
+        synclist_remove(&env->global->refc_binaries, &refc->head);
+        refc_binary_destroy(refc, env->global);
     }
 }
 
@@ -477,13 +494,14 @@ int enif_demonitor_process(ErlNifEnv *env, void *obj, const ErlNifMonitor *mon)
     int32_t target_process_id = INVALID_PROCESS_ID;
     uint64_t ref_ticks = 0;
 
+    struct RefcBinary *resource = refc_binary_from_data(obj);
+
     // Phase 1: Find and remove from monitors list while holding monitors lock
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
     struct ListHead *item;
     LIST_FOR_EACH (item, monitors) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         if (monitor->ref_ticks == mon->ref_ticks) {
-            struct RefcBinary *resource = refc_binary_from_data(obj);
             if (resource->resource_type != mon->resource_type) {
                 synclist_unlock(&resource_type->monitors);
                 return -1;
@@ -492,6 +510,7 @@ int enif_demonitor_process(ErlNifEnv *env, void *obj, const ErlNifMonitor *mon)
             target_process_id = monitor->process_id;
             ref_ticks = monitor->ref_ticks;
             list_remove(&monitor->resource_list_head);
+            resource->ref_count -= REFC_MONITOR_INC;
             free(monitor);
             break;
         }
@@ -517,11 +536,14 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
 {
     struct ResourceType *resource_type = resource->resource_type;
 
-    // Phase 1: Collect monitors to destroy while holding monitors lock
+    // Phase 1: Mark dying and collect monitors while holding the lock.
+    // The dying flag prevents concurrent resource_type_fire_monitor from
+    // calling down on a resource whose ref_count has reached 0.
     struct ListHead to_signal;
     list_init(&to_signal);
 
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
+    resource->ref_count |= REFC_DYING_FLAG;
     struct ListHead *item;
     struct ListHead *tmp;
     MUTABLE_LIST_FOR_EACH (item, tmp, monitors) {
@@ -533,8 +555,7 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
     }
     synclist_unlock(&resource_type->monitors);
 
-    // Phase 2: Send demonitor signals without holding monitors lock
-    // This avoids lock order inversion with processes_table
+    // Phase 2: Send demonitor signals without holding monitors lock.
     MUTABLE_LIST_FOR_EACH (item, tmp, &to_signal) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         Context *target = globalcontext_get_process_lock(global, monitor->process_id);
@@ -543,6 +564,7 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
             globalcontext_get_process_unlock(global, target);
         }
         list_remove(&monitor->resource_list_head);
+        resource->ref_count -= REFC_MONITOR_INC;
         free(monitor);
     }
 }

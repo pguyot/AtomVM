@@ -65,24 +65,22 @@ void refc_binary_increment_refcount(struct RefcBinary *refc)
 
 bool refc_binary_decrement_refcount(struct RefcBinary *refc, struct GlobalContext *global)
 {
-    if (--refc->ref_count == 0) {
+    --refc->ref_count;
+    size_t new_val = refc->ref_count;
+    // Plain binaries use the full word; resources use the packed lower half.
+    bool reached_zero = refc->resource_type
+        ? (new_val & REFC_COUNT_MASK) == 0
+        : new_val == 0;
+    if (reached_zero) {
         if (refc->resource_type) {
             if (refc->resource_type->down) {
-                // There may be monitors associated with this resource.
+                // Sets dying flag and removes monitors from resource_type list.
                 destroy_resource_monitors(refc, global);
-                // After this point, the resource can no longer be found by
-                // resource_type_fire_monitor
-                // However, resource_type_fire_monitor may have incremented ref_count
-                // to call the monitor handler.
-                // So we check ref_count again. We're not affected by the ABA problem
-                // here as the resource cannot (should not) be monitoring while it is
-                // being destroyed, i.e. no resource monitor will be created now
-                if (UNLIKELY(refc->ref_count != 0)) {
+                // Defer destruction until all in-flight down callbacks complete.
+                if (refc->ref_count & REFC_MONITOR_MASK) {
                     return false;
                 }
             }
-            // Remove the resource from the list of serialized resources
-            // so it no longer can be unserialized.
             resource_unmark_serialized(refc->data, refc->resource_type);
         }
         synclist_remove(&global->refc_binaries, &refc->head);
@@ -127,7 +125,10 @@ term refc_binary_create_binary_info(Context *ctx)
         struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
         term t = term_alloc_tuple(2, &ctx->heap);
         term_put_tuple_element(t, 0, term_from_int(refc->size));
-        term_put_tuple_element(t, 1, term_from_int(refc->ref_count));
+        size_t count = refc->resource_type
+            ? (refc->ref_count & REFC_COUNT_MASK)
+            : refc->ref_count;
+        term_put_tuple_element(t, 1, term_from_int(count));
         ret = term_list_prepend(t, ret, &ctx->heap);
     }
     synclist_unlock(&ctx->global->refc_binaries);
@@ -202,11 +203,14 @@ COLD_FUNC void refc_binary_dump_info(Context *ctx)
     fprintf(stderr, "\nTop %d largest refc binaries:\n", TOP_N);
     for (size_t i = 0; i < TOP_N && top[i] != NULL; i++) {
         struct RefcBinary *refc = top[i];
+        size_t count = refc->resource_type
+            ? (refc->ref_count & REFC_COUNT_MASK)
+            : refc->ref_count;
         fprintf(stderr, "  [%zu] size=%d bytes (%.1f%%), refcount=%d",
             top_indices[i],
             (int) refc->size,
             (double) refc->size * 100.0 / (double) total_size,
-            (int) refc->ref_count);
+            (int) count);
 
         if (refc->resource_type) {
             fprintf(stderr, " [resource]");

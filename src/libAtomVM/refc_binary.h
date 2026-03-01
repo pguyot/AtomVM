@@ -55,11 +55,24 @@ typedef struct GlobalContext GlobalContext;
 struct RefcBinary
 {
     struct ListHead head;
+    // For resources (resource_type != NULL), this word is packed:
+    //   [dying:1 | monitor_refc:7/15 | ref_count:24/48]
+    // (7+24 on 32-bit, 15+48 on 64-bit).
+    // This avoids growing the struct on memory-constrained embedded targets.
+    // For plain refc binaries (resource_type == NULL), the full word is
+    // the reference count, giving 2^32-1 refs on 32-bit platforms.
     size_t ATOMIC ref_count;
     size_t size;
     struct ResourceType *resource_type; // Resource type or NULL for regular refc binaries.
     uint8_t data[];
 };
+
+#define REFC_COUNT_BITS (sizeof(size_t) * 6)
+#define REFC_COUNT_MASK (((size_t) 1 << REFC_COUNT_BITS) - 1)
+#define REFC_MONITOR_INC ((size_t) 1 << REFC_COUNT_BITS)
+#define REFC_DYING_FLAG ((size_t) 1 << (sizeof(size_t) * 8 - 1))
+#define REFC_MONITOR_MASK (~REFC_COUNT_MASK & ~REFC_DYING_FLAG)
+#define REFC_MONITOR_MAX ((REFC_DYING_FLAG >> REFC_COUNT_BITS) - 1)
 
 /**
  * @brief Create a reference-counted resource object outside of the process heap
