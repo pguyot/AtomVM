@@ -189,6 +189,7 @@ enum TrapAndLoadResult
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
+#define JIT_VARIANT_THUMB2 4
 
 #ifndef AVM_NO_JIT
 
@@ -204,7 +205,11 @@ enum TrapAndLoadResult
 
 #ifdef __arm__
 #define JIT_ARCH_TARGET JIT_ARCH_ARMV6M
+#ifdef __thumb2__
+#define JIT_JUMPTABLE_ENTRY_SIZE 6
+#else
 #define JIT_JUMPTABLE_ENTRY_SIZE 12
+#endif
 #endif
 
 #if defined(__riscv) && (__riscv_xlen == 32)
