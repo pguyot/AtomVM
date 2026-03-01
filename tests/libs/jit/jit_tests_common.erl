@@ -80,6 +80,8 @@ find_binutils(Arch) ->
         case Arch of
             riscv32 ->
                 Prefixes0 ++ toolchain_prefixes(riscv64);
+            arm_thumb2 ->
+                Prefixes0 ++ toolchain_prefixes(arm);
             _ ->
                 Prefixes0
         end,
@@ -109,6 +111,8 @@ find_binutils_from_list([{AsCmd, ObjdumpCmd} | Rest]) ->
 -spec get_asm_header(atom()) -> string().
 get_asm_header(arm) ->
     ".arch armv6-m\n.thumb\n.syntax unified\n";
+get_asm_header(arm_thumb2) ->
+    ".arch armv7-m\n.thumb\n.syntax unified\n";
 get_asm_header(aarch64) ->
     ".text\n";
 get_asm_header(x86_64) ->
@@ -121,6 +125,8 @@ get_asm_header(riscv64) ->
 %% Get architecture-specific assembler flags
 -spec get_as_flags(atom()) -> string().
 get_as_flags(arm) ->
+    "";
+get_as_flags(arm_thumb2) ->
     "";
 get_as_flags(aarch64) ->
     "";

@@ -55,7 +55,8 @@
     adr/2,
     push/1,
     pop/1,
-    reg_to_num/1
+    reg_to_num/1,
+    cond_to_num/1
 ]).
 
 -export_type([
