@@ -452,9 +452,9 @@ void resource_type_fire_monitor(struct ResourceType *resource_type, ErlNifEnv *e
     }
 
     // Balance the increment from enif_monitor_process.
-    // Re-read dying: down callback may have released the resource.
-    refc->ref_count -= REFC_MONITOR_INC;
-    size_t val = refc->ref_count;
+    // Capture the return value of the atomic RMW directly; a separate
+    // load would race with concurrent decrements.
+    size_t val = (refc->ref_count -= REFC_MONITOR_INC);
     if ((val & REFC_DYING_FLAG) && !(val & REFC_MONITOR_MASK)) {
         resource_unmark_serialized(refc->data, refc->resource_type);
         synclist_remove(&env->global->refc_binaries, &refc->head);

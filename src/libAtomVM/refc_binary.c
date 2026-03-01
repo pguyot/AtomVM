@@ -65,24 +65,32 @@ void refc_binary_increment_refcount(struct RefcBinary *refc)
 
 bool refc_binary_decrement_refcount(struct RefcBinary *refc, struct GlobalContext *global)
 {
-    --refc->ref_count;
-    size_t new_val = refc->ref_count;
-    // Plain binaries use the full word; resources use the packed lower half.
-    bool reached_zero = refc->resource_type
-        ? (new_val & REFC_COUNT_MASK) == 0
-        : new_val == 0;
-    if (reached_zero) {
-        if (refc->resource_type) {
-            if (refc->resource_type->down) {
-                // Sets dying flag and removes monitors from resource_type list.
-                destroy_resource_monitors(refc, global);
-                // Defer destruction until all in-flight down callbacks complete.
-                if (refc->ref_count & REFC_MONITOR_MASK) {
-                    return false;
-                }
-            }
-            resource_unmark_serialized(refc->data, refc->resource_type);
+    if (!refc->resource_type) {
+        // Plain refc binary: the full word is the reference count.
+        // Capture the return value of the atomic decrement directly;
+        // a separate load would race with concurrent decrements.
+        size_t new_val = --refc->ref_count;
+        if (new_val == 0) {
+            synclist_remove(&global->refc_binaries, &refc->head);
+            refc_binary_destroy(refc, global);
+            return true;
         }
+        return false;
+    }
+
+    // Resource: ref count is in the packed lower bits.
+    size_t new_val = --refc->ref_count;
+    if ((new_val & REFC_COUNT_MASK) == 0) {
+        if (refc->resource_type->down) {
+            // Sets dying flag and removes monitors from resource_type list.
+            destroy_resource_monitors(refc, global);
+            // Defer destruction until all in-flight down callbacks complete.
+            // Re-read: destroy_resource_monitors modified the monitor bits.
+            if (refc->ref_count & REFC_MONITOR_MASK) {
+                return false;
+            }
+        }
+        resource_unmark_serialized(refc->data, refc->resource_type);
         synclist_remove(&global->refc_binaries, &refc->head);
         refc_binary_destroy(refc, global);
         return true;
