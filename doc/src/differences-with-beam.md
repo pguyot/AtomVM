@@ -170,6 +170,30 @@ features such as node monitoring are not implemented yet.
 
 It is currently possible to connect a BEAM node with an AtomVM node.
 
+### System limits
+
+AtomVM targets embedded platforms with constrained resources. The following table compares key
+system limits between BEAM and AtomVM.
+
+| Limit | BEAM (64-bit) | BEAM (32-bit) | AtomVM (64-bit) | AtomVM (32-bit) |
+|---|---|---|---|---|
+| Processes | 2^18 default, up to 2^24 | 2^18 default, up to 2^24 | 2^31 - 1 | 2^28 - 1 |
+| Atoms | 2^20 (1,048,576) | 2^20 (1,048,576) | Memory-bounded | Memory-bounded |
+| Atom length | 255 characters | 255 characters | 255 characters | 255 characters |
+| Tuple elements | 2^24 - 1 | 2^24 - 1 | 2^24 - 1 | 2^24 - 1 |
+| Binary size | ~2 exabytes (2^61 - 1) | ~512 MB (2^29 - 1) | Memory-bounded | Memory-bounded |
+| Function arguments | 255 | 255 | 255 | 255 |
+| Binary ref count | Memory-bounded | Memory-bounded | 2^64 - 1 | 2^32 - 1 |
+| Resource ref count | Memory-bounded | Memory-bounded | 2^48 - 1 | 2^24 - 1 |
+| Resource monitors | Memory-bounded | Memory-bounded | 2^15 - 1 (32767) | 2^7 - 1 (127) |
+| Integer precision | Unlimited | Unlimited | 256 bits + sign | 256 bits + sign |
+| ETS tables | Memory-bounded | Memory-bounded | Memory-bounded | Memory-bounded |
+
+Resource reference counts and monitor counts are limited because they share a single machine word
+internally to avoid increasing memory usage per resource on embedded targets. Regular reference-counted
+binaries (non-resources) use the full word for the reference count.
+`enif_monitor_process` returns -1 when the per-resource monitor limit is reached.
+
 ## Known limitations of the standard library
 
 AtomVM standard library is extremely limited and while programs written for AtomVM can be run
