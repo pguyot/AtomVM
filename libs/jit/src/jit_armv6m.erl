@@ -66,6 +66,7 @@
     add/3,
     sub/3,
     mul/3,
+    mul_reg/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -3528,6 +3529,16 @@ mul(
     State1#state{
         stream = Stream2, available_regs = State1#state.available_regs bor TempBit, regs = Regs1
     }.
+
+%% Register-register multiply: DestReg = DestReg * SrcReg
+-spec mul_reg(state(), armv6m_register(), armv6m_register()) -> state().
+mul_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DestReg, SrcReg
+) ->
+    I = jit_armv6m_asm:muls(DestReg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%
 %% Analysis of AArch64 pattern and ARM Thumb mapping:
