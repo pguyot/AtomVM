@@ -67,6 +67,18 @@ struct RefcBinary
     uint8_t data[];
 };
 
+// Atomically subtract `delta` from ref_count and return the new value.
+// Needed because clang < 14 rejects capturing the result of _Atomic
+// compound assignment (`x -= n`) while prefix decrement (`--x`) works.
+static inline size_t refc_binary_sub_refcount(struct RefcBinary *refc, size_t delta)
+{
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+    return atomic_fetch_sub(&refc->ref_count, delta) - delta;
+#else
+    return (refc->ref_count -= delta);
+#endif
+}
+
 #define REFC_COUNT_BITS (sizeof(size_t) * 6)
 #define REFC_COUNT_MASK (((size_t) 1 << REFC_COUNT_BITS) - 1)
 #define REFC_MONITOR_INC ((size_t) 1 << REFC_COUNT_BITS)
