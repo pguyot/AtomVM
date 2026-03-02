@@ -55,6 +55,7 @@ jobs:
           - stm32f207zgt6
           - stm32u375rgt6
           - stm32g0b1ret6
+        jit: [""]
         include:
           - device: stm32f407vgt6
             max_size: 524288
@@ -98,6 +99,23 @@ jobs:
             max_size: 393216
             renode_platform: stm32g0b1.repl
             avm_address: "0x08060000"
+          # JIT-enabled builds for representative devices
+          # Cortex-M4 (Thumb-2)
+          - device: stm32f407vgt6
+            jit: "-DAVM_DISABLE_JIT=OFF"
+            max_size: 524288
+          # Cortex-M7 (Thumb-2)
+          - device: stm32h743vit6
+            jit: "-DAVM_DISABLE_JIT=OFF"
+            max_size: 524288
+          # Cortex-M0+ (ARMv6-M, no Thumb-2)
+          - device: stm32g0b1ret6
+            jit: "-DAVM_DISABLE_JIT=OFF"
+            max_size: 393216
+          # Cortex-M33 (Thumb-2)
+          - device: stm32l562qei6
+            jit: "-DAVM_DISABLE_JIT=OFF"
+            max_size: 393216
 
     steps:
     - uses: erlef/setup-beam@v1
@@ -128,23 +146,25 @@ jobs:
       run: git config --global --add safe.directory /__w/AtomVM/AtomVM
 
     - name: "Initialize CodeQL"
+      if: matrix.jit == ''
       uses: github/codeql-action/init@v4
       with:
         languages: 'cpp'
         build-mode: manual
         queries: +./code-queries/term-to-non-term-func.ql,./code-queries/non-term-to-term-func.ql,./code-queries/mismatched-atom-string-length.ql,./code-queries/mismatched-free-type.ql,./code-queries/term-use-after-gc.ql,./code-queries/allocations-exceeding-ensure-free.ql,./code-queries/allocations-without-ensure-free.ql
 
-    - name: "Build for ${{ matrix.device }}"
+    - name: "Build for ${{ matrix.device }}${{ matrix.jit != '' && ' (JIT)' || '' }}"
       shell: bash
       working-directory: ./src/platforms/stm32/
       run: |
         set -euo pipefail
         mkdir build
         cd build
-        cmake .. -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/arm-toolchain.cmake -DDEVICE=${{ matrix.device }}
+        cmake .. -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/arm-toolchain.cmake -DDEVICE=${{ matrix.device }} ${{ matrix.jit }}
         cmake --build .
 
     - name: "Check firmware size for ${{ matrix.device }}"
+      if: matrix.jit == ''
       shell: bash
       working-directory: ./src/platforms/stm32/build
       run: |
@@ -164,7 +184,7 @@ jobs:
         echo "OK: ${FLASH_USED} / ${MAX} bytes ($(( FLASH_USED * 100 / MAX ))% used)"
 
     - name: Build host AtomVM and test AVMs
-      if: matrix.renode_platform
+      if: matrix.renode_platform && matrix.jit == ''
       run: |
         set -euo pipefail
         mkdir build-host
@@ -173,7 +193,7 @@ jobs:
         cmake --build . -t stm32_boot_test stm32_gpio_test
 
     - name: Install Renode
-      if: matrix.renode_platform
+      if: matrix.renode_platform && matrix.jit == ''
       run: |
         set -euo pipefail
         mkdir -p renode-portable
@@ -183,7 +203,7 @@ jobs:
         pip install -r renode-portable/tests/requirements.txt
 
     - name: Run Renode boot test
-      if: matrix.renode_platform
+      if: matrix.renode_platform && matrix.jit == ''
       run: |
         LOCAL_REPL="src/platforms/stm32/tests/renode/${{ matrix.renode_platform }}"
         if [ -f "$LOCAL_REPL" ]; then
@@ -198,7 +218,7 @@ jobs:
           --variable PLATFORM:$PLATFORM
 
     - name: Run Renode GPIO test
-      if: matrix.renode_platform
+      if: matrix.renode_platform && matrix.jit == ''
       run: |
         LOCAL_REPL="src/platforms/stm32/tests/renode/${{ matrix.renode_platform }}"
         if [ -f "$LOCAL_REPL" ]; then

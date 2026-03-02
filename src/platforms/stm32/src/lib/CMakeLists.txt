@@ -33,7 +33,6 @@ set(HEADER_FILES
 
 set(SOURCE_FILES
     gpio_driver.c
-    jit_stream_flash.c
     platform_nifs.c
     sys.c
     ../../../../libAtomVM/portnifloader.c
@@ -64,3 +63,16 @@ target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} SYSTEM PUBLIC
 target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC
     "${CMAKE_BINARY_DIR}/generated"
 )
+
+if (NOT AVM_DISABLE_JIT)
+    target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_sources(
+        libAtomVM${PLATFORM_LIB_SUFFIX}
+        PRIVATE
+            jit_stream_flash_platform.c
+            ../../../../libAtomVM/jit_stream_flash.c
+            jit_stream_flash_platform.h
+            ../../../../libAtomVM/jit_stream_flash.h
+    )
+    target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,jit_stream_flash_get_nif")
+endif()

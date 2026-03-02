@@ -1,7 +1,7 @@
 /*
  * This file is part of AtomVM.
  *
- * Copyright 2025 by Paul Guyot <pguyot@kallisys.net>
+ * Copyright 2025-2026 by Paul Guyot <pguyot@kallisys.net>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,17 +18,10 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
-#ifndef AVM_NO_JIT
+// This file is replaced by the common jit_stream_flash.c when JIT is enabled.
+// See CMakeLists.txt for the conditional inclusion.
 
-#include "context.h"
-#include "jit.h"
-#include "term.h"
-
-ModuleNativeEntryPoint jit_stream_entry_point(Context *ctx, term jit_stream)
-{
-    UNUSED(ctx);
-    UNUSED(jit_stream);
-    return NULL;
-}
-
+#ifdef AVM_NO_JIT
+// Provide a translation unit even when JIT is completely disabled
+typedef int make_iso_compilers_happy;
 #endif
