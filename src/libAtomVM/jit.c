@@ -2167,8 +2167,8 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
         debug_info_size, debug_line_size, debug_abbrev_size, debug_str_size, debug_aranges_size);
 
     // Section name strings: "\0.text\0.symtab\0.strtab\0.shstrtab\0.debug_info\0.debug_line\0.debug_abbrev\0.debug_str\0.debug_aranges\0"
-    const char *section_names = "\0.text\0.symtab\0.strtab\0.shstrtab\0.debug_info\0.debug_line\0.debug_abbrev\0.debug_str\0.debug_aranges\0";
-    size_t shstrtab_size = 103; // strlen of section_names
+    static const char section_names[] = "\0.text\0.symtab\0.strtab\0.shstrtab\0.debug_info\0.debug_line\0.debug_abbrev\0.debug_str\0.debug_aranges\0";
+    size_t shstrtab_size = sizeof(section_names) - 1; // exclude compiler-added trailing NUL
 
     // Count how many sections we have (null + .text + .symtab + .strtab + .shstrtab + debug sections)
     int section_count = 5; // Base sections
