@@ -36,6 +36,7 @@ set(ERLANG_MODULES
     erts_debug
     ets
     file
+    filename
     gen
     gen_event
     gen_server
