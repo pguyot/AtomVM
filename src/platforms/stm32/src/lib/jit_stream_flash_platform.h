@@ -29,12 +29,45 @@
 extern "C" {
 #endif
 
-// STM32 flash constants for JIT stream buffering.
-// The actual flash erase/program granularity varies by STM32 family
-// (2KB pages on L4/G0/G4/WB, 8KB on H5/U5, 16-128KB sectors on F4/F7,
-// 128KB sectors on H7), but these constants are used by the common
-// jit_stream_flash.c for page buffering and sector management.
-#define FLASH_SECTOR_SIZE 4096
+/*
+ * FLASH_SECTOR_SIZE defines the logical erase unit for the common
+ * jit_stream_flash.c code. It must match the hardware erase granularity
+ * of the STM32 family, because the common code assumes that erasing at an
+ * address erases exactly FLASH_SECTOR_SIZE bytes.
+ *
+ * For sector-based families (F2/F4/F7/H7) with large erase units
+ * (128-256KB), the common code's malloc(FLASH_SECTOR_SIZE) sector
+ * buffer requires a significant heap allocation that may be impractical
+ * on devices with limited RAM.
+ */
+#if defined(STM32F2XX) || defined(STM32F4XX)
+/* Variable sectors: JIT area is in the 128KB sector region */
+#define FLASH_SECTOR_SIZE (128 * 1024)
+#elif defined(STM32F7XX)
+/* Variable sectors: JIT area is in the 256KB sector region */
+#define FLASH_SECTOR_SIZE (256 * 1024)
+#elif defined(STM32H7XX)
+/* Uniform 128KB sectors */
+#define FLASH_SECTOR_SIZE (128 * 1024)
+#elif defined(STM32H5XX) || defined(STM32U3XX) || defined(STM32U5XX)
+/* Uniform 8KB sectors */
+#define FLASH_SECTOR_SIZE (8 * 1024)
+#elif defined(STM32L5XX) || defined(STM32WBXX)
+/* Uniform 4KB pages */
+#define FLASH_SECTOR_SIZE (4 * 1024)
+#elif defined(STM32G0XX) || defined(STM32G4XX) || defined(STM32L4XX)
+/* Uniform 2KB pages */
+#define FLASH_SECTOR_SIZE (2 * 1024)
+#else
+#error "Unknown STM32 family for JIT flash sector size"
+#endif
+
+/*
+ * FLASH_PAGE_SIZE is the write buffer size used by jit_stream_flash.c.
+ * It must be >= the hardware program unit (32 bytes on H7, 16 bytes on
+ * H5/U3/U5, 8 bytes on G0/G4/L4/L5/WB, 4 bytes on F2/F4/F7).
+ * 256 bytes is a common value that works for all families.
+ */
 #define FLASH_PAGE_SIZE 256
 
 #ifdef __cplusplus
