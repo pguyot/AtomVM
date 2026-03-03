@@ -517,8 +517,8 @@ test_sublist3() ->
     ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 3, 10), [c, d, e]),
     ?ASSERT_MATCH(lists:sublist([a, b, c], 1, 0), []),
     ?ASSERT_MATCH(lists:sublist([], 1, 0), []),
-    ?ASSERT_ERROR(lists:sublist([a, b, c], 0, 1), badarg),
-    ?ASSERT_ERROR(lists:sublist([a, b, c], 1, -1), badarg),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 0, 1), function_clause),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 1, -1), function_clause),
     ?ASSERT_ERROR(lists:sublist([a, b, c], 5, 1), function_clause),
     ok.
 

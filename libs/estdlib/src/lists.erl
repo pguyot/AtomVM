@@ -858,9 +858,7 @@ sublist0([H | Tail], Len) -> [H | sublist0(Tail, Len - 1)].
 %%-----------------------------------------------------------------------------
 -spec sublist(List :: [Elem], Start :: pos_integer(), Len :: non_neg_integer()) -> [Elem].
 sublist(List, Start, Len) when is_integer(Start), Start >= 1, is_integer(Len), Len >= 0 ->
-    sublist(nthtail(Start - 1, List), Len);
-sublist(List, Start, Len) ->
-    erlang:error(badarg, [List, Start, Len]).
+    sublist(nthtail(Start - 1, List), Len).
 
 %%-----------------------------------------------------------------------------
 %% @param   List a non-empty list
