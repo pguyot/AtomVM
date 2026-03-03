@@ -67,6 +67,8 @@
     dropwhile/2,
     duplicate/2,
     sublist/2,
+    sublist/3,
+    droplast/1,
     append/1,
     append/2,
     min/1,
@@ -844,6 +846,31 @@ sublist(List, Len) when is_integer(Len) andalso Len >= 0 ->
 sublist0([], _Len) -> [];
 sublist0(_, 0) -> [];
 sublist0([H | Tail], Len) -> [H | sublist0(Tail, Len - 1)].
+
+%%-----------------------------------------------------------------------------
+%% @param   List  list to take the sublist from
+%% @param   Start 1-based start position
+%% @param   Len   maximum number of elements to return
+%% @returns a sublist of `List' starting at `Start' with at most `Len' elements
+%% @doc     Return a sublist starting at `Start' (1-based) with at most `Len' elements.
+%%          It is not an error for `Start+Len' to exceed the length of `List'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec sublist(List :: [Elem], Start :: pos_integer(), Len :: non_neg_integer()) -> [Elem].
+sublist(List, Start, Len) when is_integer(Start), Start >= 1, is_integer(Len), Len >= 0 ->
+    sublist(nthtail(Start - 1, List), Len);
+sublist(List, Start, Len) ->
+    erlang:error(badarg, [List, Start, Len]).
+
+%%-----------------------------------------------------------------------------
+%% @param   List a non-empty list
+%% @returns all elements of `List' except the last
+%% @doc     Drop the last element of a list.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec droplast(List :: nonempty_list(T)) -> [T].
+droplast([_]) -> [];
+droplast([H | T]) -> [H | droplast(T)].
 
 %%-----------------------------------------------------------------------------
 %% @param   ListOfLists a list of lists to make the general list from

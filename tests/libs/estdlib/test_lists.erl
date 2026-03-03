@@ -58,6 +58,8 @@ test() ->
     ok = test_append(),
     ok = test_min(),
     ok = test_max(),
+    ok = test_sublist3(),
+    ok = test_droplast(),
     ok.
 
 test_nth() ->
@@ -507,6 +509,24 @@ test_max() ->
     ?ASSERT_MATCH(lists:max([a, b, c]), c),
     ?ASSERT_MATCH(lists:max([c, b, a]), c),
     ?ASSERT_ERROR(lists:max([]), function_clause),
+    ok.
+
+test_sublist3() ->
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 1, 3), [a, b, c]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 2, 3), [b, c, d]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 3, 10), [c, d, e]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c], 1, 0), []),
+    ?ASSERT_MATCH(lists:sublist([], 1, 0), []),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 0, 1), badarg),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 1, -1), badarg),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 5, 1), function_clause),
+    ok.
+
+test_droplast() ->
+    ?ASSERT_MATCH(lists:droplast([a]), []),
+    ?ASSERT_MATCH(lists:droplast([a, b]), [a]),
+    ?ASSERT_MATCH(lists:droplast([a, b, c]), [a, b]),
+    ?ASSERT_ERROR(lists:droplast([]), function_clause),
     ok.
 
 id(X) ->
