@@ -39,6 +39,7 @@
 #include <string.h>
 
 #include "nifs.h"
+#include "portnifloader.h"
 
 /*
  * Per-family flash programming configuration.
