@@ -70,7 +70,10 @@
     call_func_ptr/3,
     return_labels_and_lines/2,
     add_label/2,
-    add_label/3
+    add_label/3,
+    set_type_tracking/3,
+    get_type_tracking/2,
+    get_regs_tracking/1
 ]).
 
 -ifdef(JIT_DWARF).
@@ -3205,3 +3208,8 @@ add_label(
     };
 add_label(#state{labels = Labels} = State, Label, Offset) ->
     State#state{labels = [{Label, Offset} | Labels]}.
+
+%% @doc No-op type tracking stubs for backends without register tracking.
+get_regs_tracking(_State) -> undefined.
+set_type_tracking(State, _VmLoc, _Type) -> State.
+get_type_tracking(_State, _VmLoc) -> unknown.
