@@ -232,9 +232,9 @@ call_ext_only_test() ->
             "  14:	ff e0                	jmpq   *%rax\n"
             "  16:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
             "  1a:	48 c7 c2 02 00 00 00 	mov    $0x2,%rdx\n"
-            "  21:	48 c7 c1 02 00 00 00 	mov    $0x2,%rcx\n"
-            "  28:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
-            "  2f:	ff e0                	jmpq   *%rax\n"
+            "  21:	48 89 d1             	mov    %rdx,%rcx\n"
+            "  24:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
+            "  2b:	ff e0                	jmpq   *%rax\n"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
@@ -253,9 +253,9 @@ call_ext_last_test() ->
             "  14:	ff e0                	jmpq   *%rax\n"
             "  16:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
             "  1a:	48 c7 c2 02 00 00 00 	mov    $0x2,%rdx\n"
-            "  21:	48 c7 c1 02 00 00 00 	mov    $0x2,%rcx\n"
-            "  28:	49 c7 c0 0a 00 00 00 	mov    $0xa,%r8\n"
-            "  2f:	ff e0                	jmpq   *%rax\n"
+            "  21:	48 89 d1             	mov    %rdx,%rcx\n"
+            "  24:	49 c7 c0 0a 00 00 00 	mov    $0xa,%r8\n"
+            "  2b:	ff e0                	jmpq   *%rax\n"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
