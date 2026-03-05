@@ -1220,7 +1220,7 @@ set_args(
         end
      || Arg <- Args
     ],
-    SetArgsCode = set_args0(Args1, ArgsRegs, ParamRegs, AvailableScratchGP, []),
+    SetArgsCode = set_args0(Args1, ArgsRegs, ParamRegs, AvailableScratchGP, #{}, []),
     Stream1 = StreamModule:append(Stream0, SetArgsCode),
     NewUsedRegs = lists:foldl(
         fun
@@ -1283,51 +1283,64 @@ exchange_reg(Args, ArgsRegs, Reg1, Reg2) ->
     ),
     {NewArgs, NewArgsRegs}.
 
-set_args0([], [], [], _AvailGP, Acc) ->
+set_args0([], [], [], _AvailGP, _LoadedImm, Acc) ->
     list_to_binary(lists:reverse(Acc));
-set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc) ->
-    set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, Acc);
-set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, Acc) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, Acc);
+set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc) ->
+    set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
+set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
 set_args0(
     [jit_state | ArgsT],
     [?JITSTATE_REG | ArgsRegs],
     [?JITSTATE_REG | ParamRegs],
     AvailGP,
+    LoadedImm,
     Acc
 ) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, Acc);
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
 set_args0(
-    [jit_state | ArgsT], [?JITSTATE_REG | ArgsRegs], [ParamReg | ParamRegs], AvailGP, Acc
+    [jit_state | ArgsT], [?JITSTATE_REG | ArgsRegs], [ParamReg | ParamRegs], AvailGP, LoadedImm, Acc
 ) ->
     false = lists:member(ParamReg, ArgsRegs),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [
         jit_x86_64_asm:movq(?JITSTATE_REG, ParamReg) | Acc
     ]);
 % ctx is special as we need it to access x_reg/y_reg/fp_reg
-set_args0([Arg | ArgsT], [_ArgReg | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, Acc) ->
+set_args0([Arg | ArgsT], [_ArgReg | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
     false = lists:member(?CTX_REG, ArgsRegs),
     J = set_args1(Arg, ?CTX_REG),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [J | Acc]);
+    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [J | Acc]);
 set_args0(
     [Arg | ArgsT],
     [ArgReg | ArgsRegs],
     [ParamReg | ParamRegs],
     AvailGP,
+    LoadedImm,
     Acc
 ) ->
     case lists:member(ParamReg, ArgsRegs) of
         false ->
             % Normal case: ParamReg is free, just move Arg to ParamReg
-            J = set_args1(Arg, ParamReg),
-            set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, [J | Acc]);
+            case is_integer(Arg) andalso maps:find(Arg, LoadedImm) of
+                {ok, SourceReg} ->
+                    J = jit_x86_64_asm:movq(SourceReg, ParamReg),
+                    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [J | Acc]);
+                _ ->
+                    J = set_args1(Arg, ParamReg),
+                    NewLoadedImm =
+                        case is_integer(Arg) of
+                            true -> LoadedImm#{Arg => ParamReg};
+                            false -> LoadedImm
+                        end,
+                    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, NewLoadedImm, [J | Acc])
+            end;
         true ->
             % ParamReg is occupied by another argument that will go elsewhere
             % Use xchg to swap ArgReg and ParamReg
             % After xchg, the value from Arg (which was in ArgReg) is now in ParamReg
             I = jit_x86_64_asm:xchgq(ArgReg, ParamReg),
             {NewArgsT, NewArgsRegs} = exchange_reg(ArgsT, ArgsRegs, ParamReg, ArgReg),
-            set_args0(NewArgsT, NewArgsRegs, ParamRegs, AvailGP, [I | Acc])
+            set_args0(NewArgsT, NewArgsRegs, ParamRegs, AvailGP, LoadedImm, [I | Acc])
     end.
 
 set_args1(Reg, Reg) ->
