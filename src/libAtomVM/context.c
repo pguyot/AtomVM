@@ -226,6 +226,11 @@ void context_destroy(Context *ctx)
         signal_message = next;
     }
 
+    // Delete ETS tables owned by the dying process before sending monitor
+    // messages, so monitored processes see the table as gone when they
+    // receive the DOWN message, matching BEAM behavior.
+    ets_delete_owned_tables(&ctx->global->ets, ctx->process_id, ctx->global);
+
     // When monitor message is sent, process is no longer in the table
     // and is no longer registered either.
     struct Monitor *remaining_monitors = context_monitors_handle_terminate(ctx);
@@ -290,8 +295,6 @@ void context_destroy(Context *ctx)
     // Here, the context can no longer be acquired with
     // globalcontext_get_process_lock, so it's safe to free the pointer.
     free(ctx->platform_data);
-
-    ets_delete_owned_tables(&ctx->global->ets, ctx->process_id, ctx->global);
 
     free(ctx);
 }
