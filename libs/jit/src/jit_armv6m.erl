@@ -64,13 +64,18 @@
     add/3,
     sub/3,
     mul/3,
+    mul_reg/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
     call_func_ptr/3,
     return_labels_and_lines/2,
     add_label/2,
-    add_label/3
+    add_label/3,
+    set_type_tracking/3,
+    get_type_tracking/2,
+    get_regs_tracking/1,
+    xor_/3
 ]).
 
 -include_lib("jit.hrl").
@@ -139,7 +144,9 @@
     used_regs :: non_neg_integer(),
     labels :: [{integer() | reference(), integer()}],
     variant :: non_neg_integer(),
-    literal_pool :: [{non_neg_integer(), armv6m_register(), non_neg_integer()}]
+    literal_pool :: [{non_neg_integer(), armv6m_register(), non_neg_integer()}],
+    %% Register value tracking for optimization
+    regs :: jit_regs:regs()
 }).
 
 -type state() :: #state{}.
@@ -278,7 +285,8 @@ new(Variant, StreamModule, Stream) ->
         used_regs = 0,
         labels = [],
         variant = Variant,
-        literal_pool = []
+        literal_pool = [],
+        regs = jit_regs:new()
     }.
 
 %%-----------------------------------------------------------------------------
@@ -663,8 +671,8 @@ call_primitive_last(
     % registers used for parameters
     ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
     ArgsRegs = args_regs(Args),
-    ParamMask = regs_to_mask(ParamRegs),
-    ArgsMask = regs_to_mask(ArgsRegs),
+    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
+    ArgsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
     ScratchMask = ?AVAILABLE_REGS_MASK band (bnot (ArgsMask bor ParamMask)),
     Temp = first_avail(ScratchMask),
     TempBit = reg_bit(Temp),
@@ -719,7 +727,8 @@ call_primitive_last(
         end,
     State5 = State4#state{
         available_regs = ?AVAILABLE_REGS_MASK,
-        used_regs = 0
+        used_regs = 0,
+        regs = jit_regs:invalidate_all(State4#state.regs)
     },
     flush_literal_pool(State5).
 
@@ -775,7 +784,8 @@ return_if_not_equal_to_ctx(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     {free, Reg}
 ) ->
@@ -791,10 +801,12 @@ return_if_not_equal_to_ctx(
     I2 = jit_armv6m_asm:bcc(eq, 2 + byte_size(I3) + byte_size(I4)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
     RegBit = reg_bit(Reg),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{
         stream = Stream1,
         available_regs = AvailableRegs0 bor RegBit,
-        used_regs = UsedRegs0 band (bnot RegBit)
+        used_regs = UsedRegs0 band (bnot RegBit),
+        regs = Regs1
     }.
 
 %%-----------------------------------------------------------------------------
@@ -1034,7 +1046,9 @@ if_block(
         Stream2,
         Replacements
     ),
-    merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs);
+    State3 = merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs),
+    MergedRegs = jit_regs:merge(State1#state.regs, State2#state.regs),
+    State3#state{regs = MergedRegs};
 if_block(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     Cond,
@@ -1049,7 +1063,9 @@ if_block(
     BranchOffset = OffsetAfter - (Offset + BranchInstrOffset),
     NewBranchInstr = jit_armv6m_asm:bcc(CC, BranchOffset),
     Stream3 = StreamModule:replace(Stream2, Offset + BranchInstrOffset, NewBranchInstr),
-    merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs).
+    State3 = merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs),
+    MergedRegs = jit_regs:merge(State1#state.regs, State2#state.regs),
+    State3#state{regs = MergedRegs}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit an if else block, i.e. emit a test of a condition and
@@ -1088,7 +1104,8 @@ if_else_block(
     StateElse = State2#state{
         stream = Stream4,
         used_regs = State1#state.used_regs,
-        available_regs = State1#state.available_regs
+        available_regs = State1#state.available_regs,
+        regs = State1#state.regs
     },
     State3 = BlockFalseFn(StateElse),
     Stream5 = State3#state.stream,
@@ -1097,7 +1114,9 @@ if_else_block(
     FinalJumpOffset = OffsetFinal - ElseJumpOffset,
     NewElseJumpInstr = jit_armv6m_asm:b(FinalJumpOffset),
     Stream6 = StreamModule:replace(Stream5, ElseJumpOffset, NewElseJumpInstr),
-    merge_used_regs(State3#state{stream = Stream6}, State2#state.used_regs).
+    State4 = merge_used_regs(State3#state{stream = Stream6}, State2#state.used_regs),
+    MergedRegs = jit_regs:merge(State2#state.regs, State3#state.regs),
+    State4#state{regs = MergedRegs}.
 
 -spec if_block_cond(state(), condition()) ->
     {
@@ -1145,7 +1164,8 @@ if_block_cond(
     Code = <<I1/binary, I2/binary>>,
     Stream2 = StreamModule:append(Stream1, Code),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, le, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
@@ -1201,7 +1221,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFF:16>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, available_regs = Available} = State0,
@@ -1221,7 +1242,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream1},
+    Regs2b = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream1, regs = Regs2b},
     {State3, CC, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
@@ -1328,7 +1350,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFF:16>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2c = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2c},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State0,
@@ -1349,7 +1372,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFF:16>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2d = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2d},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{
@@ -1372,7 +1396,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream1},
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State2 = State1#state{stream = Stream1, regs = Regs1},
     {State2, CC, byte_size(I1)};
 if_block_cond(
     #state{
@@ -1395,7 +1420,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream1},
+    Regs1b = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State2 = State1#state{stream = Stream1, regs = Regs1b},
     {State2, CC, byte_size(I1)};
 if_block_cond(
     #state{
@@ -1430,7 +1456,8 @@ if_block_cond(
     Code = <<TestCode/binary, 16#FFFF:16>>,
     Stream1 = StreamModule:append(Stream0, Code),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream1},
+    Regs1c = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State2 = State1#state{stream = Stream1, regs = Regs1c},
     {State2, BranchCond, byte_size(TestCode)};
 if_block_cond(
     #state{
@@ -1448,7 +1475,8 @@ if_block_cond(
     CC = eq,
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, 16#FFFF:16>>),
-    State1 = State0#state{stream = Stream1},
+    Regs1d = jit_regs:invalidate_reg(State0#state.regs, Temp),
+    State1 = State0#state{stream = Stream1, regs = Regs1d},
     {State1, CC, byte_size(I1) + byte_size(I2)};
 if_block_cond(
     #state{
@@ -1492,8 +1520,9 @@ if_block_cond(
     CC = eq,
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream4 = StreamModule:append(Stream3, <<16#FFFF:16>>),
+    Regs3 = jit_regs:invalidate_reg(State2#state.regs, Temp),
     State3 = State2#state{
-        stream = Stream4, available_regs = State2#state.available_regs bor TempBit
+        stream = Stream4, available_regs = State2#state.available_regs bor TempBit, regs = Regs3
     },
     {State3, CC, OffsetAfter - OffsetBefore};
 if_block_cond(
@@ -1560,18 +1589,22 @@ merge_used_regs(#state{used_regs = UR} = State, OtherUR) ->
 %%-----------------------------------------------------------------------------
 -spec shift_right(#state{}, maybe_free_armv6m_register(), non_neg_integer()) ->
     {#state{}, armv6m_register()}.
-shift_right(#state{stream_module = StreamModule, stream = Stream0} = State, {free, Reg}, Shift) when
+shift_right(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, {free, Reg}, Shift
+) when
     ?IS_GPR(Reg) andalso is_integer(Shift)
 ->
     I = jit_armv6m_asm:lsrs(Reg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
-    {State#state{stream = Stream1}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = Regs1}, Reg};
 shift_right(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = UR
+        used_regs = UR,
+        regs = Regs0
     } = State,
     Reg,
     Shift
@@ -1582,9 +1615,13 @@ shift_right(
     Bit = reg_bit(ResultReg),
     I = jit_armv6m_asm:lsrs(ResultReg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
     {
         State#state{
-            stream = Stream1, available_regs = Avail band (bnot Bit), used_regs = UR bor Bit
+            stream = Stream1,
+            available_regs = Avail band (bnot Bit),
+            used_regs = UR bor Bit,
+            regs = Regs1
         },
         ResultReg
     }.
@@ -1597,12 +1634,15 @@ shift_right(
 %% @param Shift number of bits to shift
 %% @return new state
 %%-----------------------------------------------------------------------------
-shift_left(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, Shift) when
+shift_left(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Shift
+) when
     is_atom(Reg)
 ->
     I = jit_armv6m_asm:lsls(Reg, Reg, Shift),
     Stream1 = StreamModule:append(Stream0, I),
-    State#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a call to a function pointer with arguments. This function converts
@@ -1841,11 +1881,13 @@ call_func_ptr(
 
     ResultRegBit = reg_bit(ResultReg),
     AvailableRegs3Mask = (AvailableRegs1Mask band (bnot ResultRegBit)) band ?AVAILABLE_REGS_MASK,
+    Regs1 = jit_regs:invalidate_all(State0#state.regs),
     {
         State4#state{
             stream = Stream8,
             available_regs = AvailableRegs3Mask,
-            used_regs = UsedRegs2Mask
+            used_regs = UsedRegs2Mask,
+            regs = Regs1
         },
         ResultReg
     }.
@@ -2107,29 +2149,50 @@ set_registers_args1(State, Value, Reg, _StackOffset) when ?IS_SIGNED_OR_UNSIGNED
 %%-----------------------------------------------------------------------------
 -spec move_to_vm_register(state(), Src :: value() | vm_register(), Dest :: vm_register()) ->
     state().
+move_to_vm_register(#state{regs = Regs0} = State, Src, Dest) ->
+    VmLoc = vm_dest_to_contents(Dest),
+    Regs1 =
+        case VmLoc of
+            unknown -> Regs0;
+            _ -> jit_regs:invalidate_vm_loc(Regs0, VmLoc)
+        end,
+    State1 = move_to_vm_register_emit(State#state{regs = Regs1}, Src, Dest),
+    case {Src, VmLoc} of
+        {Reg, Contents} when is_atom(Reg), Contents =/= unknown ->
+            #state{regs = Regs2} = State1,
+            State1#state{regs = jit_regs:set_contents(Regs2, Reg, Contents)};
+        _ ->
+            State1
+    end.
+
 % Native register to VM register
-move_to_vm_register(State0, Src, {x_reg, extra}) when is_atom(Src) ->
+move_to_vm_register_emit(State0, Src, {x_reg, extra}) when is_atom(Src) ->
     I1 = jit_armv6m_asm:str(Src, ?X_REG(?MAX_REG)),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
-move_to_vm_register(State0, Src, {x_reg, X}) when is_atom(Src) ->
+move_to_vm_register_emit(State0, Src, {x_reg, X}) when is_atom(Src) ->
     I1 = jit_armv6m_asm:str(Src, ?X_REG(X)),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
-move_to_vm_register(State0, Src, {ptr, Reg}) when is_atom(Src) ->
+move_to_vm_register_emit(State0, Src, {ptr, Reg}) when is_atom(Src) ->
     I1 = jit_armv6m_asm:str(Src, {Reg, 0}),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
-move_to_vm_register(#state{available_regs = Avail} = State0, Src, {y_reg, Y}) when
+move_to_vm_register_emit(
+    #state{available_regs = Avail, regs = Regs0} = State0, Src, {y_reg, Y}
+) when
     is_atom(Src)
 ->
     Temp1 = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp1)),
     Code = str_y_reg(Src, Y, Temp1, AT),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, Code),
-    State0#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp1),
+    State0#state{stream = Stream1, regs = Regs1};
 % Source is an integer to y_reg (optimized: ldr first, then movs)
-move_to_vm_register(#state{available_regs = Avail} = State0, N, {y_reg, Y}) when
+move_to_vm_register_emit(
+    #state{available_regs = Avail, regs = Regs0} = State0, N, {y_reg, Y}
+) when
     is_integer(N), N >= 0, N =< 255
 ->
     Temp1 = first_avail(Avail),
@@ -2139,9 +2202,10 @@ move_to_vm_register(#state{available_regs = Avail} = State0, N, {y_reg, Y}) when
     I1 = jit_armv6m_asm:movs(Temp2, N),
     YCode = str_y_reg(Temp2, Y, Temp1, AT),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, <<I1/binary, YCode/binary>>),
-    State0#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp1), Temp2),
+    State0#state{stream = Stream1, regs = Regs1};
 % Source is an integer (0-255 for movs, negative values need different handling)
-move_to_vm_register(#state{available_regs = AR0} = State0, N, Dest) when
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, N, Dest) when
     is_integer(N), N >= 0, N =< 255
 ->
     Temp = first_avail(AR0),
@@ -2149,47 +2213,53 @@ move_to_vm_register(#state{available_regs = AR0} = State0, N, Dest) when
     I1 = jit_armv6m_asm:movs(Temp, N),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State1 = move_to_vm_register(State0#state{stream = Stream1, available_regs = AT}, Temp, Dest),
-    State1#state{available_regs = AR0};
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{available_regs = AR0, regs = Regs1};
 %% Handle large values using simple literal pool (branch-over pattern)
-move_to_vm_register(#state{available_regs = AR0} = State0, N, Dest) when
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, N, Dest) when
     is_integer(N)
 ->
     Temp = first_avail(AR0),
     AT = AR0 band (bnot reg_bit(Temp)),
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, N),
     State2 = move_to_vm_register(State1, Temp, Dest),
-    State2#state{available_regs = AR0};
+    Regs1 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State2#state{available_regs = AR0, regs = Regs1};
 % Source is a VM register
-move_to_vm_register(#state{available_regs = AR0} = State0, {x_reg, extra}, Dest) ->
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, {x_reg, extra}, Dest) ->
     Temp = first_avail(AR0),
     AT = AR0 band (bnot reg_bit(Temp)),
     I1 = jit_armv6m_asm:ldr(Temp, ?X_REG(?MAX_REG)),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State1 = move_to_vm_register(State0#state{stream = Stream1, available_regs = AT}, Temp, Dest),
-    State1#state{available_regs = AR0};
-move_to_vm_register(#state{available_regs = AR0} = State0, {x_reg, X}, Dest) ->
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{available_regs = AR0, regs = Regs1};
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, {x_reg, X}, Dest) ->
     Temp = first_avail(AR0),
     AT = AR0 band (bnot reg_bit(Temp)),
     I1 = jit_armv6m_asm:ldr(Temp, ?X_REG(X)),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State1 = move_to_vm_register(State0#state{stream = Stream1, available_regs = AT}, Temp, Dest),
-    State1#state{available_regs = AR0};
-move_to_vm_register(#state{available_regs = AR0} = State0, {ptr, Reg}, Dest) ->
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{available_regs = AR0, regs = Regs1};
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, {ptr, Reg}, Dest) ->
     Temp = first_avail(AR0),
     AT = AR0 band (bnot reg_bit(Temp)),
     I1 = jit_armv6m_asm:ldr(Temp, {Reg, 0}),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State1 = move_to_vm_register(State0#state{stream = Stream1, available_regs = AT}, Temp, Dest),
-    State1#state{available_regs = AR0};
-move_to_vm_register(#state{available_regs = AR0} = State0, {y_reg, Y}, Dest) ->
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{available_regs = AR0, regs = Regs1};
+move_to_vm_register_emit(#state{available_regs = AR0} = State0, {y_reg, Y}, Dest) ->
     Temp = first_avail(AR0),
     AT = AR0 band (bnot reg_bit(Temp)),
     Code = ldr_y_reg(Temp, Y, AT),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, Code),
     State1 = move_to_vm_register(State0#state{stream = Stream1, available_regs = AT}, Temp, Dest),
-    State1#state{available_regs = AR0};
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{available_regs = AR0, regs = Regs1};
 % term_to_float
-move_to_vm_register(
+move_to_vm_register_emit(
     #state{
         stream_module = StreamModule,
         available_regs = Avail,
@@ -2218,7 +2288,8 @@ move_to_vm_register(
     end,
     Stream1 = StreamModule:append(Stream0, Code),
     State1 = free_native_register(State0, Reg),
-    State1#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(State1#state.regs, Temp1), Temp2),
+    State1#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a move of an array element (reg[x]) to a vm or a native register.
@@ -2302,7 +2373,7 @@ move_array_element(
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary, I3/binary>>),
     State1#state{stream = Stream2};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
         State,
     Reg,
     Index,
@@ -2316,7 +2387,9 @@ move_array_element(
     YCode = str_y_reg(Temp2, Y, Temp1, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp2),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
+    State#state{stream = Stream1, regs = Regs2};
 move_array_element(
     #state{
         stream_module = StreamModule, available_regs = Avail
@@ -2341,9 +2414,11 @@ move_array_element(
     YCode = str_y_reg(Temp2, Y, Temp1, AT),
     Code = <<I1/binary, I2/binary, YCode/binary>>,
     Stream2 = StreamModule:append(Stream1, Code),
-    State1#state{stream = Stream2};
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp2),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
+    State1#state{stream = Stream2, regs = Regs2};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
         State,
     {free, Reg},
     Index,
@@ -2355,19 +2430,23 @@ move_array_element(
     YCode = str_y_reg(Reg, Y, Temp, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
+    State#state{stream = Stream1, regs = Regs2};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0} = State, Reg, Index, Dest
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
 ) when is_atom(Dest) andalso is_integer(Index) ->
     I1 = jit_armv6m_asm:ldr(Dest, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Dest),
+    State#state{stream = Stream1, regs = Regs1};
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -2380,17 +2459,21 @@ move_array_element(
     AvailableRegs1 = AvailableRegs0 bor Bit,
     UsedRegs1 = UsedRegs0 band (bnot Bit),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, IndexReg),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs2
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -2403,17 +2486,20 @@ move_array_element(
     AvailableRegs1 = AvailableRegs0 bor Bit,
     UsedRegs1 = UsedRegs0 band (bnot Bit),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, IndexReg),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs1
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -2432,10 +2518,13 @@ move_array_element(
     Stream1 = StreamModule:append(
         Stream0, <<I1/binary, I2/binary, I3/binary>>
     ),
+    Regs1 = jit_regs:invalidate_reg(Regs0, IndexReg),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs2
     }.
 
 %% @doc move reg[x] to a vm or native register
@@ -2444,14 +2533,16 @@ move_array_element(
 get_array_element(
     #state{
         stream_module = StreamModule,
-        stream = Stream0
+        stream = Stream0,
+        regs = Regs0
     } = State,
     {free, Reg},
     Index
 ) when Index * 4 =< 124 ->
     I1 = jit_armv6m_asm:ldr(Reg, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
-    {State#state{stream = Stream1}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = Regs1}, Reg};
 get_array_element(
     #state{
         stream_module = StreamModule,
@@ -2469,13 +2560,15 @@ get_array_element(
     I1 = jit_armv6m_asm:add(Reg, Temp),
     I2 = jit_armv6m_asm:ldr(Reg, {Reg, 124}),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
-    {State1#state{stream = Stream2}, Reg};
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Reg),
+    {State1#state{stream = Stream2, regs = Regs1}, Reg};
 get_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     Index
@@ -2484,11 +2577,13 @@ get_array_element(
     ElemBit = reg_bit(ElemReg),
     I1 = jit_armv6m_asm:ldr(ElemReg, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ElemReg),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail band (bnot ElemBit),
-            used_regs = UsedRegs0 bor ElemBit
+            used_regs = UsedRegs0 bor ElemBit,
+            regs = Regs1
         },
         ElemReg
     };
@@ -2514,11 +2609,13 @@ get_array_element(
     I1 = jit_armv6m_asm:add(Temp, Reg),
     I2 = jit_armv6m_asm:ldr(ElemReg, {Temp, 124}),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, ElemReg),
     {
         State1#state{
             stream = Stream2,
             available_regs = Avail1,
-            used_regs = UsedRegs0 bor ElemBit
+            used_regs = UsedRegs0 bor ElemBit,
+            regs = Regs1
         },
         ElemReg
     }.
@@ -2615,73 +2712,123 @@ move_to_array_element(
     free_native_register(State2, ValueReg).
 
 -spec move_to_native_register(state(), value() | cp) -> {state(), armv6m_register()}.
-move_to_native_register(
+move_to_native_register(State, Reg) when ?IS_GPR(Reg) ->
+    {State, Reg};
+move_to_native_register(#state{regs = Regs} = State, Value) ->
+    Contents = value_to_contents(Value),
+    case Contents =/= unknown andalso jit_regs:find_reg_with_contents(Regs, Contents) of
+        {ok, CachedReg} ->
+            Bit = reg_bit(CachedReg),
+            case State#state.used_regs band Bit of
+                0 ->
+                    case State#state.available_regs band Bit of
+                        0 ->
+                            move_to_native_register_emit(State, Value, Contents);
+                        _ ->
+                            {
+                                State#state{
+                                    used_regs = State#state.used_regs bor Bit,
+                                    available_regs = State#state.available_regs band (bnot Bit)
+                                },
+                                CachedReg
+                            }
+                    end;
+                _ ->
+                    {State, CachedReg}
+            end;
+        _ ->
+            move_to_native_register_emit(State, Value, Contents)
+    end.
+
+move_to_native_register_emit(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
-    cp
+    cp,
+    Contents
 ) ->
     Reg = first_avail(Avail),
     Bit = reg_bit(Reg),
     I1 = jit_armv6m_asm:ldr(Reg, ?CP),
     Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
         State#state{
-            stream = Stream1, used_regs = Used bor Bit, available_regs = Avail band (bnot Bit)
+            stream = Stream1,
+            used_regs = Used bor Bit,
+            available_regs = Avail band (bnot Bit),
+            regs = Regs1
         },
         Reg
     };
-move_to_native_register(State, Reg) when is_atom(Reg) ->
-    {State, Reg};
-move_to_native_register(
-    #state{stream_module = StreamModule, stream = Stream0} = State, {ptr, Reg}
+move_to_native_register_emit(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    {ptr, Reg},
+    _Contents
 ) when is_atom(Reg) ->
     I1 = jit_armv6m_asm:ldr(Reg, {Reg, 0}),
     Stream1 = StreamModule:append(Stream0, I1),
-    {State#state{stream = Stream1}, Reg};
-move_to_native_register(
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = Regs1}, Reg};
+move_to_native_register_emit(
     #state{
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State0,
-    Imm
+    Imm,
+    Contents
 ) when
     is_integer(Imm)
 ->
     Reg = first_avail(Avail),
     Bit = reg_bit(Reg),
-    State1 = State0#state{used_regs = Used bor Bit, available_regs = Avail band (bnot Bit)},
+    Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
+    State1 = State0#state{
+        used_regs = Used bor Bit,
+        available_regs = Avail band (bnot Bit),
+        regs = Regs1
+    },
     {move_to_native_register(State1, Imm, Reg), Reg};
-move_to_native_register(
+move_to_native_register_emit(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
-    {x_reg, extra}
+    {x_reg, extra},
+    Contents
 ) ->
     Reg = first_avail(Avail),
     Bit = reg_bit(Reg),
     I1 = jit_armv6m_asm:ldr(Reg, ?X_REG(?MAX_REG)),
     Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
         State#state{
-            stream = Stream1, used_regs = Used bor Bit, available_regs = Avail band (bnot Bit)
+            stream = Stream1,
+            used_regs = Used bor Bit,
+            available_regs = Avail band (bnot Bit),
+            regs = Regs1
         },
         Reg
     };
-move_to_native_register(
+move_to_native_register_emit(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
-    {x_reg, X}
+    {x_reg, X},
+    Contents
 ) when
     X < ?MAX_REG
 ->
@@ -2689,35 +2836,51 @@ move_to_native_register(
     Bit = reg_bit(Reg),
     I1 = jit_armv6m_asm:ldr(Reg, ?X_REG(X)),
     Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
         State#state{
-            stream = Stream1, used_regs = Used bor Bit, available_regs = Avail band (bnot Bit)
+            stream = Stream1,
+            used_regs = Used bor Bit,
+            available_regs = Avail band (bnot Bit),
+            regs = Regs1
         },
         Reg
     };
-move_to_native_register(
+move_to_native_register_emit(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
-    {y_reg, Y}
+    {y_reg, Y},
+    Contents
 ) ->
     Reg = first_avail(Avail),
     Bit = reg_bit(Reg),
     AvailT = Avail band (bnot Bit),
     Code = ldr_y_reg(Reg, Y, AvailT),
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1, available_regs = AvailT, used_regs = Used bor Bit}, Reg};
-move_to_native_register(
+    Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
+    {
+        State#state{
+            stream = Stream1,
+            available_regs = AvailT,
+            used_regs = Used bor Bit,
+            regs = Regs1
+        },
+        Reg
+    };
+move_to_native_register_emit(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
         used_regs = Used
     } = State,
-    {fp_reg, F}
+    {fp_reg, F},
+    _Contents
 ) ->
     RegA = first_avail(Avail),
     BitA = reg_bit(RegA),
@@ -2737,13 +2900,18 @@ move_to_native_register(
 
 -spec move_to_native_register(state(), value(), armv6m_register()) -> state().
 move_to_native_register(
-    #state{stream_module = StreamModule, stream = Stream0} = State, RegSrc, RegDst
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, RegSrc, RegDst
 ) when is_atom(RegSrc) ->
     I = jit_armv6m_asm:mov(RegDst, RegSrc),
     Stream1 = StreamModule:append(Stream0, I),
-    State#state{stream = Stream1};
+    SrcContents = jit_regs:get_contents(Regs0, RegSrc),
+    Regs1 = jit_regs:set_contents(Regs0, RegDst, SrcContents),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_native_register(State, ValSrc, RegDst) when is_integer(ValSrc) ->
-    mov_immediate(State, RegDst, ValSrc);
+    State1 = mov_immediate(State, RegDst, ValSrc),
+    #state{regs = Regs0} = State1,
+    Regs1 = jit_regs:set_contents(Regs0, RegDst, {imm, ValSrc}),
+    State1#state{regs = Regs1};
 move_to_native_register(
     #state{stream_module = StreamModule, stream = Stream0} = State, {ptr, Reg}, RegDst
 ) when ?IS_GPR(Reg) ->
@@ -2793,7 +2961,8 @@ copy_to_native_register(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
     Reg
 ) when is_atom(Reg) ->
@@ -2801,11 +2970,14 @@ copy_to_native_register(
     SaveBit = reg_bit(SaveReg),
     I1 = jit_armv6m_asm:mov(SaveReg, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
+    SrcContents = jit_regs:get_contents(Regs0, Reg),
+    Regs1 = jit_regs:set_contents(Regs0, SaveReg, SrcContents),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail band (bnot SaveBit),
-            used_regs = Used bor SaveBit
+            used_regs = Used bor SaveBit,
+            regs = Regs1
         },
         SaveReg
     };
@@ -2814,7 +2986,8 @@ copy_to_native_register(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = Used
+        used_regs = Used,
+        regs = Regs0
     } = State,
     {ptr, Reg}
 ) when is_atom(Reg) ->
@@ -2822,11 +2995,13 @@ copy_to_native_register(
     SaveBit = reg_bit(SaveReg),
     I1 = jit_armv6m_asm:ldr(SaveReg, {Reg, 0}),
     Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, SaveReg),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail band (bnot SaveBit),
-            used_regs = Used bor SaveBit
+            used_regs = Used bor SaveBit,
+            regs = Regs1
         },
         SaveReg
     };
@@ -2834,7 +3009,8 @@ copy_to_native_register(State, Reg) ->
     move_to_native_register(State, Reg).
 
 move_to_cp(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     {y_reg, Y}
 ) ->
     Reg = first_avail(Avail),
@@ -2843,10 +3019,12 @@ move_to_cp(
     I2 = jit_armv6m_asm:str(Reg, ?CP),
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     Offset
 ) ->
     Reg = first_avail(Avail),
@@ -2855,7 +3033,8 @@ increment_sp(
     I3 = jit_armv6m_asm:str(Reg, ?Y_REGS),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 set_continuation_to_label(
     #state{
@@ -2892,7 +3071,8 @@ set_continuation_to_label(
 
     Code = <<I2/binary, I3/binary, I4/binary>>,
     Stream2 = StreamModule:append(State1#state.stream, Code),
-    State1#state{stream = Stream2}.
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(State#state.regs, Temp1), Temp2),
+    State1#state{stream = Stream2, regs = Regs1}.
 
 %% @doc Set the contination to a given offset
 %% Return a reference so the offset will be updated with update_branches
@@ -2903,7 +3083,8 @@ set_continuation_to_offset(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        branches = Branches
+        branches = Branches,
+        regs = Regs0
     } = State
 ) ->
     Temp = first_avail(Avail),
@@ -2920,7 +3101,8 @@ set_continuation_to_offset(
     I4 = jit_armv6m_asm:str(Temp, ?JITSTATE_CONTINUATION(TempJitState)),
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    {State#state{stream = Stream1, branches = [Reloc | Branches]}, OffsetRef}.
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), TempJitState),
+    {State#state{stream = Stream1, branches = [Reloc | Branches], regs = Regs1}, OffsetRef}.
 
 %% @doc Implement a continuation entry point.
 %% TODO: push r4-r7 and lr
@@ -2947,7 +3129,8 @@ get_module_index(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State
 ) ->
     Reg = first_avail(Avail),
@@ -2960,11 +3143,13 @@ get_module_index(
     I2 = jit_armv6m_asm:ldr(Reg, ?MODULE_INDEX(Reg)),
     Code = <<I1a/binary, I1b/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, TempJitState), Reg),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail1,
-            used_regs = UsedRegs0 bor RegBit
+            used_regs = UsedRegs0 bor RegBit,
+            regs = Regs1
         },
         Reg
     }.
@@ -2973,19 +3158,29 @@ get_module_index(
 %% JIT currentl calls this with two values: ?TERM_PRIMARY_CLEAR_MASK (-4) to
 %% clear bits and ?TERM_BOXED_TAG_MASK (0x3F). We can avoid any literal pool
 %% by using BICS for -4.
-and_(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Reg}, SrcReg) when
+and_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    {free, Reg},
+    SrcReg
+) when
     is_atom(SrcReg)
 ->
     I = jit_armv6m_asm:ands(Reg, SrcReg),
     Stream1 = StreamModule:append(Stream0, I),
-    {State0#state{stream = Stream1}, Reg};
-and_(#state{stream_module = StreamModule, stream = Stream0} = State0, {free, Reg}, 16#FFFFFF) ->
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State0#state{stream = Stream1, regs = Regs1}, Reg};
+and_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    {free, Reg},
+    16#FFFFFF
+) ->
     I1 = jit_armv6m_asm:lsls(Reg, Reg, 8),
     I2 = jit_armv6m_asm:lsrs(Reg, Reg, 8),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    {State0#state{stream = Stream1}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State0#state{stream = Stream1, regs = Regs1}, Reg};
 and_(
-    #state{stream_module = StreamModule, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
     {free, Reg},
     Val
 ) when Avail =/= 0 andalso Val < 0 andalso Val >= -256 ->
@@ -2996,9 +3191,10 @@ and_(
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:bics(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    {State1#state{available_regs = AT bor TempBit, stream = Stream2}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State1#state{available_regs = AT bor TempBit, stream = Stream2, regs = Regs1}, Reg};
 and_(
-    #state{stream_module = StreamModule, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
     {free, Reg},
     Val
 ) when Avail =/= 0 ->
@@ -3009,7 +3205,8 @@ and_(
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:ands(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    {State1#state{available_regs = AT bor TempBit, stream = Stream2}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State1#state{available_regs = AT bor TempBit, stream = Stream2, regs = Regs1}, Reg};
 and_(
     #state{stream_module = StreamModule, available_regs = 0} = State0,
     {free, Reg},
@@ -3029,9 +3226,10 @@ and_(
     % Restore r0 from r12
     Restore = jit_armv6m_asm:mov(r0, ?IP_REG),
     Stream4 = StreamModule:append(Stream3, Restore),
-    {State0#state{stream = Stream4}, Reg};
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Reg),
+    {State0#state{stream = Stream4, regs = Regs1}, Reg};
 and_(
-    #state{stream_module = StreamModule, available_regs = 0} = State0,
+    #state{stream_module = StreamModule, available_regs = 0, regs = Regs0} = State0,
     {free, Reg},
     Val
 ) ->
@@ -3049,9 +3247,10 @@ and_(
     % Restore r0 from r12
     Restore = jit_armv6m_asm:mov(r0, ?IP_REG),
     Stream4 = StreamModule:append(Stream3, Restore),
-    {State0#state{stream = Stream4}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State0#state{stream = Stream4, regs = Regs1}, Reg};
 and_(
-    #state{stream_module = StreamModule, available_regs = Avail, used_regs = UR} =
+    #state{stream_module = StreamModule, available_regs = Avail, used_regs = UR, regs = Regs0} =
         State0,
     Reg,
     ?TERM_PRIMARY_CLEAR_MASK
@@ -3061,23 +3260,26 @@ and_(
     I1 = jit_armv6m_asm:lsrs(ResultReg, Reg, 2),
     I2 = jit_armv6m_asm:lsls(ResultReg, ResultReg, 2),
     Stream1 = StreamModule:append(State0#state.stream, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
     {
         State0#state{
             stream = Stream1,
             available_regs = Avail band (bnot ResultBit),
-            used_regs = UR bor ResultBit
+            used_regs = UR bor ResultBit,
+            regs = Regs1
         },
         ResultReg
     }.
 
-or_(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, SrcReg) when
+or_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Reg, SrcReg) when
     is_atom(SrcReg)
 ->
     I = jit_armv6m_asm:orrs(Reg, SrcReg),
     Stream1 = StreamModule:append(Stream0, I),
-    State0#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State0#state{stream = Stream1, regs = Regs1};
 or_(
-    #state{stream_module = StreamModule, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
     Reg,
     Val
 ) ->
@@ -3087,22 +3289,48 @@ or_(
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:orrs(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    State1#state{available_regs = Avail, stream = Stream2}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
 
-add(#state{stream_module = StreamModule, stream = Stream0} = State0, Reg, Val) when
+xor_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Reg, SrcReg
+) when
+    is_atom(SrcReg)
+->
+    I = jit_armv6m_asm:eors(Reg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State0#state{stream = Stream1, regs = Regs1};
+xor_(
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
+    Reg,
+    Val
+) ->
+    Temp = first_avail(Avail),
+    AT = Avail band (bnot reg_bit(Temp)),
+    State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
+    Stream1 = State1#state.stream,
+    I = jit_armv6m_asm:eors(Reg, Temp),
+    Stream2 = StreamModule:append(Stream1, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
+
+add(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Reg, Val) when
     (Val >= 0 andalso Val =< 255) orelse is_atom(Val)
 ->
     I = jit_armv6m_asm:adds(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I),
-    State0#state{stream = Stream1};
-add(#state{stream_module = StreamModule, available_regs = Avail} = State0, Reg, Val) ->
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State0#state{stream = Stream1, regs = Regs1};
+add(#state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0, Reg, Val) ->
     Temp = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp)),
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:adds(Reg, Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    State1#state{available_regs = Avail, stream = Stream2}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
 
 mov_immediate(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, Val) when
     Val >= 0 andalso Val =< 255
@@ -3245,65 +3473,72 @@ flush_literal_pool(
     ),
     State#state{stream = Stream2, literal_pool = []}.
 
-sub(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, Val) when
+sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val) when
     (Val >= 0 andalso Val =< 255) orelse is_atom(Val)
 ->
     I1 = jit_armv6m_asm:subs(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1};
-sub(#state{stream_module = StreamModule, available_regs = Avail} = State0, Reg, Val) ->
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
+sub(#state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0, Reg, Val) ->
     Temp = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp)),
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:subs(Reg, Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    State1#state{available_regs = Avail, stream = Stream2}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
 
 mul(State, _Reg, 1) ->
     State;
 mul(State, Reg, 2) ->
     shift_left(State, Reg, 1);
-mul(#state{available_regs = Avail} = State, Reg, 3) ->
+mul(#state{available_regs = Avail, regs = Regs0} = State, Reg, 3) ->
     Temp = first_avail(Avail),
     I1 = jit_armv6m_asm:lsls(Temp, Reg, 1),
     I2 = jit_armv6m_asm:adds(Reg, Temp, Reg),
     Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(State, Reg, 4) ->
     shift_left(State, Reg, 2);
-mul(#state{available_regs = Avail} = State, Reg, 5) ->
+mul(#state{available_regs = Avail, regs = Regs0} = State, Reg, 5) ->
     Temp = first_avail(Avail),
     I1 = jit_armv6m_asm:lsls(Temp, Reg, 2),
     I2 = jit_armv6m_asm:adds(Reg, Temp, Reg),
     Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(State0, Reg, 6) ->
     State1 = mul(State0, Reg, 3),
     mul(State1, Reg, 2);
-mul(#state{available_regs = Avail} = State, Reg, 7) ->
+mul(#state{available_regs = Avail, regs = Regs0} = State, Reg, 7) ->
     Temp = first_avail(Avail),
     I1 = jit_armv6m_asm:lsls(Temp, Reg, 3),
     I2 = jit_armv6m_asm:subs(Reg, Temp, Reg),
     Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(State, Reg, 8) ->
     shift_left(State, Reg, 3);
-mul(#state{available_regs = Avail} = State, Reg, 9) ->
+mul(#state{available_regs = Avail, regs = Regs0} = State, Reg, 9) ->
     Temp = first_avail(Avail),
     I1 = jit_armv6m_asm:lsls(Temp, Reg, 3),
     I2 = jit_armv6m_asm:adds(Reg, Temp, Reg),
     Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(State0, Reg, 10) ->
     State1 = mul(State0, Reg, 5),
     mul(State1, Reg, 2);
-mul(#state{available_regs = Avail} = State, Reg, 15) ->
+mul(#state{available_regs = Avail, regs = Regs0} = State, Reg, 15) ->
     Temp = first_avail(Avail),
     I1 = jit_armv6m_asm:lsls(Temp, Reg, 4),
     I2 = jit_armv6m_asm:subs(Reg, Temp, Reg),
     Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State#state{stream = Stream1, regs = Regs1};
 mul(State, Reg, 16) ->
     shift_left(State, Reg, 4);
 mul(State, Reg, 32) ->
@@ -3311,19 +3546,31 @@ mul(State, Reg, 32) ->
 mul(State, Reg, 64) ->
     shift_left(State, Reg, 6);
 mul(
-    #state{stream_module = StreamModule, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
     Reg,
     Val
 ) ->
     Temp = first_avail(Avail),
     TempBit = reg_bit(Temp),
     AT = Avail band (bnot TempBit),
-    % multiply by decomposing by power of 2
     State1 = mov_immediate(State0#state{available_regs = AT}, Temp, Val),
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:muls(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    State1#state{stream = Stream2, available_regs = State1#state.available_regs bor TempBit}.
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Reg),
+    State1#state{
+        stream = Stream2, available_regs = State1#state.available_regs bor TempBit, regs = Regs1
+    }.
+
+%% Register-register multiply: DestReg = DestReg * SrcReg
+-spec mul_reg(state(), armv6m_register(), armv6m_register()) -> state().
+mul_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DestReg, SrcReg
+) ->
+    I = jit_armv6m_asm:muls(DestReg, SrcReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%
 %% Analysis of AArch64 pattern and ARM Thumb mapping:
@@ -3406,7 +3653,9 @@ decrement_reductions_and_maybe_schedule_next(
     Stream5 = StreamModule:replace(
         Stream4, BNEOffset, <<NewI4/binary, NewI5/binary>>
     ),
-    merge_used_regs(State2#state{stream = Stream5}, State1#state.used_regs).
+    State3 = merge_used_regs(State2#state{stream = Stream5}, State1#state.used_regs),
+    MergedRegs = jit_regs:merge(State1#state.regs, State2#state.regs),
+    State3#state{regs = MergedRegs}.
 
 -spec call_or_schedule_next(state(), non_neg_integer()) -> state().
 call_or_schedule_next(State0, Label) ->
@@ -3564,7 +3813,8 @@ rewrite_cp_offset(
     State0#state{stream = Stream3}.
 
 set_bs(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0,
     TermReg
 ) ->
     Temp = first_avail(Avail),
@@ -3572,7 +3822,8 @@ set_bs(
     I2 = jit_armv6m_asm:movs(Temp, 0),
     I3 = jit_armv6m_asm:str(Temp, ?BS_OFFSET),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State0#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state
@@ -3759,15 +4010,17 @@ args_regs(Args) ->
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec add_label(state(), integer() | reference()) -> state().
-add_label(#state{stream_module = StreamModule, stream = Stream0} = State0, Label) ->
+add_label(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Label) ->
     Offset0 = StreamModule:offset(Stream0),
+    Regs1 = jit_regs:invalidate_all(Regs0),
+    Regs2 = jit_regs:invalidate_all_types(Regs1),
     {State1, Offset1} =
         if
             Offset0 rem 4 =:= 0 ->
-                {State0, Offset0};
+                {State0#state{regs = Regs2}, Offset0};
             true ->
                 Stream1 = StreamModule:append(Stream0, jit_armv6m_asm:nop()),
-                {State0#state{stream = Stream1}, Offset0 + 2}
+                {State0#state{stream = Stream1, regs = Regs2}, Offset0 + 2}
         end,
     add_label(State1, Label, Offset1).
 
@@ -3802,10 +4055,11 @@ add_label(
     DataOffset = JumpTableEntryStart + 8,
     AddInstrOffset = JumpTableEntryStart + 4,
 
-    % Calculate offset from 'add pc, pc, r3' instruction + 4 to target label
-    % PC when add instruction executes
+    % Calculate offset from 'add pc, r3' instruction to target label
+    % When 'add pc, r3' executes, PC reads as AddInstrOffset + 4
+    % Result goes through BXWritePC, so bit 0 must be 1 for Thumb mode
     AddPC = AddInstrOffset + 4,
-    RelativeOffset = LabelOffset - AddPC,
+    RelativeOffset = LabelOffset - AddPC + 1,
     DataBytes = <<RelativeOffset:32/little>>,
 
     Stream1 = StreamModule:replace(Stream0, DataOffset, DataBytes),
@@ -3824,3 +4078,21 @@ add_label(
     };
 add_label(#state{labels = Labels} = State, Label, Offset) ->
     State#state{labels = [{Label, Offset} | Labels]}.
+
+%% @doc Get the register tracking state.
+get_regs_tracking(#state{regs = Regs}) -> Regs.
+
+%% @doc Set type information for a VM location in the register tracking.
+set_type_tracking(#state{regs = Regs0} = State, VmLoc, Type) ->
+    Regs1 = jit_regs:set_type(Regs0, VmLoc, Type),
+    State#state{regs = Regs1}.
+
+%% @doc Get type information for a VM location from the register tracking.
+get_type_tracking(#state{regs = Regs}, VmLoc) ->
+    jit_regs:get_type(Regs, VmLoc).
+
+%% Convert a value to a contents descriptor for tracking.
+value_to_contents(Value) -> jit_regs:value_to_contents(Value, ?MAX_REG).
+
+%% Convert a VM register destination to a contents descriptor.
+vm_dest_to_contents(Dest) -> jit_regs:vm_dest_to_contents(Dest, ?MAX_REG).
