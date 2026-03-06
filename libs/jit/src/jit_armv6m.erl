@@ -2586,8 +2586,8 @@ move_to_array_element(
     BaseReg,
     IndexReg,
     Offset
-) when is_integer(IndexReg) andalso is_integer(Offset) andalso Offset div 8 =:= 0 ->
-    move_to_array_element(State, Value, BaseReg, IndexReg + (Offset div 8));
+) when is_integer(IndexReg) andalso is_integer(Offset) ->
+    move_to_array_element(State, Value, BaseReg, IndexReg + Offset);
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
     ValueReg,
@@ -3590,7 +3590,8 @@ rewrite_cp_offset(
     State0#state{stream = Stream3}.
 
 set_bs(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0,
     TermReg
 ) ->
     Temp = first_avail(Avail),
@@ -3598,7 +3599,8 @@ set_bs(
     I2 = jit_armv6m_asm:movs(Temp, 0),
     I3 = jit_armv6m_asm:str(Temp, ?BS_OFFSET),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State0#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state
@@ -3826,10 +3828,11 @@ add_label(
     DataOffset = JumpTableEntryStart + 8,
     AddInstrOffset = JumpTableEntryStart + 4,
 
-    % Calculate offset from 'add pc, pc, r3' instruction + 4 to target label
-    % PC when add instruction executes
+    % Calculate offset from 'add pc, r3' instruction to target label
+    % When 'add pc, r3' executes, PC reads as AddInstrOffset + 4
+    % Result goes through BXWritePC, so bit 0 must be 1 for Thumb mode
     AddPC = AddInstrOffset + 4,
-    RelativeOffset = LabelOffset - AddPC,
+    RelativeOffset = LabelOffset - AddPC + 1,
     DataBytes = <<RelativeOffset:32/little>>,
 
     Stream1 = StreamModule:replace(Stream0, DataOffset, DataBytes),

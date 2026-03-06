@@ -2332,8 +2332,8 @@ move_to_array_element(
     BaseReg,
     IndexReg,
     Offset
-) when is_integer(IndexReg) andalso is_integer(Offset) andalso Offset div 8 =:= 0 ->
-    move_to_array_element(State, Value, BaseReg, IndexReg + (Offset div 8));
+) when is_integer(IndexReg) andalso is_integer(Offset) ->
+    move_to_array_element(State, Value, BaseReg, IndexReg + Offset);
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
     ValueReg,
@@ -3187,7 +3187,8 @@ rewrite_cp_offset(
     State0#state{stream = Stream1}.
 
 set_bs(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0,
     TermReg
 ) ->
     Temp = first_avail(Avail),
@@ -3197,7 +3198,8 @@ set_bs(
     {BaseReg2, Off2} = ?BS_OFFSET,
     I3 = jit_riscv32_asm:sw(BaseReg2, Temp, Off2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State0#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state

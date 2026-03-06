@@ -2536,7 +2536,7 @@ move_to_array_element_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
                         "   0:  02c52f83            lw  t6,44(a0)\n"
-                        "   4:  01f6a423            sw  t6,8(a3)"
+                        "   4:  01f6a623            sw  t6,12(a3)"
                     >>,
                     jit_tests_common:assert_stream(riscv32, Dump, Stream)
                 end),
