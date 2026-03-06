@@ -1605,7 +1605,8 @@ move_to_vm_register_emit(
     vm_register() | aarch64_register()
 ) -> state().
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available, regs = Regs0} =
+        State,
     Reg,
     Index,
     {x_reg, X}
@@ -1614,9 +1615,12 @@ move_array_element(
     I1 = jit_aarch64_asm:ldr(Temp, {Reg, Index * ?WORD_SIZE}),
     I2 = jit_aarch64_asm:str(Temp, ?X_REG(X)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    State#state{stream = Stream1, regs = Regs2};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available, regs = Regs0} =
+        State,
     Reg,
     Index,
     {ptr, Dest}
@@ -1625,9 +1629,10 @@ move_array_element(
     I1 = jit_aarch64_asm:ldr(Temp, {Reg, Index * ?WORD_SIZE}),
     I2 = jit_aarch64_asm:str(Temp, {Dest, 0}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available, regs = Regs0} =
         State,
     Reg,
     Index,
@@ -1642,9 +1647,12 @@ move_array_element(
     I3 = jit_aarch64_asm:str(Temp2, {Temp1, Y * ?WORD_SIZE}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp1),
+    Regs3 = jit_regs:invalidate_reg(Regs2, Temp2),
+    State#state{stream = Stream1, regs = Regs3};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available, regs = Regs0} =
         State,
     {free, Reg},
     Index,
@@ -1656,19 +1664,24 @@ move_array_element(
     I3 = jit_aarch64_asm:str(Reg, {Temp, Y * ?WORD_SIZE}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Reg),
+    Regs3 = jit_regs:invalidate_reg(Regs2, Temp),
+    State#state{stream = Stream1, regs = Regs3};
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0} = State, Reg, Index, Dest
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
 ) when is_atom(Dest) andalso is_integer(Index) ->
     I1 = jit_aarch64_asm:ldr(Dest, {Reg, Index * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Dest),
+    State#state{stream = Stream1, regs = Regs1};
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1680,17 +1693,21 @@ move_array_element(
     AvailableRegs1 = AvailableRegs0 bor Bit,
     UsedRegs1 = UsedRegs0 band (bnot Bit),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, IndexReg),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs2
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1702,17 +1719,20 @@ move_array_element(
     AvailableRegs1 = AvailableRegs0 bor Bit,
     UsedRegs1 = UsedRegs0 band (bnot Bit),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, IndexReg),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs1
     };
 move_array_element(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = AvailableRegs0,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     {free, IndexReg},
@@ -1728,10 +1748,14 @@ move_array_element(
     Stream1 = StreamModule:append(
         Stream0, <<I1/binary, I2/binary, I3/binary>>
     ),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    Regs3 = jit_regs:invalidate_reg(Regs2, IndexReg),
     State#state{
         available_regs = AvailableRegs1,
         used_regs = UsedRegs1,
-        stream = Stream1
+        stream = Stream1,
+        regs = Regs3
     }.
 
 %%-----------------------------------------------------------------------------
@@ -1749,14 +1773,16 @@ move_array_element(
 get_array_element(
     #state{
         stream_module = StreamModule,
-        stream = Stream0
+        stream = Stream0,
+        regs = Regs0
     } = State,
     {free, Reg},
     Index
 ) ->
     I1 = jit_aarch64_asm:ldr(Reg, {Reg, Index * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
-    {State#state{stream = Stream1}, Reg};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = Regs1}, Reg};
 get_array_element(
     #state{
         stream_module = StreamModule,
