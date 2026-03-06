@@ -783,7 +783,14 @@ term module_get_type_by_index(const Module *mod, int type_index, Context *ctx)
 ModuleNativeEntryPoint module_get_native_entry_point(Module *module, int exported_label)
 {
     assert(module->native_code);
+#ifdef JIT_JUMPTABLE_IS_DATA
+    // WASM: jump table entries are data (function pointers stored in an array).
+    // Read the function pointer from the data array.
+    const ModuleNativeEntryPoint *table = (const ModuleNativeEntryPoint *) module->native_code;
+    return table[exported_label];
+#else
     return (ModuleNativeEntryPoint) (((const uint8_t *) module->native_code) + JIT_JUMPTABLE_ENTRY_SIZE * exported_label);
+#endif
 }
 #endif
 

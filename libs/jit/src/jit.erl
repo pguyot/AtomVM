@@ -2887,13 +2887,13 @@ first_pass_bs_create_bin_insert_value_increment_offset(_MMod, MSt0, Offset, Size
     is_integer(Offset) andalso is_integer(Size) andalso is_integer(Unit)
 ->
     {MSt0, Offset + (Size * Unit)};
-first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, 0, Size, 8) when is_atom(Size) ->
+first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, 0, Size, 8) when is_atom(Size) orelse is_integer(Size) ->
     MSt1 = MMod:shift_left(MSt0, Size, 3),
     {MSt1, Size};
 first_pass_bs_create_bin_insert_value_increment_offset(_MMod, MSt0, 0, Size, 1) ->
     {MSt0, Size};
 first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, Offset, Size, 8) when
-    is_integer(Offset) andalso is_atom(Size)
+    is_integer(Offset) andalso (is_atom(Size) orelse is_integer(Size))
 ->
     MSt1 = MMod:shift_left(MSt0, Size, 3),
     MSt2 = MMod:add(MSt1, Size, Offset),
@@ -2909,7 +2909,7 @@ first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, Offset, Size,
     MSt1 = MMod:add(MSt0, Offset, Size * Unit),
     {MSt1, Offset};
 first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, Offset, Size, 8) when
-    is_atom(Size)
+    is_atom(Size) orelse is_integer(Size)
 ->
     MSt1 = MMod:shift_left(MSt0, Size, 3),
     MSt2 = MMod:add(MSt1, Offset, Size),
@@ -4180,7 +4180,7 @@ verify_is_binary_or_match_state(Label, Src, MMod, MSt0) ->
 verify_is_boxed_with_tag(Label, Arg1, BoxedTag, MMod, MSt0) ->
     verify_is_boxed_with_tag(Label, Arg1, ?TERM_BOXED_TAG_MASK, BoxedTag, MMod, MSt0).
 
-verify_is_boxed_with_tag(Label, {free, Reg}, BoxedMask, BoxedTag, MMod, MSt0) when is_atom(Reg) ->
+verify_is_boxed_with_tag(Label, {free, Reg}, BoxedMask, BoxedTag, MMod, MSt0) when is_atom(Reg) orelse is_integer(Reg) ->
     MSt1 = verify_is_boxed(MMod, MSt0, Reg, Label),
     {MSt2, Reg} = MMod:and_(MSt1, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     MSt3 = MMod:move_array_element(MSt2, Reg, 0, Reg),
@@ -4410,10 +4410,12 @@ cond_raise_badarg_or_jump_to_fail_label(Cond, 0, MMod, MSt0) ->
 cond_raise_badarg_or_jump_to_fail_label(Cond, FailLabel, MMod, MSt0) when FailLabel > 0 ->
     cond_jump_to_label(Cond, FailLabel, MMod, MSt0).
 
-term_to_int(Term, _FailLabel, _MMod, MSt0) when is_integer(Term) ->
+term_to_int(Term, _FailLabel, _MMod, MSt0) when is_integer(Term), Term < 0 ->
     {MSt0, Term bsr 4};
 term_to_int({literal, Val}, _FailLabel, _MMod, MSt0) when is_integer(Val) ->
     {MSt0, Val};
+term_to_int({imm, Val}, _FailLabel, _MMod, MSt0) when is_integer(Val) ->
+    {MSt0, Val bsr 4};
 % Optimized case: when we have type information showing this is an integer, skip the type check
 term_to_int({typed, Term, {t_integer, _Range}}, _FailLabel, MMod, MSt0) ->
     {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
@@ -4472,7 +4474,7 @@ memory_ensure_free_with_extra_root({x_reg, N} = ExtraRoot, Live, Size, MMod, MSt
     ]),
     MSt2 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt1),
     {MSt2, ExtraRoot};
-memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_atom(ExtraRoot) ->
+memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_atom(ExtraRoot) orelse is_integer(ExtraRoot) ->
     ExtraRootXReg =
         if
             Live < ?MAX_REG ->
@@ -4844,9 +4846,7 @@ decode_allocator_list0(MMod, AccNeed, Remaining, Rest0) ->
 term_from_int(Int) when is_integer(Int) ->
     (Int bsl 4) bor ?TERM_INTEGER_TAG.
 
-term_from_int(Int, _MMod, MSt0) when is_integer(Int) ->
-    {MSt0, term_from_int(Int)};
-term_from_int(Reg, MMod, MSt0) when is_atom(Reg) ->
+term_from_int(Reg, MMod, MSt0) when is_atom(Reg) orelse is_integer(Reg) ->
     MSt1 = MMod:shift_left(MSt0, Reg, 4),
     MSt2 = MMod:or_(MSt1, Reg, ?TERM_INTEGER_TAG),
     {MSt2, Reg}.
