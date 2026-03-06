@@ -94,6 +94,7 @@
 %% ARM EABI flags
 -define(EF_ARM_EABI_VER5, 16#05000000).
 -define(EF_ARM_ABI_FLOAT_SOFT, 16#00000200).
+-define(EF_ARM_ABI_FLOAT_HARD, 16#00000400).
 -define(EF_ARM_ARCH_V6M, 16#00000009).
 
 %% DWARF register numbers
@@ -107,3 +108,4 @@
 -define(DWARF_A0_REG_RISCV32, 10).
 % r0 register in ARM
 -define(DWARF_R0_REG_ARMV6M, 0).
+-define(DWARF_R0_REG_ARM32, 0).

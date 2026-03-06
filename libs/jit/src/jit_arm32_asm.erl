@@ -23,6 +23,8 @@
     add/4,
     sub/3,
     sub/4,
+    subs/3,
+    subs/4,
     rsb/4,
     mul/4,
     mls/5,
@@ -55,7 +57,9 @@
     pop/1,
     nop/0,
     bkpt/1,
-    reg_to_num/1
+    adr/2,
+    reg_to_num/1,
+    encode_imm/1
 ]).
 
 -export_type([
@@ -140,11 +144,13 @@ encode_imm(_) ->
 encode_imm(_Imm, 16) ->
     false;
 encode_imm(Imm, Rotate) ->
-    %% Try rotating right by Rotate*2 bits
+    %% ARM encoding: value = imm8 ROR (Rotate * 2)
+    %% So imm8 = value ROL (Rotate * 2) = value ROR (32 - Rotate * 2)
+    %% We rotate LEFT by Rotate*2 to find the candidate imm8
     Shift = Rotate * 2,
-    Rotated = ((Imm bsr Shift) bor (Imm bsl (32 - Shift))) band 16#FFFFFFFF,
-    case Rotated =< 255 of
-        true -> {Rotate, Rotated};
+    Candidate = ((Imm bsl Shift) bor (Imm bsr (32 - Shift))) band 16#FFFFFFFF,
+    case Candidate =< 255 of
+        true -> {Rotate, Candidate};
         false -> encode_imm(Imm, Rotate + 1)
     end.
 
@@ -199,6 +205,17 @@ sub(Cond, Rd, Rn, Imm) when is_integer(Imm) ->
 -spec sub(cc(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
 sub(Cond, Rd, RmOrImm) ->
     sub(Cond, Rd, Rd, RmOrImm).
+
+%% SUBS Rd, Rn, Rm/Imm (subtract with flag setting)
+-spec subs(cc(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
+subs(Cond, Rd, Rn, Rm) when is_atom(Rm) ->
+    dp_reg(Cond, 2#0010, 1, Rd, Rn, Rm);
+subs(Cond, Rd, Rn, Imm) when is_integer(Imm) ->
+    dp_imm(Cond, 2#0010, 1, Rd, Rn, Imm).
+
+-spec subs(cc(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
+subs(Cond, Rd, RmOrImm) ->
+    subs(Cond, Rd, Rd, RmOrImm).
 
 %% RSB Rd, Rn, Rm/Imm (reverse subtract)
 -spec rsb(cc(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
@@ -550,3 +567,22 @@ bkpt(Imm) when is_integer(Imm), Imm >= 0, Imm =< 16#FFFF ->
     Imm4 = Imm band 16#F,
     Instr = (14 bsl 28) bor (2#00010010 bsl 20) bor (Imm12 bsl 8) bor (2#0111 bsl 4) bor Imm4,
     <<Instr:32/little>>.
+
+%% ADR Rd, #offset (address relative to PC)
+%% In ARM mode, ADR is encoded as ADD Rd, PC, #imm or SUB Rd, PC, #imm
+%% The offset is relative to the current instruction address.
+%% Since PC reads as instruction_address + 8 in ARM mode, we adjust accordingly.
+-spec adr(arm_gpr_register(), integer()) -> binary().
+adr(Rd, Offset) when is_integer(Offset) ->
+    %% ADR means: Rd = instruction_address + Offset
+    %% PC reads as instruction_address + 8, so:
+    %% Rd = PC + (Offset - 8)
+    AdjustedOffset = Offset - 8,
+    if
+        AdjustedOffset >= 0 ->
+            %% ADD Rd, PC, #AdjustedOffset
+            add(al, Rd, pc, AdjustedOffset);
+        true ->
+            %% SUB Rd, PC, #(-AdjustedOffset)
+            sub(al, Rd, pc, -AdjustedOffset)
+    end.
