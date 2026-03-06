@@ -38,6 +38,8 @@ set(ERLANG_MODULES
     jit_riscv64_asm_tests
     jit_x86_64_tests
     jit_x86_64_asm_tests
+    jit_xtensa_tests
+    jit_xtensa_asm_tests
 )
 
 if (NOT AVM_DISABLE_JIT_DWARF)
