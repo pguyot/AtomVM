@@ -3548,31 +3548,29 @@ rewrite_cp_offset(
     OffsetImm0 = Delta0 bsl 2,
 
     % Check if offset fits in ARM32 rotated immediate
-    NewMoveInstr =
-        case jit_arm32_asm:encode_imm(OffsetImm0 band 16#FFFFFFFF) of
-            false ->
-                % Need to emit literal pool
-                OffsetImm1 = (Delta0 + 1) bsl 2,
-                % Emit the 32-bit literal right after current position
-                StreamWithLiteral = StreamModule:append(
-                    Stream0, <<OffsetImm1:32/little>>
-                ),
-                % Compute PC-relative offset for ldr instruction
-                % ARM32: PC = instruction_address + 8
-                PCRelOffset = CurrentOffset - (RewriteOffset + 8),
-                LdrInstr = jit_arm32_asm:ldr(al, TempReg, {pc, PCRelOffset}),
-                Stream1 = StreamModule:replace(StreamWithLiteral, RewriteOffset, LdrInstr),
-                Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-                Stream2 = StreamModule:append(Stream1, Prolog),
-                State0#state{stream = Stream2};
-            _ ->
-                MovInstr = jit_arm32_asm:mov(al, TempReg, OffsetImm0),
-                Stream1 = StreamModule:replace(Stream0, RewriteOffset, MovInstr),
-                Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-                Stream2 = StreamModule:append(Stream1, Prolog),
-                State0#state{stream = Stream2}
-        end,
-    NewMoveInstr.
+    case jit_arm32_asm:encode_imm(OffsetImm0 band 16#FFFFFFFF) of
+        false ->
+            % Need to emit literal pool
+            OffsetImm1 = (Delta0 + 1) bsl 2,
+            % Emit the 32-bit literal right after current position
+            StreamWithLiteral = StreamModule:append(
+                Stream0, <<OffsetImm1:32/little>>
+            ),
+            % Compute PC-relative offset for ldr instruction
+            % ARM32: PC = instruction_address + 8
+            PCRelOffset = CurrentOffset - (RewriteOffset + 8),
+            LdrInstr = jit_arm32_asm:ldr(al, TempReg, {pc, PCRelOffset}),
+            Stream1 = StreamModule:replace(StreamWithLiteral, RewriteOffset, LdrInstr),
+            Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
+            Stream2 = StreamModule:append(Stream1, Prolog),
+            State0#state{stream = Stream2};
+        _ ->
+            MovInstr = jit_arm32_asm:mov(al, TempReg, OffsetImm0),
+            Stream1 = StreamModule:replace(Stream0, RewriteOffset, MovInstr),
+            Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
+            Stream2 = StreamModule:append(Stream1, Prolog),
+            State0#state{stream = Stream2}
+    end.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
