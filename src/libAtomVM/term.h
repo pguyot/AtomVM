@@ -1375,7 +1375,7 @@ static inline int64_t term_to_int64(term t)
 #if BOXED_TERMS_REQUIRED_FOR_INT != BOXED_TERMS_REQUIRED_FOR_INT64
         if (term_boxed_size(t) == BOXED_TERMS_REQUIRED_FOR_INT) {
             return term_unbox_int(t);
-        } else if (term_boxed_size(t) == BOXED_TERMS_REQUIRED_FOR_INT64) {
+        } else {
             return term_unbox_int64(t);
         }
 #else

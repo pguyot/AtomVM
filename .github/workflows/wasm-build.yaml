@@ -108,6 +108,11 @@ jobs:
     runs-on: ubuntu-24.04
     container: emscripten/emsdk
 
+    strategy:
+      fail-fast: false
+      matrix:
+        jit: ["", "-DAVM_DISABLE_JIT=OFF"]
+
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
@@ -122,7 +127,7 @@ jobs:
         set -euo pipefail
         mkdir build
         cd build
-        emcmake cmake ..
+        emcmake cmake .. ${{ matrix.jit }}
         emmake make -j
 
     - name: Download AtomVM and test modules
@@ -147,7 +152,7 @@ jobs:
         node src/AtomVM.js ../../../../build/tests/erlang_tests/test_crypto.beam
 
     - name: "Rename and write sha256sum (node)"
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') && matrix.jit == ''
       shell: bash
       working-directory: src/platforms/emscripten/build/src
       run: |
@@ -160,7 +165,7 @@ jobs:
 
     - name: "Release (node)"
       uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') && matrix.jit == ''
       with:
         draft: true
         fail_on_unmatched_files: true
@@ -181,6 +186,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        jit: ["", "-DAVM_DISABLE_JIT=OFF"]
         language: ["javascript-typescript"]
 
     steps:
@@ -191,6 +197,7 @@ jobs:
       run: sudo apt update -y && sudo apt install -y cmake gperf
 
     - name: "Initialize CodeQL"
+      if: matrix.jit == ''
       uses: github/codeql-action/init@v3
       with:
         languages: ${{matrix.language}}
@@ -204,13 +211,15 @@ jobs:
         set -euo pipefail
         mkdir build
         cd build
-        emcmake cmake .. -DAVM_EMSCRIPTEN_ENV=web
+        emcmake cmake .. -DAVM_EMSCRIPTEN_ENV=web ${{ matrix.jit }}
         emmake make -j
 
     - name: "Perform CodeQL Analysis"
+      if: matrix.jit == ''
       uses: github/codeql-action/analyze@v3
 
     - name: Upload wasm build for web
+      if: matrix.jit == ''
       uses: actions/upload-artifact@v4
       with:
         name: atomvm-js-web

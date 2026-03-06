@@ -850,7 +850,11 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t si
 #endif
 #else
     UNUSED(size);
-    return (ModuleNativeEntryPoint) (native_code + offset);
+    // Use memcpy to convert object pointer to function pointer (ISO C compliant)
+    ModuleNativeEntryPoint result;
+    const uint8_t *addr = native_code + offset;
+    memcpy(&result, &addr, sizeof(result));
+    return result;
 #endif
 }
 

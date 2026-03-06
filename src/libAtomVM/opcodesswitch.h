@@ -1339,6 +1339,20 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 
 #else
 
+#ifdef JIT_JUMPTABLE_IS_DATA
+static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
+{
+    int label = (int) ((ctx->cp & 0xFFFFFF) >> 2) / JIT_JUMPTABLE_ENTRY_SIZE;
+    return module_get_native_entry_point(mod, label);
+}
+#else
+static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
+{
+    return (ModuleNativeEntryPoint) ((const uint8_t *) mod->native_code)
+        + ((ctx->cp & 0xFFFFFF) >> 2);
+}
+#endif
+
 #define DO_RETURN()                                                     \
     {                                                                   \
         int module_index = ((uintptr_t) ctx->cp) >> 24;                 \
@@ -1353,7 +1367,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
             code = mod->code->code;                                     \
         }                                                               \
         if (mod->native_code) {                                         \
-            native_pc = (ModuleNativeEntryPoint) ((const uint8_t *) mod->native_code) + ((ctx->cp & 0xFFFFFF) >> 2); \
+            native_pc = do_return_native(mod, ctx);                     \
         } else {                                                        \
             native_pc = NULL;                                           \
             pc = code + ((((uintptr_t) ctx->cp) & 0xFFFFFF) >> 2);      \
@@ -2105,10 +2119,18 @@ schedule_in:
             if (mod->native_code == NULL) {
                 // set PC
                 native_pc = NULL;
-                JUMP_TO_ADDRESS(jit_state.continuation);
+                JUMP_TO_ADDRESS(jit_state.continuation_pc);
             } else {
 #endif
+#ifdef JIT_JUMPTABLE_IS_DATA
+                // WASM: continuation stores (label + 1); convert to function pointer
+                {
+                    int label = (int) (uintptr_t) jit_state.continuation - 1;
+                    native_pc = module_get_native_entry_point(mod, label);
+                }
+#else
                 native_pc = jit_state.continuation;
+#endif
 #ifndef AVM_NO_EMU
             }
 #endif

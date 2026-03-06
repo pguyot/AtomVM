@@ -237,6 +237,20 @@ _Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->rema
 
 _Static_assert(sizeof(size_t) == 4, "size_t is expected to be 32 bits");
 
+#elif JIT_ARCH_TARGET == JIT_ARCH_WASM32
+_Static_assert(offsetof(Context, e) == 0x28, "ctx->e is 0x28 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(Context, x) == 0x2C, "ctx->x is 0x2C in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(Context, cp) == 0x70, "ctx->cp is 0x70 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(Context, fr) == 0x74, "ctx->fr is 0x74 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(Context, bs) == 0x78, "ctx->bs is 0x78 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(Context, bs_offset) == 0x7C, "ctx->bs_offset is 0x7C in jit/src/jit_wasm32.erl");
+
+_Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(JITState, continuation) == 0x4, "jit_state->continuation is 0x4 in jit/src/jit_wasm32.erl");
+_Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->remaining_reductions is 0x8 in jit/src/jit_wasm32.erl");
+
+_Static_assert(sizeof(size_t) == 4, "size_t is expected to be 32 bits");
+
 #else
 #error Unknown jit target
 #endif
@@ -324,12 +338,19 @@ static Context *jit_return(Context *ctx, JITState *jit_state)
         // return to emulated
         const uint8_t *code = mod->code->code;
         const uint8_t *pc = code + ((ctx->cp & 0xFFFFFF) >> 2);
-        jit_state->continuation = pc;
+        jit_state->continuation_pc = pc;
     } else {
 #endif
+#ifdef JIT_JUMPTABLE_IS_DATA
+        // WASM: continuation stores (label + 1) to distinguish from NULL.
+        // The dispatch loop converts this to a function pointer.
+        int label = ((ctx->cp & 0xFFFFFF) >> 2) / JIT_JUMPTABLE_ENTRY_SIZE;
+        jit_state->continuation = (ModuleNativeEntryPoint) (uintptr_t) (label + 1);
+#else
         // return to native using pointer arithmetics on function pointers
         const void *native_pc = ((const uint8_t *) mod->native_code) + ((ctx->cp & 0xFFFFFF) >> 2);
         jit_state->continuation = (ModuleNativeEntryPoint) native_pc;
+#endif
 #ifndef AVM_NO_EMU
     }
 #endif
