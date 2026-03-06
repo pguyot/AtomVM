@@ -551,6 +551,28 @@ call_primitive_last(
         stream = Stream0
     } = State0,
     Primitive,
+    []
+) ->
+    % No arguments: use memory-indirect jump, no need to load function pointer
+    PrimAddr =
+        case Primitive of
+            0 -> {0, ?NATIVE_INTERFACE_REG};
+            N -> ?PRIMITIVE(N)
+        end,
+    Call = jit_x86_64_asm:jmpq(PrimAddr),
+    Stream1 = StreamModule:append(Stream0, Call),
+    State0#state{
+        stream = Stream1,
+        available_regs = ?AVAILABLE_REGS_MASK,
+        used_regs = 0,
+        regs = jit_regs:invalidate_all(State0#state.regs)
+    };
+call_primitive_last(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0
+    } = State0,
+    Primitive,
     Args
 ) ->
     % We need a register for the function pointer that should not be used as a parameter
@@ -1144,7 +1166,8 @@ shift_right_arith(
         stream_module = StreamModule,
         available_regs = Avail,
         used_regs = UR,
-        stream = Stream0
+        stream = Stream0,
+        regs = Regs0
     } = State,
     Reg,
     Shift
@@ -1156,11 +1179,13 @@ shift_right_arith(
     I1 = jit_x86_64_asm:movq(Reg, ResultReg),
     I2 = jit_x86_64_asm:sarq(Shift, ResultReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail band (bnot Bit),
-            used_regs = UR bor Bit
+            used_regs = UR bor Bit,
+            regs = Regs1
         },
         ResultReg
     }.
@@ -1467,6 +1492,10 @@ set_args1({y_reg, X}, Reg) ->
     ];
 set_args1(ArgReg, Reg) when ?IS_GPR(ArgReg) ->
     jit_x86_64_asm:movq(ArgReg, Reg);
+set_args1(0, Reg) ->
+    jit_x86_64_asm:xorl(Reg, Reg);
+set_args1(Arg, Reg) when is_integer(Arg), Arg >= 0, Arg =< 16#FFFFFFFF ->
+    jit_x86_64_asm:movl(Arg, Reg);
 set_args1(Arg, Reg) when is_integer(Arg) andalso Arg >= -16#80000000 andalso Arg < 16#80000000 ->
     jit_x86_64_asm:movq(Arg, Reg);
 set_args1(Arg, Reg) when is_integer(Arg) ->
@@ -2118,8 +2147,9 @@ move_to_native_register_emit(
     Bit = reg_bit(Reg),
     I1 =
         if
-            ?IS_SINT32_T(Imm) -> jit_x86_64_asm:movq(Imm, Reg);
+            Imm =:= 0 -> jit_x86_64_asm:xorl(Reg, Reg);
             Imm >= 0, Imm =< 16#FFFFFFFF -> jit_x86_64_asm:movl(Imm, Reg);
+            ?IS_SINT32_T(Imm) -> jit_x86_64_asm:movq(Imm, Reg);
             true -> jit_x86_64_asm:movabsq(Imm, Reg)
         end,
     Stream1 = StreamModule:append(Stream0, I1),
@@ -2224,8 +2254,9 @@ move_to_native_register(
     I =
         if
             is_atom(RegSrc) -> jit_x86_64_asm:movq(RegSrc, RegDst);
-            ?IS_SINT32_T(RegSrc) -> jit_x86_64_asm:movq(RegSrc, RegDst);
+            RegSrc =:= 0 -> jit_x86_64_asm:xorl(RegDst, RegDst);
             RegSrc >= 0, RegSrc =< 16#FFFFFFFF -> jit_x86_64_asm:movl(RegSrc, RegDst);
+            ?IS_SINT32_T(RegSrc) -> jit_x86_64_asm:movq(RegSrc, RegDst);
             true -> jit_x86_64_asm:movabsq(RegSrc, RegDst)
         end,
     Stream1 = StreamModule:append(Stream0, I),
@@ -2593,16 +2624,16 @@ div_reg(
 ) ->
     %% DivisorReg must not be rax (clobbered by dividend move) or rdx (clobbered by cqo).
     %% If DivisorReg is rax, move it to a temp register first.
-    {I0, ActualDivisor} =
+    {I0, ActualDivisor, Regs1} =
         case DivisorReg of
             rax ->
                 Temp = first_avail(Avail band (bnot reg_bit(DividendReg))),
-                {jit_x86_64_asm:movq(rax, Temp), Temp};
+                {jit_x86_64_asm:movq(rax, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             rdx ->
                 Temp = first_avail(Avail band (bnot reg_bit(DividendReg))),
-                {jit_x86_64_asm:movq(rdx, Temp), Temp};
+                {jit_x86_64_asm:movq(rdx, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             _ ->
-                {<<>>, DivisorReg}
+                {<<>>, DivisorReg, Regs0}
         end,
     I1 =
         case DividendReg of
@@ -2615,8 +2646,8 @@ div_reg(
     I5 = jit_x86_64_asm:popq(rdx),
     Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, rax),
-    {State#state{stream = Stream1, regs = Regs1}, rax}.
+    Regs2 = jit_regs:invalidate_reg(Regs1, rax),
+    {State#state{stream = Stream1, regs = Regs2}, rax}.
 
 %% Signed integer remainder: remainder = DividendReg rem DivisorReg
 %% Uses idivq which divides rdx:rax by operand, remainder in rdx.
@@ -2634,20 +2665,20 @@ rem_reg(
         Avail band (bnot reg_bit(rax)) band (bnot reg_bit(DivisorReg)) band
             (bnot reg_bit(DividendReg))
     ),
-    {I0, ActualDivisor} =
+    {I0, ActualDivisor, Regs1} =
         case DivisorReg of
             rax ->
                 Temp = first_avail(
                     Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(RemTemp))
                 ),
-                {jit_x86_64_asm:movq(rax, Temp), Temp};
+                {jit_x86_64_asm:movq(rax, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             rdx ->
                 Temp = first_avail(
                     Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(RemTemp))
                 ),
-                {jit_x86_64_asm:movq(rdx, Temp), Temp};
+                {jit_x86_64_asm:movq(rdx, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             _ ->
-                {<<>>, DivisorReg}
+                {<<>>, DivisorReg, Regs0}
         end,
     I1 =
         case DividendReg of
@@ -2662,12 +2693,12 @@ rem_reg(
     Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     RemBit = reg_bit(RemTemp),
-    Regs1 = jit_regs:invalidate_reg(Regs0, rax),
-    Regs2 = jit_regs:invalidate_reg(Regs1, RemTemp),
+    Regs2 = jit_regs:invalidate_reg(Regs1, rax),
+    Regs3 = jit_regs:invalidate_reg(Regs2, RemTemp),
     {
         State#state{
             stream = Stream1,
-            regs = Regs2,
+            regs = Regs3,
             available_regs = Avail band (bnot RemBit),
             used_regs = State#state.used_regs bor RemBit
         },
