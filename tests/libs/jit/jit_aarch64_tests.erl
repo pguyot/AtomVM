@@ -2244,3 +2244,16 @@ jump_to_continuation_test() ->
             "   8:	d61f00e0 	br	x7"
         >>,
     jit_tests_common:assert_stream(aarch64, Dump, Stream).
+
+%% After freeing a register, cache is preserved so reload is elided
+cached_load_after_free_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r7} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:free_native_registers(State1, [r7]),
+    {State3, r7} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	f9402c07 	ldr	x7, [x0, #88]"
+        >>,
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
