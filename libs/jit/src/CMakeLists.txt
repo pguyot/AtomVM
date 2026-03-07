@@ -29,12 +29,12 @@ set(ERLANG_MODULES
     jit_stream_binary
     jit_stream_flash
     jit_stream_mmap
-    jit_aarch64
-    jit_aarch64_asm
-    jit_armv6m
-    jit_armv6m_asm
-    jit_riscv32
-    jit_riscv32_asm
+    # jit_aarch64 excluded: incomplete at this bisect point
+    # jit_aarch64_asm
+    # jit_armv6m excluded: incomplete at this bisect point
+    # jit_armv6m_asm
+    # jit_riscv32 excluded: incomplete at this bisect point
+    # jit_riscv32_asm
     jit_x86_64
     jit_x86_64_asm
 )
