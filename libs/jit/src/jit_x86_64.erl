@@ -1816,7 +1816,8 @@ get_array_element(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        used_regs = UsedRegs0
+        used_regs = UsedRegs0,
+        regs = Regs0
     } = State,
     Reg,
     Index
@@ -1825,9 +1826,13 @@ get_array_element(
     Bit = reg_bit(ElemReg),
     I1 = jit_x86_64_asm:movq({Index * 8, Reg}, ElemReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ElemReg),
     {
         State#state{
-            stream = Stream1, available_regs = Avail band (bnot Bit), used_regs = UsedRegs0 bor Bit
+            stream = Stream1,
+            available_regs = Avail band (bnot Bit),
+            used_regs = UsedRegs0 bor Bit,
+            regs = Regs1
         },
         ElemReg
     }.
@@ -1849,7 +1854,8 @@ get_array_element(
     Index :: non_neg_integer()
 ) -> state().
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     {x_reg, X},
     Reg,
     Index
@@ -1858,9 +1864,11 @@ move_to_array_element(
     I1 = jit_x86_64_asm:movq(?X_REG(X), Temp),
     I2 = jit_x86_64_asm:movq(Temp, {Index * 8, Reg}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     {ptr, Source},
     Reg,
     Index
@@ -1869,9 +1877,10 @@ move_to_array_element(
     I1 = jit_x86_64_asm:movq({0, Source}, Temp),
     I2 = jit_x86_64_asm:movq(Temp, {Index * 8, Reg}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} =
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
         State,
     {y_reg, Y},
     Reg,
@@ -1883,7 +1892,8 @@ move_to_array_element(
     I3 = jit_x86_64_asm:movq(Temp, {Index * 8, Reg}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0} = State, Source, Reg, Index
 ) when ?IS_GPR(Source) andalso ?IS_GPR(Reg) andalso is_integer(Index) ->
@@ -1897,7 +1907,8 @@ move_to_array_element(
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1};
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     Source,
     Reg,
     Index
@@ -1906,7 +1917,8 @@ move_to_array_element(
     I1 = jit_x86_64_asm:movabsq(Source, Temp),
     I2 = jit_x86_64_asm:movq(Temp, {Index * 8, Reg}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1}.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a move of a value (integer, vm register or native register) to an
@@ -1928,7 +1940,8 @@ move_to_array_element(
 ) when is_integer(Index) andalso is_integer(Offset) ->
     move_to_array_element(State, Source, BaseReg, Index + Offset);
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     {x_reg, X},
     BaseReg,
     IndexReg,
@@ -1938,9 +1951,11 @@ move_to_array_element(
     I1 = jit_x86_64_asm:movq(?X_REG(X), Temp),
     I2 = jit_x86_64_asm:movq(Temp, {Offset * ?WORD_SIZE, BaseReg, IndexReg, 8}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     {y_reg, Y},
     BaseReg,
     IndexReg,
@@ -1951,7 +1966,8 @@ move_to_array_element(
     I2 = jit_x86_64_asm:movq({Y * 8, Temp}, Temp),
     I3 = jit_x86_64_asm:movq(Temp, {Offset * ?WORD_SIZE, BaseReg, IndexReg, 8}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     Source,
@@ -2528,9 +2544,11 @@ mul_reg(
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0
 ) ->
     Temp = first_avail(Avail),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     Offset = StreamModule:offset(Stream0),
     I1 = jit_x86_64_asm:decl(?JITSTATE_REMAINING_REDUCTIONS),
     {RewriteJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(0),
@@ -2538,7 +2556,7 @@ decrement_reductions_and_maybe_schedule_next(
     I4 = jit_x86_64_asm:movq(Temp, ?JITSTATE_CONTINUATION),
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State1 = State0#state{stream = Stream1},
+    State1 = State0#state{stream = Stream1, regs = Regs1},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     % Rewrite jumps
     #state{stream = Stream2} = State2,

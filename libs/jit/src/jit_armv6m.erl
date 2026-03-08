@@ -2561,7 +2561,8 @@ get_array_element(
     I2 = jit_armv6m_asm:ldr(Reg, {Reg, 124}),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Reg),
-    {State1#state{stream = Stream2, regs = Regs1}, Reg};
+    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    {State1#state{stream = Stream2, regs = Regs2}, Reg};
 get_array_element(
     #state{
         stream_module = StreamModule,
@@ -2649,9 +2650,11 @@ move_to_array_element(
     I1 = jit_armv6m_asm:add(Temp, Reg),
     I2 = jit_armv6m_asm:str(ValueReg, {Temp, 124}),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
-    State1#state{stream = Stream2};
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State1#state{stream = Stream2, regs = Regs1};
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0,
     ValueReg,
     Reg,
     IndexReg
@@ -2661,7 +2664,8 @@ move_to_array_element(
     I2 = jit_armv6m_asm:lsls(Temp, Temp, 2),
     I3 = jit_armv6m_asm:str(ValueReg, {Reg, Temp}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State0#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
     State0,
     Value,
@@ -2681,7 +2685,8 @@ move_to_array_element(
 ) when is_integer(IndexReg) andalso is_integer(Offset) andalso Offset div 8 =:= 0 ->
     move_to_array_element(State, Value, BaseReg, IndexReg + (Offset div 8));
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State,
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
     ValueReg,
     BaseReg,
     IndexReg,
@@ -2692,7 +2697,8 @@ move_to_array_element(
     I2 = jit_armv6m_asm:lsls(Temp, Temp, 2),
     I3 = jit_armv6m_asm:str(ValueReg, {BaseReg, Temp}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    State#state{stream = Stream1};
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
     State0,
     Value,
@@ -2708,7 +2714,8 @@ move_to_array_element(
     Stream1 = (State1#state.stream_module):append(
         State1#state.stream, <<I1/binary, I2/binary, I3/binary>>
     ),
-    State2 = State1#state{stream = Stream1},
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State2 = State1#state{stream = Stream1, regs = Regs1},
     free_native_register(State2, ValueReg).
 
 -spec move_to_native_register(state(), value() | cp) -> {state(), armv6m_register()}.
