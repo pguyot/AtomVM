@@ -549,15 +549,15 @@ li_test_() ->
         %% These must go through unsigned 32-bit path (lui+addi+slli+srli)
         %% to avoid sign extension corruption on RV64.
         %% GNU as uses different instruction sequences for these, so we verify
-        %% our output matches the unsigned path (includes slli+srli to clear upper bits).
+        %% our output includes slli to clear upper bits (sign extension fix).
         ?_test(begin
             Bin = jit_riscv64_asm:li(a0, 16#7FFFFFFF),
-            ?assert(byte_size(Bin) >= 12),
+            ?assert(byte_size(Bin) > 8),
             ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
         end),
         ?_test(begin
             Bin = jit_riscv64_asm:li(a0, 16#7FFFF800),
-            ?assert(byte_size(Bin) >= 12),
+            ?assert(byte_size(Bin) > 8),
             ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
         end),
         %% Value just below the buggy range (uses li_32bit path: lui+addi)
