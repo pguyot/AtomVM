@@ -544,6 +544,27 @@ li_test_() ->
         %% Negative 12-bit
         ?_assertAsmEqual(
             <<16#80000513:32/little>>, "li a0, -2048", jit_riscv64_asm:li(a0, -2048)
+        ),
+        %% Values near top of signed 32-bit range (0x7FFFF800 - 0x7FFFFFFF)
+        %% These must go through unsigned 32-bit path (lui+addi+slli+srli)
+        %% to avoid sign extension corruption on RV64.
+        %% GNU as uses different instruction sequences for these, so we verify
+        %% our output matches the unsigned path (includes slli+srli to clear upper bits).
+        ?_test(begin
+            Bin = jit_riscv64_asm:li(a0, 16#7FFFFFFF),
+            ?assert(byte_size(Bin) >= 12),
+            ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
+        end),
+        ?_test(begin
+            Bin = jit_riscv64_asm:li(a0, 16#7FFFF800),
+            ?assert(byte_size(Bin) >= 12),
+            ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
+        end),
+        %% Value just below the buggy range (uses li_32bit path: lui+addi)
+        ?_assertAsmEqual(
+            <<16#7FFFF537:32/little, 16#7FF50513:32/little>>,
+            ".option norvc\nli a0, 0x7FFFF7FF",
+            jit_riscv64_asm:li(a0, 16#7FFFF7FF)
         )
     ].
 

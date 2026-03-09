@@ -324,7 +324,7 @@ li(Rd, Imm) when Rd =/= zero, Imm >= -32, Imm =< 31 ->
     c_li(Rd, Imm);
 li(Rd, Imm) when Imm >= -2048, Imm =< 2047 ->
     addi(Rd, zero, Imm);
-li(Rd, Imm) when Imm >= -16#80000000, Imm =< 16#7FFFFFFF ->
+li(Rd, Imm) when Imm >= -16#80000000, Imm =< 16#7FFFF7FF ->
     li_32bit(Rd, Imm);
 li(Rd, Imm) when Imm >= 0, Imm =< 16#FFFFFFFF ->
     %% Unsigned 32-bit that doesn't fit in signed 32-bit range.

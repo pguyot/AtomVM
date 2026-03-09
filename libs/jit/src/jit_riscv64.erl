@@ -1798,7 +1798,7 @@ call_func_ptr(
 
     AvailableRegs2 = lists:delete(ResultReg, AvailableRegs1),
     AvailableRegs3 = ?AVAILABLE_REGS -- (?AVAILABLE_REGS -- AvailableRegs2),
-    Regs1 = jit_regs:invalidate_volatile(State0#state.regs, UsedRegs1),
+    Regs1 = jit_regs:invalidate_all(State0#state.regs),
     {
         State4#state{
             stream = Stream8,
@@ -3220,9 +3220,11 @@ mul_reg(
 %%
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State0
 ) ->
     Temp = first_avail(Avail),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     % Load reduction count
     I1 = jit_riscv64_asm:lw(Temp, ?JITSTATE_REG, ?JITSTATE_REDUCTIONCOUNT_OFFSET),
     % Decrement reduction count
@@ -3241,7 +3243,7 @@ decrement_reductions_and_maybe_schedule_next(
     I6 = jit_riscv64_asm:sd(?JITSTATE_REG, Temp, ?JITSTATE_CONTINUATION_OFFSET),
     % Append the instructions to the stream
     Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary, I6/binary>>),
-    State1 = State0#state{stream = Stream2},
+    State1 = State0#state{stream = Stream2, regs = Regs1},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     % Rewrite the branch and adr instructions
     #state{stream = Stream3} = State2,
