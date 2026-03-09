@@ -1491,7 +1491,8 @@ if_block_cond(
     CC = eq,
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, 16#FFFF:16>>),
-    State1 = State0#state{stream = Stream1},
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Reg),
+    State1 = State0#state{stream = Stream1, regs = Regs1},
     State2 = if_block_free_reg(RegTuple, State1),
     {State2, CC, byte_size(I1) + byte_size(I2)};
 if_block_cond(

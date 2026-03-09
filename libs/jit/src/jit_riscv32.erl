@@ -1381,7 +1381,8 @@ if_block_cond(
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     BranchInstr = <<16#FFFFFFFF:32/little>>,
     Stream2 = StreamModule:append(Stream1, BranchInstr),
-    State1 = State0#state{stream = Stream2},
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Reg),
+    State1 = State0#state{stream = Stream2, regs = Regs1},
     State2 = if_block_free_reg(RegTuple, State1),
     {State2, {beq, Reg, zero}, byte_size(I1) + byte_size(I2)};
 if_block_cond(

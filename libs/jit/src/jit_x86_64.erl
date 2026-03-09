@@ -1026,11 +1026,12 @@ if_block_cond0(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) 
     {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
+if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
     I1 = jit_x86_64_asm:andb(Mask, Reg),
     I2 = jit_x86_64_asm:cmpb(Val, Reg),
     {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel8(1),
-    State1 = if_block_free_reg(RegTuple, State0),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1 = if_block_free_reg(RegTuple, State0#state{regs = Regs1}),
     {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
 if_block_cond0(State0, {Reg, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
     Temp = first_avail(State0#state.available_regs),
