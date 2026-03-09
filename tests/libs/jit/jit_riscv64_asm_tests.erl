@@ -548,22 +548,23 @@ li_test_() ->
         %% Values near top of signed 32-bit range (0x7FFFF800 - 0x7FFFFFFF)
         %% These must go through unsigned 32-bit path (lui+addi+slli+srli)
         %% to avoid sign extension corruption on RV64.
-        %% GNU as uses different instruction sequences for these, so we verify
-        %% our output includes slli to clear upper bits (sign extension fix).
-        ?_test(begin
-            Bin = jit_riscv64_asm:li(a0, 16#7FFFFFFF),
-            ?assert(byte_size(Bin) > 8),
-            ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
-        end),
-        ?_test(begin
-            Bin = jit_riscv64_asm:li(a0, 16#7FFFF800),
-            ?assert(byte_size(Bin) > 8),
-            ?assertNotEqual(nomatch, binary:match(Bin, jit_riscv64_asm:slli(a0, a0, 32)))
-        end),
-        %% Value just below the buggy range (uses li_32bit path: lui+addi)
+        %% On RV64, GNU as uses addiw for li with these values, but we use
+        %% slli+srli to clear upper bits instead. Use explicit instruction
+        %% sequences to validate against cross-binutils.
+        ?_assertAsmEqual(
+            <<16#80000537:32/little, 16#157D:16/little, 16#1502:16/little, 16#9101:16/little>>,
+            "lui a0, 0x80000\nc.addi a0, -1\nc.slli a0, 32\nc.srli a0, 32",
+            jit_riscv64_asm:li(a0, 16#7FFFFFFF)
+        ),
+        ?_assertAsmEqual(
+            <<16#80000537:32/little, 16#80050513:32/little, 16#1502:16/little, 16#9101:16/little>>,
+            "lui a0, 0x80000\naddi a0, a0, -2048\nc.slli a0, 32\nc.srli a0, 32",
+            jit_riscv64_asm:li(a0, 16#7FFFF800)
+        ),
+        %% Value just below the boundary (uses li_32bit path: lui+addi)
         ?_assertAsmEqual(
             <<16#7FFFF537:32/little, 16#7FF50513:32/little>>,
-            ".option norvc\nli a0, 0x7FFFF7FF",
+            "li a0, 0x7FFFF7FF",
             jit_riscv64_asm:li(a0, 16#7FFFF7FF)
         )
     ].
