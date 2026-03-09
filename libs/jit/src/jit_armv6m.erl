@@ -2261,11 +2261,11 @@ move_to_vm_register_emit(#state{available_regs = AR0} = State0, {y_reg, Y}, Dest
     Code = ldr_y_reg(Temp, Y, AT),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, Code),
     % ldr_y_reg clobbers first_avail(AT) as a hidden temp for loading Y_REGS pointer
-    LdrTemp = first_avail(AT),
+    Regs0a = case AT of 0 -> State0#state.regs; _ -> jit_regs:invalidate_reg(State0#state.regs, first_avail(AT)) end,
     State0a = State0#state{
         stream = Stream1,
         available_regs = AT,
-        regs = jit_regs:invalidate_reg(State0#state.regs, LdrTemp)
+        regs = Regs0a
     },
     State1 = move_to_vm_register(State0a, Temp, Dest),
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
@@ -2897,8 +2897,7 @@ move_to_native_register_emit(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     % ldr_y_reg clobbers first_avail(AvailT) as a hidden temp for loading Y_REGS pointer
-    LdrTemp = first_avail(AvailT),
-    Regs2 = jit_regs:invalidate_reg(Regs1, LdrTemp),
+    Regs2 = case AvailT of 0 -> Regs1; _ -> jit_regs:invalidate_reg(Regs1, first_avail(AvailT)) end,
     {
         State#state{
             stream = Stream1,
@@ -2977,8 +2976,7 @@ move_to_native_register(
     Code = ldr_y_reg(RegDst, Y, AT),
     Stream1 = StreamModule:append(Stream0, Code),
     % ldr_y_reg clobbers first_avail(AT) as a hidden temp for loading Y_REGS pointer
-    LdrTemp = first_avail(AT),
-    Regs1 = jit_regs:invalidate_reg(Regs0, LdrTemp),
+    Regs1 = case AT of 0 -> Regs0; _ -> jit_regs:invalidate_reg(Regs0, first_avail(AT)) end,
     State#state{stream = Stream1, regs = Regs1};
 move_to_native_register(
     #state{
@@ -3060,8 +3058,8 @@ move_to_cp(
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     % ldr_y_reg clobbers first_avail(AvailT) as a hidden temp for loading Y_REGS pointer
-    LdrTemp = first_avail(AvailT),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), LdrTemp),
+    Regs1a = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = case AvailT of 0 -> Regs1a; _ -> jit_regs:invalidate_reg(Regs1a, first_avail(AvailT)) end,
     State#state{stream = Stream1, regs = Regs1}.
 
 increment_sp(
