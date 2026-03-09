@@ -781,13 +781,14 @@ jump_to_label(
     Offset = StreamModule:offset(Stream0),
     {State1, CodeBlock} = branch_to_label_code(State0, Offset, Label, LabelLookupResult),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
-    State1#state{stream = Stream1}.
+    %% After unconditional jump, register tracking is dead until next label
+    State1#state{stream = Stream1, regs = jit_regs:invalidate_all(State1#state.regs)}.
 
 jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
     Offset = StreamModule:offset(Stream0),
     CodeBlock = branch_to_offset_code(State, Offset, TargetOffset),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
-    State#state{stream = Stream1}.
+    State#state{stream = Stream1, regs = jit_regs:invalidate_all(State#state.regs)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to address in continuation pointer register
