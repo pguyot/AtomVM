@@ -410,6 +410,8 @@ struct Test tests[] = {
     TEST_CASE(test_undef),
     TEST_CASE(test_bs_1),
     TEST_CASE(test_bs_2),
+    TEST_CASE(test_bs_3a),
+    TEST_CASE(test_bs_3b),
     TEST_CASE(test_bs_3),
     TEST_CASE(test_bs_4),
     TEST_CASE(test_bs),

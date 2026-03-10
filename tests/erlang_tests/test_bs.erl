@@ -20,7 +20,7 @@
 
 -module(test_bs).
 
--export([start/0, start_1/0, start_2/0, start_3/0, start_4/0, ext_id/1, join/2]).
+-export([start/0, start_1/0, start_2/0, start_3/0, start_3a/0, start_3b/0, start_4/0, ext_id/1, join/2]).
 
 start() ->
     0 = start_1(),
@@ -99,6 +99,12 @@ start_2() ->
 
 %% Group 3: GC, string matching, iteration tests
 start_3() ->
+    0 = start_3a(),
+    0 = start_3b(),
+    0.
+
+%% Group 3a: GC + string matching
+start_3a() ->
     BigBin = make_binary(1025),
     FirstPart = binary:part(BigBin, 0, 1024),
     LastPart = binary:part(BigBin, 1024, 1),
@@ -110,6 +116,10 @@ start_3() ->
 
     test_match_case_type(),
 
+    0.
+
+%% Group 3b: Iteration, large, copy bits, match string select
+start_3b() ->
     ok = test_iterate_binary(),
 
     ok = test_large(),

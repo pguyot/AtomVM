@@ -432,6 +432,8 @@ compile_erlang(test_bs)
 compile_erlang(test_bs_1)
 compile_erlang(test_bs_2)
 compile_erlang(test_bs_3)
+compile_erlang(test_bs_3a)
+compile_erlang(test_bs_3b)
 compile_erlang(test_bs_4)
 compile_erlang(test_bs_int)
 compile_erlang(test_bs_int_unaligned)
@@ -972,6 +974,8 @@ set(erlang_test_beams
     test_bs_1.beam
     test_bs_2.beam
     test_bs_3.beam
+    test_bs_3a.beam
+    test_bs_3b.beam
     test_bs_4.beam
     test_bs_int.beam
     test_bs_int_unaligned.beam
