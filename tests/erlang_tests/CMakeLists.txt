@@ -433,6 +433,11 @@ compile_erlang(test_bs_1)
 compile_erlang(test_bs_2)
 compile_erlang(test_bs_3)
 compile_erlang(test_bs_3a)
+compile_erlang(test_bs_3a1)
+compile_erlang(test_bs_3a2)
+compile_erlang(test_bs_3a3)
+compile_erlang(test_bs_3a4)
+compile_erlang(test_bs_3a5)
 compile_erlang(test_bs_3b)
 compile_erlang(test_bs_4)
 compile_erlang(test_bs_int)
@@ -975,6 +980,11 @@ set(erlang_test_beams
     test_bs_2.beam
     test_bs_3.beam
     test_bs_3a.beam
+    test_bs_3a1.beam
+    test_bs_3a2.beam
+    test_bs_3a3.beam
+    test_bs_3a4.beam
+    test_bs_3a5.beam
     test_bs_3b.beam
     test_bs_4.beam
     test_bs_int.beam

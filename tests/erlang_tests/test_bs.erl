@@ -20,7 +20,9 @@
 
 -module(test_bs).
 
--export([start/0, start_1/0, start_2/0, start_3/0, start_3a/0, start_3b/0, start_4/0, ext_id/1, join/2]).
+-export([start/0, start_1/0, start_2/0, start_3/0, start_3a/0, start_3b/0,
+         start_3a1/0, start_3a2/0, start_3a3/0, start_3a4/0, start_3a5/0,
+         start_4/0, ext_id/1, join/2]).
 
 start() ->
     0 = start_1(),
@@ -105,17 +107,39 @@ start_3() ->
 
 %% Group 3a: GC + string matching
 start_3a() ->
+    0 = start_3a1(),
+    0 = start_3a2(),
+    0 = start_3a3(),
+    0 = start_3a4(),
+    0 = start_3a5(),
+    0.
+
+%% match_force_gc
+start_3a1() ->
     BigBin = make_binary(1025),
     FirstPart = binary:part(BigBin, 0, 1024),
     LastPart = binary:part(BigBin, 1024, 1),
     {FirstPart, LastPart} = test_match_force_gc(BigBin),
+    0.
 
+%% put_match_string
+start_3a2() ->
     test_put_match_string(<<"foo">>, <<"bar">>),
+    0.
+
+%% skip_bits
+start_3a3() ->
     test_skip_bits(),
+    0.
+
+%% bs_match_string_unaligned
+start_3a4() ->
     ok = test_bs_match_string_unaligned(),
+    0.
 
+%% match_case_type
+start_3a5() ->
     test_match_case_type(),
-
     0.
 
 %% Group 3b: Iteration, large, copy bits, match string select
