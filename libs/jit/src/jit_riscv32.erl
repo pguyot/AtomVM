@@ -631,7 +631,8 @@ call_primitive(
     StateCall = State#state{
         stream = Stream1,
         available_regs = Available band (bnot TempBit),
-        used_regs = Used bor TempBit
+        used_regs = Used bor TempBit,
+        regs = jit_regs:invalidate_reg(State#state.regs, TempReg)
     },
     call_func_ptr(StateCall, {free, TempReg}, Args);
 call_primitive(
@@ -675,7 +676,10 @@ call_primitive_last(
     Stream1 = StreamModule:append(Stream0, PrepCall),
 
     State1 = State0#state{
-        stream = Stream1, available_regs = AvailableRegs1, used_regs = UsedMask
+        stream = Stream1,
+        available_regs = AvailableRegs1,
+        used_regs = UsedMask,
+        regs = jit_regs:invalidate_reg(State0#state.regs, Temp)
     },
 
     % Preprocess offset special arg
@@ -2044,7 +2048,11 @@ move_to_vm_register_emit(
     Stream1 = (State0#state.stream_module):append(State0#state.stream, Code),
     % str_y_reg clobbers Temp1, and for large offsets also clobbers first_avail(AT)
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp1),
-    Regs2 = case AT of 0 -> Regs1; _ -> jit_regs:invalidate_reg(Regs1, first_avail(AT)) end,
+    Regs2 =
+        case AT of
+            0 -> Regs1;
+            _ -> jit_regs:invalidate_reg(Regs1, first_avail(AT))
+        end,
     State0#state{stream = Stream1, regs = Regs2};
 % Source is an integer to y_reg (optimized: ldr first, then movs)
 move_to_vm_register_emit(
@@ -2061,7 +2069,11 @@ move_to_vm_register_emit(
     Stream1 = (State0#state.stream_module):append(State0#state.stream, <<I1/binary, YCode/binary>>),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp1), Temp2),
     % str_y_reg may clobber first_avail(AT) for large offsets
-    Regs2 = case AT of 0 -> Regs1; _ -> jit_regs:invalidate_reg(Regs1, first_avail(AT)) end,
+    Regs2 =
+        case AT of
+            0 -> Regs1;
+            _ -> jit_regs:invalidate_reg(Regs1, first_avail(AT))
+        end,
     State0#state{stream = Stream1, regs = Regs2};
 % Source is an integer (0-255 for movs, negative values need different handling)
 move_to_vm_register_emit(#state{available_regs = AR0} = State0, N, Dest) when
@@ -2117,7 +2129,11 @@ move_to_vm_register_emit(#state{available_regs = AR0} = State0, {y_reg, Y}, Dest
     Code = ldr_y_reg(Temp, Y, AT),
     Stream1 = (State0#state.stream_module):append(State0#state.stream, Code),
     % ldr_y_reg clobbers first_avail(AT) as a hidden temp for loading Y_REGS pointer
-    Regs0a = case AT of 0 -> State0#state.regs; _ -> jit_regs:invalidate_reg(State0#state.regs, first_avail(AT)) end,
+    Regs0a =
+        case AT of
+            0 -> State0#state.regs;
+            _ -> jit_regs:invalidate_reg(State0#state.regs, first_avail(AT))
+        end,
     State0a = State0#state{
         stream = Stream1,
         available_regs = AT,
@@ -2622,7 +2638,11 @@ move_to_native_register_emit(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     % ldr_y_reg clobbers first_avail(AvailT) as a hidden temp for loading Y_REGS pointer
-    Regs2 = case AvailT of 0 -> Regs1; _ -> jit_regs:invalidate_reg(Regs1, first_avail(AvailT)) end,
+    Regs2 =
+        case AvailT of
+            0 -> Regs1;
+            _ -> jit_regs:invalidate_reg(Regs1, first_avail(AvailT))
+        end,
     {
         State#state{
             stream = Stream1,
@@ -2706,7 +2726,11 @@ move_to_native_register(
     Code = ldr_y_reg(RegDst, Y, AT),
     Stream1 = StreamModule:append(Stream0, Code),
     % ldr_y_reg clobbers first_avail(AT) as a hidden temp for loading Y_REGS pointer
-    Regs1 = case AT of 0 -> Regs0; _ -> jit_regs:invalidate_reg(Regs0, first_avail(AT)) end,
+    Regs1 =
+        case AT of
+            0 -> Regs0;
+            _ -> jit_regs:invalidate_reg(Regs0, first_avail(AT))
+        end,
     State#state{stream = Stream1, regs = Regs1};
 move_to_native_register(
     #state{
@@ -2791,7 +2815,11 @@ move_to_cp(
     Stream1 = StreamModule:append(Stream0, Code),
     % ldr_y_reg clobbers first_avail(AvailT) as a hidden temp for loading Y_REGS pointer
     Regs1a = jit_regs:invalidate_reg(Regs0, Reg),
-    Regs1 = case AvailT of 0 -> Regs1a; _ -> jit_regs:invalidate_reg(Regs1a, first_avail(AvailT)) end,
+    Regs1 =
+        case AvailT of
+            0 -> Regs1a;
+            _ -> jit_regs:invalidate_reg(Regs1a, first_avail(AvailT))
+        end,
     State#state{stream = Stream1, regs = Regs1}.
 
 increment_sp(

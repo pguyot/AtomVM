@@ -504,7 +504,8 @@ call_primitive(
                 State#state{
                     stream = Stream1,
                     available_regs = AvailableRegs0 band (bnot TempBit),
-                    used_regs = UsedRegs bor TempBit
+                    used_regs = UsedRegs bor TempBit,
+                    regs = jit_regs:invalidate_reg(State#state.regs, Temp)
                 },
                 {free, Temp},
                 Args
@@ -552,7 +553,10 @@ call_primitive_last(
     Stream1 = StreamModule:append(Stream0, PrepCall),
     State1 = set_args2(
         State0#state{
-            stream = Stream1, available_regs = AvailableRegs1, used_regs = UsedRegs
+            stream = Stream1,
+            available_regs = AvailableRegs1,
+            used_regs = UsedRegs,
+            regs = jit_regs:invalidate_reg(State0#state.regs, Temp)
         },
         Args,
         ParamRegs,
@@ -1026,7 +1030,9 @@ if_block_cond0(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) 
     {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
-if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
+if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when
+    ?IS_UINT8_T(Mask)
+->
     I1 = jit_x86_64_asm:andb(Mask, Reg),
     I2 = jit_x86_64_asm:cmpb(Val, Reg),
     {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel8(1),

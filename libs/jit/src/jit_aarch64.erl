@@ -561,7 +561,10 @@ call_primitive_last(
     Stream1 = StreamModule:append(Stream0, PrepCall),
     State1 = set_args(
         State0#state{
-            stream = Stream1, available_regs = AvailableRegs1, used_regs = UsedRegs
+            stream = Stream1,
+            available_regs = AvailableRegs1,
+            used_regs = UsedRegs,
+            regs = jit_regs:invalidate_reg(State0#state.regs, Temp)
         },
         Args
     ),
