@@ -22,6 +22,7 @@
 
 -export([start/0, start_1/0, start_2/0, start_3/0, start_3a/0, start_3b/0,
          start_3a1/0, start_3a2/0, start_3a3/0, start_3a4/0, start_3a5/0,
+         start_3a3_a/0, start_3a3_b/0, start_3a3_c/0, start_3a3_d/0, start_3a3_e/0,
          start_4/0, ext_id/1, join/2]).
 
 start() ->
@@ -129,7 +130,31 @@ start_3a2() ->
 
 %% skip_bits
 start_3a3() ->
-    test_skip_bits(),
+    0 = start_3a3_a(),
+    0 = start_3a3_b(),
+    0 = start_3a3_c(),
+    0 = start_3a3_d(),
+    0 = start_3a3_e(),
+    0.
+
+start_3a3_a() ->
+    <<"oobar">> = skip_bits(8, <<"foobar">>),
+    0.
+
+start_3a3_b() ->
+    <<"obar">> = skip_bits(16, <<"foobar">>),
+    0.
+
+start_3a3_c() ->
+    <<"">> = skip_bits(48, <<"foobar">>),
+    0.
+
+start_3a3_d() ->
+    ok = expect_error(fun() -> skip_bits(128, <<"foobar">>) end, {badmatch, <<"foobar">>}),
+    0.
+
+start_3a3_e() ->
+    ok = expect_error(fun() -> skip_bits(1, <<"foobar">>) end, fun skip_bits_unsupported/2),
     0.
 
 %% bs_match_string_unaligned
