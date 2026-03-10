@@ -429,6 +429,10 @@ compile_erlang(test_match)
 compile_erlang(test_ordering_0)
 compile_erlang(test_ordering_1)
 compile_erlang(test_bs)
+compile_erlang(test_bs_1)
+compile_erlang(test_bs_2)
+compile_erlang(test_bs_3)
+compile_erlang(test_bs_4)
 compile_erlang(test_bs_int)
 compile_erlang(test_bs_int_unaligned)
 compile_erlang(test_bs_start_match_live)
@@ -965,6 +969,10 @@ set(erlang_test_beams
     test_ordering_0.beam
     test_ordering_1.beam
     test_bs.beam
+    test_bs_1.beam
+    test_bs_2.beam
+    test_bs_3.beam
+    test_bs_4.beam
     test_bs_int.beam
     test_bs_int_unaligned.beam
     test_bs_start_match_live.beam

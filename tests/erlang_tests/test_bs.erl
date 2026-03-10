@@ -20,9 +20,17 @@
 
 -module(test_bs).
 
--export([start/0, ext_id/1, join/2]).
+-export([start/0, start_1/0, start_2/0, start_3/0, start_4/0, ext_id/1, join/2]).
 
 start() ->
+    0 = start_1(),
+    0 = start_2(),
+    0 = start_3(),
+    0 = start_4(),
+    0.
+
+%% Group 1: Binary construction and integer get tests
+start_1() ->
     test_pack_small_ints({2, 61, 20}, <<23, 180>>),
     test_pack_integer_big_endian(1024, 32, <<0, 0, 4, 0>>),
     IntegersAndBinaries = test_pack_integers_and_binaries(
@@ -54,6 +62,10 @@ start() ->
     ok = test_get_with_int_signed(),
     ok = test_get_with_unaligned_binary(),
 
+    0.
+
+%% Group 2: Binary matching and append tests
+start_2() ->
     <<"">> = test_match_first_integer(<<16#FF>>),
     <<1, 2, 3>> = test_match_first_integer(<<16#FF, 1, 2, 3>>),
     <<1, 2, 3>> = test_match_first_integer(<<16#AB, 16#CD, 1, 2, 3>>),
@@ -83,6 +95,10 @@ start() ->
     ),
     nope = test_match_recursive(<<"foo">>, []),
 
+    0.
+
+%% Group 3: GC, string matching, iteration tests
+start_3() ->
     BigBin = make_binary(1025),
     FirstPart = binary:part(BigBin, 0, 1024),
     LastPart = binary:part(BigBin, 1024, 1),
@@ -101,6 +117,10 @@ start() ->
     ok = test_copy_bits_string(),
     ok = test_bs_match_string_select(),
 
+    0.
+
+%% Group 4: Skip bits, variable size, float tests
+start_4() ->
     ok = test_bs_skip_bits2_little(),
 
     ok = test_bs_variable_size_bitstring(),
