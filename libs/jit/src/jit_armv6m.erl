@@ -3231,7 +3231,7 @@ and_(
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:bics(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
     {State1#state{available_regs = AT bor TempBit, stream = Stream2, regs = Regs1}, Reg};
 and_(
     #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
@@ -3245,7 +3245,7 @@ and_(
     Stream1 = State1#state.stream,
     I = jit_armv6m_asm:ands(Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
     {State1#state{available_regs = AT bor TempBit, stream = Stream2, regs = Regs1}, Reg};
 and_(
     #state{stream_module = StreamModule, available_regs = 0} = State0,

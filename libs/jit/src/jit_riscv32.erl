@@ -2950,7 +2950,7 @@ and_(
     I1 = jit_riscv32_asm:not_(Temp, Temp),
     I2 = jit_riscv32_asm:and_(Reg, Reg, Temp),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
     {State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}, Reg};
 and_(
     #state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} = State0,
@@ -2963,7 +2963,7 @@ and_(
     Stream1 = State1#state.stream,
     I = jit_riscv32_asm:and_(Reg, Reg, Temp),
     Stream2 = StreamModule:append(Stream1, I),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
     {State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}, Reg};
 and_(
     #state{stream_module = StreamModule, available_regs = 0} = State0,
