@@ -22,4 +22,27 @@
 -export([start/0]).
 
 start() ->
-    test_bs:start_3a3_d().
+    ok = expect_error(fun() -> skip_bits(128, <<"foobar">>) end, {badmatch, <<"foobar">>}),
+    0.
+
+skip_bits(Len, Bin) ->
+    <<_First:Len, Rest/binary>> = Bin,
+    Rest.
+
+expect_error(F, Reason) when is_atom(Reason) orelse is_tuple(Reason) ->
+    expect_error(F, fun(Tag, Value) -> Tag =:= error andalso Value =:= Reason end);
+expect_error(F, ErrorValidator) when is_function(ErrorValidator) ->
+    ok =
+        try
+            F(),
+            unexpected
+        catch
+            T:V ->
+                case ErrorValidator(T, V) of
+                    false ->
+                        erlang:display({T, V}),
+                        {got, {T, V}, validator_failed};
+                    true ->
+                        ok
+                end
+        end.
