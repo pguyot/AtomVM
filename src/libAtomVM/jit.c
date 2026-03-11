@@ -2165,40 +2165,51 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
         return NULL;
     }
 
-    const Elf_Ehdr *ehdr = (const Elf_Ehdr *) original_elf_data;
-    const Elf_Shdr *shdrs = (const Elf_Shdr *) (original_elf_data + ehdr->e_shoff);
-    const char *shstrtab = (const char *) (original_elf_data + shdrs[ehdr->e_shstrndx].sh_offset);
+    // Copy original ELF data into an aligned buffer to avoid unaligned access
+    // on strict-alignment architectures like armv6m. The original data comes
+    // from a byte stream that may not be aligned to struct field boundaries.
+    uint8_t *aligned_elf_data = (uint8_t *) malloc(original_elf_size);
+    if (!aligned_elf_data) {
+        fprintf(stderr, "ERROR: Failed to allocate aligned buffer for ELF parsing\n");
+        return NULL;
+    }
+    memcpy(aligned_elf_data, original_elf_data, original_elf_size);
+
+    const Elf_Ehdr *ehdr = (const Elf_Ehdr *) aligned_elf_data;
+    const Elf_Shdr *shdrs = (const Elf_Shdr *) (aligned_elf_data + ehdr->e_shoff);
+    const char *shstrtab = (const char *) (aligned_elf_data + shdrs[ehdr->e_shstrndx].sh_offset);
 
     // Find .symtab, .strtab, and .debug_* sections
     for (int i = 0; i < ehdr->e_shnum; i++) {
         const char *section_name = shstrtab + shdrs[i].sh_name;
 
         if (shdrs[i].sh_type == SHT_SYMTAB) {
-            symtab_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            symtab_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             symtab_size = shdrs[i].sh_size;
         } else if (shdrs[i].sh_type == SHT_STRTAB && i != ehdr->e_shstrndx) {
-            strtab_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            strtab_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             strtab_size = shdrs[i].sh_size;
         } else if (strcmp(section_name, ".debug_info") == 0) {
-            debug_info_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            debug_info_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             debug_info_size = shdrs[i].sh_size;
         } else if (strcmp(section_name, ".debug_line") == 0) {
-            debug_line_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            debug_line_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             debug_line_size = shdrs[i].sh_size;
         } else if (strcmp(section_name, ".debug_abbrev") == 0) {
-            debug_abbrev_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            debug_abbrev_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             debug_abbrev_size = shdrs[i].sh_size;
         } else if (strcmp(section_name, ".debug_str") == 0) {
-            debug_str_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            debug_str_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             debug_str_size = shdrs[i].sh_size;
         } else if (strcmp(section_name, ".debug_aranges") == 0) {
-            debug_aranges_data = (const char *) original_elf_data + shdrs[i].sh_offset;
+            debug_aranges_data = (const char *) aligned_elf_data + shdrs[i].sh_offset;
             debug_aranges_size = shdrs[i].sh_size;
         }
     }
 
     if (!symtab_data || !strtab_data) {
         fprintf(stderr, "ERROR: Could not find symbol or string table in original ELF\n");
+        free(aligned_elf_data);
         return NULL;
     }
 
@@ -2228,8 +2239,9 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
     }
 
     // Find the actual .text section size from the original ELF
-    const Elf_Ehdr *orig_ehdr = (const Elf_Ehdr *) original_elf_data;
-    const Elf_Shdr *orig_shdrs = (const Elf_Shdr *) (original_elf_data + orig_ehdr->e_shoff);
+    // (reuse already-aligned pointers)
+    const Elf_Ehdr *orig_ehdr = ehdr;
+    const Elf_Shdr *orig_shdrs = shdrs;
 
     size_t code_size = 0;
 
@@ -2244,6 +2256,7 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
 
     if (code_size == 0) {
         fprintf(stderr, "ERROR: Could not find .text section in original ELF\n");
+        free(aligned_elf_data);
         return NULL;
     }
 
@@ -2254,6 +2267,7 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
     uint8_t *new_elf = (uint8_t *) malloc(elf_size);
     if (!new_elf) {
         fprintf(stderr, "ERROR: Failed to allocate memory for new ELF\n");
+        free(aligned_elf_data);
         return NULL;
     }
     memset(new_elf, 0, elf_size);
@@ -2523,6 +2537,7 @@ static uint8_t *create_minimal_elf_for_debugging(const uint8_t *original_elf_dat
         next_section++;
     }
 
+    free(aligned_elf_data);
     *new_elf_size = elf_size;
     return new_elf;
 }
