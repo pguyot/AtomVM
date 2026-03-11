@@ -1862,7 +1862,7 @@ cached_load_same_xreg_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax"
+            "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
@@ -1875,8 +1875,8 @@ cached_load_different_xreg_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-            "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11"
+            "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
+            "   4:	4c 8b 5f 38          	mov    0x38(%rdi),%r11"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
@@ -1888,7 +1888,7 @@ cached_load_cp_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	48 8b 87 e0 00 00 00 	mov    0xe0(%rdi),%rax"
+            "   0:	48 8b 87 b8 00 00 00 	mov    0xb8(%rdi),%rax"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).
 
@@ -1901,6 +1901,6 @@ cached_load_after_free_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax"
+            "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax"
         >>,
     jit_tests_common:assert_stream(x86_64, Dump, Stream).

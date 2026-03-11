@@ -2250,6 +2250,6 @@ cached_load_after_free_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402c07 	ldr	x7, [x0, #88]"
+            "   0:	f9401807 	ldr	x7, [x0, #48]"
         >>,
     jit_tests_common:assert_stream(aarch64, Dump, Stream).
