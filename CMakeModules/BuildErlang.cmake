@@ -22,7 +22,6 @@ macro(pack_archive avm_name)
 
     set(multiValueArgs ERLC_FLAGS MODULES DEPENDS_ON)
     cmake_parse_arguments(PACK_ARCHIVE "" "" "${multiValueArgs}" ${ARGN})
-    list(JOIN PACK_ARCHIVE_ERLC_FLAGS " " PACK_ARCHIVE_ERLC_FLAGS)
 
     # Build -pa flags and file dependencies from DEPENDS_ON
     set(_pack_archive_pa_flags "")
