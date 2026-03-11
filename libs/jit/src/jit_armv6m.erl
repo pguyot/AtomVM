@@ -978,13 +978,16 @@ if_block(
     {'and', CondList},
     BlockFn
 ) ->
+    % Pre-flush the literal pool before the conditional branches (same reason as
+    % the single-condition variant below).
+    State0a = flush_literal_pool_with_branch_over(State0),
     {Replacements, State1} = lists:foldl(
         fun(Cond, {AccReplacements, AccState}) ->
             Offset = StreamModule:offset(AccState#state.stream),
             {NewAccState, CC, ReplaceDelta} = if_block_cond(AccState, Cond),
             {[{Offset + ReplaceDelta, CC} | AccReplacements], NewAccState}
         end,
-        {[], State0},
+        {[], State0a},
         CondList
     ),
     State2 = BlockFn(State1),
@@ -1001,12 +1004,18 @@ if_block(
     ),
     merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs);
 if_block(
-    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    #state{stream_module = StreamModule} = State0,
     Cond,
     BlockFn
 ) ->
-    Offset = StreamModule:offset(Stream0),
-    {State1, CC, BranchInstrOffset} = if_block_cond(State0, Cond),
+    % Pre-flush the literal pool before the conditional branch. The BCC on armv6m
+    % has a range of only ±258 bytes. If the block function calls flush_literal_pool
+    % (e.g., call_primitive_last, jump_to_label, jump_to_continuation), the flushed
+    % literal data could cause the BCC target to exceed its range.
+    State0a = flush_literal_pool_with_branch_over(State0),
+    #state{stream = Stream0a} = State0a,
+    Offset = StreamModule:offset(Stream0a),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State0a, Cond),
     State2 = BlockFn(State1),
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
@@ -1029,13 +1038,16 @@ if_block(
 -spec if_else_block(state(), condition(), fun((state()) -> state()), fun((state()) -> state())) ->
     state().
 if_else_block(
-    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    #state{stream_module = StreamModule} = State0,
     Cond,
     BlockTrueFn,
     BlockFalseFn
 ) ->
+    % Pre-flush the literal pool before the conditional branch (same reason as if_block).
+    State0a = flush_literal_pool_with_branch_over(State0),
+    #state{stream = Stream0} = State0a,
     Offset = StreamModule:offset(Stream0),
-    {State1, CC, BranchInstrOffset} = if_block_cond(State0, Cond),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State0a, Cond),
     State2 = BlockTrueFn(State1),
     Stream2 = State2#state.stream,
     %% Emit unconditional branch to skip the else block (will be replaced)
@@ -2964,20 +2976,35 @@ maybe_flush_literal_pool(
     % bigint.beam currently requires 663 or lower to compile.
     if
         Offset - Addr > 512 ->
-            NbLiterals = length(LP),
-            Continuation = NbLiterals * 4 + 4 - (Offset rem 4),
-            Stream1 = StreamModule:append(Stream0, jit_armv6m_asm:b(Continuation)),
-            Stream2 =
-                if
-                    Offset rem 4 =:= 0 ->
-                        StreamModule:append(Stream1, <<16#FFFF:16>>);
-                    true ->
-                        Stream1
-                end,
-            flush_literal_pool(State#state{stream = Stream2});
+            flush_literal_pool_with_branch_over(State);
         true ->
             State
     end.
+
+%% @doc Force flush all literal pool entries, emitting a branch-over sequence.
+%% Unlike flush_literal_pool (which assumes it follows unconditional control flow),
+%% this function emits an unconditional branch to skip over the literal data.
+%% Use this before code sections that contain a conditional branch (BCC) that must
+%% skip over a flush_literal_pool call, since the BCC range on armv6m is only
+%% ±258 bytes and a large literal pool could exceed that range.
+-spec flush_literal_pool_with_branch_over(state()) -> state().
+flush_literal_pool_with_branch_over(#state{literal_pool = []} = State) ->
+    State;
+flush_literal_pool_with_branch_over(
+    #state{stream_module = StreamModule, stream = Stream0, literal_pool = LP} = State
+) ->
+    Offset = StreamModule:offset(Stream0),
+    NbLiterals = length(LP),
+    Continuation = NbLiterals * 4 + 4 - (Offset rem 4),
+    Stream1 = StreamModule:append(Stream0, jit_armv6m_asm:b(Continuation)),
+    Stream2 =
+        if
+            Offset rem 4 =:= 0 ->
+                StreamModule:append(Stream1, <<16#FFFF:16>>);
+            true ->
+                Stream1
+        end,
+    flush_literal_pool(State#state{stream = Stream2}).
 
 flush_literal_pool(#state{literal_pool = []} = State) ->
     State;
@@ -3101,9 +3128,16 @@ mul(
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
     #state{
-        stream_module = StreamModule, stream = Stream0, available_regs = [Temp, TempJitState | _]
+        available_regs = [Temp, TempJitState | _]
     } = State0
 ) ->
+    % Pre-flush the literal pool before the reduction check. The BNE conditional
+    % branch below must skip over the scheduling block which includes a
+    % flush_literal_pool call. The BCC range on armv6m is only ±258 bytes, and
+    % if many literal pool entries are pending, the flush data would exceed this
+    % range. By flushing first, the pool is empty when we reach the BNE.
+    #state{stream_module = StreamModule, stream = Stream0} =
+        State0a = flush_literal_pool_with_branch_over(State0),
     % Load jit_state pointer from stack
     I0 = jit_armv6m_asm:ldr(TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
     % Load reduction count
@@ -3125,7 +3159,7 @@ decrement_reductions_and_maybe_schedule_next(
     I7 = jit_armv6m_asm:str(Temp, ?JITSTATE_CONTINUATION(TempJitState)),
     % Append the instructions to the stream
     Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary, I6/binary, I7/binary>>),
-    State1 = State0#state{stream = Stream2},
+    State1 = State0a#state{stream = Stream2},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     % Add the prolog at the continuation point (where scheduled execution resumes)
     #state{stream = Stream3} = State2,
