@@ -124,7 +124,16 @@ jobs:
 
     - name: "Install deps (macOS)"
       if: runner.os == 'macOS'
-      run: brew update && brew install gperf erlang@${{ matrix.otp }} mbedtls@3 rebar3
+      run: |
+        brew update
+        for i in 1 2 3; do
+          if brew install gperf erlang@${{ matrix.otp }} mbedtls@3 rebar3; then
+            break
+          fi
+          echo "brew install attempt $i failed, cleaning up locks and retrying in $((i * 5)) seconds..."
+          rm -f "$(brew --prefix)/var/homebrew/locks"/*.lock 2>/dev/null || true
+          sleep $((i * 5))
+        done
 
     - name: "macOS setup mbedtls@3 environment"
       if: runner.os == 'macOS'

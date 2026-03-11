@@ -68,13 +68,29 @@ jobs:
 
     - name: "Install deps"
       if: matrix.otp != '24' && matrix.otp != '25'
-      run: brew update && HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf doxygen erlang@${{ matrix.otp }} gleam ${{ matrix.mbedtls }} rebar3
+      run: |
+        brew update
+        for i in 1 2 3; do
+          if HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf doxygen erlang@${{ matrix.otp }} gleam ${{ matrix.mbedtls }} rebar3; then
+            break
+          fi
+          echo "brew install attempt $i failed, cleaning up locks and retrying in $((i * 5)) seconds..."
+          rm -f "$(brew --prefix)/var/homebrew/locks"/*.lock 2>/dev/null || true
+          sleep $((i * 5))
+        done
 
     - name: "Install deps"
       if: matrix.otp == '24' || matrix.otp == '25'
       run: |
         brew update
-        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf doxygen erlang@${{ matrix.otp }} gleam ${{ matrix.mbedtls }}
+        for i in 1 2 3; do
+          if HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf doxygen erlang@${{ matrix.otp }} gleam ${{ matrix.mbedtls }}; then
+            break
+          fi
+          echo "brew install attempt $i failed, cleaning up locks and retrying in $((i * 5)) seconds..."
+          rm -f "$(brew --prefix)/var/homebrew/locks"/*.lock 2>/dev/null || true
+          sleep $((i * 5))
+        done
         wget https://github.com/erlang/rebar3/releases/download/3.23.0/rebar3
         chmod +x rebar3
         for bin_dir in {/usr/local,/opt/homebrew}/opt/erlang@{24,25}/bin/ ; do
