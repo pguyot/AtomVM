@@ -4208,3 +4208,44 @@ if_block_literal_pool_flush_test_() ->
                 end)
             ]
         end}.
+
+%% Test that decrement_reductions_and_maybe_schedule_next correctly reserves
+%% space for NOP alignment + PUSH prolog when constraining the literal pool
+%% flush. Without the fix, the BCC offset could exceed 258 (max BCC range)
+%% when the literal pool fills the entire max_offset budget and then NOP+PUSH
+%% are appended afterward.
+decrement_reductions_literal_pool_bcc_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    %% Add 1 instruction (2 bytes) to make BNEOffset ≡ 2 (mod 4), which
+    %% causes the post-flush code to be 4-byte aligned and avoids NOP padding
+    %% before the literal pool, maximizing the number of entries that can be
+    %% flushed and potentially overflowing the BCC range.
+    State1 = ?BACKEND:move_to_vm_register(State0, r1, {ptr, r3}),
+    %% Accumulate 60 literal pool entries (each emits a 2-byte LDR placeholder).
+    %% This provides enough entries that the partial flush inside
+    %% call_primitive_last could fill up to the BCC max offset.
+    State2 = lists:foldl(
+        fun(I, AccState) ->
+            ?BACKEND:move_to_native_register(AccState, 16#10000000 + I, r5)
+        end,
+        State1,
+        lists:seq(1, 60)
+    ),
+    %% This call should not crash. Before the fix, it would fail with a
+    %% function_clause error in bcc/2 because the BCC offset exceeded 258.
+    State3 = ?BACKEND:decrement_reductions_and_maybe_schedule_next(State2),
+    %% Follow with a flush to place any remaining literal pool entries
+    State4 = ?BACKEND:flush(State3),
+    Stream = ?BACKEND:stream(State4),
+    %% Verify the stream was generated (non-empty)
+    ?assert(byte_size(Stream) > 0),
+    %% Verify the BCC instruction at BNEOffset is within valid range.
+    %% BNEOffset = 2 (initial STR) + 120 (60 LDRs) + 8 (LDR+LDR+SUBS+STR) = 130
+    BNEOffset = 130,
+    <<_:BNEOffset/binary, BccInstr:16/little, _/binary>> = Stream,
+    %% Extract the BCC offset: BCC NE has opcode D1xx, offset field is bits 7:0
+    ?assertEqual(16#D1, BccInstr bsr 8),
+    %% Signed 8-bit offset * 2 + 4 = branch distance
+    Imm8 = BccInstr band 16#FF,
+    %% Imm8 should be ≤ 127 (max positive 8-bit signed value = max BCC forward range)
+    ?assert(Imm8 =< 127).

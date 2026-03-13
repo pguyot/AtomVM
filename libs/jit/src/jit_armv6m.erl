@@ -3478,7 +3478,12 @@ decrement_reductions_and_maybe_schedule_next(
     I7 = jit_armv6m_asm:str(Temp, ?JITSTATE_CONTINUATION(TempJitState)),
     % Append the instructions to the stream
     Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary, I6/binary, I7/binary>>),
-    NewMaxOffset = if_block_max_offset(PrevMaxOffset, BNEOffset),
+    % Reserve 4 bytes for NOP alignment (0-2 bytes) + PUSH prolog (2 bytes)
+    % that are emitted after the literal pool flush but before the BCC target
+    NewMaxOffset = case PrevMaxOffset of
+        unbound -> BNEOffset + 254;
+        _ -> disabled
+    end,
     State1 = State0#state{stream = Stream2, literal_pool_max_offset = NewMaxOffset},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     % Add the prolog at the continuation point (where scheduled execution resumes)
