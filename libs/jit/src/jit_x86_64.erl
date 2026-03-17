@@ -1146,7 +1146,8 @@ shift_right_arith(
         stream_module = StreamModule,
         available_regs = Avail,
         used_regs = UR,
-        stream = Stream0
+        stream = Stream0,
+        regs = Regs0
     } = State,
     Reg,
     Shift
@@ -1158,11 +1159,13 @@ shift_right_arith(
     I1 = jit_x86_64_asm:movq(Reg, ResultReg),
     I2 = jit_x86_64_asm:sarq(Shift, ResultReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
     {
         State#state{
             stream = Stream1,
             available_regs = Avail band (bnot Bit),
-            used_regs = UR bor Bit
+            used_regs = UR bor Bit,
+            regs = Regs1
         },
         ResultReg
     }.
