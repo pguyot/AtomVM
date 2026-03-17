@@ -2610,16 +2610,16 @@ div_reg(
 ) ->
     %% DivisorReg must not be rax (clobbered by dividend move) or rdx (clobbered by cqo).
     %% If DivisorReg is rax, move it to a temp register first.
-    {I0, ActualDivisor} =
+    {I0, ActualDivisor, Regs1} =
         case DivisorReg of
             rax ->
                 Temp = first_avail(Avail band (bnot reg_bit(DividendReg))),
-                {jit_x86_64_asm:movq(rax, Temp), Temp};
+                {jit_x86_64_asm:movq(rax, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             rdx ->
                 Temp = first_avail(Avail band (bnot reg_bit(DividendReg))),
-                {jit_x86_64_asm:movq(rdx, Temp), Temp};
+                {jit_x86_64_asm:movq(rdx, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             _ ->
-                {<<>>, DivisorReg}
+                {<<>>, DivisorReg, Regs0}
         end,
     I1 =
         case DividendReg of
@@ -2632,8 +2632,8 @@ div_reg(
     I5 = jit_x86_64_asm:popq(rdx),
     Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, rax),
-    {State#state{stream = Stream1, regs = Regs1}, rax}.
+    Regs2 = jit_regs:invalidate_reg(Regs1, rax),
+    {State#state{stream = Stream1, regs = Regs2}, rax}.
 
 %% Signed integer remainder: remainder = DividendReg rem DivisorReg
 %% Uses idivq which divides rdx:rax by operand, remainder in rdx.
@@ -2651,20 +2651,20 @@ rem_reg(
         Avail band (bnot reg_bit(rax)) band (bnot reg_bit(DivisorReg)) band
             (bnot reg_bit(DividendReg))
     ),
-    {I0, ActualDivisor} =
+    {I0, ActualDivisor, Regs1} =
         case DivisorReg of
             rax ->
                 Temp = first_avail(
                     Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(RemTemp))
                 ),
-                {jit_x86_64_asm:movq(rax, Temp), Temp};
+                {jit_x86_64_asm:movq(rax, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             rdx ->
                 Temp = first_avail(
                     Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(RemTemp))
                 ),
-                {jit_x86_64_asm:movq(rdx, Temp), Temp};
+                {jit_x86_64_asm:movq(rdx, Temp), Temp, jit_regs:invalidate_reg(Regs0, Temp)};
             _ ->
-                {<<>>, DivisorReg}
+                {<<>>, DivisorReg, Regs0}
         end,
     I1 =
         case DividendReg of
@@ -2679,12 +2679,12 @@ rem_reg(
     Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     RemBit = reg_bit(RemTemp),
-    Regs1 = jit_regs:invalidate_reg(Regs0, rax),
-    Regs2 = jit_regs:invalidate_reg(Regs1, RemTemp),
+    Regs2 = jit_regs:invalidate_reg(Regs1, rax),
+    Regs3 = jit_regs:invalidate_reg(Regs2, RemTemp),
     {
         State#state{
             stream = Stream1,
-            regs = Regs2,
+            regs = Regs3,
             available_regs = Avail band (bnot RemBit),
             used_regs = State#state.used_regs bor RemBit
         },
