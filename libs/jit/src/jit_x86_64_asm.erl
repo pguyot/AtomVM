@@ -60,6 +60,7 @@
     retq/0,
     cmpb/2,
     xchgq/2,
+    xorl/2,
     xorq/2,
     cqo/0,
     idivq/1,
@@ -559,6 +560,14 @@ orq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#09, 3:2, MODRM_REG:3, MODRM_RM:3>>.
+
+xorl(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
+    (case {REX_R, REX_B} of
+        {0, 0} -> <<16#31, 3:2, MODRM_REG:3, MODRM_RM:3>>;
+        _ -> <<(16#40 bor (REX_R bsl 2) bor REX_B), 16#31, 3:2, MODRM_REG:3, MODRM_RM:3>>
+    end).
 
 xorq(Imm, DestReg) when ?IS_SINT8_T(Imm) andalso is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
