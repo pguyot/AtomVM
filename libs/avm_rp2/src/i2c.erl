@@ -138,6 +138,8 @@
 open(Params) ->
     SCL = proplists:get_value(scl, Params),
     SDA = proplists:get_value(sda, Params),
+    (is_integer(SCL) andalso is_integer(SDA) andalso SCL =/= SDA)
+        orelse error(badarg),
     ClockSpeedHz = proplists:get_value(clock_speed_hz, Params, ?DEFAULT_CLOCK_SPEED_HZ),
     Peripheral = proplists:get_value(peripheral, Params, ?DEFAULT_PERIPHERAL),
     SendTimeoutMs = proplists:get_value(send_timeout_ms, Params, ?DEFAULT_SEND_TIMEOUT_MS),
@@ -601,10 +603,15 @@ get_read_available(_Resource) ->
 
 %% @private
 call(Pid, Request) ->
+    MRef = monitor(process, Pid),
     Ref = make_ref(),
     Pid ! {self(), Ref, Request},
     receive
-        {Ref, Reply} -> Reply
+        {Ref, Reply} ->
+            demonitor(MRef, [flush]),
+            Reply;
+        {'DOWN', MRef, process, Pid, Reason} ->
+            {error, {server_died, Reason}}
     end.
 
 %% @private
@@ -669,7 +676,9 @@ handle_request(Resource, SendTimeoutMs, TxState, {write_bytes, Address, Register
             {error, _} = Error -> Error;
             _N -> ok
         end,
-    {reply, Result, TxState}.
+    {reply, Result, TxState};
+handle_request(_Resource, _SendTimeoutMs, TxState, _Unknown) ->
+    {reply, {error, badarg}, TxState}.
 
 %% @private
 do_read(Resource, Address, Count, Nostop, infinity) ->

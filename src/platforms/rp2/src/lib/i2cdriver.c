@@ -41,10 +41,12 @@
 #define NUM_I2C_INSTANCES 2
 
 static ErlNifResourceType *i2c_resource_type;
+static bool i2c_in_use[NUM_I2C_INSTANCES] = { false, false };
 
 struct I2CResource
 {
     i2c_inst_t *i2c_inst;
+    uint peripheral_index;
 };
 
 static term create_pair(Context *ctx, term term1, term term2)
@@ -82,12 +84,17 @@ static bool get_i2c_resource(Context *ctx, term resource_term, struct I2CResourc
     return true;
 }
 
-static bool term_to_nostop(term t)
+static bool term_to_bool(term t, bool *out)
 {
-    if (UNLIKELY(!term_is_atom(t))) {
-        return false;
+    if (t == TRUE_ATOM) {
+        *out = true;
+        return true;
     }
-    return t == TRUE_ATOM;
+    if (t == FALSE_ATOM) {
+        *out = false;
+        return true;
+    }
+    return false;
 }
 
 static bool term_to_i2c_addr(term t, uint8_t *addr)
@@ -119,20 +126,31 @@ static term nif_i2c_init(Context *ctx, int argc, term argv[])
     if (UNLIKELY(baudrate <= 0)) {
         RAISE_ERROR(BADARG_ATOM);
     }
+    if (UNLIKELY(i2c_in_use[peripheral])) {
+        if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return create_error_tuple(ctx, globalcontext_make_atom(ctx->global, ATOM_STR("\x4", "busy")));
+    }
+
     i2c_inst_t *inst = i2c_get_instance((uint) peripheral);
 
     uint actual_baudrate = i2c_init(inst, (uint) baudrate);
+    i2c_in_use[peripheral] = true;
 
     struct I2CResource *rsrc_obj = enif_alloc_resource(i2c_resource_type, sizeof(struct I2CResource));
     if (IS_NULL_PTR(rsrc_obj)) {
+        i2c_in_use[peripheral] = false;
         i2c_deinit(inst);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     rsrc_obj->i2c_inst = inst;
+    rsrc_obj->peripheral_index = (uint) peripheral;
 
     // Return {ok, {ActualBaudrate, Resource}}
     size_t requested_size = TERM_BOXED_RESOURCE_SIZE + TUPLE_SIZE(2) + TUPLE_SIZE(2);
     if (UNLIKELY(memory_ensure_free(ctx, requested_size) != MEMORY_GC_OK)) {
+        i2c_in_use[peripheral] = false;
         i2c_deinit(inst);
         enif_release_resource(rsrc_obj);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -151,13 +169,16 @@ static term nif_i2c_deinit(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
 
-    struct I2CResource *rsrc_obj;
-    if (UNLIKELY(!get_i2c_resource(ctx, argv[0], &rsrc_obj))) {
+    void *rsrc_obj_ptr;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], i2c_resource_type, &rsrc_obj_ptr))) {
         RAISE_ERROR(BADARG_ATOM);
     }
-
-    i2c_deinit(rsrc_obj->i2c_inst);
-    rsrc_obj->i2c_inst = NULL;
+    struct I2CResource *rsrc_obj = (struct I2CResource *) rsrc_obj_ptr;
+    if (!IS_NULL_PTR(rsrc_obj->i2c_inst)) {
+        i2c_in_use[rsrc_obj->peripheral_index] = false;
+        i2c_deinit(rsrc_obj->i2c_inst);
+        rsrc_obj->i2c_inst = NULL;
+    }
 
     return OK_ATOM;
 }
@@ -192,9 +213,10 @@ static term nif_i2c_set_slave_mode(Context *ctx, int argc, term argv[])
     if (UNLIKELY(!get_i2c_resource(ctx, argv[0], &rsrc_obj))) {
         RAISE_ERROR(BADARG_ATOM);
     }
-    VALIDATE_VALUE(argv[1], term_is_atom);
-
-    bool slave = (argv[1] == TRUE_ATOM);
+    bool slave;
+    if (UNLIKELY(!term_to_bool(argv[1], &slave))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     uint8_t addr;
     if (UNLIKELY(!term_to_i2c_addr(argv[2], &addr))) {
         RAISE_ERROR(BADARG_ATOM);
@@ -219,15 +241,16 @@ static term nif_i2c_write_blocking(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
     VALIDATE_VALUE(argv[2], term_is_binary);
-    VALIDATE_VALUE(argv[3], term_is_atom);
-
     uint8_t addr;
     if (UNLIKELY(!term_to_i2c_addr(argv[1], &addr))) {
         RAISE_ERROR(BADARG_ATOM);
     }
     const uint8_t *data = (const uint8_t *) term_binary_data(argv[2]);
     size_t len = term_binary_size(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
 
     int ret = i2c_write_blocking(rsrc_obj->i2c_inst, addr, data, len, nostop);
     if (UNLIKELY(ret < 0)) {
@@ -250,14 +273,15 @@ static term nif_i2c_read_blocking(Context *ctx, int argc, term argv[])
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_integer);
-    VALIDATE_VALUE(argv[3], term_is_atom);
-
     uint8_t addr;
     if (UNLIKELY(!term_to_i2c_addr(argv[1], &addr))) {
         RAISE_ERROR(BADARG_ATOM);
     }
     avm_int_t count = term_to_int(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
 
     if (UNLIKELY(count < 0)) {
         RAISE_ERROR(BADARG_ATOM);
@@ -290,7 +314,7 @@ static term nif_i2c_write_blocking_until(Context *ctx, int argc, term argv[])
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_binary);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_int64);
 
     uint8_t addr;
@@ -299,7 +323,10 @@ static term nif_i2c_write_blocking_until(Context *ctx, int argc, term argv[])
     }
     const uint8_t *data = (const uint8_t *) term_binary_data(argv[2]);
     size_t len = term_binary_size(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     int64_t deadline_us = term_to_int64(argv[4]);
     if (UNLIKELY(deadline_us < 0)) {
         RAISE_ERROR(BADARG_ATOM);
@@ -327,7 +354,7 @@ static term nif_i2c_read_blocking_until(Context *ctx, int argc, term argv[])
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_integer);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_int64);
 
     uint8_t addr;
@@ -335,7 +362,10 @@ static term nif_i2c_read_blocking_until(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
     avm_int_t count = term_to_int(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     int64_t deadline_us = term_to_int64(argv[4]);
 
     if (UNLIKELY(count < 0 || deadline_us < 0)) {
@@ -370,7 +400,7 @@ static term nif_i2c_write_timeout_us(Context *ctx, int argc, term argv[])
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_binary);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_integer);
 
     uint8_t addr;
@@ -379,7 +409,10 @@ static term nif_i2c_write_timeout_us(Context *ctx, int argc, term argv[])
     }
     const uint8_t *data = (const uint8_t *) term_binary_data(argv[2]);
     size_t len = term_binary_size(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     avm_int_t timeout_us = term_to_int(argv[4]);
     if (UNLIKELY(timeout_us < 0)) {
         RAISE_ERROR(BADARG_ATOM);
@@ -406,7 +439,7 @@ static term nif_i2c_read_timeout_us(Context *ctx, int argc, term argv[])
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_integer);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_integer);
 
     uint8_t addr;
@@ -414,7 +447,10 @@ static term nif_i2c_read_timeout_us(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
     avm_int_t count = term_to_int(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     avm_int_t timeout_us = term_to_int(argv[4]);
 
     if (UNLIKELY(count < 0 || timeout_us < 0)) {
@@ -448,7 +484,7 @@ static term nif_i2c_write_timeout_per_char_us(Context *ctx, int argc, term argv[
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_binary);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_integer);
 
     uint8_t addr;
@@ -457,7 +493,10 @@ static term nif_i2c_write_timeout_per_char_us(Context *ctx, int argc, term argv[
     }
     const uint8_t *data = (const uint8_t *) term_binary_data(argv[2]);
     size_t len = term_binary_size(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     avm_int_t timeout_per_char_us = term_to_int(argv[4]);
     if (UNLIKELY(timeout_per_char_us < 0)) {
         RAISE_ERROR(BADARG_ATOM);
@@ -484,7 +523,7 @@ static term nif_i2c_read_timeout_per_char_us(Context *ctx, int argc, term argv[]
     }
     VALIDATE_VALUE(argv[1], term_is_integer);
     VALIDATE_VALUE(argv[2], term_is_integer);
-    VALIDATE_VALUE(argv[3], term_is_atom);
+
     VALIDATE_VALUE(argv[4], term_is_integer);
 
     uint8_t addr;
@@ -492,7 +531,10 @@ static term nif_i2c_read_timeout_per_char_us(Context *ctx, int argc, term argv[]
         RAISE_ERROR(BADARG_ATOM);
     }
     avm_int_t count = term_to_int(argv[2]);
-    bool nostop = term_to_nostop(argv[3]);
+    bool nostop;
+    if (UNLIKELY(!term_to_bool(argv[3], &nostop))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
     avm_int_t timeout_per_char_us = term_to_int(argv[4]);
 
     if (UNLIKELY(count < 0 || timeout_per_char_us < 0)) {
@@ -658,6 +700,7 @@ static void i2c_resource_dtor(ErlNifEnv *caller_env, void *obj)
     UNUSED(caller_env);
     struct I2CResource *rsrc_obj = (struct I2CResource *) obj;
     if (!IS_NULL_PTR(rsrc_obj->i2c_inst)) {
+        i2c_in_use[rsrc_obj->peripheral_index] = false;
         i2c_deinit(rsrc_obj->i2c_inst);
         rsrc_obj->i2c_inst = NULL;
     }
