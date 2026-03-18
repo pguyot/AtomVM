@@ -302,7 +302,7 @@ predicate leafOnResolvedNotTakenBranch(FunctionCall outerCall, FunctionCall leaf
  * exclusive control-flow branches (different successors of the same
  * branch point dominate each call, so they cannot both execute).
  */
-pragma[noinline]
+pragma[inline]
 predicate mutuallyExclusiveInFunction(FunctionCall call1, FunctionCall call2) {
     call1.getEnclosingFunction() = call2.getEnclosingFunction() and
     call1 != call2 and
@@ -324,6 +324,7 @@ predicate mutuallyExclusiveInFunction(FunctionCall call1, FunctionCall call2) {
  * different allocating functions on exclusive branches (e.g.,
  * `term_make_boxed_int64` OR `term_make_boxed_int`, never both).
  */
+pragma[nomagic]
 predicate allLeafCallsDirectAndExclusive(Function callee) {
     // All reachable leaf calls must be directly within the callee
     forex(FunctionCall leaf |
