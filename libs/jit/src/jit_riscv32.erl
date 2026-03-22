@@ -1610,7 +1610,7 @@ div_(
     DividendReg,
     DivisorReg
 ) ->
-    I = jit_riscv32_asm:'div'(DividendReg, DividendReg, DivisorReg),
+    I = jit_riscv32_asm:div_(DividendReg, DividendReg, DivisorReg),
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
@@ -1620,7 +1620,7 @@ rem_(
     DividendReg,
     DivisorReg
 ) ->
-    I = jit_riscv32_asm:'rem'(DividendReg, DividendReg, DivisorReg),
+    I = jit_riscv32_asm:rem_(DividendReg, DividendReg, DivisorReg),
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
