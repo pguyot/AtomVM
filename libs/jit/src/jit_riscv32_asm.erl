@@ -87,8 +87,8 @@
     call/2,
     % M extension (multiply/divide)
     mul/3,
-    'div'/3,
-    'rem'/3,
+    div_/3,
+    rem_/3,
     % C extension (compressed) - arithmetic/logical
     c_add/2,
     c_sub/2,
@@ -1133,20 +1133,16 @@ mul(Rd, Rs1, Rs2) ->
     % Opcode: 0110011 (0x33), Funct3: 000, Funct7: 0000001
     encode_r_type(16#33, Rd, 16#0, Rs1, Rs2, 16#01).
 
-%% DIV - Signed divide (RV32M extension)
-%% Divides rs1 by rs2 (signed), places quotient in rd
-%% Format: div rd, rs1, rs2
+%% DIV rd, rs1, rs2 - Signed division
 %% Encoding: R-type with opcode=0x33, funct3=0x4, funct7=0x01
--spec 'div'(riscv_register(), riscv_register(), riscv_register()) -> binary().
-'div'(Rd, Rs1, Rs2) ->
+-spec div_(riscv_register(), riscv_register(), riscv_register()) -> binary().
+div_(Rd, Rs1, Rs2) ->
     encode_r_type(16#33, Rd, 16#4, Rs1, Rs2, 16#01).
 
-%% REM - Signed remainder (RV32M extension)
-%% Divides rs1 by rs2 (signed), places remainder in rd
-%% Format: rem rd, rs1, rs2
+%% REM rd, rs1, rs2 - Signed remainder
 %% Encoding: R-type with opcode=0x33, funct3=0x6, funct7=0x01
--spec 'rem'(riscv_register(), riscv_register(), riscv_register()) -> binary().
-'rem'(Rd, Rs1, Rs2) ->
+-spec rem_(riscv_register(), riscv_register(), riscv_register()) -> binary().
+rem_(Rd, Rs1, Rs2) ->
     encode_r_type(16#33, Rd, 16#6, Rs1, Rs2, 16#01).
 
 %%-----------------------------------------------------------------------------
