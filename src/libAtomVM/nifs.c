@@ -6282,6 +6282,8 @@ static term nif_jit_backend_module(Context *ctx, int argc, term argv[])
     return JIT_RISCV32_ATOM;
 #elif JIT_ARCH_TARGET == JIT_ARCH_RISCV64
     return JIT_RISCV64_ATOM;
+#elif JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+    return JIT_XTENSA_ATOM;
 #else
 #error Unknown JIT target
 #endif
