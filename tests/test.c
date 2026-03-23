@@ -19,7 +19,9 @@
  */
 
 #include <assert.h>
+#ifndef QEMU_SEMIHOSTING
 #include <libgen.h>
+#endif
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -644,8 +646,12 @@ struct Test tests[] = {
 static int test_atom(struct Test *test)
 {
     int result = 0;
-    char module_file[128];
+    char module_file[256];
+#ifdef QEMU_SEMIHOSTING_BEAM_DIR
+    snprintf(module_file, sizeof(module_file), "%s/%s.beam", QEMU_SEMIHOSTING_BEAM_DIR, test->test_module);
+#else
     snprintf(module_file, sizeof(module_file), "%s.beam", test->test_module);
+#endif
     MappedFile *beam_file = mapped_file_open_beam(module_file);
     assert(beam_file != NULL);
 
@@ -721,6 +727,7 @@ int test_module_execution(bool beam, struct Test *test)
 
 int test_modules_execution(bool beam, bool skip, int count, char **item)
 {
+#ifndef QEMU_SEMIHOSTING
     if (chdir("erlang_tests") != 0) {
         perror("Error: ");
         return EXIT_FAILURE;
@@ -752,6 +759,7 @@ int test_modules_execution(bool beam, bool skip, int count, char **item)
 #endif
     }
 #endif
+#endif /* !QEMU_SEMIHOSTING */
 
     int failed_tests = 0;
 
@@ -809,6 +817,17 @@ static void syntax_error(const char *name, const char *message)
     fprintf(stderr, "%s: syntax error\n%s\nTry %s -h for help\n", name, message, name);
 }
 
+#ifdef QEMU_SEMIHOSTING
+int main(void)
+{
+    time_t seed = time(NULL);
+    fprintf(stderr, "Seed is %li\n", (long int) seed);
+    srand(seed);
+
+    int result = test_modules_execution(false, false, 0, NULL);
+    return result;
+}
+#else
 int main(int argc, char **argv)
 {
     char *name = argv[0];
@@ -875,3 +894,4 @@ int main(int argc, char **argv)
     }
     return result;
 }
+#endif

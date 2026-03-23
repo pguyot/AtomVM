@@ -206,3 +206,110 @@ jobs:
         atomvm examples/erlang/hello_world.avm
         atomvm -v
         atomvm -h
+
+  qemu-semihosting-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["macos-14"]
+        otp: ["28"]
+        arch: ["arm", "riscv32"]
+        jit: ["jit-disabled", "jit-enabled"]
+
+    steps:
+    - name: "Checkout repo"
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ matrix.otp }}
+        rebar3-version: "3.26"
+        hexpm-mirrors: |
+          https://builds.hex.pm
+          https://repo.hex.pm
+          https://cdn.jsdelivr.net/hex
+
+    - name: "Install deps"
+      run: |
+        brew update
+        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf ninja meson qemu
+
+    - name: "Install ARM toolchain"
+      if: matrix.arch == 'arm'
+      run: |
+        brew install --cask gcc-arm-embedded
+        arm-none-eabi-gcc --version
+
+    - name: "Install RISC-V toolchain"
+      if: matrix.arch == 'riscv32'
+      run: |
+        # Download xPack RISC-V bare-metal toolchain (prebuilt)
+        RISCV_VERSION="14.2.0-3"
+        RISCV_RELEASE="v${RISCV_VERSION}"
+        if [ "$(uname -m)" = "arm64" ]; then
+          RISCV_ARCH="darwin-arm64"
+        else
+          RISCV_ARCH="darwin-x64"
+        fi
+        RISCV_URL="https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/${RISCV_RELEASE}/xpack-riscv-none-elf-gcc-${RISCV_VERSION}-${RISCV_ARCH}.tar.gz"
+        echo "Downloading ${RISCV_URL}"
+        curl -sL "${RISCV_URL}" | tar xz -C /tmp
+        RISCV_DIR=$(ls -d /tmp/xpack-riscv-none-elf-gcc-*)
+        echo "${RISCV_DIR}/bin" >> $GITHUB_PATH
+        ${RISCV_DIR}/bin/riscv-none-elf-gcc --version
+
+    - name: "System info"
+      run: |
+        echo "**uname:**"
+        uname -a
+        echo "**CMake version:**"
+        cmake --version
+        echo "**QEMU version:**"
+        qemu-system-arm --version
+        qemu-system-riscv32 --version
+
+    - name: "Build: configure"
+      run: |
+        mkdir build && cd build
+        TOOLCHAIN_FILE=""
+        JIT_FLAG="-DAVM_DISABLE_JIT=ON"
+        if [ "${{ matrix.arch }}" = "arm" ]; then
+          TOOLCHAIN_FILE="../src/platforms/qemu_semihosting/cmake/arm-toolchain.cmake"
+        elif [ "${{ matrix.arch }}" = "riscv32" ]; then
+          TOOLCHAIN_FILE="../src/platforms/qemu_semihosting/cmake/riscv32-toolchain.cmake"
+        fi
+        if [ "${{ matrix.jit }}" = "jit-enabled" ]; then
+          JIT_FLAG="-DAVM_DISABLE_JIT=OFF"
+        fi
+        cmake \
+          -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+          ${JIT_FLAG} \
+          -G Ninja \
+          ../src/platforms/qemu_semihosting
+
+    - name: "Build: compile"
+      working-directory: build
+      run: ninja
+
+    - name: "Test: test-erlang under QEMU"
+      timeout-minutes: 30
+      working-directory: build
+      run: |
+        if [ "${{ matrix.arch }}" = "arm" ]; then
+          qemu-system-arm \
+            -machine mps2-an385 \
+            -cpu cortex-m3 \
+            -nographic \
+            -semihosting-config enable=on,target=native \
+            -kernel tests/test-erlang.elf
+        elif [ "${{ matrix.arch }}" = "riscv32" ]; then
+          qemu-system-riscv32 \
+            -machine virt \
+            -nographic \
+            -bios none \
+            -semihosting-config enable=on,target=native \
+            -kernel tests/test-erlang.elf
+        fi
