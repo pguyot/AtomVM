@@ -684,6 +684,7 @@ static int test_atom(struct Test *test)
     return result;
 }
 
+#ifndef QEMU_SEMIHOSTING
 static int test_beam(struct Test *test)
 {
     char command[512];
@@ -706,6 +707,7 @@ static int test_beam(struct Test *test)
     }
     return system(command);
 }
+#endif
 
 int test_module_execution(bool beam, struct Test *test)
 {
@@ -715,7 +717,12 @@ int test_module_execution(bool beam, struct Test *test)
     }
     fprintf(stderr, "%s:\r", test->test_module);
     fflush(NULL);
+#ifdef QEMU_SEMIHOSTING
+    int result = test_atom(test);
+    (void) beam;
+#else
     int result = beam ? test_beam(test) : test_atom(test);
+#endif
     fflush(NULL);
     if (result) {
         fprintf(stderr, "\x1b[2K\x1b[1;31m%s:\x1b[34GFAILED\x1b[0m\n", test->test_module);
@@ -802,6 +809,18 @@ int test_modules_execution(bool beam, bool skip, int count, char **item)
     }
 }
 
+#ifdef QEMU_SEMIHOSTING
+int main(void)
+{
+    time_t seed = time(NULL);
+    fprintf(stderr, "Seed is %li\n", (long int) seed);
+    srand(seed);
+
+    int result = test_modules_execution(false, false, 0, NULL);
+    return result;
+}
+#else
+
 static void usage(const char *name)
 {
     fprintf(stdout, "%s: run AtomVM tests\n", name);
@@ -817,17 +836,6 @@ static void syntax_error(const char *name, const char *message)
     fprintf(stderr, "%s: syntax error\n%s\nTry %s -h for help\n", name, message, name);
 }
 
-#ifdef QEMU_SEMIHOSTING
-int main(void)
-{
-    time_t seed = time(NULL);
-    fprintf(stderr, "Seed is %li\n", (long int) seed);
-    srand(seed);
-
-    int result = test_modules_execution(false, false, 0, NULL);
-    return result;
-}
-#else
 int main(int argc, char **argv)
 {
     char *name = argv[0];
