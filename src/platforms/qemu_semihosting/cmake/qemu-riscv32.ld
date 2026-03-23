@@ -117,6 +117,8 @@ SECTIONS
     __tls_align = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss));
 
     . = ALIGN(8);
+    PROVIDE(end = .);
+    PROVIDE(_end = .);
     __heap_start = .;
     __heap_end = ORIGIN(ram) + LENGTH(ram) - 8192;
     __stack = ORIGIN(ram) + LENGTH(ram);

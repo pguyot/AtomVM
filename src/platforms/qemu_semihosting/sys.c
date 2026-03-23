@@ -149,6 +149,16 @@ term sys_get_info(Context *ctx, term key)
     return UNDEFINED_ATOM;
 }
 
+/* Empty _init/_fini stubs required by __libc_init_array when
+ * linking with -nostartfiles (which skips crti.o/crtn.o). */
+void _init(void)
+{
+}
+
+void _fini(void)
+{
+}
+
 #ifndef AVM_NO_JIT
 ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t size, size_t offset)
 {

@@ -19,6 +19,14 @@ ENTRY(_start)
 
 SECTIONS
 {
+    /* ARM Cortex-M vector table must be at start of flash */
+    .isr_vector :
+    {
+        . = ALIGN(4);
+        KEEP(*(.isr_vector))
+        . = ALIGN(4);
+    } >flash
+
     .text :
     {
         . = ALIGN(4);
@@ -133,8 +141,10 @@ SECTIONS
     __tls_align = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss));
 
     . = ALIGN(8);
+    PROVIDE(end = .);
+    PROVIDE(_end = .);
     __heap_start = .;
-    __heap_end = ORIGIN(ram) + LENGTH(ram) - 4096;
+    __heap_end = ORIGIN(ram) + LENGTH(ram) - 8192;
     __stack = ORIGIN(ram) + LENGTH(ram);
 
     .ARM.attributes 0 : { *(.ARM.attributes) }

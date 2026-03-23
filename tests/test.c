@@ -716,14 +716,16 @@ int test_module_execution(bool beam, struct Test *test)
         return 0;
     }
     fprintf(stderr, "%s:\r", test->test_module);
-    fflush(NULL);
 #ifdef QEMU_SEMIHOSTING
+    fflush(stderr);
     int result = test_atom(test);
     (void) beam;
+    fflush(stderr);
 #else
-    int result = beam ? test_beam(test) : test_atom(test);
-#endif
     fflush(NULL);
+    int result = beam ? test_beam(test) : test_atom(test);
+    fflush(NULL);
+#endif
     if (result) {
         fprintf(stderr, "\x1b[2K\x1b[1;31m%s:\x1b[34GFAILED\x1b[0m\n", test->test_module);
         return 1;

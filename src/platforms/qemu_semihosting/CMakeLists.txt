@@ -119,6 +119,10 @@ set(PLATFORM_SOURCE_FILES
     ../../libAtomVM/portnifloader.c
 )
 
+if (CMAKE_SYSTEM_PROCESSOR STREQUAL "cortex-m3")
+    list(APPEND PLATFORM_SOURCE_FILES startup_arm.S)
+endif()
+
 add_library(libAtomVM${PLATFORM_LIB_SUFFIX} ${PLATFORM_SOURCE_FILES})
 target_compile_features(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC c_std_11)
 target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC libAtomVM)
