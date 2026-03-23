@@ -108,6 +108,23 @@ find_package(Erlang REQUIRED)
 add_subdirectory(../../libAtomVM libAtomVM)
 add_dependencies(libAtomVM picolibc)
 
+# When JIT is enabled, libAtomVM defines AVM_NO_EMU (PUBLIC) which disables
+# the bytecode emulator, expecting all code to be JIT-compiled or precompiled.
+# For QEMU semihosting we load plain beams and rely on the emulator as
+# fallback, so remove AVM_NO_EMU from both the library and its interface.
+if (NOT AVM_DISABLE_JIT)
+    get_target_property(_defs libAtomVM COMPILE_DEFINITIONS)
+    if (_defs)
+        list(REMOVE_ITEM _defs "AVM_NO_EMU")
+        set_target_properties(libAtomVM PROPERTIES COMPILE_DEFINITIONS "${_defs}")
+    endif()
+    get_target_property(_idefs libAtomVM INTERFACE_COMPILE_DEFINITIONS)
+    if (_idefs)
+        list(REMOVE_ITEM _idefs "AVM_NO_EMU")
+        set_target_properties(libAtomVM PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_idefs}")
+    endif()
+endif()
+
 # Platform library
 set(PLATFORM_LIB_SUFFIX ${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR})
 
