@@ -122,6 +122,10 @@ SECTIONS
         __tls_end = .;
     } >ram
 
+    /* Size symbols required by picolibc CRT for data copy and BSS zeroing */
+    __data_size = __edata - __data_start;
+    __bss_size = __bss_end - __bss_start;
+
     __tdata_source = LOADADDR(.tdata);
     __tdata_size = __tdata_end - __tdata_start;
     __tbss_size = __tbss_end - __tbss_start;
