@@ -94,9 +94,12 @@ endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAGS} -O2 -ffunction-sections -fdata-sections")
 set(LINKER_FLAGS "-nostdlib -nostartfiles -Wl,--gc-sections -T${LINKER_SCRIPT} ${ARCH_FLAGS}")
 
-# Use linker flags for try_compile
-set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
-set(CMAKE_REQUIRED_FLAGS ${LINKER_FLAGS})
+# For CMake try_compile (e.g. check_c_source_compiles in libAtomVM), use
+# nosys.specs so the toolchain's default libc can link test programs.
+# We keep CMAKE_TRY_COMPILE_TARGET_TYPE as STATIC_LIBRARY from the toolchain
+# to avoid unnecessary link tests, but set CMAKE_REQUIRED_FLAGS for any that
+# do need to link.
+set(CMAKE_REQUIRED_FLAGS "${LINKER_FLAGS}")
 
 # Find host Erlang tooling (needed for compiling .erl test files)
 find_package(Erlang REQUIRED)
@@ -158,10 +161,16 @@ set_target_properties(test-erlang.elf PROPERTIES
 # JIT precompilation is skipped: beams are JIT-compiled at runtime.
 # We temporarily force AVM_DISABLE_JIT so erlang_tests only produces plain
 # beams (no JIT precompilation which would require the jit library).
+# PackBEAM binary dir must be 'tools/packbeam' to match paths expected by
+# erlang_tests/code_load/CMakeLists.txt (${CMAKE_BINARY_DIR}/tools/packbeam/packbeam).
 set(_saved_AVM_DISABLE_JIT ${AVM_DISABLE_JIT})
 set(AVM_DISABLE_JIT ON)
 if (NOT "${CMAKE_GENERATOR}" MATCHES "Xcode")
-    add_subdirectory(../../../tools/packbeam packbeam)
+    # PackBEAM's project() enables CXX by default, but it only uses rebar3
+    # (no C/CXX compilation). Skip the CXX compiler check which would fail
+    # with the bare-metal cross-compiler.
+    set(CMAKE_CXX_COMPILER_WORKS TRUE)
+    add_subdirectory(../../../tools/packbeam tools/packbeam)
     add_subdirectory(../../../tests/erlang_tests erlang_tests)
     add_dependencies(test-erlang.elf erlang_test_modules)
 endif()
