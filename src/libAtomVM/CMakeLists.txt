@@ -147,6 +147,12 @@ if (ADVANCED_TRACING)
 endif()
 
 target_link_libraries(libAtomVM PUBLIC m)
+include(CheckIncludeFile)
+check_include_file(fenv.h HAVE_FENV_H)
+if (HAVE_FENV_H)
+    target_compile_definitions(libAtomVM PUBLIC HAVE_FENV_H)
+endif()
+
 include(CheckCSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror=unknown-pragmas")
 check_c_source_compiles("

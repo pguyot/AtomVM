@@ -20,7 +20,9 @@
 
 #include "context.h"
 
+#ifdef HAVE_FENV_H
 #include <fenv.h>
+#endif
 #include <math.h>
 
 #include "defaultatoms.h"

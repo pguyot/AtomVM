@@ -354,6 +354,34 @@ jobs:
           library-arch: riscv32-linux-gnu-ilp32
           jit_target_arch: "riscv32"
 
+        # xtensa build + jit
+        - os: "ubuntu-24.04"
+          cc: "xtensa-buildroot-linux-uclibc-gcc"
+          cxx: "xtensa-buildroot-linux-uclibc-g++"
+          cflags: "-O2"
+          otp: "28"
+          elixir_version: "1.17"
+          rebar3_version: "3.24.0"
+          cmake_opts_other: "-DAVM_DISABLE_JIT=OFF -DAVM_JIT_TARGET_ARCH=xtensa -DCMAKE_TOOLCHAIN_FILE=${RUNNER_TEMP}/xtensa_toolchain.cmake"
+          compiler_pkgs: "qemu-user qemu-user-binfmt binfmt-support"
+          arch: "xtensa"
+          library-arch: xtensa-buildroot-linux-uclibc
+          jit_target_arch: "xtensa"
+
+        # JIT + DWARF build (xtensa)
+        - os: "ubuntu-24.04"
+          cc: "xtensa-buildroot-linux-uclibc-gcc"
+          cxx: "xtensa-buildroot-linux-uclibc-g++"
+          cflags: "-O2"
+          otp: "28"
+          elixir_version: "1.17"
+          rebar3_version: "3.24.0"
+          cmake_opts_other: "-DAVM_DISABLE_JIT=OFF -DAVM_DISABLE_JIT_DWARF=OFF -DAVM_JIT_TARGET_ARCH=xtensa -DCMAKE_TOOLCHAIN_FILE=${RUNNER_TEMP}/xtensa_toolchain.cmake"
+          compiler_pkgs: "qemu-user qemu-user-binfmt binfmt-support"
+          arch: "xtensa"
+          library-arch: xtensa-buildroot-linux-uclibc
+          jit_target_arch: "xtensa"
+
         # libsodium enabled build
         - os: "ubuntu-24.04"
           cc: "cc"
@@ -530,6 +558,44 @@ jobs:
 
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: "Setup cross compilation architecture (xtensa)"
+      if: matrix.library-arch == 'xtensa-buildroot-linux-uclibc'
+      run: |
+        # Download Bootlin xtensa-lx60 toolchain (dc232b core, uclibc)
+        TOOLCHAIN_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/xtensa-lx60/tarballs/xtensa-lx60--uclibc--stable-2025.08-1.tar.xz"
+        wget -q "$TOOLCHAIN_URL" -O /tmp/xtensa-toolchain.tar.xz
+        sudo mkdir -p /opt/xtensa-lx60
+        sudo tar xf /tmp/xtensa-toolchain.tar.xz -C /opt/xtensa-lx60 --strip-components=1
+        rm /tmp/xtensa-toolchain.tar.xz
+
+        # Add toolchain to PATH
+        echo "/opt/xtensa-lx60/bin" >> $GITHUB_PATH
+
+        # Create CMake toolchain file
+        SYSROOT=/opt/xtensa-lx60/xtensa-buildroot-linux-uclibc/sysroot
+        cat > ${RUNNER_TEMP}/xtensa_toolchain.cmake <<EOF
+        set(CMAKE_SYSTEM_NAME Linux)
+        set(CMAKE_SYSTEM_PROCESSOR xtensa)
+
+        set(CMAKE_C_COMPILER xtensa-buildroot-linux-uclibc-gcc)
+        set(CMAKE_CXX_COMPILER xtensa-buildroot-linux-uclibc-g++)
+        set(CMAKE_SYSROOT $SYSROOT)
+
+        set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+        EOF
+
+        # Set up qemu-user binfmt for xtensa
+        sudo mkdir -p /usr/gnemul
+        sudo ln -s $SYSROOT /usr/gnemul/qemu-xtensa
+
+        # Register xtensa binfmt if not already done by qemu-user-binfmt
+        if [ ! -f /proc/sys/fs/binfmt_misc/qemu-xtensa ]; then
+          echo ':qemu-xtensa:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x5e\x00:\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfe\xff\xff\xff:/usr/bin/qemu-xtensa:CF' | sudo tee /proc/sys/fs/binfmt_misc/register || true
+        fi
 
     - name: "APT update"
       run: sudo apt update -y

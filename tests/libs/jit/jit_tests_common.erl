@@ -124,6 +124,8 @@ get_asm_header(x86_64) ->
 get_asm_header(riscv32) ->
     ".text\n";
 get_asm_header(riscv64) ->
+    ".text\n";
+get_asm_header(xtensa) ->
     ".text\n".
 
 %% Get architecture-specific assembler flags
@@ -137,7 +139,9 @@ get_as_flags(x86_64) ->
 get_as_flags(riscv32) ->
     "-march=rv32imac";
 get_as_flags(riscv64) ->
-    "-march=rv64imac -mabi=lp64".
+    "-march=rv64imac -mabi=lp64";
+get_as_flags(xtensa) ->
+    "".
 
 %% Parse objdump output lines and extract binary data
 -spec asm_lines([binary()], binary(), atom()) -> binary().
@@ -328,7 +332,9 @@ get_objdump_flags(x86_64) ->
 get_objdump_flags(riscv32) ->
     "-m riscv:rv32";
 get_objdump_flags(riscv64) ->
-    "-m riscv:rv64".
+    "-m riscv:rv64";
+get_objdump_flags(xtensa) ->
+    "-m xtensa".
 
 %% Update the test source file when a stream assertion fails.
 -spec update_test_source(atom(), binary(), binary(), string()) -> ok.
