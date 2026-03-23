@@ -108,23 +108,6 @@ find_package(Erlang REQUIRED)
 add_subdirectory(../../libAtomVM libAtomVM)
 add_dependencies(libAtomVM picolibc)
 
-# When JIT is enabled, libAtomVM defines AVM_NO_EMU (PUBLIC) which disables
-# the bytecode emulator, expecting all code to be JIT-compiled or precompiled.
-# For QEMU semihosting we load plain beams and rely on the emulator as
-# fallback, so remove AVM_NO_EMU from both the library and its interface.
-if (NOT AVM_DISABLE_JIT)
-    get_target_property(_defs libAtomVM COMPILE_DEFINITIONS)
-    if (_defs)
-        list(REMOVE_ITEM _defs "AVM_NO_EMU")
-        set_target_properties(libAtomVM PROPERTIES COMPILE_DEFINITIONS "${_defs}")
-    endif()
-    get_target_property(_idefs libAtomVM INTERFACE_COMPILE_DEFINITIONS)
-    if (_idefs)
-        list(REMOVE_ITEM _idefs "AVM_NO_EMU")
-        set_target_properties(libAtomVM PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_idefs}")
-    endif()
-endif()
-
 # Platform library
 set(PLATFORM_LIB_SUFFIX ${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR})
 
@@ -156,12 +139,16 @@ target_include_directories(test-erlang.elf PRIVATE
 target_link_libraries(test-erlang.elf PRIVATE libAtomVM libAtomVM${PLATFORM_LIB_SUFFIX})
 add_dependencies(test-erlang.elf picolibc)
 
-# Semihosting-specific defines: use compile-time path to beam files
-# Beams are always loaded from the base erlang_tests directory;
-# JIT compilation happens at runtime, not via precompiled beams.
+# Semihosting-specific defines: use compile-time path to beam files.
+# JIT builds use precompiled beams from the arch-specific subdirectory.
+if (NOT AVM_DISABLE_JIT)
+    set(_beam_dir "${CMAKE_BINARY_DIR}/erlang_tests/${AVM_JIT_TARGET_ARCH}")
+else()
+    set(_beam_dir "${CMAKE_BINARY_DIR}/erlang_tests")
+endif()
 target_compile_definitions(test-erlang.elf PRIVATE
     QEMU_SEMIHOSTING
-    QEMU_SEMIHOSTING_BEAM_DIR="${CMAKE_BINARY_DIR}/erlang_tests"
+    QEMU_SEMIHOSTING_BEAM_DIR="${_beam_dir}"
 )
 
 # Link picolibc semihosting CRT, libc, libsemihost, and libgcc
@@ -178,24 +165,23 @@ set_target_properties(test-erlang.elf PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
 )
 
-# Build PackBEAM tool (escript - runs on host) and erlang test modules.
-# JIT precompilation is skipped: beams are JIT-compiled at runtime.
-# We temporarily force AVM_DISABLE_JIT so erlang_tests only produces plain
-# beams (no JIT precompilation which would require the jit library).
+# Build PackBEAM tool (escript - runs on host), JIT library (if enabled),
+# and erlang test modules (with JIT precompilation when enabled).
 # PackBEAM binary dir must be 'tools/packbeam' to match paths expected by
-# erlang_tests/code_load/CMakeLists.txt (${CMAKE_BINARY_DIR}/tools/packbeam/packbeam).
-set(_saved_AVM_DISABLE_JIT ${AVM_DISABLE_JIT})
-set(AVM_DISABLE_JIT ON)
+# BuildErlang.cmake (${CMAKE_BINARY_DIR}/tools/packbeam/packbeam).
 if (NOT "${CMAKE_GENERATOR}" MATCHES "Xcode")
     # PackBEAM's project() enables CXX by default, but it only uses rebar3
     # (no C/CXX compilation). Skip the CXX compiler check which would fail
     # with the bare-metal cross-compiler.
     set(CMAKE_CXX_COMPILER_WORKS TRUE)
     add_subdirectory(../../../tools/packbeam tools/packbeam)
+    # JIT precompilation needs the jit library beams (compiled by host erlc)
+    if (NOT AVM_DISABLE_JIT)
+        add_subdirectory(../../../libs/jit/src libs/jit/src)
+    endif()
     add_subdirectory(../../../tests/erlang_tests erlang_tests)
     add_dependencies(test-erlang.elf erlang_test_modules)
 endif()
-set(AVM_DISABLE_JIT ${_saved_AVM_DISABLE_JIT})
 
 # Generate a helper script to run tests under QEMU
 file(WRITE "${CMAKE_BINARY_DIR}/run-qemu-tests.sh" "\
