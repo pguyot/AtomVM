@@ -1670,9 +1670,8 @@ schedule_in:
             jit_state.module = mod;
             jit_state.remaining_reductions = remaining_reductions;
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
-            jit_state.code_base = (const void *) native_pc;
+            jit_state.code_base = (const void *) mod->native_code;
 #endif
-            // __asm__ volatile("int $0x03");
             TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
             TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);

@@ -760,6 +760,11 @@ int test_modules_execution(bool beam, bool skip, int count, char **item)
             perror("Error: cannot find riscv64 directory");
             return EXIT_FAILURE;
         }
+#elif JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+        if (chdir("xtensa") != 0) {
+            perror("Error: cannot find xtensa directory");
+            return EXIT_FAILURE;
+        }
 #else
 #error Unknown JIT target
 #endif

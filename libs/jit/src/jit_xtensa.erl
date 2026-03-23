@@ -102,22 +102,25 @@
 
 -define(ASSERT(Expr), true = Expr).
 
-%% Xtensa (ESP32 LX6/LX7) call0 ABI:
-%% a2-a7 are used for argument passing (6 registers).
-%% a2 is used for return values.
-%% a12-a15 are callee-saved registers.
-%% a8-a11 are caller-saved temporary registers.
-%% a1 is the stack pointer.
-%% a0 is the return address register (set by call0/callx0).
-%% No zero register - must use beqz/bnez for zero comparisons.
+%% Xtensa (ESP32 LX6/LX7) windowed ABI:
+%% C calls JIT via CALL8. JIT entry points start with ENTRY a1, 32.
+%% JIT returns to C with RETW (not RET).
+%% JIT calls C primitives via CALLX8 with args in a10-a15
+%%   (callee sees them as a2-a7).
+%% Return value from C comes back in a10 (callee's a2 mapped back).
+%% CALLX8 preserves caller's a0-a7 automatically (register window).
+%% a8-a15 are clobbered by CALLX8.
+%% a0 contains encoded return address - MUST NOT be modified (needed for RETW).
 %%
-%% Registers used by the JIT backend (Xtensa):
-%%   - Context: a2 (ctx pointer, first parameter)
-%%   - JITState: a3 (second parameter)
-%%   - Native interface: a4 (third parameter)
-%%   - Return address: a0 (set by call0/callx0)
+%% Registers used by the JIT backend (Xtensa windowed):
+%%   - Context: a2 (ctx pointer, first parameter from C via CALL8)
+%%   - JITState: a3 (second parameter from C)
+%%   - Native interface: a4 (third parameter from C)
+%%   - Return address: a0 (encoded, must not be touched - needed for RETW)
 %%   - Stack pointer: a1
-%%   - Available for JIT scratch: a8-a11 (4 temp registers)
+%%   - Available for JIT scratch: a5-a15 (11 registers)
+%%     a5-a7: preserved across CALLX8 (in caller's window)
+%%     a8-a15: clobbered by CALLX8
 %%   - IP_REG: a8 (special scratch, not in SCRATCH_REGS)
 
 -type xtensa_register() ::
@@ -197,8 +200,8 @@
 -define(BS_OFFSET, {?CTX_REG, 16#68}).
 % JITSTATE is in a3 register
 -define(JITSTATE_REG, a3).
-% Return address register (a0 in call0 ABI)
--define(RA_REG, a0).
+%% In windowed ABI, a0 holds the encoded return address and must not be
+%% modified.  RETW uses it implicitly.  No RA_REG define is needed.
 -define(JITSTATE_MODULE_OFFSET, 0).
 -define(JITSTATE_CONTINUATION_OFFSET, 16#4).
 -define(JITSTATE_REDUCTIONCOUNT_OFFSET, 16#8).
@@ -206,7 +209,14 @@
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 
--define(JUMP_TABLE_ENTRY_SIZE, 3).
+-define(JUMP_TABLE_ENTRY_SIZE, 6).
+%% ENTRY frame size: 32 bytes for window save areas (base + extra) +
+%% 32 bytes for local storage (push_registers for up to 8 saved regs).
+%% Total must be 16-byte aligned.
+-define(ENTRY_FRAME_SIZE, 96).
+%% Offset within the ENTRY frame where push_registers stores data.
+%% This must be above the window save areas (32 bytes).
+-define(FRAME_LOCAL_OFFSET, 48).
 
 %% Use a8 as temporary for some operations
 -define(IP_REG, a8).
@@ -225,17 +235,18 @@
     is_integer(X) andalso X >= -16#80000000 andalso X < 16#100000000
 ).
 
-%% Xtensa call0 ABI register allocation:
-%% - a2: context pointer (reserved, passed as first parameter)
-%% - a3: JIT state pointer (reserved, second parameter)
-%% - a4: native interface pointer (reserved, third parameter)
-%% - a0: return address (set by call0/callx0)
+%% Xtensa windowed ABI register allocation:
+%% - a2: context pointer (reserved, passed as first parameter from C)
+%% - a3: JIT state pointer (reserved, second parameter from C)
+%% - a4: native interface pointer (reserved, third parameter from C)
+%% - a0: encoded return address (must not be modified, needed for RETW)
 %% - a1: stack pointer
-%% - a8-a11: temporaries, caller-saved, available for JIT use
-%% - a12-a15: callee-saved
--define(AVAILABLE_REGS, [a11, a10, a9, a8]).
--define(PARAMETER_REGS, [a2, a3, a4, a5, a6, a7]).
--define(SCRATCH_REGS, [a11, a10, a9]).
+%% - a5-a7: preserved across CALLX8 (in caller's register window)
+%% - a8-a15: clobbered by CALLX8, available for JIT use
+%% - CALLX8 arguments go in a10-a15 (callee sees them as a2-a7)
+-define(AVAILABLE_REGS, [a15, a14, a13, a12, a11, a10, a9, a8, a7, a6, a5]).
+-define(PARAMETER_REGS, [a10, a11, a12, a13, a14, a15]).
+-define(SCRATCH_REGS, [a15, a14, a13, a12, a11, a10, a9]).
 
 -define(REG_BIT_A0, (1 bsl 0)).
 -define(REG_BIT_A1, (1 bsl 1)).
@@ -249,14 +260,21 @@
 -define(REG_BIT_A9, (1 bsl 9)).
 -define(REG_BIT_A10, (1 bsl 10)).
 -define(REG_BIT_A11, (1 bsl 11)).
+-define(REG_BIT_A12, (1 bsl 12)).
+-define(REG_BIT_A13, (1 bsl 13)).
+-define(REG_BIT_A14, (1 bsl 14)).
+-define(REG_BIT_A15, (1 bsl 15)).
 
-%% AVAILABLE_REGS = [a11, a10, a9, a8]
+%% AVAILABLE_REGS = [a15, a14, a13, a12, a11, a10, a9, a8, a7, a6, a5]
 -define(AVAILABLE_REGS_MASK,
-    (?REG_BIT_A11 bor ?REG_BIT_A10 bor ?REG_BIT_A9 bor ?REG_BIT_A8)
+    (?REG_BIT_A15 bor ?REG_BIT_A14 bor ?REG_BIT_A13 bor ?REG_BIT_A12 bor
+        ?REG_BIT_A11 bor ?REG_BIT_A10 bor ?REG_BIT_A9 bor ?REG_BIT_A8 bor
+        ?REG_BIT_A7 bor ?REG_BIT_A6 bor ?REG_BIT_A5)
 ).
-%% SCRATCH_REGS = [a11, a10, a9] (excludes a8=IP_REG)
+%% SCRATCH_REGS = [a15, a14, a13, a12, a11, a10, a9] (excludes a8=IP_REG)
 -define(SCRATCH_REGS_MASK,
-    (?REG_BIT_A11 bor ?REG_BIT_A10 bor ?REG_BIT_A9)
+    (?REG_BIT_A15 bor ?REG_BIT_A14 bor ?REG_BIT_A13 bor ?REG_BIT_A12 bor
+        ?REG_BIT_A11 bor ?REG_BIT_A10 bor ?REG_BIT_A9)
 ).
 
 -include("jit_backend_dwarf_impl.hrl").
@@ -440,9 +458,12 @@ jump_table0(
     N,
     LabelsCount
 ) ->
-    % Create jump table entry: J instruction (3 bytes)
-    % This will be patched in add_label when the label offset is known
-    JumpEntry = <<16#FF, 16#FF, 16#FF>>,
+    % Create jump table entry: ENTRY(3 bytes) + J placeholder(3 bytes) = 6 bytes
+    % ENTRY establishes a windowed register frame when C calls via CALL8.
+    % The J instruction will be patched in add_label when the label offset is known.
+    EntryInstr = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
+    JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
+    JumpEntry = <<EntryInstr/binary, JPlaceholder/binary>>,
     Stream1 = StreamModule:append(Stream0, JumpEntry),
     jump_table0(State#state{stream = Stream1}, N + 1, LabelsCount).
 
@@ -460,12 +481,14 @@ jump_table0(
 patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
     NewInstr =
         case Type of
-            {adr, Reg} ->
+            {adr, Reg, HeaderOffset} ->
                 % Generate code_relative_address padded to 12 bytes
-                code_relative_address_padded12(Reg, LabelOffset);
+                % LabelOffset is a stream offset; subtract header to get code-relative
+                code_relative_address_padded12(Reg, LabelOffset - HeaderOffset);
             far_branch ->
                 % J instruction (3 bytes, 18-bit signed range)
-                Rel = LabelOffset - Offset,
+                % J target = PC + 4 + offset18, so offset18 = target - PC - 4
+                Rel = LabelOffset - Offset - 4,
                 jit_xtensa_asm:j(Rel)
         end,
     StreamModule:replace(Stream, Offset, NewInstr).
@@ -611,9 +634,8 @@ call_primitive_last(
     Primitive,
     Args
 ) ->
-    % We need a register for the function pointer that should not be used as a parameter
-    % Since we're not returning, we can use all scratch registers except
-    % registers used for parameters
+    %% Xtensa windowed ABI: use CALLX8 to call the primitive, then
+    %% move return value to a2 and RETW back to C.
     ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
     ArgsRegs = args_regs(Args),
     ArgsRegsMask = jit_regs:regs_to_mask(ArgsRegs, fun reg_bit/1),
@@ -641,42 +663,30 @@ call_primitive_last(
         Args
     ),
 
-    %% In Xtensa call0, up to 6 arguments fit in registers (a2-a7)
-    % Always use tail call when calling primitives in tail position
-    State4 =
-        case Args1 of
-            [FirstArg, jit_state | ArgsT] ->
-                % Use tail call
-                ArgsForTailCall = [FirstArg, jit_state_tail_call | ArgsT],
-                State2 = set_registers_args(State1, ArgsForTailCall, 0),
-                tail_call_with_jit_state_registers_only(State2, Temp)
-        end,
-    State4#state{
-        available_regs = ?AVAILABLE_REGS_MASK,
-        used_regs = 0,
-        regs = jit_regs:invalidate_all(State4#state.regs)
-    }.
+    %% Set up arguments in parameter registers (a10-a15) and call
+    case Args1 of
+        [FirstArg, jit_state | ArgsT] ->
+            ArgsForCall = [FirstArg, jit_state_tail_call | ArgsT],
+            ParameterRegs = parameter_regs(Args1),
+            State2 = set_registers_args(State1, ArgsForCall, ParameterRegs, 0),
+            Stream2 = State2#state.stream,
+            %% CALLX8 to the primitive
+            I_call = jit_xtensa_asm:callx8(Temp),
+            %% Move return value from a10 to a2 (return register)
+            I_mv = jit_xtensa_asm:mv(a2, a10),
+            %% Return to C
+            I_retw = jit_xtensa_asm:retw(),
+            Stream3 = StreamModule:append(Stream2, <<I_call/binary, I_mv/binary, I_retw/binary>>),
+            State2#state{
+                stream = Stream3,
+                available_regs = ?AVAILABLE_REGS_MASK,
+                used_regs = 0,
+                regs = jit_regs:invalidate_all(State2#state.regs)
+            }
+    end.
 
-%%-----------------------------------------------------------------------------
-%% @doc Tail call to address in register.
-%% RA is preserved across regular calls (call_func_ptr saves/restores it),
-%% so when the called C primitive returns, it returns to opcodesswitch.h.
-%% @end
-%% @param State current backend state
-%% @param Reg register containing the target address
-%% @return Updated backend state
-%%-----------------------------------------------------------------------------
-tail_call_with_jit_state_registers_only(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0
-    } = State,
-    Reg
-) ->
-    % Jump to address in register (tail call)
-    I1 = jit_xtensa_asm:jx(Reg),
-    Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1}.
+%% tail_call_with_jit_state_registers_only removed — tail calls now use
+%% the JITState trampoline (store fn+args in jit_state, retw, C dispatches).
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a return of a value if it's not equal to ctx.
@@ -696,7 +706,8 @@ return_if_not_equal_to_ctx(
     } = State,
     {free, Reg}
 ) ->
-    % Xtensa call0 ABI: return value in a2 (= CTX_REG)
+    % Xtensa windowed ABI: return value in a2 (= CTX_REG)
+    % RETW returns to the caller's register window
     I2 =
         case Reg of
             % Return value is already in a2
@@ -704,10 +715,10 @@ return_if_not_equal_to_ctx(
             % Move to a2 (return register)
             _ -> jit_xtensa_asm:mv(a2, Reg)
         end,
-    I3 = jit_xtensa_asm:ret(),
+    I3 = jit_xtensa_asm:retw(),
     %% Branch if equal (skip the return)
     %% Offset accounts for beq instruction (3 bytes) plus I2 and I3
-    I1 = jit_xtensa_asm:beq(Reg, ?CTX_REG, 3 + byte_size(I2) + byte_size(I3)),
+    I1 = jit_xtensa_asm:beq(Reg, ?CTX_REG, byte_size(I2) + byte_size(I3) - 1),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     RegBit = reg_bit(Reg),
     Regs1 = jit_regs:invalidate_reg(State#state.regs, Reg),
@@ -771,10 +782,15 @@ jump_to_continuation(
     I1 = jit_xtensa_asm:l32i(Temp, ?JITSTATE_REG, ?JITSTATE_CODE_BASE_OFFSET),
     %% Add target offset to get final absolute address
     I2 = jit_xtensa_asm:add(Temp, Temp, OffsetReg),
-    %% Indirect branch to the calculated absolute address
-    I3 = jit_xtensa_asm:jx(Temp),
+    %% Skip past the ENTRY instruction (3 bytes) at the continuation entry point.
+    %% All continuation targets (jump table entries and inline continuations)
+    %% have an ENTRY instruction. When jumping from within JIT code we are
+    %% already in a windowed frame, so we must skip the ENTRY.
+    I3 = jit_xtensa_asm:addi(Temp, Temp, 3),
+    %% Indirect branch to the calculated absolute address (past ENTRY)
+    I4 = jit_xtensa_asm:jx(Temp),
 
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     % Free all registers since this is a tail jump
     State0#state{stream = Stream1, available_regs = ?AVAILABLE_REGS_MASK, used_regs = 0}.
@@ -782,7 +798,8 @@ jump_to_continuation(
 branch_to_offset_code(_State, Offset, TargetOffset) ->
     %% Xtensa J instruction has 18-bit signed offset range (+-131072 bytes)
     %% This is sufficient for virtually all module sizes
-    Rel = TargetOffset - Offset,
+    %% J target = PC + 4 + offset18, so offset18 = target - PC - 4
+    Rel = TargetOffset - Offset - 4,
     jit_xtensa_asm:j(Rel).
 
 branch_to_label_code(State, Offset, Label, {Label, LabelOffset}) ->
@@ -827,7 +844,7 @@ if_block(
     OffsetAfter = StreamModule:offset(Stream2),
     Stream3 = lists:foldl(
         fun({JumpOffset}, AccStream) ->
-            JumpRel = OffsetAfter - JumpOffset,
+            JumpRel = OffsetAfter - JumpOffset - 4,
             NewJumpInstr = jit_xtensa_asm:j(JumpRel),
             StreamModule:replace(AccStream, JumpOffset, NewJumpInstr)
         end,
@@ -849,7 +866,7 @@ if_block(
     OffsetAfter = StreamModule:offset(Stream2),
     %% Patch the J instruction in the trampoline to jump to the end of the block
     JumpOffset = Offset + JumpDelta,
-    JumpRel = OffsetAfter - JumpOffset,
+    JumpRel = OffsetAfter - JumpOffset - 4,
     NewJumpInstr = jit_xtensa_asm:j(JumpRel),
     Stream3 = StreamModule:replace(Stream2, JumpOffset, NewJumpInstr),
     State3 = merge_used_regs(State2#state{stream = Stream3}, State1#state.used_regs),
@@ -887,7 +904,7 @@ if_else_block(
     %% Else block starts here.
     OffsetAfter = StreamModule:offset(Stream3),
     %% Patch the J in the trampoline to jump to the else block
-    JumpRel = OffsetAfter - JumpInstrOffset,
+    JumpRel = OffsetAfter - JumpInstrOffset - 4,
     NewJumpInstr = jit_xtensa_asm:j(JumpRel),
     Stream4 = StreamModule:replace(Stream3, JumpInstrOffset, NewJumpInstr),
     %% Build the else block
@@ -900,7 +917,7 @@ if_else_block(
     Stream5 = State3#state.stream,
     OffsetFinal = StreamModule:offset(Stream5),
     %% Patch the unconditional J to jump to the end (3 bytes)
-    FinalJumpOffset = OffsetFinal - ElseJumpOffset,
+    FinalJumpOffset = OffsetFinal - ElseJumpOffset - 4,
     NewElseJumpInstr = jit_xtensa_asm:j(FinalJumpOffset),
     3 = byte_size(NewElseJumpInstr),
     Stream6 = StreamModule:replace(Stream5, ElseJumpOffset, NewElseJumpInstr),
@@ -918,9 +935,9 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bgez Reg, +6 (skip over J if NOT less than 0) + J placeholder
+    %% Xtensa: bltz Reg, +2 (skip over J if less than 0) + J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
-    I1 = jit_xtensa_asm:bgez(Reg, 6),
+    I1 = jit_xtensa_asm:bltz(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -936,8 +953,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bgei Reg, Val, +6; J placeholder (skip if NOT less than Val)
-    I1 = jit_xtensa_asm:bgei(Reg, Val, 6),
+    %% Xtensa: blti Reg, Val, +2; J placeholder (skip J if less than Val)
+    I1 = jit_xtensa_asm:blti(Reg, Val, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -952,7 +969,7 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: load Val, bge Reg, Temp, +6; J placeholder
+    %% Xtensa: load Val, blt Reg, Temp, +2; J placeholder
     Temp =
         case State0#state.available_regs of
             0 -> ?IP_REG;
@@ -961,7 +978,7 @@ if_block_cond(
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:bge(Reg, Temp, 6),
+    I1 = jit_xtensa_asm:blt(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -982,11 +999,11 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bge Reg, Temp, +6; J placeholder
+    %% Xtensa: blt Reg, Temp, +2; J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:bge(Reg, Temp, 6),
+    I1 = jit_xtensa_asm:blt(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1007,11 +1024,11 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bge Temp, Reg, +6; J placeholder
+    %% Xtensa: blt Temp, Reg, +2; J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:bge(Temp, Reg, 6),
+    I1 = jit_xtensa_asm:blt(Temp, Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1032,11 +1049,11 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bge Temp, Reg, +6; J placeholder
+    %% Xtensa: blt Temp, Reg, +2; J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:bge(Temp, Reg, 6),
+    I1 = jit_xtensa_asm:blt(Temp, Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1052,8 +1069,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bge Reg, RegB, +6; J placeholder
-    I1 = jit_xtensa_asm:bge(Reg, RegB, 6),
+    %% Xtensa: blt Reg, RegB, +2; J placeholder
+    I1 = jit_xtensa_asm:blt(Reg, RegB, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1067,8 +1084,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bnez Reg, +6 (skip over J if NOT equal to 0) + J placeholder
-    I1 = jit_xtensa_asm:bnez(Reg, 6),
+    %% Xtensa: beqz Reg, +2 (skip over J if equal to 0) + J placeholder
+    I1 = jit_xtensa_asm:beqz(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1082,8 +1099,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: beqz Reg, +6 (skip over J if equal to 0) + J placeholder
-    I1 = jit_xtensa_asm:beqz(Reg, 6),
+    %% Xtensa: bnez Reg, +2 (skip over J if not equal to 0) + J placeholder
+    I1 = jit_xtensa_asm:bnez(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1098,8 +1115,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bne Reg, RegB, +6; J placeholder
-    I1 = jit_xtensa_asm:bne(Reg, RegB, 6),
+    %% Xtensa: beq Reg, RegB, +2; J placeholder
+    I1 = jit_xtensa_asm:beq(Reg, RegB, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1119,8 +1136,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: beqi Reg, Val, +6; J placeholder
-    I1 = jit_xtensa_asm:beqi(Reg, Val, 6),
+    %% Xtensa: bnei Reg, Val, +2; J placeholder
+    I1 = jit_xtensa_asm:bnei(Reg, Val, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1140,11 +1157,11 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: li Temp, Val; beq Reg, Temp, +6; J placeholder
+    %% Xtensa: li Temp, Val; bne Reg, Temp, +2; J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:beq(Reg, Temp, 6),
+    I1 = jit_xtensa_asm:bne(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1160,8 +1177,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: beq Reg, Val, +6; J placeholder
-    I1 = jit_xtensa_asm:beq(Reg, Val, 6),
+    %% Xtensa: bne Reg, Val, +2; J placeholder
+    I1 = jit_xtensa_asm:bne(Reg, Val, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1179,8 +1196,8 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: bnei Reg, Val, +6; J placeholder
-    I1 = jit_xtensa_asm:bnei(Reg, Val, 6),
+    %% Xtensa: beqi Reg, Val, +2; J placeholder
+    I1 = jit_xtensa_asm:beqi(Reg, Val, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1200,11 +1217,11 @@ if_block_cond(
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: li Temp, Val; bne Reg, Temp, +6; J placeholder
+    %% Xtensa: li Temp, Val; beq Reg, Temp, +2; J placeholder
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    I1 = jit_xtensa_asm:bne(Reg, Temp, 6),
+    I1 = jit_xtensa_asm:beq(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1215,8 +1232,8 @@ if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {{free, RegA}, '==', {free, RegB}}
 ) ->
-    %% Xtensa: bne RegA, RegB, +6; J placeholder
-    I1 = jit_xtensa_asm:bne(RegA, RegB, 6),
+    %% Xtensa: beq RegA, RegB, +2; J placeholder
+    I1 = jit_xtensa_asm:beq(RegA, RegB, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = State0#state{stream = Stream1},
@@ -1240,8 +1257,8 @@ if_block_cond(
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    %% Xtensa: bne Reg, Temp, +6; J placeholder
-    I1 = jit_xtensa_asm:bne(Reg, Temp, 6),
+    %% Xtensa: beq Reg, Temp, +2; J placeholder
+    I1 = jit_xtensa_asm:beq(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1265,8 +1282,8 @@ if_block_cond(
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
-    %% Xtensa: beq Reg, Temp, +6; J placeholder
-    I1 = jit_xtensa_asm:beq(Reg, Temp, 6),
+    %% Xtensa: bne Reg, Temp, +2; J placeholder
+    I1 = jit_xtensa_asm:bne(Reg, Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I1/binary, JPlaceholder/binary>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
@@ -1276,57 +1293,45 @@ if_block_cond(
 if_block_cond(
     #state{
         stream_module = StreamModule,
-        stream = Stream0,
-        available_regs = Avail
+        stream = Stream0
     } = State0,
     {'(bool)', RegOrTuple, '==', false}
 ) ->
-    Temp =
-        case Avail of
-            0 -> ?IP_REG;
-            _ -> first_avail(Avail)
-        end,
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: slli+bltz trampoline (bit was 1 = NOT false, skip)
-    I1 = jit_xtensa_asm:slli(Temp, Reg, 31),
-    Stream1 = StreamModule:append(Stream0, I1),
-    I2 = jit_xtensa_asm:bltz(Temp, 6),
+    %% Condition: Reg == false (== 0). Block executes when condition is met.
+    %% Branch skips J when condition IS met (Reg == 0) to enter the block.
+    %% When condition is NOT met (Reg != 0), fall through to J which skips block.
+    I1 = jit_xtensa_asm:beqz(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
-    Stream2 = StreamModule:append(Stream1, <<I2/binary, JPlaceholder/binary>>),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream2},
-    {State2, byte_size(I1) + byte_size(I2)};
+    State2 = State1#state{stream = Stream1},
+    {State2, byte_size(I1)};
 if_block_cond(
     #state{
         stream_module = StreamModule,
-        stream = Stream0,
-        available_regs = Avail
+        stream = Stream0
     } = State0,
     {'(bool)', RegOrTuple, '!=', false}
 ) ->
-    Temp =
-        case Avail of
-            0 -> ?IP_REG;
-            _ -> first_avail(Avail)
-        end,
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    %% Xtensa: slli+bgez trampoline (bit was 0 = NOT true, skip)
-    I1 = jit_xtensa_asm:slli(Temp, Reg, 31),
-    Stream1 = StreamModule:append(Stream0, I1),
-    I2 = jit_xtensa_asm:bgez(Temp, 6),
+    %% Condition: Reg != false (Reg != 0). Block executes when condition is met.
+    %% Branch skips J when condition IS met (Reg != 0) to enter the block.
+    %% When condition is NOT met (Reg == 0), fall through to J which skips block.
+    I1 = jit_xtensa_asm:bnez(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
-    Stream2 = StreamModule:append(Stream1, <<I2/binary, JPlaceholder/binary>>),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream2},
-    {State2, byte_size(I1) + byte_size(I2)};
+    State2 = State1#state{stream = Stream1},
+    {State2, byte_size(I1)};
 if_block_cond(
     #state{
         stream_module = StreamModule,
@@ -1353,8 +1358,8 @@ if_block_cond(
     OffsetBefore = StreamModule:offset(Stream0),
     Stream1 = StreamModule:append(Stream0, TestCode),
     BranchDelta = StreamModule:offset(Stream1) - OffsetBefore,
-    %% Xtensa: beqz Temp, +6; J placeholder (skip if zero = NOT != 0)
-    I_beqz = jit_xtensa_asm:beqz(Temp, 6),
+    %% Xtensa: bnez Temp, +2; J placeholder (skip J if nonzero = IS != 0)
+    I_beqz = jit_xtensa_asm:bnez(Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I_beqz/binary, JPlaceholder/binary>>),
     State1 = if_block_free_reg(RegOrTuple, State0),
@@ -1378,8 +1383,8 @@ if_block_cond(
     I1 = jit_xtensa_asm:not_(Temp, Reg),
     I2 = jit_xtensa_asm:slli(Temp, Temp, 28),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    %% Xtensa: beqz+J trampoline
-    I3 = jit_xtensa_asm:beqz(Temp, 6),
+    %% Xtensa: bnez+J trampoline (skip J if nonzero = low bits != 0xF)
+    I3 = jit_xtensa_asm:bnez(Temp, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I3/binary, JPlaceholder/binary>>),
     State1 = State0#state{stream = Stream2},
@@ -1391,11 +1396,11 @@ if_block_cond(
     } = State0,
     {{free, Reg} = RegTuple, '&', 16#F, '!=', 16#F}
 ) when ?IS_GPR(Reg) ->
-    %% Xtensa: not+slli+beqz+J trampoline
+    %% Xtensa: not+slli+bnez+J trampoline (skip J if nonzero = low bits != 0xF)
     I1 = jit_xtensa_asm:not_(Reg, Reg),
     I2 = jit_xtensa_asm:slli(Reg, Reg, 28),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    I3 = jit_xtensa_asm:beqz(Reg, 6),
+    I3 = jit_xtensa_asm:bnez(Reg, 2),
     JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
     Stream2 = StreamModule:append(Stream1, <<I3/binary, JPlaceholder/binary>>),
     State1 = State0#state{stream = Stream2},
@@ -1422,11 +1427,11 @@ if_block_cond(
     State1 = State0#state{stream = Stream1},
     {State2, Temp} = and_(State1#state{available_regs = AT}, {free, Temp}, Mask),
     Stream2 = State2#state.stream,
-    %% Compare Temp with Val and branch if equal (NOT != Val)
+    %% Compare Temp with Val and branch if not equal (IS != Val)
     case Val of
         0 ->
-            %% Xtensa: beqz+J trampoline (zero = NOT != 0)
-            I_beqz = jit_xtensa_asm:beqz(Temp, 6),
+            %% Xtensa: bnez+J trampoline (nonzero = IS != 0)
+            I_beqz = jit_xtensa_asm:bnez(Temp, 2),
             JPlaceholder1 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream2) - OffsetBefore + byte_size(I_beqz),
             Stream3 = StreamModule:append(Stream2, <<I_beqz/binary, JPlaceholder1/binary>>),
@@ -1435,8 +1440,8 @@ if_block_cond(
             },
             {State3, BranchDelta};
         _ when ?IS_GPR(Val) ->
-            %% Xtensa: beq+J trampoline (equal = NOT != Val)
-            I_beq = jit_xtensa_asm:beq(Temp, Val, 6),
+            %% Xtensa: bne+J trampoline (not equal = IS != Val)
+            I_beq = jit_xtensa_asm:bne(Temp, Val, 2),
             JPlaceholder2 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream2) - OffsetBefore + byte_size(I_beq),
             Stream3 = StreamModule:append(Stream2, <<I_beq/binary, JPlaceholder2/binary>>),
@@ -1454,8 +1459,8 @@ if_block_cond(
             AT2 = AT band (bnot reg_bit(MaskReg)),
             State3 = mov_immediate(State2#state{available_regs = AT2}, MaskReg, Val),
             Stream3 = State3#state.stream,
-            %% Xtensa: beq+J trampoline
-            I_beq2 = jit_xtensa_asm:beq(Temp, MaskReg, 6),
+            %% Xtensa: bne+J trampoline
+            I_beq2 = jit_xtensa_asm:bne(Temp, MaskReg, 2),
             JPlaceholder3 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream3) - OffsetBefore + byte_size(I_beq2),
             Stream4 = StreamModule:append(Stream3, <<I_beq2/binary, JPlaceholder3/binary>>),
@@ -1477,11 +1482,11 @@ if_block_cond(
     OffsetBefore = StreamModule:offset(Stream0),
     {State1, Reg} = and_(State0, RegTuple, Mask),
     Stream1 = State1#state.stream,
-    %% Compare Reg with Val and branch if equal (NOT != Val)
+    %% Compare Reg with Val and branch if not equal (IS != Val)
     case Val of
         0 ->
-            %% Xtensa: beqz+J trampoline
-            I_beqz = jit_xtensa_asm:beqz(Reg, 6),
+            %% Xtensa: bnez+J trampoline
+            I_beqz = jit_xtensa_asm:bnez(Reg, 2),
             JPlaceholder4 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream1) - OffsetBefore + byte_size(I_beqz),
             Stream2 = StreamModule:append(Stream1, <<I_beqz/binary, JPlaceholder4/binary>>),
@@ -1489,8 +1494,8 @@ if_block_cond(
             State3 = if_block_free_reg(RegTuple, State2),
             {State3, BranchDelta};
         _ when ?IS_GPR(Val) ->
-            %% Xtensa: beq+J trampoline
-            I_beq3 = jit_xtensa_asm:beq(Reg, Val, 6),
+            %% Xtensa: bne+J trampoline
+            I_beq3 = jit_xtensa_asm:bne(Reg, Val, 2),
             JPlaceholder5 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream1) - OffsetBefore + byte_size(I_beq3),
             Stream2 = StreamModule:append(Stream1, <<I_beq3/binary, JPlaceholder5/binary>>),
@@ -1503,8 +1508,8 @@ if_block_cond(
             AT = State1#state.available_regs band (bnot reg_bit(MaskReg)),
             State2 = mov_immediate(State1#state{available_regs = AT}, MaskReg, Val),
             Stream2 = State2#state.stream,
-            %% Xtensa: beq+J trampoline
-            I_beq4 = jit_xtensa_asm:beq(Reg, MaskReg, 6),
+            %% Xtensa: bne+J trampoline
+            I_beq4 = jit_xtensa_asm:bne(Reg, MaskReg, 2),
             JPlaceholder6 = <<16#FF, 16#FF, 16#FF>>,
             BranchDelta = StreamModule:offset(Stream2) - OffsetBefore + byte_size(I_beq4),
             Stream3 = StreamModule:append(Stream2, <<I_beq4/binary, JPlaceholder6/binary>>),
@@ -1736,22 +1741,28 @@ call_func_ptr(
         [FuncPtrTuple | Args]
     ),
     UsedRegs1 = UsedRegs0 -- FreeRegs,
-    %% Save RA (a0) so it's preserved across callx0 calls
-    SavedRegs = [?RA_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | UsedRegs1],
 
-    % Calculate available registers
+    %% Windowed ABI: a0-a7 are preserved across CALLX8 automatically.
+    %% Only a8-a15 are clobbered.  We only need to save used regs in a8-a15
+    %% that are not freed by this call.
+    HighRegs = [a8, a9, a10, a11, a12, a13, a14, a15],
+    RegsToSave = [R || R <- UsedRegs1, lists:member(R, HighRegs)],
+
+    % Calculate available registers (freed regs become available)
     FreeGPRegs = FreeRegs -- (FreeRegs -- ?AVAILABLE_REGS),
     AvailableRegs1 = FreeGPRegs ++ AvailableRegs0,
 
-    %% Calculate stack space: round up to 16-byte boundary for Xtensa ABI
-    NumRegs = length(SavedRegs),
-    StackBytes = NumRegs * 4,
-    AlignedStackBytes = ((StackBytes + 15) div 16) * 16,
+    %% Save high registers that need preserving to stack
+    NumToSave = length(RegsToSave),
+    AlignedStackBytes =
+        if
+            NumToSave > 0 -> ((NumToSave * 4 + 15) div 16) * 16;
+            true -> 0
+        end,
+    Stream1 = push_registers(RegsToSave, AlignedStackBytes, StreamModule, Stream0),
 
-    Stream1 = push_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream0),
-
-    %% Set up arguments following Xtensa call0 ABI
-    %% Arguments are passed in a2-a7 (up to 6 register arguments)
+    %% Set up arguments following Xtensa windowed ABI
+    %% Arguments are passed in a10-a15 (up to 6 register arguments)
     Args1 = lists:map(
         fun(Arg) ->
             case Arg of
@@ -1765,8 +1776,10 @@ call_func_ptr(
     RegArgs0 = Args1,
     RegArgsRegs = lists:flatmap(fun arg_to_reg_list/1, RegArgs0),
 
-    % We pushed registers to stack, so we can use these registers we saved
-    % and the currently available registers
+    % Registers available for set_registers_args:
+    % - freed regs (consumed by call) that are in AVAILABLE_REGS
+    % - saved regs (will be restored after call) that are not arg sources
+    % - previously available regs
     SetArgsRegsOnlyAvailableArgs = (UsedRegs1 -- RegArgsRegs) ++ AvailableRegs0,
     State1 = State0#state{
         available_regs = jit_regs:regs_to_mask(SetArgsRegsOnlyAvailableArgs, fun reg_bit/1),
@@ -1780,7 +1793,7 @@ call_func_ptr(
     {Stream3, SetArgsAvailableRegs, FuncPtrReg, RegArgs} =
         case FuncPtrTuple of
             {free, FuncPtrReg0} ->
-                % If FuncPtrReg is in parameter regs, we must swap it with a free reg.
+                % If FuncPtrReg is in parameter regs, we must move it out.
                 case lists:member(FuncPtrReg0, ParameterRegs) of
                     true ->
                         case SetArgsRegsOnlyAvailableArgs -- ParameterRegs of
@@ -1795,8 +1808,7 @@ call_func_ptr(
                                     RegArgs0
                                 };
                             [] ->
-                                % Swap SetArgsRegsOnlyAvailableArgs with a reg used in RegArgs0
-                                % that is not in ParameterRegs
+                                % Swap with a reg used in RegArgs0 that is not in ParameterRegs
                                 [NewArgReg | _] = SetArgsRegsOnlyAvailableArgs,
                                 [FuncPtrReg1 | _] = RegArgsRegs -- ParameterRegs,
                                 MovInstr1 = jit_xtensa_asm:mv(NewArgReg, FuncPtrReg1),
@@ -1851,61 +1863,45 @@ call_func_ptr(
     State4 = set_registers_args(State3, RegArgs, ParameterRegs, StackOffset),
     Stream4 = State4#state.stream,
 
-    %% Call the function pointer using callx0
-    Call = jit_xtensa_asm:callx0(FuncPtrReg),
+    %% Call the function pointer using callx8 (windowed ABI)
+    Call = jit_xtensa_asm:callx8(FuncPtrReg),
     Stream5 = StreamModule:append(Stream4, Call),
 
-    % For result, we need a free register (including FuncPtrReg).
-    % If none are available (all registers were pushed to the stack),
-    % we write the result to the stack position of FuncPtrReg
+    %% Return value is in a10 (callee's a2 mapped back to caller's a10).
+    %% Pick a result register from the available registers.
+    %% After CALLX8, a8-a15 are all clobbered, so they are all available
+    %% (except for any we still need to restore from stack).
+    %% a5-a7 are preserved and may still hold live values.
+    PostCallAvail = (AvailableRegs1 -- HighRegs) ++ (HighRegs -- RegsToSave),
     {Stream6, UsedRegs2, ResultReg} =
-        case length(SavedRegs) of
-            N when N >= 7 andalso element(1, FuncPtrTuple) =:= free ->
-                % We use original FuncPtrReg then as we know it's available.
-                % Calculate stack offset: find register index in SavedRegs * 4 bytes
-                ResultReg0 = element(2, FuncPtrTuple),
-                RegIndex = index_of(ResultReg0, SavedRegs),
-                case RegIndex >= 0 of
-                    true ->
-                        StoreResultStackOffset = RegIndex * 4,
-                        StoreResult = jit_xtensa_asm:s32i(a0, a1, StoreResultStackOffset),
+        case PostCallAvail of
+            [ResultReg0 | _] ->
+                case ResultReg0 of
+                    a10 ->
+                        %% Result already in the right register
+                        {Stream5, [a10 | UsedRegs1], a10};
+                    _ ->
+                        MoveResult = jit_xtensa_asm:mv(ResultReg0, a10),
                         {
-                            StreamModule:append(Stream5, StoreResult),
+                            StreamModule:append(Stream5, MoveResult),
                             [ResultReg0 | UsedRegs1],
                             ResultReg0
-                        };
-                    false ->
-                        % FuncPtrReg was not in SavedRegs, use an available register
-                        [ResultReg1 | _] = AvailableRegs1 -- SavedRegs,
-                        MoveResult = jit_xtensa_asm:mv(ResultReg1, a0),
-                        {
-                            StreamModule:append(Stream5, MoveResult),
-                            [ResultReg1 | UsedRegs1],
-                            ResultReg1
                         }
                 end;
-            _ ->
-                % Use any free that is not in SavedRegs
-                case AvailableRegs1 -- SavedRegs of
-                    [ResultReg1 | _] ->
-                        MoveResult = jit_xtensa_asm:mv(ResultReg1, a0),
-                        {
-                            StreamModule:append(Stream5, MoveResult),
-                            [ResultReg1 | UsedRegs1],
-                            ResultReg1
-                        };
-                    [] ->
-                        % No available registers, use ?IP_REG
-                        MoveResult = jit_xtensa_asm:mv(?IP_REG, a0),
-                        {StreamModule:append(Stream5, MoveResult), [?IP_REG | UsedRegs1], ?IP_REG}
-                end
+            [] ->
+                %% Fallback: use ?IP_REG (a8)
+                MoveResult = jit_xtensa_asm:mv(?IP_REG, a10),
+                {StreamModule:append(Stream5, MoveResult), [?IP_REG | UsedRegs1], ?IP_REG}
         end,
 
-    Stream8 = pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream6),
+    Stream8 = pop_registers(RegsToSave, AlignedStackBytes, StreamModule, Stream6),
 
     AvailableRegs2 = lists:delete(ResultReg, AvailableRegs1),
     AvailableRegs3 = ?AVAILABLE_REGS -- (?AVAILABLE_REGS -- AvailableRegs2),
-    Regs1 = jit_regs:invalidate_volatile(State0#state.regs, UsedRegs1),
+    %% Invalidate ALL register tracking after a call. Even though a0-a7 are
+    %% preserved by the windowed ABI, the called function may trigger GC which
+    %% moves heap objects. Any cached heap pointers in registers become stale.
+    Regs1 = jit_regs:invalidate_all(State0#state.regs),
     {
         State4#state{
             stream = Stream8,
@@ -1921,46 +1917,35 @@ arg_to_reg_list({free, Reg}) when is_atom(Reg) -> [Reg];
 arg_to_reg_list(Reg) when is_atom(Reg) -> [Reg];
 arg_to_reg_list(_) -> [].
 
-index_of(Item, List) -> index_of(Item, List, 0).
-
-index_of(_, [], _) -> -1;
-index_of(Item, [Item | _], Index) -> Index;
-index_of(Item, [_ | Rest], Index) -> index_of(Item, Rest, Index + 1).
-
-push_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream0) when length(SavedRegs) > 0 ->
-    %% Xtensa addi range is +-128, use add_immediate_binary for stack adjust
-    StackAdjust = add_immediate_binary(a1, a1, -AlignedStackBytes),
-    Stream1 = StreamModule:append(Stream0, StackAdjust),
-    {Stream2, _} = lists:foldl(
+push_registers(SavedRegs, _AlignedStackBytes, StreamModule, Stream0) when length(SavedRegs) > 0 ->
+    %% Windowed ABI: store registers within the ENTRY frame at positive offsets
+    %% from SP, starting at FRAME_LOCAL_OFFSET (above the window save areas).
+    %% This avoids conflicts with the window overflow handler.
+    {Stream1, _} = lists:foldl(
         fun(Reg, {StreamAcc, Offset}) ->
             Store = jit_xtensa_asm:s32i(Reg, a1, Offset),
             {StreamModule:append(StreamAcc, Store), Offset + 4}
         end,
-        {Stream1, 0},
+        {Stream0, ?FRAME_LOCAL_OFFSET},
         SavedRegs
     ),
-    Stream2;
+    Stream1;
 push_registers([], _AlignedStackBytes, _StreamModule, Stream0) ->
     Stream0.
 
-pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream0) when length(SavedRegs) > 0 ->
-    %% Xtensa: l32i reg, a1, offset for each reg then add_immediate for stack adjust
+pop_registers(SavedRegs, _AlignedStackBytes, StreamModule, Stream0) when length(SavedRegs) > 0 ->
+    %% Windowed ABI: restore registers from the ENTRY frame at positive offsets.
     {Stream1, _} = lists:foldl(
         fun(Reg, {StreamAcc, Offset}) ->
             Load = jit_xtensa_asm:l32i(Reg, a1, Offset),
             {StreamModule:append(StreamAcc, Load), Offset + 4}
         end,
-        {Stream0, 0},
+        {Stream0, ?FRAME_LOCAL_OFFSET},
         SavedRegs
     ),
-    StackAdjust = add_immediate_binary(a1, a1, AlignedStackBytes),
-    StreamModule:append(Stream1, StackAdjust);
+    Stream1;
 pop_registers([], _AlignedStackBytes, _StreamModule, Stream0) ->
     Stream0.
-
-set_registers_args(State0, Args, StackOffset) ->
-    ParamRegs = parameter_regs(Args),
-    set_registers_args(State0, Args, ParamRegs, StackOffset).
 
 set_registers_args(
     #state{used_regs = UsedRegsMask} = State0,
@@ -1970,7 +1955,7 @@ set_registers_args(
 ) ->
     UsedRegs = mask_to_list(UsedRegsMask),
     ArgsRegs = args_regs(Args),
-    AvailableScratchGP = ((?SCRATCH_REGS -- ParamRegs) -- ArgsRegs) -- UsedRegs,
+    AvailableScratchGP = ((?AVAILABLE_REGS -- ParamRegs) -- ArgsRegs) -- UsedRegs,
     State1 = set_registers_args0(
         State0, Args, ArgsRegs, ParamRegs, AvailableScratchGP, StackOffset
     ),
@@ -1995,16 +1980,16 @@ set_registers_args(
 parameter_regs(Args) ->
     parameter_regs0(Args, ?PARAMETER_REGS, []).
 
-% ILP32 (Xtensa call0 ABI): 64-bit args require even register number alignment
-% Parameter registers are a2-a7
+% ILP32 (Xtensa windowed ABI): 64-bit args require even register number alignment
+% Parameter registers are a10-a15 (callee sees them as a2-a7)
 parameter_regs0([], _, Acc) ->
     lists:reverse(Acc);
-parameter_regs0([{avm_int64_t, _} | T], [a2, a3 | Rest], Acc) ->
-    parameter_regs0(T, Rest, [a3, a2 | Acc]);
-parameter_regs0([{avm_int64_t, _} | T], [a3, a4 | Rest], Acc) ->
-    parameter_regs0(T, Rest, [a4, a3 | Acc]);
-parameter_regs0([{avm_int64_t, _} | T], [a4, a5 | Rest], Acc) ->
-    parameter_regs0(T, Rest, [a5, a4 | Acc]);
+parameter_regs0([{avm_int64_t, _} | T], [a10, a11 | Rest], Acc) ->
+    parameter_regs0(T, Rest, [a11, a10 | Acc]);
+parameter_regs0([{avm_int64_t, _} | T], [a11, a12 | Rest], Acc) ->
+    parameter_regs0(T, Rest, [a12, a11 | Acc]);
+parameter_regs0([{avm_int64_t, _} | T], [a12, a13 | Rest], Acc) ->
+    parameter_regs0(T, Rest, [a13, a12 | Acc]);
 parameter_regs0([_Other | T], [Reg | Rest], Acc) ->
     parameter_regs0(T, Rest, [Reg | Acc]).
 
@@ -2077,6 +2062,21 @@ set_registers_args1(State, Reg, Reg, _Offset) ->
     State;
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
+    ctx,
+    ParamReg,
+    _StackOffset
+) ->
+    %% ctx is always in a2 (?CTX_REG)
+    case ParamReg of
+        ?CTX_REG ->
+            State;
+        _ ->
+            I = jit_xtensa_asm:mv(ParamReg, ?CTX_REG),
+            Stream1 = StreamModule:append(Stream0, I),
+            State#state{stream = Stream1}
+    end;
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
     jit_state,
     ParamReg,
     _StackOffset
@@ -2090,9 +2090,20 @@ set_registers_args1(
             Stream1 = StreamModule:append(Stream0, I),
             State#state{stream = Stream1}
     end;
-%% For tail calls, jit_state is already in ?JITSTATE_REG (a3)
+%% For tail calls, jit_state is in ?JITSTATE_REG (a3).
+%% In windowed ABI, it still needs to be moved to the parameter register
+%% (a11 etc.) since the callee will see it in a different window.
 set_registers_args1(State, jit_state_tail_call, ?JITSTATE_REG, _StackOffset) ->
     State;
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    jit_state_tail_call,
+    ParamReg,
+    _StackOffset
+) ->
+    I = jit_xtensa_asm:mv(ParamReg, ?JITSTATE_REG),
+    Stream1 = StreamModule:append(Stream0, I),
+    State#state{stream = Stream1};
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {x_reg, extra},
@@ -3005,34 +3016,23 @@ set_continuation_to_label(
         stream_module = StreamModule,
         stream = Stream0,
         available_regs = Avail,
-        branches = Branches,
-        labels = Labels,
         regs = Regs0
     } = State,
     Label
 ) ->
     Temp = first_avail(Avail),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    Offset = StreamModule:offset(Stream0),
-    case lists:keyfind(Label, 1, Labels) of
-        {Label, LabelOffset} ->
-            %% Label is already known, emit code_relative_address
-            I1 = code_relative_address(Temp, LabelOffset),
-            I2 = jit_xtensa_asm:s32i(Temp, ?JITSTATE_REG, ?JITSTATE_CONTINUATION_OFFSET),
-            Code = <<I1/binary, I2/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            State#state{stream = Stream1, regs = Regs1};
-        false ->
-            %% Label not yet known, emit 12-byte placeholder for code_relative_address
-            I1 =
-                <<16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF,
-                    16#FF>>,
-            Reloc = {Label, Offset, {adr, Temp}},
-            I2 = jit_xtensa_asm:s32i(Temp, ?JITSTATE_REG, ?JITSTATE_CONTINUATION_OFFSET),
-            Code = <<I1/binary, I2/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            State#state{stream = Stream1, branches = [Reloc | Branches], regs = Regs1}
-    end.
+    %% In windowed ABI, the continuation will be called by C via CALL8,
+    %% so it must point to a location with an ENTRY instruction.
+    %% We use the jump table entry for the label, which has ENTRY + J.
+    %% code_base points past the chunk header, so the offset is relative to
+    %% the jump table start (which is the first thing after the header).
+    CodeRelativeOffset = Label * ?JUMP_TABLE_ENTRY_SIZE,
+    I1 = code_relative_address(Temp, CodeRelativeOffset),
+    I2 = jit_xtensa_asm:s32i(Temp, ?JITSTATE_REG, ?JITSTATE_CONTINUATION_OFFSET),
+    Code = <<I1/binary, I2/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %% @doc Set the contination to a given offset
 %% Return a reference so the offset will be updated with update_branches
@@ -3044,6 +3044,7 @@ set_continuation_to_offset(
         stream = Stream0,
         available_regs = Avail,
         branches = Branches,
+        jump_table_start = JumpTableStart,
         regs = Regs0
     } = State
 ) ->
@@ -3052,7 +3053,7 @@ set_continuation_to_offset(
     Offset = StreamModule:offset(Stream0),
     %% Reserve 12 bytes placeholder for code_relative_address
     I1 = <<16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF>>,
-    Reloc = {OffsetRef, Offset, {adr, Temp}},
+    Reloc = {OffsetRef, Offset, {adr, Temp, JumpTableStart}},
     %% Store continuation
     I2 = jit_xtensa_asm:s32i(Temp, ?JITSTATE_REG, ?JITSTATE_CONTINUATION_OFFSET),
     Code = <<I1/binary, I2/binary>>,
@@ -3061,9 +3062,13 @@ set_continuation_to_offset(
     {State#state{stream = Stream1, branches = [Reloc | Branches], regs = Regs1}, OffsetRef}.
 
 %% @doc Implement a continuation entry point.
+%% In windowed ABI, C calls the continuation via CALL8, so we need ENTRY
+%% to establish a new register window frame.
 -spec continuation_entry_point(#state{}) -> #state{}.
-continuation_entry_point(State) ->
-    State.
+continuation_entry_point(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    I1 = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1}.
 
 get_module_index(
     #state{
@@ -3504,7 +3509,12 @@ mul(
 %%
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        jump_table_start = JumpTableStart
+    } = State0
 ) ->
     Temp = first_avail(Avail),
     % Load reduction count
@@ -3526,12 +3536,19 @@ decrement_reductions_and_maybe_schedule_next(
     State1 = State0#state{stream = Stream2},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     #state{stream = Stream3} = State2,
+    %% Emit ENTRY at the continuation point so C can call it via CALL8.
+    %% The continuation offset stored in jit_state points here.
+    EntryInstr = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
     NewOffset = StreamModule:offset(Stream3),
-    NewI4 = jit_xtensa_asm:bnez(Temp, NewOffset - BNEOffset),
+    Stream3b = StreamModule:append(Stream3, EntryInstr),
+    %% The BNEZ from within JIT code must skip past the ENTRY instruction
+    %% (we are already in a windowed frame, so hitting ENTRY again is wrong).
+    NewI4 = jit_xtensa_asm:bnez(Temp, (NewOffset + 3) - BNEOffset - 4),
     %% Generate code_relative_address padded to 12 bytes
-    NewI5 = code_relative_address_padded12(Temp, NewOffset),
+    %% The continuation address is NewOffset (stream offset) minus header
+    NewI5 = code_relative_address_padded12(Temp, NewOffset - JumpTableStart),
     Stream4 = StreamModule:replace(
-        Stream3, BNEOffset, <<NewI4/binary, NewI5/binary>>
+        Stream3b, BNEOffset, <<NewI4/binary, NewI5/binary>>
     ),
     StreamN = Stream4,
     State3 = merge_used_regs(State2#state{stream = StreamN}, State1#state.used_regs),
@@ -3581,7 +3598,8 @@ call_only_or_schedule_next(
                         % Near branch: use direct conditional branch (RISC-V has ±4KB range)
 
                         % Branch if NOT zero (temp != 0)
-                        I4 = jit_xtensa_asm:bnez(Temp, Rel),
+                        %% Xtensa branch target = PC + 4 + offset, so offset = Rel - 4
+                        I4 = jit_xtensa_asm:bnez(Temp, Rel - 4),
                         Stream2 = StreamModule:append(Stream1, I4),
                         State0#state{stream = Stream2};
                     true ->
@@ -3595,7 +3613,7 @@ call_only_or_schedule_next(
                         ),
                         FarSeqSize = byte_size(FarCodeBlock),
                         % Skip over the far branch sequence if zero (temp == 0)
-                        I4 = jit_xtensa_asm:beqz(Temp, FarSeqSize + 3),
+                        I4 = jit_xtensa_asm:beqz(Temp, FarSeqSize - 1),
                         Stream2 = StreamModule:append(Stream1, I4),
                         Stream3 = StreamModule:append(Stream2, FarCodeBlock),
                         State1#state{stream = Stream3}
@@ -3607,7 +3625,7 @@ call_only_or_schedule_next(
                 FarSeqOffset = BccOffset + 3,
                 {State1, FarCodeBlock} = branch_to_label_code(State0, FarSeqOffset, Label, false),
                 FarSeqSize = byte_size(FarCodeBlock),
-                I4 = jit_xtensa_asm:beqz(Temp, FarSeqSize + 3),
+                I4 = jit_xtensa_asm:beqz(Temp, FarSeqSize - 1),
                 Stream2 = StreamModule:append(Stream1, I4),
                 Stream3 = StreamModule:append(Stream2, FarCodeBlock),
                 State1#state{stream = Stream3}
@@ -3673,7 +3691,12 @@ rewrite_cp_offset(
     PaddedInstr = <<NewMoveInstr/binary, Nops/binary>>,
     15 = byte_size(PaddedInstr),
     Stream1 = StreamModule:replace(Stream0, RewriteOffset, PaddedInstr),
-    State0#state{stream = Stream1}.
+    %% Emit ENTRY at the continuation point so that jump_to_continuation can
+    %% skip past it with +3. This makes inline continuations consistent with
+    %% jump table entries (which also have ENTRY).
+    EntryInstr = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
+    Stream2 = StreamModule:append(Stream1, EntryInstr),
+    State0#state{stream = Stream2}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
@@ -3701,7 +3724,8 @@ return_labels_and_lines(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
-        labels = Labels
+        labels = Labels,
+        jump_table_start = JumpTableStart
     } = State,
     SortedLines
 ) ->
@@ -3710,13 +3734,14 @@ return_labels_and_lines(
      || {Label, LabelOffset} <- Labels, is_integer(Label)
     ]),
 
-    I2 = jit_xtensa_asm:ret(),
+    I2 = jit_xtensa_asm:retw(),
     %% Xtensa: Return address of data that follows this prologue.
     %% code_relative_address loads code_base+offset into a2 (return register).
     %% We need the offset of the data after this prologue.
-    %% Prologue = code_relative_address(12 bytes padded) + ret(3 bytes) = 15 bytes
+    %% Prologue = code_relative_address(12 bytes padded) + retw(3 bytes) = 15 bytes
     %% So the data starts at current_offset + 15
-    DataOffset = StreamModule:offset(Stream0) + 15,
+    %% Subtract header offset since code_base points past the header
+    DataOffset = StreamModule:offset(Stream0) + 15 - JumpTableStart,
     I1 = code_relative_address_padded12(a2, DataOffset),
     Prologue = <<I1/binary, I2/binary>>,
     ProloguePadded =
@@ -3736,11 +3761,12 @@ return_labels_and_lines(
 %% Loads code_base from JITState, then adds the absolute offset.
 %% Returns a variable-length sequence to load code_base + offset into Rd.
 -spec code_relative_address(xtensa_register(), non_neg_integer()) -> binary().
-code_relative_address(Rd, AbsOffset) ->
+code_relative_address(Rd, CodeRelativeOffset) ->
     %% Load code_base from JITState (stored at offset 0xC)
+    %% code_base points to the start of the native code (past the chunk header).
+    %% CodeRelativeOffset must be relative to code_base, NOT a raw stream offset.
     I1 = jit_xtensa_asm:l32i(Rd, ?JITSTATE_REG, ?JITSTATE_CODE_BASE_OFFSET),
-    %% Add the absolute offset
-    I2 = add_immediate_binary(Rd, Rd, AbsOffset),
+    I2 = add_immediate_binary(Rd, Rd, CodeRelativeOffset),
     <<I1/binary, I2/binary>>.
 
 %% @doc Generate code_relative_address padded to exactly 12 bytes.
@@ -3902,19 +3928,39 @@ reg_bit(a7) -> ?REG_BIT_A7;
 reg_bit(a8) -> ?REG_BIT_A8;
 reg_bit(a9) -> ?REG_BIT_A9;
 reg_bit(a10) -> ?REG_BIT_A10;
-reg_bit(a11) -> ?REG_BIT_A11.
+reg_bit(a11) -> ?REG_BIT_A11;
+reg_bit(a12) -> ?REG_BIT_A12;
+reg_bit(a13) -> ?REG_BIT_A13;
+reg_bit(a14) -> ?REG_BIT_A14;
+reg_bit(a15) -> ?REG_BIT_A15.
 
 %% first_avail returns the first available register from a bitmask.
-%% Order matches ?AVAILABLE_REGS = [a11, a10, a9, a8]
+%% Order matches ?AVAILABLE_REGS = [a15, a14, a13, a12, a11, a10, a9, a8, a7, a6, a5]
+%% Check high registers first (they are clobbered by CALLX8 so prefer them).
+first_avail(Mask) when Mask band ?REG_BIT_A15 =/= 0 -> a15;
+first_avail(Mask) when Mask band ?REG_BIT_A14 =/= 0 -> a14;
+first_avail(Mask) when Mask band ?REG_BIT_A13 =/= 0 -> a13;
+first_avail(Mask) when Mask band ?REG_BIT_A12 =/= 0 -> a12;
 first_avail(Mask) when Mask band ?REG_BIT_A11 =/= 0 -> a11;
 first_avail(Mask) when Mask band ?REG_BIT_A10 =/= 0 -> a10;
 first_avail(Mask) when Mask band ?REG_BIT_A9 =/= 0 -> a9;
-first_avail(Mask) when Mask band ?REG_BIT_A8 =/= 0 -> a8.
+first_avail(Mask) when Mask band ?REG_BIT_A8 =/= 0 -> a8;
+first_avail(Mask) when Mask band ?REG_BIT_A7 =/= 0 -> a7;
+first_avail(Mask) when Mask band ?REG_BIT_A6 =/= 0 -> a6;
+first_avail(Mask) when Mask band ?REG_BIT_A5 =/= 0 -> a5.
 
 %% Convert bitmask to list, covering all register bits.
 mask_to_list(0) -> [];
-mask_to_list(Mask) -> mask_to_list_a11(Mask).
+mask_to_list(Mask) -> mask_to_list_a15(Mask).
 
+mask_to_list_a15(Mask) when Mask band ?REG_BIT_A15 =/= 0 -> [a15 | mask_to_list_a14(Mask)];
+mask_to_list_a15(Mask) -> mask_to_list_a14(Mask).
+mask_to_list_a14(Mask) when Mask band ?REG_BIT_A14 =/= 0 -> [a14 | mask_to_list_a13(Mask)];
+mask_to_list_a14(Mask) -> mask_to_list_a13(Mask).
+mask_to_list_a13(Mask) when Mask band ?REG_BIT_A13 =/= 0 -> [a13 | mask_to_list_a12(Mask)];
+mask_to_list_a13(Mask) -> mask_to_list_a12(Mask).
+mask_to_list_a12(Mask) when Mask band ?REG_BIT_A12 =/= 0 -> [a12 | mask_to_list_a11(Mask)];
+mask_to_list_a12(Mask) -> mask_to_list_a11(Mask).
 mask_to_list_a11(Mask) when Mask band ?REG_BIT_A11 =/= 0 -> [a11 | mask_to_list_a10(Mask)];
 mask_to_list_a11(Mask) -> mask_to_list_a10(Mask).
 mask_to_list_a10(Mask) when Mask band ?REG_BIT_A10 =/= 0 -> [a10 | mask_to_list_a9(Mask)];
@@ -3973,9 +4019,10 @@ args_regs(Args) ->
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec add_label(state(), integer() | reference()) -> state().
-add_label(#state{stream_module = StreamModule, stream = Stream0} = State0, Label) ->
+add_label(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Label) ->
     Offset0 = StreamModule:offset(Stream0),
-    add_label(State0, Label, Offset0).
+    Regs1 = jit_regs:invalidate_all(Regs0),
+    add_label(State0#state{regs = Regs1}, Label, Offset0).
 
 %%-----------------------------------------------------------------------------
 %% @doc Add a label at a specific offset
@@ -3998,16 +4045,19 @@ add_label(
     LabelOffset
 ) when is_integer(Label) ->
     %% Patch the jump table entry immediately
-    %% Each jump table entry is a J instruction (3 bytes)
+    %% Each jump table entry is ENTRY(3 bytes) + J(3 bytes) = 6 bytes
+    %% The J instruction is at offset +3 within the entry (after ENTRY)
     JumpTableEntryOffset = JumpTableStart + Label * ?JUMP_TABLE_ENTRY_SIZE,
+    JInstrOffset = JumpTableEntryOffset + 3,
 
-    %% Calculate relative offset from J instruction to target
-    Rel = LabelOffset - JumpTableEntryOffset,
+    %% Calculate relative offset from J instruction position to target
+    %% J target = PC + 4 + Offset, so Offset = target - PC - 4 = target - JInstrOffset - 4
+    Rel = LabelOffset - JInstrOffset - 4,
 
     %% Encode J instruction
     JumpTableEntry = jit_xtensa_asm:j(Rel),
 
-    Stream1 = StreamModule:replace(Stream0, JumpTableEntryOffset, JumpTableEntry),
+    Stream1 = StreamModule:replace(Stream0, JInstrOffset, JumpTableEntry),
 
     % Eagerly patch any branches targeting this label
     {Stream2, RemainingBranches} = patch_branches_for_label(
@@ -4019,10 +4069,13 @@ add_label(
     ),
 
     State#state{
-        stream = Stream2, branches = RemainingBranches, labels = [{Label, LabelOffset} | Labels]
+        stream = Stream2,
+        branches = RemainingBranches,
+        labels = [{Label, LabelOffset} | Labels],
+        regs = jit_regs:invalidate_all(State#state.regs)
     };
-add_label(#state{labels = Labels} = State, Label, Offset) ->
-    State#state{labels = [{Label, Offset} | Labels]}.
+add_label(#state{labels = Labels, regs = Regs0} = State, Label, Offset) ->
+    State#state{labels = [{Label, Offset} | Labels], regs = jit_regs:invalidate_all(Regs0)}.
 
 %% @doc Get the register tracking state.
 get_regs_tracking(#state{regs = Regs}) -> Regs.

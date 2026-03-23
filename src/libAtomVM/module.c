@@ -1916,7 +1916,13 @@ bool module_find_line(Module *mod, unsigned int offset, uint32_t *line, size_t *
     size_t i;
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+
+#if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+        struct JITState temp_jit_state = { .code_base = (const void *) mod->native_code };
+        const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, &temp_jit_state, NULL);
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
+#endif
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2 + labels_count * 6;
         size_t lines_count = READ_16_UNALIGNED(labels_and_lines);
@@ -1991,7 +1997,13 @@ COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, i
 
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+
+#if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+        struct JITState temp_jit_state = { .code_base = (const void *) mod->native_code };
+        const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, &temp_jit_state, NULL);
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
+#endif
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2;
         uint32_t label_offset = 0;
@@ -2070,7 +2082,13 @@ uint32_t module_label_code_offset(Module *mod, int label)
 {
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+
+#if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+        struct JITState temp_jit_state = { .code_base = (const void *) mod->native_code };
+        const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, &temp_jit_state, NULL);
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
+#endif
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2;
         while (labels_count > 0) {

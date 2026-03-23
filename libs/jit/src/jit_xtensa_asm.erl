@@ -92,8 +92,13 @@
     jx/1,
     call0/1,
     callx0/1,
+    call8/1,
+    callx8/1,
     ret/0,
     ret_n/0,
+    retw/0,
+    retw_n/0,
+    entry/2,
     % Narrow (density) instructions
     add_n/3,
     addi_n/3,
@@ -201,10 +206,10 @@ reg_to_num(a15) -> 15.
 %% 24-bit Instruction Format Encoders
 %%=============================================================================
 
-%% RRR format: op2[23:20] | op1[19:16] | r[15:12] | s[11:8] | t[7:4] | op0[3:0]
+%% RRR format: op1[23:20] | op2[19:16] | r[15:12] | s[11:8] | t[7:4] | op0[3:0]
 -spec encode_rrr(integer(), integer(), integer(), integer(), integer(), integer()) -> binary().
 encode_rrr(Op0, T, S, R, Op1, Op2) ->
-    Instr = (Op2 bsl 20) bor (Op1 bsl 16) bor (R bsl 12) bor (S bsl 8) bor (T bsl 4) bor Op0,
+    Instr = (Op1 bsl 20) bor (Op2 bsl 16) bor (R bsl 12) bor (S bsl 8) bor (T bsl 4) bor Op0,
     <<Instr:24/little>>.
 
 %% RRI8 format: imm8[23:16] | r[15:12] | s[11:8] | t[7:4] | op0[3:0]
@@ -323,24 +328,24 @@ addx8(Ar, As, At) ->
 
 %% SLL: AR[r] = AR[s] << (32 - SAR)
 %% Actually SLL uses the SAR register. Must set SAR with SSL first.
-%% op0=0, op1=1, op2=10 (0xA), t=0
+%% op0=0, bits[23:20]=0xA, bits[19:16]=1, t=0
 -spec sll(xtensa_register(), xtensa_register(), xtensa_register()) -> binary().
 sll(Ar, As, _At) ->
-    encode_rrr(0, 0, reg_to_num(As), reg_to_num(Ar), 16#1, 16#A).
+    encode_rrr(0, 0, reg_to_num(As), reg_to_num(Ar), 16#A, 16#1).
 
 %% SRL: AR[r] = AR[t] >> SAR (logical)
 %% Must set SAR with SSR first.
-%% op0=0, op1=1, op2=10 (0xA), s=0
+%% op0=0, bits[23:20]=0x9, bits[19:16]=1, s=0
 -spec srl(xtensa_register(), xtensa_register(), xtensa_register()) -> binary().
 srl(Ar, _As, At) ->
-    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#1, 16#A).
+    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#9, 16#1).
 
 %% SRA: AR[r] = AR[t] >> SAR (arithmetic)
 %% Must set SAR with SSR first.
-%% op0=0, op1=1, op2=11 (0xB), s=0
+%% op0=0, bits[23:20]=0xB, bits[19:16]=1, s=0
 -spec sra(xtensa_register(), xtensa_register(), xtensa_register()) -> binary().
 sra(Ar, _As, At) ->
-    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#1, 16#B).
+    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#B, 16#1).
 
 %% SSL: Set SAR for left shift. SAR = 32 - AR[s][4:0]
 %% op0=0, op1=4, op2=0, r=1, t=0
@@ -360,60 +365,34 @@ ssr(As) ->
 ssa8l(As) ->
     encode_rrr(0, 0, reg_to_num(As), 2, 16#4, 0).
 
-%% SLLI: AR[r] = AR[s] << (0..31)
-%% op0=0, op1=0, op2=0, special encoding
-%% Encoding: the shift amount is 32 - sa, split between r[15:12] and op2[23:20]
-%% Actually, SLLI: op0=0, t=sa[4:0] low bits in t field
-%% Wait, SLLI encoding: op0=0, op1=1, op2=0, with sa encoded specially
-%% Let me reconsider. SLLI: RRR format
-%% op0=0, op1=0, op2=0 is not right.
-%% SLLI is actually encoded as:
-%% op0=0, op1=0001b, op2=sa[4] (0 or 1), r=AR[r], s=AR[s], t=sa[3:0]
-%% Wait no. Let me use the correct Xtensa encoding.
-%% SLLI: op0=0, RRR format with:
-%%   op1 = 0 (0000b), op2 = 0 (0000b) for shifts
-%%   Actually this varies per Xtensa config.
-%%
-%% Per ISA manual: SLLI
-%%   Type: RRR
-%%   op0 = 0, op1 = 0001b (1), op2 = sa4..0
-%%   Wait, that's not right either.
-%%
-%% Correct SLLI encoding per Xtensa ISA:
-%% 24-bit: 0000 | 0001 | sa[4]||0||sa[3:0]... this is getting complex.
-%% Let me encode it directly.
-%% SLLI: shift amount 1..31
-%% Bits: op2=0, op1=0, r=Ar, s=As, t=ShiftAmount[3:0]
-%% with bit 20 = sa[4] (the high bit of shift amount)
-%% Actually:
-%% SLLI encoding: op0=0, op1=0001, but sa is split
-%% The format is: (sa4 bsl 20) | (1 bsl 16) | (r bsl 12) | (s bsl 8) | ((sa band 16#F) bsl 4)
+%% SLLI: AR[r] = AR[s] << sa (1..31)
+%% op0=0, RRR format with shift amount encoded as (32 - sa).
+%% The encoded value split: sa_enc[4] at bits[23:20], op=1 at bits[19:16],
+%% r at bits[15:12], s at bits[11:8], sa_enc[3:0] at bits[7:4].
 -spec slli(xtensa_register(), xtensa_register(), 1..31) -> binary().
 slli(Ar, As, Sa) when Sa >= 1, Sa =< 31 ->
-    %% SLLI: op0=0, op1=0001b
-    %% sa[4] goes to bit 20 (part of op2 field), sa[3:0] goes to t field
-    Sa4 = (Sa bsr 4) band 1,
-    Sa30 = Sa band 16#F,
+    SaEnc = 32 - Sa,
+    Sa4 = (SaEnc bsr 4) band 1,
+    Sa30 = SaEnc band 16#F,
     Instr =
         (Sa4 bsl 20) bor (16#1 bsl 16) bor (reg_to_num(Ar) bsl 12) bor
             (reg_to_num(As) bsl 8) bor (Sa30 bsl 4) bor 0,
     <<Instr:24/little>>.
 
 %% SRLI: AR[r] = AR[t] >> sa (logical, immediate)
-%% op0=0, op1=0001b, with different encoding
-%% SRLI: op0=0, t=At, s=sa[3:0], r=Ar, op1=0100b (4), op2=0
+%% op0=0, t=At, s=sa[3:0], r=Ar, bits[23:20]=4, bits[19:16]=1
 -spec srli(xtensa_register(), xtensa_register(), 0..15) -> binary().
 srli(Ar, At, Sa) when Sa >= 0, Sa =< 15 ->
-    encode_rrr(0, reg_to_num(At), Sa band 16#F, reg_to_num(Ar), 16#4, 0).
+    encode_rrr(0, reg_to_num(At), Sa band 16#F, reg_to_num(Ar), 16#4, 1).
 
 %% SRAI: AR[r] = AR[t] >> sa (arithmetic, immediate)
-%% op0=0, op1=0100b (4), op2 has sa[4], t=At, s=sa[3:0], r=Ar
+%% op0=0, bits[23:20] = 2 + sa[4], bits[19:16] = 1, r=Ar, s=sa[3:0], t=At
 -spec srai(xtensa_register(), xtensa_register(), 0..31) -> binary().
 srai(Ar, At, Sa) when Sa >= 0, Sa =< 31 ->
     Sa4 = (Sa bsr 4) band 1,
     Sa30 = Sa band 16#F,
     Instr =
-        (Sa4 bsl 20) bor (16#4 bsl 16) bor (reg_to_num(Ar) bsl 12) bor
+        ((2 + Sa4) bsl 20) bor (16#1 bsl 16) bor (reg_to_num(Ar) bsl 12) bor
             (Sa30 bsl 8) bor (reg_to_num(At) bsl 4) bor 0,
     <<Instr:24/little>>.
 
@@ -634,69 +613,69 @@ bltz(As, Offset) ->
     encode_bri12(16#6, 16#9, reg_to_num(As), Offset band 16#FFF).
 
 %% BEQI: if AR[s] == b4const(r) then PC += sign_extend(imm8)
-%% op0=7, r encodes constant via b4const table, t=2
+%% op0=6, r encodes constant via b4const table, t=2
 %% The 'r' field indexes into b4const: see b4const_encode
 -spec beqi(xtensa_register(), integer(), integer()) -> binary().
 beqi(As, Imm, Offset) ->
     R = b4const_encode(Imm),
-    encode_bri8(16#7, 16#2, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#2, reg_to_num(As), R, Offset).
 
 %% BNEI: if AR[s] != b4const(r) then PC += sign_extend(imm8)
-%% op0=7, t=6 (0x6)
+%% op0=6, t=6 (0x6)
 -spec bnei(xtensa_register(), integer(), integer()) -> binary().
 bnei(As, Imm, Offset) ->
     R = b4const_encode(Imm),
-    encode_bri8(16#7, 16#6, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#6, reg_to_num(As), R, Offset).
 
 %% BLTI: if AR[s] < b4const(r) then PC += sign_extend(imm8)
-%% op0=7, t=3
+%% op0=6, t=0xA
 -spec blti(xtensa_register(), integer(), integer()) -> binary().
 blti(As, Imm, Offset) ->
     R = b4const_encode(Imm),
-    encode_bri8(16#7, 16#3, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#A, reg_to_num(As), R, Offset).
 
 %% BGEI: if AR[s] >= b4const(r) then PC += sign_extend(imm8)
-%% op0=7, t=11 (0xB)
+%% op0=6, t=0xE
 -spec bgei(xtensa_register(), integer(), integer()) -> binary().
 bgei(As, Imm, Offset) ->
     R = b4const_encode(Imm),
-    encode_bri8(16#7, 16#B, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#E, reg_to_num(As), R, Offset).
 
 %% BLTUI: if (unsigned)AR[s] < b4constu(r) then PC += sign_extend(imm8)
-%% op0=7, t=7
+%% op0=6, t=0xB
 -spec bltui(xtensa_register(), integer(), integer()) -> binary().
 bltui(As, Imm, Offset) ->
     R = b4constu_encode(Imm),
-    encode_bri8(16#7, 16#7, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#B, reg_to_num(As), R, Offset).
 
 %% BGEUI: if (unsigned)AR[s] >= b4constu(r) then PC += sign_extend(imm8)
-%% op0=7, t=15 (0xF)
+%% op0=6, t=0xF
 -spec bgeui(xtensa_register(), integer(), integer()) -> binary().
 bgeui(As, Imm, Offset) ->
     R = b4constu_encode(Imm),
-    encode_bri8(16#7, 16#F, reg_to_num(As), R, Offset).
+    encode_bri8(16#6, 16#F, reg_to_num(As), R, Offset).
 
 %% BBCI: if AR[s] bit b is clear then PC += sign_extend(imm8)
-%% op0=7, r=b[3:0], t=0 when b<16, t=8 when b>=16
+%% op0=7, t=b[3:0], r=6 when b<16, r=7 when b>=16
 -spec bbci(xtensa_register(), 0..31, integer()) -> binary().
 bbci(As, Bit, Offset) when Bit >= 0, Bit =< 31 ->
-    T =
+    R =
         if
-            Bit >= 16 -> 16#8;
-            true -> 16#0
+            Bit >= 16 -> 16#7;
+            true -> 16#6
         end,
-    encode_bri8(16#7, T, reg_to_num(As), Bit band 16#F, Offset).
+    encode_bri8(16#7, Bit band 16#F, reg_to_num(As), R, Offset).
 
 %% BBSI: if AR[s] bit b is set then PC += sign_extend(imm8)
-%% op0=7, r=b[3:0], t=4 when b<16, t=12 when b>=16
+%% op0=7, t=b[3:0], r=E when b<16, r=F when b>=16
 -spec bbsi(xtensa_register(), 0..31, integer()) -> binary().
 bbsi(As, Bit, Offset) when Bit >= 0, Bit =< 31 ->
-    T =
+    R =
         if
-            Bit >= 16 -> 16#C;
-            true -> 16#4
+            Bit >= 16 -> 16#F;
+            true -> 16#E
         end,
-    encode_bri8(16#7, T, reg_to_num(As), Bit band 16#F, Offset).
+    encode_bri8(16#7, Bit band 16#F, reg_to_num(As), R, Offset).
 
 %%=============================================================================
 %% B4CONST encoding tables
@@ -829,7 +808,7 @@ j(Offset) ->
 %%   So JX encoding: op0=0, t=0xa, s=0, r=register, op1=0, op2=0
 -spec jx(xtensa_register()) -> binary().
 jx(As) ->
-    encode_rrr(0, 16#A, 0, reg_to_num(As), 0, 0).
+    encode_rrr(0, 16#A, reg_to_num(As), 0, 0, 0).
 
 %% CALL0: call relative, PC-relative with 18-bit offset * 4
 %% op0=5, n=0
@@ -845,7 +824,7 @@ call0(Offset) ->
 %% Similar to JX but with link: op0=0, t=0xC, s=0, r=register, op1=0, op2=0
 -spec callx0(xtensa_register()) -> binary().
 callx0(As) ->
-    encode_rrr(0, 16#C, 0, reg_to_num(As), 0, 0).
+    encode_rrr(0, 16#C, reg_to_num(As), 0, 0, 0).
 
 %% RET: return from subroutine (call0 ABI). PC = a0
 %% Same as JX a0 but with specific encoding
@@ -860,15 +839,46 @@ ret() ->
 ret_n() ->
     <<16#0D, 16#F0>>.
 
+%% RETW: return from windowed subroutine. Rotates window back and PC = a0[29:0]
+%% op0=0, t=0x9, s=0, r=0, op1=0, op2=0
+-spec retw() -> binary().
+retw() ->
+    encode_rrr(0, 16#9, 0, 0, 0, 0).
+
+%% RETW.N: narrow windowed return (2 bytes)
+-spec retw_n() -> binary().
+retw_n() ->
+    <<16#1D, 16#F0>>.
+
+%% CALL8: PC-relative windowed call with 8-register rotation
+%% CALL format: op0=5, n=2
+-spec call8(integer()) -> binary().
+call8(Offset) ->
+    Offset18 = (Offset bsr 2) band 16#3FFFF,
+    encode_call(16#5, 2, Offset18).
+
+%% CALLX8: indirect windowed call through register with 8-register rotation
+%% op0=0, t=0xE, s=register, r=0, op1=0, op2=0
+-spec callx8(xtensa_register()) -> binary().
+callx8(As) ->
+    encode_rrr(0, 16#E, reg_to_num(As), 0, 0, 0).
+
+%% ENTRY: allocate stack frame and rotate register window
+%% BRI12 format: op0=6, t=3, s=register, imm12=framesize/8
+-spec entry(xtensa_register(), non_neg_integer()) -> binary().
+entry(As, FrameSize) when (FrameSize rem 8) =:= 0, FrameSize >= 0, FrameSize =< 32760 ->
+    Imm12 = FrameSize bsr 3,
+    encode_bri12(16#6, 16#3, reg_to_num(As), Imm12 band 16#FFF).
+
 %%=============================================================================
 %% Narrow (Density) Instructions - 16-bit
 %%=============================================================================
 
 %% ADD.N: AR[r] = AR[s] + AR[t]
-%% op0=0xC (1100b)
+%% op0=0xA (1010b)
 -spec add_n(xtensa_register(), xtensa_register(), xtensa_register()) -> binary().
 add_n(Ar, As, At) ->
-    encode_rrrn(16#C, reg_to_num(At), reg_to_num(As), reg_to_num(Ar)).
+    encode_rrrn(16#A, reg_to_num(At), reg_to_num(As), reg_to_num(Ar)).
 
 %% ADDI.N: AR[r] = AR[s] + imm
 %% op0=0xB (1011b), imm encoded in r and t fields
@@ -920,38 +930,32 @@ s32i_n(At, As, Offset) when Offset >= 0, Offset =< 60, (Offset rem 4) =:= 0 ->
 -spec movi_n(xtensa_register(), -32..95) -> binary().
 movi_n(As, Imm) when Imm >= -32, Imm =< 95 ->
     %% MOVI.N encoding:
-    %% Format: op0[3:0]=0xC, s[7:4]=reg, imm4[11:8]=low4bits, imm_hi[15:12]
-    %% The 7-bit immediate: if Imm < 0, adjust to unsigned
+    %% Format: imm[3:0][15:12] | s[11:8] | imm[6:4][7:4] | op0=0xC[3:0]
     Imm7 = Imm band 16#7F,
     Low4 = Imm7 band 16#F,
     Hi3 = (Imm7 bsr 4) band 16#7,
     SNum = reg_to_num(As),
-    Instr = (Hi3 bsl 12) bor (Low4 bsl 8) bor (SNum bsl 4) bor 16#C,
+    Instr = (Low4 bsl 12) bor (SNum bsl 8) bor (Hi3 bsl 4) bor 16#C,
     <<Instr:16/little>>.
 
 %% BEQZ.N: if AR[s] == 0 then PC += imm6
-%% op0=0xC with specific sub-encoding (actually part of ST2 group)
-%% BEQZ.N encoding: 16-bit, complex bit layout
+%% Format: imm[3:0][15:12] | s[11:8] | (8|imm[5:4])[7:4] | op0=0xC[3:0]
 -spec beqz_n(xtensa_register(), integer()) -> binary().
 beqz_n(As, Offset) when Offset >= 0, Offset =< 63 ->
-    %% BEQZ.N: op0[3:0]=0xC, s[7:4]=reg, t=imm6[5:4,3:0] encoded
-    %% Bits[3:0] = 0x8 (narrow branch beqz)
-    %% Actually: bits[3:0]=0xC, bits[7:4]=s, bits[11:8]=imm[3:0], bits[15:12]=1|0|imm[5:4]
-    %% Format: {1, 0, imm[5:4], imm[3:0], s, 0xC}
     Imm30 = Offset band 16#F,
     Imm54 = (Offset bsr 4) band 16#3,
     SNum = reg_to_num(As),
-    Instr = ((16#8 bor Imm54) bsl 12) bor (Imm30 bsl 8) bor (SNum bsl 4) bor 16#C,
+    Instr = (Imm30 bsl 12) bor (SNum bsl 8) bor ((16#8 bor Imm54) bsl 4) bor 16#C,
     <<Instr:16/little>>.
 
 %% BNEZ.N: if AR[s] != 0 then PC += imm6
+%% Format: imm[3:0][15:12] | s[11:8] | (0xC|imm[5:4])[7:4] | op0=0xC[3:0]
 -spec bnez_n(xtensa_register(), integer()) -> binary().
 bnez_n(As, Offset) when Offset >= 0, Offset =< 63 ->
-    %% Same as BEQZ.N but with different flag: {1, 1, imm[5:4], imm[3:0], s, 0xC}
     Imm30 = Offset band 16#F,
     Imm54 = (Offset bsr 4) band 16#3,
     SNum = reg_to_num(As),
-    Instr = ((16#C bor Imm54) bsl 12) bor (Imm30 bsl 8) bor (SNum bsl 4) bor 16#C,
+    Instr = (Imm30 bsl 12) bor (SNum bsl 8) bor ((16#C bor Imm54) bsl 4) bor 16#C,
     <<Instr:16/little>>.
 
 %% NOP.N: narrow no-operation (2 bytes)
@@ -1010,22 +1014,22 @@ break(S, T) ->
     encode_rrr(0, T band 16#F, S band 16#F, 16#4, 0, 0).
 
 %% MEMW: memory write barrier
-%% op0=0, op1=0, op2=2, r=0, s=0, t=12
+%% op0=0, t=0xC, s=0, r=2, op1=0, op2=0
 -spec memw() -> binary().
 memw() ->
-    encode_rrr(0, 16#C, 0, 0, 16#0, 16#2).
+    encode_rrr(0, 16#C, 0, 2, 0, 0).
 
 %% ISYNC: instruction sync
-%% op0=0, op1=0, op2=2, r=0, s=0, t=0
+%% op0=0, t=0, s=0, r=2, op1=0, op2=0
 -spec isync() -> binary().
 isync() ->
-    encode_rrr(0, 0, 0, 0, 16#0, 16#2).
+    encode_rrr(0, 0, 0, 2, 0, 0).
 
 %% DSYNC: data sync
-%% op0=0, op1=0, op2=2, r=0, s=0, t=3
+%% op0=0, t=3, s=0, r=2, op1=0, op2=0
 -spec dsync() -> binary().
 dsync() ->
-    encode_rrr(0, 16#3, 0, 0, 16#0, 16#2).
+    encode_rrr(0, 16#3, 0, 2, 0, 0).
 
 %%=============================================================================
 %% Pseudo-instructions
@@ -1242,8 +1246,8 @@ mv(Dst, Src) ->
 -spec neg(xtensa_register(), xtensa_register()) -> binary().
 neg(Ar, At) ->
     %% NEG is a real Xtensa instruction: AR[r] = 0 - AR[t]
-    %% op0=0, op1=0, op2=6, r=Ar, s=0, t=At
-    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#0, 16#6).
+    %% op0=0, t=At, s=0, r=Ar, bits[23:20]=6, bits[19:16]=0
+    encode_rrr(0, reg_to_num(At), 0, reg_to_num(Ar), 16#6, 0).
 
 %% NOT: bitwise NOT (complement)
 -spec not_(xtensa_register(), xtensa_register()) -> binary().

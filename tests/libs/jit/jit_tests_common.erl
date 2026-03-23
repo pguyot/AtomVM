@@ -98,7 +98,9 @@ find_binutils_beam(Arch) ->
 -spec toolchain_prefixes(atom()) -> [string()].
 toolchain_prefixes(Arch) ->
     ArchStr = atom_to_list(Arch),
-    Variants = ["-esp-elf", "-unknown-elf", "-elf", "-none-eabi", "-linux-gnu"],
+    Variants = [
+        "-esp-elf", "-unknown-elf", "-elf", "-none-eabi", "-linux-gnu", "-buildroot-linux-uclibc"
+    ],
     [ArchStr ++ V || V <- Variants].
 
 %% Generic helper function to find binutils from a list
@@ -141,7 +143,7 @@ get_as_flags(riscv32) ->
 get_as_flags(riscv64) ->
     "-march=rv64imac -mabi=lp64";
 get_as_flags(xtensa) ->
-    "".
+    "--no-transform".
 
 %% Parse objdump output lines and extract binary data
 -spec asm_lines([binary()], binary(), atom()) -> binary().

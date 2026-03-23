@@ -2127,9 +2127,11 @@ void jit_debug_register_code(Module *mod, const void *native_code, size_t native
         return;
     }
 
-    // Compute ELF size from its headers
-    const Elf_Ehdr *ehdr = (const Elf_Ehdr *) elf_start;
-    size_t elf_size = ehdr->e_shoff + (size_t) ehdr->e_shnum * ehdr->e_shentsize;
+    // Compute ELF size from its headers using memcpy to avoid unaligned access
+    // (elf_start may not be properly aligned for struct access on Xtensa)
+    Elf_Ehdr ehdr_copy;
+    memcpy(&ehdr_copy, elf_start, sizeof(Elf_Ehdr));
+    size_t elf_size = ehdr_copy.e_shoff + (size_t) ehdr_copy.e_shnum * ehdr_copy.e_shentsize;
     if (elf_size > remaining) {
         return;
     }
@@ -2152,7 +2154,8 @@ void jit_debug_register_code(Module *mod, const void *native_code, size_t native
         }
     }
 
-    // Make a writable copy of the ELF for patching
+    // Make a writable copy of the ELF for patching.
+    // malloc returns aligned memory, so struct access on patched_elf is safe.
     uint8_t *patched_elf = (uint8_t *) malloc(elf_size);
     if (!patched_elf) {
         return;
@@ -2163,10 +2166,14 @@ void jit_debug_register_code(Module *mod, const void *native_code, size_t native
 
     // Patch .text section header: set sh_addr to load_address.
     // LLDB uses this to auto-relocate symbol table addresses.
-    Elf_Shdr *shdrs = (Elf_Shdr *) (patched_elf + ehdr->e_shoff);
-    for (int i = 0; i < ehdr->e_shnum; i++) {
-        if (shdrs[i].sh_type == 1 && (shdrs[i].sh_flags & 6) == 6) {
-            shdrs[i].sh_addr = load_address;
+    // Use memcpy to handle potentially unaligned section headers on Xtensa.
+    uint8_t *shdrs_base = patched_elf + ehdr_copy.e_shoff;
+    for (int i = 0; i < ehdr_copy.e_shnum; i++) {
+        Elf_Shdr shdr;
+        memcpy(&shdr, shdrs_base + (size_t) i * ehdr_copy.e_shentsize, sizeof(Elf_Shdr));
+        if (shdr.sh_type == 1 && (shdr.sh_flags & 6) == 6) {
+            shdr.sh_addr = load_address;
+            memcpy(shdrs_base + (size_t) i * ehdr_copy.e_shentsize, &shdr, sizeof(Elf_Shdr));
             break;
         }
     }

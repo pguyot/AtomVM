@@ -223,7 +223,7 @@ enum TrapAndLoadResult
 
 #ifdef __XTENSA__
 #define JIT_ARCH_TARGET JIT_ARCH_XTENSA
-#define JIT_JUMPTABLE_ENTRY_SIZE 3
+#define JIT_JUMPTABLE_ENTRY_SIZE 6
 #endif
 
 #ifndef JIT_ARCH_TARGET

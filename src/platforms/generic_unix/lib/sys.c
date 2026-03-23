@@ -817,7 +817,7 @@ void sys_mbedtls_ctr_drbg_context_unlock(GlobalContext *global)
 #ifndef AVM_NO_JIT
 ModuleNativeEntryPoint sys_map_native_code(const uint8_t *native_code, size_t size, size_t offset)
 {
-#if defined(__arm__) || defined(__aarch64__)
+#if defined(__arm__) || defined(__aarch64__) || defined(__xtensa__)
 #if defined(__APPLE__)
     uint8_t *native_code_mmap = (uint8_t *) mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
 #else
