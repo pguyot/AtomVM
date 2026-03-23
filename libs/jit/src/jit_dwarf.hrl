@@ -109,3 +109,5 @@
 -define(DWARF_A0_REG_RISCV64, 10).
 % r0 register in ARM
 -define(DWARF_R0_REG_ARMV6M, 0).
+% a2 register in Xtensa (ctx is passed in a2)
+-define(DWARF_A2_REG_XTENSA, 2).
