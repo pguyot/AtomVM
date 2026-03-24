@@ -182,7 +182,11 @@ recv_data_loop(
             ),
             State#state{buffer = NewBuffer, select_handle = SelectHandle, received = NewReceived};
         {select, {select_info, recv, SelectHandle}} when is_reference(SelectHandle) ->
-            State#state{select_handle = SelectHandle}
+            State#state{select_handle = SelectHandle};
+        {error, closed} ->
+            exit(normal);
+        {error, Reason} ->
+            exit({recv_error, Reason})
     end.
 
 process_recv_buffer(DHandle, <<Size:32, Rest/binary>>, Received) when byte_size(Rest) >= Size ->
