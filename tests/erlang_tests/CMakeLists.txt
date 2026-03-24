@@ -122,6 +122,7 @@ compile_erlang(send_receive)
 compile_erlang(send_to_dead_process)
 compile_erlang(selval)
 compile_erlang(byte_size_test)
+compile_erlang(test_byte_size_match_state)
 compile_erlang(tuple)
 compile_erlang(count_char)
 compile_erlang(len_test)
@@ -670,6 +671,7 @@ set(erlang_test_beams
     send_to_dead_process.beam
     selval.beam
     byte_size_test.beam
+    test_byte_size_match_state.beam
     tuple.beam
     count_char.beam
     len_test.beam
