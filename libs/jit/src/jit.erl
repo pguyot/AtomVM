@@ -3269,8 +3269,11 @@ op_gc_bif1_byte_size_binary(MMod, MSt0, Arg, Dest) ->
     MSt6 = MMod:move_to_vm_register(MSt5, Reg, Dest),
     MMod:free_native_registers(MSt6, [Reg, Dest]).
 
-is_known_binary(_MMod, _MSt, {typed, _Arg, {t_bs_matchable, Unit}}) when Unit rem 8 =:= 0 ->
-    true;
+is_known_binary(_MMod, _MSt, {typed, _Arg, {t_bs_matchable, _Unit}}) ->
+    % t_bs_matchable can be either a binary or a match state.
+    % Match states have a different layout (boxed_value[1] is the original
+    % binary term, not a size), so we cannot safely inline byte_size here.
+    false;
 is_known_binary(_MMod, _MSt, _) ->
     false.
 
