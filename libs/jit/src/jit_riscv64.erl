@@ -1004,11 +1004,12 @@ if_else_block(
     ElseBranchOffset = OffsetAfter - BranchInstrOffset,
     NewBranchInstr = apply(jit_riscv64_asm, BranchFunc, [Reg, Operand, ElseBranchOffset]),
     Stream4 = StreamModule:replace(Stream3, BranchInstrOffset, NewBranchInstr),
-    %% Build the else block
+    %% Build the else block (reset regs to pre-true-block state)
     StateElse = State2#state{
         stream = Stream4,
         used_regs = State1#state.used_regs,
-        available_regs = State1#state.available_regs
+        available_regs = State1#state.available_regs,
+        regs = State1#state.regs
     },
     State3 = BlockFalseFn(StateElse),
     Stream5 = State3#state.stream,
@@ -1185,6 +1186,26 @@ if_block_cond(
             RegOrTuple -> RegOrTuple
         end,
     %% RISC-V: Load immediate into temp, then beq Reg, Temp, offset
+    OffsetBefore = StreamModule:offset(Stream0),
+    State1 = mov_immediate(State0, Temp, Val),
+    Stream1 = State1#state.stream,
+    BranchDelta = StreamModule:offset(Stream1) - OffsetBefore,
+    BranchInstr = <<16#FFFFFFFF:32/little>>,
+    Stream2 = StreamModule:append(Stream1, BranchInstr),
+    State2 = if_block_free_reg(RegOrTuple, State1),
+    State3 = State2#state{stream = Stream2},
+    {State3, {beq, Reg, Temp}, BranchDelta};
+%% {Reg, '!=', Val} when Val is a large integer (> 255)
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State0,
+    {RegOrTuple, '!=', Val}
+) when is_integer(Val) ->
+    Temp = first_avail(Available),
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
     OffsetBefore = StreamModule:offset(Stream0),
     State1 = mov_immediate(State0, Temp, Val),
     Stream1 = State1#state.stream,
@@ -1773,29 +1794,45 @@ call_func_ptr(
     % For result, we need a free register (including FuncPtrReg).
     % If none are available (all registers were pushed to the stack),
     % we write the result to the stack position of FuncPtrReg
-    {Stream6, UsedRegs2} =
-        case length(SavedRegs) of
-            N when N >= 7 andalso element(1, FuncPtrTuple) =:= free ->
-                % We use original FuncPtrReg then as we know it's available.
-                % Calculate stack offset: find register index in SavedRegs * 8 bytes
-                ResultReg = element(2, FuncPtrTuple),
-                RegIndex = index_of(ResultReg, SavedRegs),
+    {Stream6, UsedRegs2, ResultReg} =
+        case {length(SavedRegs), FuncPtrTuple} of
+            {N, {free, ResultFPReg0}} when N >= 7 ->
+                % Registers exhausted: use FuncPtrReg which is free after the call
+                RegIndex = index_of(ResultFPReg0, SavedRegs),
                 case RegIndex >= 0 of
                     true ->
                         StoreResultStackOffset = RegIndex * 8,
                         StoreResult = jit_riscv64_asm:sd(sp, a0, StoreResultStackOffset),
-                        {StreamModule:append(Stream5, StoreResult), [ResultReg | UsedRegs1]};
+                        {
+                            StreamModule:append(Stream5, StoreResult),
+                            [ResultFPReg0 | UsedRegs1],
+                            ResultFPReg0
+                        };
                     false ->
-                        % FuncPtrReg was not in SavedRegs, use an available register
-                        [ResultReg1 | _] = AvailableRegs1 -- SavedRegs,
-                        MoveResult = jit_riscv64_asm:mv(ResultReg1, a0),
-                        {StreamModule:append(Stream5, MoveResult), [ResultReg1 | UsedRegs1]}
+                        MoveResult = jit_riscv64_asm:mv(ResultFPReg0, a0),
+                        {
+                            StreamModule:append(Stream5, MoveResult),
+                            [ResultFPReg0 | UsedRegs1],
+                            ResultFPReg0
+                        }
                 end;
+            {_, {free, ResultFPReg1}} ->
+                % FuncPtrReg is free after the call, use it for result
+                MoveResult = jit_riscv64_asm:mv(ResultFPReg1, a0),
+                {
+                    StreamModule:append(Stream5, MoveResult),
+                    [ResultFPReg1 | UsedRegs1],
+                    ResultFPReg1
+                };
             _ ->
-                % Use any free that is not in SavedRegs
-                [ResultReg | _] = AvailableRegs1 -- SavedRegs,
-                MoveResult = jit_riscv64_asm:mv(ResultReg, a0),
-                {StreamModule:append(Stream5, MoveResult), [ResultReg | UsedRegs1]}
+                % Use any available register that's not in SavedRegs
+                [ResultReg0 | _] = AvailableRegs1 -- SavedRegs,
+                MoveResult = jit_riscv64_asm:mv(ResultReg0, a0),
+                {
+                    StreamModule:append(Stream5, MoveResult),
+                    [ResultReg0 | UsedRegs1],
+                    ResultReg0
+                }
         end,
 
     Stream8 = pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream6),

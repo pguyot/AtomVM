@@ -1176,6 +1176,27 @@ if_block_cond(
     Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
     State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, {beq, Reg, Temp}, BranchDelta};
+%% {Reg, '!=', Val} when Val is a large integer (> 255)
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State0,
+    {RegOrTuple, '!=', Val}
+) when is_integer(Val) ->
+    Temp = first_avail(Available),
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    OffsetBefore = StreamModule:offset(Stream0),
+    State1 = mov_immediate(State0, Temp, Val),
+    Stream1 = State1#state.stream,
+    BranchDelta = StreamModule:offset(Stream1) - OffsetBefore,
+    BranchInstr = <<16#FFFFFFFF:32/little>>,
+    Stream2 = StreamModule:append(Stream1, BranchInstr),
+    State2 = if_block_free_reg(RegOrTuple, State1),
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
+    {State3, {beq, Reg, Temp}, BranchDelta};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '!=', Val}
