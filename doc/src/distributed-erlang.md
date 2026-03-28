@@ -14,10 +14,15 @@ Distribution is currently available on all platforms with TCP/IP communication, 
 - ESP32
 - RP2 (Pico)
 
-Two examples are provided:
+Distribution over serial (UART) is also available for point-to-point
+connections between any two nodes, including microcontrollers without
+networking (e.g. STM32). See [Serial distribution](#serial-distribution).
+
+Three examples are provided:
 
 - disterl in `examples/erlang/disterl.erl`: distribution on Unix systems
 - epmd\_disterl in `examples/erlang/esp32/epmd_disterl.erl`: distribution on ESP32 devices
+- serial\_disterl in `examples/erlang/serial_disterl.erl`: distribution over serial (ESP32 and Unix)
 
 ## Starting and stopping distribution
 
@@ -93,6 +98,149 @@ fun (DistCtrlr, Length :: pos_integer(), Timeout :: timeout()) -> {ok, Packet} |
 ```
 
 AtomVM's distribution is based on `socket_dist` and `socket_dist_controller` modules which can also be used with BEAM by definining `BEAM_INTERFACE` to adjust for the difference.
+
+## Serial distribution
+
+AtomVM supports distribution over serial (UART) connections using the
+`serial_dist` module. This is useful for microcontrollers that lack
+WiFi/TCP (e.g. STM32) but have UART, and for testing distribution
+locally using virtual serial ports.
+
+### Quick start
+
+```erlang
+{ok, _} = net_kernel:start('mynode@serial.local', #{
+    name_domain => longnames,
+    proto_dist => serial_dist,
+    avm_dist_opts => #{
+        uart_opts => [{peripheral, "UART1"}, {speed, 115200},
+                      {tx, 17}, {rx, 16}],
+        uart_module => uart
+    }
+}).
+```
+
+On Unix, the `peripheral` is a device path such as `"/dev/ttyUSB0"` and
+the `uart_module` is `uart` from the `avm_unix` library.
+
+### serial\_dist options
+
+- `uart_opts` — proplist passed to `UartModule:open/1` (see `uart_hal`
+  for common parameters: `peripheral`, `speed`, `data_bits`, `stop_bits`,
+  `parity`, `flow_control`)
+- `uart_module` — module implementing the `uart_hal` behaviour. Defaults
+  to `uart`.
+
+### Wire protocol
+
+Serial distribution layers three protocols on the raw UART byte stream:
+
+**1. Sync frames (link layer)**
+
+Both sides periodically send 2-byte sync frames (`<<16#AA, 16#55>>`) on
+the UART. These serve two purposes:
+
+- **Liveness detection**: a node knows its peer is alive when it receives
+  sync frames.
+- **Garbage collection**: after a failed handshake attempt, stale bytes
+  from the old handshake remain in the UART buffer. Sync frames are
+  stripped from all received data, so stale data that happens to contain
+  `16#AA 16#55` pairs is harmlessly consumed, and non-sync stale bytes
+  eventually get discarded when the next handshake attempt interprets
+  them as an invalid packet.
+
+The sync magic (`16#AA 16#55`) is chosen so it cannot appear as the
+first two bytes of a valid length-prefixed handshake message (handshake
+messages have a 16-bit big-endian length prefix, and the longest
+handshake message is well under 100 bytes, so the first byte is always
+`0x00`).
+
+**2. Handshake packets (2-byte length prefix)**
+
+During the Erlang distribution handshake, messages are framed as:
+
+```
+<<Length:16/big, Payload:Length/binary>>
+```
+
+This matches the TCP distribution handshake format. The handshake
+follows the standard Erlang distribution protocol (send\_name,
+send\_status, send\_challenge, send\_challenge\_reply,
+send\_challenge\_ack).
+
+**3. Data packets (4-byte length prefix)**
+
+After the handshake completes, distribution data packets use a 4-byte
+length prefix:
+
+```
+<<Length:32/big, Payload:Length/binary>>
+```
+
+Tick (keepalive) messages are sent as `<<0:32>>` (4 zero bytes).
+
+### Peer-to-peer connection model
+
+Unlike TCP distribution which uses a client/server model (one side
+listens, the other connects), serial is point-to-point: both nodes
+share a single UART link.
+
+A **link manager** process on each node is the sole owner of UART
+reads. On each iteration it:
+
+1. Checks its mailbox for a `setup` request from `net_kernel`
+   (non-blocking).
+2. Sends a sync frame.
+3. Reads from the UART with a short timeout.
+4. Strips sync frames from received data.
+5. If handshake data remains, enters the **accept** path (responder).
+6. If a `setup` request was pending, enters the **setup** path
+   (initiator).
+7. Otherwise, loops.
+
+This design ensures only one process reads from the UART at any time,
+avoiding the race condition that would occur if separate accept and
+setup processes competed for the same byte stream.
+
+If a handshake fails (the distribution controller process exits), the
+link manager flushes stale `setup` messages from its mailbox and
+restarts the loop, allowing retries.
+
+### Testing with socat
+
+On Unix, `socat` can create virtual serial port pairs for testing:
+
+```bash
+socat -d -d pty,raw,echo=0 pty,raw,echo=0
+```
+
+This creates two pseudo-terminal devices (e.g. `/dev/ttys003` and
+`/dev/ttys004`) connected back-to-back. Each AtomVM node uses one side:
+
+```erlang
+%% Node A
+{ok, _} = net_kernel:start('a@serial.local', #{
+    name_domain => longnames,
+    proto_dist => serial_dist,
+    avm_dist_opts => #{
+        uart_opts => [{peripheral, "/dev/ttys003"}, {speed, 115200}],
+        uart_module => uart
+    }
+}).
+
+%% Node B (separate AtomVM process)
+{ok, _} = net_kernel:start('b@serial.local', #{
+    name_domain => longnames,
+    proto_dist => serial_dist,
+    avm_dist_opts => #{
+        uart_opts => [{peripheral, "/dev/ttys004"}, {speed, 115200}],
+        uart_module => uart
+    }
+}).
+
+%% From Node B, trigger autoconnect:
+{some_registered_name, 'a@serial.local'} ! {self(), hello}.
+```
 
 ## Distribution features
 

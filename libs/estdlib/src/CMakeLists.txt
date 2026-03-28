@@ -59,6 +59,7 @@ set(ERLANG_MODULES
     maps
     math
     net
+    os
     proc_lib
     sys
     logger
@@ -67,6 +68,8 @@ set(ERLANG_MODULES
     queue
     sets
     socket
+    serial_dist
+    serial_dist_controller
     socket_dist
     socket_dist_controller
     ssl
