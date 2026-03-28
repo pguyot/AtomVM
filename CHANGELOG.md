@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `erlang:display_string/1` and `erlang:display_string/2`
 - Added Thumb-2 support to armv6m JIT backend, optimizing code for ARMv7-M and later cores
 - Added support for `binary:split/2,3` list patterns and `trim` / `trim_all` options
+- Added Erlang distribution over serial (uart)
 
 ### Changed
 - ~10% binary size reduction by rewriting module loading logic
