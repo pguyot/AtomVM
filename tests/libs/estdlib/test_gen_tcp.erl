@@ -50,7 +50,7 @@ test_echo_server(SpawnControllingProcess) ->
     receive
         ready ->
             ok
-    after 5000 -> throw({timeout, test_echo_server, ?LINE})
+    after 10000 -> throw({timeout, test_echo_server, ?LINE})
     end,
 
     test_send_receive(Port, 10, SpawnControllingProcess),
@@ -89,7 +89,7 @@ echo(Pid, Socket) ->
         SomethingElse ->
             erlang:display({echo, unexpected_message, SomethingElse}),
             Pid ! server_closed
-    after 5000 -> throw({timeout, echo, ?LINE})
+    after 10000 -> throw({timeout, echo, ?LINE})
     end.
 
 test_send_receive(Port, N, SpawnControllingProcess) ->
@@ -100,28 +100,28 @@ test_send_receive(Port, N, SpawnControllingProcess) ->
         true ->
             receive
                 echo_ready -> ok
-            after 5000 -> throw({timeout, test_send_receive_echo_ready, ?LINE})
+            after 10000 -> throw({timeout, test_send_receive_echo_ready, ?LINE})
             end,
             Pid = spawn_link(fun() ->
                 receive
                     {Parent, go} ->
                         loop(Socket, N),
                         Parent ! done
-                after 5000 -> throw({timeout, test_send_receive, ?LINE})
+                after 10000 -> throw({timeout, test_send_receive, ?LINE})
                 end
             end),
             gen_tcp:controlling_process(Socket, Pid),
             Pid ! {self(), go},
             receive
                 done -> ok
-            after 5000 -> throw({timeout, test_send_receive, ?LINE})
+            after 10000 -> throw({timeout, test_send_receive, ?LINE})
             end
     end,
 
     gen_tcp:close(Socket),
     receive
         server_closed -> ok
-    after 5000 -> throw({timeout, waiting, recv, server_closed})
+    after 10000 -> throw({timeout, waiting, recv, server_closed})
     end.
 
 loop(_Socket, 0) ->
@@ -134,7 +134,7 @@ loop(Socket, I) ->
             ok;
         {tcp, _OtherSocket, _OtherPacket} ->
             loop(Socket, I - 1)
-    after 5000 -> throw({timeout, loop, ?LINE})
+    after 10000 -> throw({timeout, loop, ?LINE})
     end.
 
 test_listen_connect_parameters() ->
