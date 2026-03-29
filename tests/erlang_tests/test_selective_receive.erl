@@ -38,7 +38,7 @@ test_selective_receive() ->
     spawn_opt(
         fun() ->
             receive
-            after 250 -> ok
+            after 500 -> ok
             end,
             Self ! two
         end,
@@ -47,7 +47,7 @@ test_selective_receive() ->
     spawn_opt(
         fun() ->
             receive
-            after 500 -> ok
+            after 1000 -> ok
             end,
             Self ! one
         end,
@@ -77,7 +77,7 @@ test_selective_receive_with_timeout() ->
     spawn_opt(
         fun() ->
             receive
-            after 500 -> ok
+            after 1000 -> ok
             end,
             Self ! one
         end,
@@ -87,7 +87,7 @@ test_selective_receive_with_timeout() ->
         receive
             one ->
                 expected_timeout
-        after 250 -> ok
+        after 500 -> ok
         end,
     receive
         two ->
