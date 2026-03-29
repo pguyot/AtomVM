@@ -31,8 +31,8 @@ test_infinity() ->
     _Pid2 = spawn_opt(fun() -> waiter2(Parent) end, []),
     receive
         _ -> 1
-        % wait 2 secs as with bug we waited few ms
-    after 2000 ->
+        % wait 3 secs as with bug we waited few ms
+    after 3000 ->
         0
     end.
 
