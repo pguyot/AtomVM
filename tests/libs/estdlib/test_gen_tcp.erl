@@ -353,26 +353,24 @@ test_listen_connect_parameters_server_loop(ListenMode, false = ListenActive, Soc
     end.
 
 test_connect_parameters() ->
-    IP =
-        case inet:getaddr("www.github.com", inet) of
-            {ok, IPAddress} ->
-                IPAddress;
-            Error ->
-                io:format(
-                    "Unable to resolve www.github.com, ~p; unable to complete connection tests.~n",
-                    [Error]
-                ),
-                throw(Error)
-        end,
-    Hostname = "www.atomvm.org",
-    Port = 80,
-    OptTests = [
-        [{active, true}],
-        [{active, false}],
-        [{inet_backend, socket}, {active, true}],
-        [{inet_backend, socket}, {active, false}]
-    ],
-    test_connect_parameters(OptTests, IP, Hostname, Port, []).
+    case inet:getaddr("www.github.com", inet) of
+        {ok, IP} ->
+            Hostname = "www.atomvm.org",
+            Port = 80,
+            OptTests = [
+                [{active, true}],
+                [{active, false}],
+                [{inet_backend, socket}, {active, true}],
+                [{inet_backend, socket}, {active, false}]
+            ],
+            test_connect_parameters(OptTests, IP, Hostname, Port, []);
+        Error ->
+            io:format(
+                "Unable to resolve www.github.com, ~p; skipping connect tests.~n",
+                [Error]
+            ),
+            ok
+    end.
 
 test_connect_parameters([], _IP, _Host, _Port, Results) ->
     case lists:flatten(Results) of
