@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added RISC-V 64-bit (RV64IMAC) JIT backend
 - Added arm32 JIT backend
 - Added DWARF debug information support for JIT-compiled code
+- Added thumb2 support to armv6m JIT backend, effectively optimizing code for armv7m+ cores
 
 ### Changed
 - ~10% binary size reduction by rewriting module loading logic

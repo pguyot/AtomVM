@@ -55,10 +55,12 @@
     adr/2,
     push/1,
     pop/1,
-    reg_to_num/1
+    reg_to_num/1,
+    cond_to_num/1
 ]).
 
 -export_type([
+    arm_gpr_register/0,
     cc/0
 ]).
 
