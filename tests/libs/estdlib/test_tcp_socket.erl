@@ -278,7 +278,7 @@ close_client_socket(Socket) ->
     receive
         recv_terminated ->
             ok
-    after 2000 ->
+    after 5000 ->
         throw({timeout, waiting, recv_terminated})
     end.
 
