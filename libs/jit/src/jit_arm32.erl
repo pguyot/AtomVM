@@ -1008,7 +1008,8 @@ if_block_cond(
     Code = <<I1/binary, I2/binary>>,
     Stream2 = StreamModule:append(Stream1, Code),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, le, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
@@ -1064,7 +1065,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, available_regs = Available} = State0,
@@ -1084,7 +1086,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream1},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream1, regs = Regs2},
     {State3, CC, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
@@ -1191,7 +1194,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0, available_regs = Available} = State0,
@@ -1212,7 +1216,8 @@ if_block_cond(
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    State3 = State2#state{stream = Stream2},
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
+    State3 = State2#state{stream = Stream2, regs = Regs2},
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{
@@ -1288,7 +1293,8 @@ if_block_cond(
     Code = <<TestCode/binary, 16#FFFFFFFF:32>>,
     Stream1 = StreamModule:append(Stream0, Code),
     State1 = if_block_free_reg(RegOrTuple, State0),
-    State2 = State1#state{stream = Stream1},
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+    State2 = State1#state{stream = Stream1, regs = Regs1},
     {State2, BranchCond, byte_size(TestCode)};
 if_block_cond(
     #state{
@@ -1305,7 +1311,8 @@ if_block_cond(
     CC = eq,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, 16#FFFFFFFF:32>>),
-    State1 = State0#state{stream = Stream1},
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Temp),
+    State1 = State0#state{stream = Stream1, regs = Regs1},
     {State1, CC, byte_size(I1) + byte_size(I2)};
 if_block_cond(
     #state{
@@ -1349,8 +1356,9 @@ if_block_cond(
     CC = eq,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream4 = StreamModule:append(Stream3, <<16#FFFFFFFF:32>>),
+    Regs3 = jit_regs:invalidate_reg(State2#state.regs, Temp),
     State3 = State2#state{
-        stream = Stream4, available_regs = State2#state.available_regs bor TempBit
+        stream = Stream4, available_regs = State2#state.available_regs bor TempBit, regs = Regs3
     },
     {State3, CC, OffsetAfter - OffsetBefore};
 if_block_cond(
