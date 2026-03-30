@@ -766,14 +766,15 @@ jump_to_label(
     Offset = StreamModule:offset(Stream0),
     {State1, CodeBlock} = branch_to_label_code(State0, Offset, Label, LabelLookupResult),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
-    State2 = State1#state{stream = Stream1},
+    %% After unconditional jump, register tracking is dead until next label
+    State2 = State1#state{stream = Stream1, regs = jit_regs:invalidate_all(State1#state.regs)},
     flush_literal_pool(State2).
 
 jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
     Offset = StreamModule:offset(Stream0),
     CodeBlock = branch_to_offset_code(State, Offset, TargetOffset),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
-    State2 = State#state{stream = Stream1},
+    State2 = State#state{stream = Stream1, regs = jit_regs:invalidate_all(State#state.regs)},
     flush_literal_pool(State2).
 
 %%-----------------------------------------------------------------------------
@@ -1706,7 +1707,7 @@ call_func_ptr(
 
     AvailableRegs2 = lists:delete(ResultReg, AvailableRegs1),
     AvailableRegs3 = ?AVAILABLE_REGS -- (?AVAILABLE_REGS -- AvailableRegs2),
-    Regs1 = jit_regs:invalidate_volatile(State0#state.regs, UsedRegs1),
+    Regs1 = jit_regs:invalidate_all(State0#state.regs),
     {
         State4#state{
             stream = Stream8,
