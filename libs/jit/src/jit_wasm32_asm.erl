@@ -67,6 +67,7 @@
     local_get/1,
     local_set/1,
     local_tee/1,
+    local_index/1,
     global_get/1,
     global_set/1,
 
@@ -210,8 +211,8 @@ br_table(Labels, DefaultLabel) ->
         <<>>,
         Labels
     ),
-    <<16#0E, (encode_uleb128(length(Labels)))/binary,
-      LabelsBin/binary, (encode_uleb128(DefaultLabel))/binary>>.
+    <<16#0E, (encode_uleb128(length(Labels)))/binary, LabelsBin/binary,
+        (encode_uleb128(DefaultLabel))/binary>>.
 
 %% @doc Emit a return instruction.
 -spec return() -> binary().
@@ -230,20 +231,23 @@ call_indirect(TypeIdx, TableIdx) ->
 %% Variable instructions (0x20-0x24)
 %%=============================================================================
 
-%% @doc Get a local variable by index.
--spec local_get(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_get({wl, LocalIdx}) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>;
-local_get(LocalIdx) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>.
+%% @doc Get a local variable by index or atom name.
+-spec local_get(non_neg_integer() | atom()) -> binary().
+local_get(LocalIdx) when is_integer(LocalIdx) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>;
+local_get(LocalAtom) when is_atom(LocalAtom) ->
+    <<16#20, (encode_uleb128(local_index(LocalAtom)))/binary>>.
 
-%% @doc Set a local variable by index.
--spec local_set(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_set({wl, LocalIdx}) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>;
-local_set(LocalIdx) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>.
+%% @doc Set a local variable by index or atom name.
+-spec local_set(non_neg_integer() | atom()) -> binary().
+local_set(LocalIdx) when is_integer(LocalIdx) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>;
+local_set(LocalAtom) when is_atom(LocalAtom) ->
+    <<16#21, (encode_uleb128(local_index(LocalAtom)))/binary>>.
 
 %% @doc Tee a local variable (set and keep value on stack).
--spec local_tee(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_tee({wl, LocalIdx}) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>;
-local_tee(LocalIdx) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>.
+-spec local_tee(non_neg_integer() | atom()) -> binary().
+local_tee(LocalIdx) when is_integer(LocalIdx) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>;
+local_tee(LocalAtom) when is_atom(LocalAtom) ->
+    <<16#22, (encode_uleb128(local_index(LocalAtom)))/binary>>.
 
 %% @doc Get a global variable by index.
 -spec global_get(non_neg_integer()) -> binary().
@@ -394,9 +398,8 @@ encode_code_section(FuncBodies) ->
 encode_func_type(ParamTypes, ResultTypes) ->
     Params = iolist_to_binary(ParamTypes),
     Results = iolist_to_binary(ResultTypes),
-    <<16#60,
-      (encode_uleb128(length(ParamTypes)))/binary, Params/binary,
-      (encode_uleb128(length(ResultTypes)))/binary, Results/binary>>.
+    <<16#60, (encode_uleb128(length(ParamTypes)))/binary, Params/binary,
+        (encode_uleb128(length(ResultTypes)))/binary, Results/binary>>.
 
 %% @doc Encode a function body (locals + expression).
 -spec encode_func_body([{non_neg_integer(), binary()}], binary()) -> binary().
@@ -422,3 +425,32 @@ encode_vector(Elements) ->
 encode_name(Name) ->
     Bin = unicode:characters_to_binary(Name),
     <<(encode_uleb128(byte_size(Bin)))/binary, Bin/binary>>.
+
+%% @doc Map a local variable atom name to its WASM local index.
+-spec local_index(atom()) -> non_neg_integer().
+local_index(local0) ->
+    0;
+local_index(local1) ->
+    1;
+local_index(local2) ->
+    2;
+local_index(local3) ->
+    3;
+local_index(local4) ->
+    4;
+local_index(local5) ->
+    5;
+local_index(local6) ->
+    6;
+local_index(local7) ->
+    7;
+local_index(local8) ->
+    8;
+local_index(local9) ->
+    9;
+local_index(local10) ->
+    10;
+local_index(Atom) when is_atom(Atom) ->
+    %% Dynamic locals beyond the predefined set
+    "local" ++ IndexStr = atom_to_list(Atom),
+    list_to_integer(IndexStr).
