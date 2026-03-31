@@ -553,17 +553,6 @@ call_only_or_schedule_next_test() ->
     ok.
 
 %%=============================================================================
-%% Type tracking
-%%=============================================================================
-
-type_tracking_test() ->
-    State0 = ?BACKEND:new(0, jit_stream_binary, jit_stream_binary:new(0)),
-    State1 = ?BACKEND:set_type_tracking(State0, {x_reg, 0}, integer),
-    ?assertEqual(integer, ?BACKEND:get_type_tracking(State1, {x_reg, 0})),
-    _ = ?BACKEND:get_regs_tracking(State1),
-    ok.
-
-%%=============================================================================
 %% CP operations
 %%=============================================================================
 

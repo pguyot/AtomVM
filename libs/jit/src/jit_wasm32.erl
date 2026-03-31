@@ -96,8 +96,6 @@
     return_labels_and_lines/2,
     add_label/2,
     add_label/3,
-    set_type_tracking/3,
-    get_type_tracking/2,
     get_regs_tracking/1,
     xor_/3,
     shift_right_arith/3,
@@ -1136,14 +1134,6 @@ add_label(
 %% @doc Get the register tracking state.
 get_regs_tracking(#state{regs = Regs}) -> Regs.
 
-%% @doc Set type information for a VM location in the register tracking.
-set_type_tracking(#state{regs = Regs0} = State, VmLoc, Type) ->
-    Regs1 = jit_regs:set_type(Regs0, VmLoc, Type),
-    State#state{regs = Regs1}.
-
-%% @doc Get type information for a VM location from the register tracking.
-get_type_tracking(#state{regs = Regs}, VmLoc) ->
-    jit_regs:get_type(Regs, VmLoc).
 
 %%=============================================================================
 %% Internal helpers
