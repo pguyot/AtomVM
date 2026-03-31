@@ -596,16 +596,15 @@ or_(State0, {free, Local}, ValOrReg) ->
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
 or_(State0, Local, ValOrReg) when is_integer(Local) ->
-    {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
         (jit_wasm32_asm:i32_or())/binary,
-        (jit_wasm32_asm:local_set(ResultLocal))/binary
+        (jit_wasm32_asm:local_set(Local))/binary
     >>,
-    Regs1 = jit_regs:invalidate_reg(State0#state.regs, ResultLocal),
-    State2 = emit(State1, Code),
-    {State2#state{regs = Regs1}, ResultLocal}.
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
+    State1 = emit(State0, Code),
+    State1#state{regs = Regs1}.
 
 xor_(State0, {free, Local}, ValOrReg) ->
     Code = <<
@@ -618,16 +617,15 @@ xor_(State0, {free, Local}, ValOrReg) ->
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
 xor_(State0, Local, ValOrReg) when is_integer(Local) ->
-    {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
         (jit_wasm32_asm:i32_xor())/binary,
-        (jit_wasm32_asm:local_set(ResultLocal))/binary
+        (jit_wasm32_asm:local_set(Local))/binary
     >>,
-    Regs1 = jit_regs:invalidate_reg(State0#state.regs, ResultLocal),
-    State2 = emit(State1, Code),
-    {State2#state{regs = Regs1}, ResultLocal}.
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
+    State1 = emit(State0, Code),
+    State1#state{regs = Regs1}.
 
 add(State0, {free, Local}, ValOrReg) ->
     Code = <<
@@ -640,16 +638,15 @@ add(State0, {free, Local}, ValOrReg) ->
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
 add(State0, Local, ValOrReg) when is_integer(Local) ->
-    {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
         (jit_wasm32_asm:i32_add())/binary,
-        (jit_wasm32_asm:local_set(ResultLocal))/binary
+        (jit_wasm32_asm:local_set(Local))/binary
     >>,
-    Regs1 = jit_regs:invalidate_reg(State0#state.regs, ResultLocal),
-    State2 = emit(State1, Code),
-    {State2#state{regs = Regs1}, ResultLocal}.
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
+    State1 = emit(State0, Code),
+    State1#state{regs = Regs1}.
 
 sub(State0, {free, Local}, ValOrReg) ->
     Code = <<
@@ -662,16 +659,15 @@ sub(State0, {free, Local}, ValOrReg) ->
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
 sub(State0, Local, ValOrReg) when is_integer(Local) ->
-    {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
         (jit_wasm32_asm:i32_sub())/binary,
-        (jit_wasm32_asm:local_set(ResultLocal))/binary
+        (jit_wasm32_asm:local_set(Local))/binary
     >>,
-    Regs1 = jit_regs:invalidate_reg(State0#state.regs, ResultLocal),
-    State2 = emit(State1, Code),
-    {State2#state{regs = Regs1}, ResultLocal}.
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
+    State1 = emit(State0, Code),
+    State1#state{regs = Regs1}.
 
 mul(State0, {free, Local}, ValOrReg) ->
     Code = <<
@@ -684,16 +680,15 @@ mul(State0, {free, Local}, ValOrReg) ->
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
 mul(State0, Local, ValOrReg) when is_integer(Local) ->
-    {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
         (jit_wasm32_asm:i32_mul())/binary,
-        (jit_wasm32_asm:local_set(ResultLocal))/binary
+        (jit_wasm32_asm:local_set(Local))/binary
     >>,
-    Regs1 = jit_regs:invalidate_reg(State0#state.regs, ResultLocal),
-    State2 = emit(State1, Code),
-    {State2#state{regs = Regs1}, ResultLocal}.
+    Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
+    State1 = emit(State0, Code),
+    State1#state{regs = Regs1}.
 
 div_reg(State0, {free, Local}, Divisor) ->
     Code = <<
@@ -1422,6 +1417,8 @@ emit_push_args(State0, [Arg | Rest]) ->
             jit_wasm32_asm:i32_const(LabelOffset);
         stack -> jit_wasm32_asm:i32_const(0);
         {free, {ptr, Local}} -> jit_wasm32_asm:local_get(Local);
+        {free, {x_reg, N}} -> emit_value_to_stack({x_reg, N});
+        {free, {y_reg, N}} -> emit_value_to_stack({y_reg, N});
         {free, Local} when is_integer(Local) -> jit_wasm32_asm:local_get(Local);
         {ptr, Local} -> jit_wasm32_asm:local_get(Local);
         {avm_int64_t, Val} ->
