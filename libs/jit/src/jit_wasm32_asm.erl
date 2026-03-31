@@ -124,7 +124,12 @@
     encode_vector/1,
     encode_name/1,
     wasm_magic/0,
-    wasm_version/0
+    wasm_version/0,
+
+    %% WASM local variable atom mapping
+    wasm_local_index/1,
+    index_to_wasm_local/1,
+    is_wasm_local/1
 ]).
 
 -compile([warnings_as_errors]).
@@ -231,19 +236,19 @@ call_indirect(TypeIdx, TableIdx) ->
 %%=============================================================================
 
 %% @doc Get a local variable by index.
--spec local_get(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_get({wl, LocalIdx}) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>;
-local_get(LocalIdx) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>.
+-spec local_get(non_neg_integer() | atom()) -> binary().
+local_get(LocalIdx) when is_integer(LocalIdx) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>;
+local_get(LocalAtom) when is_atom(LocalAtom) -> <<16#20, (encode_uleb128(wasm_local_index(LocalAtom)))/binary>>.
 
 %% @doc Set a local variable by index.
--spec local_set(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_set({wl, LocalIdx}) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>;
-local_set(LocalIdx) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>.
+-spec local_set(non_neg_integer() | atom()) -> binary().
+local_set(LocalIdx) when is_integer(LocalIdx) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>;
+local_set(LocalAtom) when is_atom(LocalAtom) -> <<16#21, (encode_uleb128(wasm_local_index(LocalAtom)))/binary>>.
 
 %% @doc Tee a local variable (set and keep value on stack).
--spec local_tee(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
-local_tee({wl, LocalIdx}) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>;
-local_tee(LocalIdx) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>.
+-spec local_tee(non_neg_integer() | atom()) -> binary().
+local_tee(LocalIdx) when is_integer(LocalIdx) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>;
+local_tee(LocalAtom) when is_atom(LocalAtom) -> <<16#22, (encode_uleb128(wasm_local_index(LocalAtom)))/binary>>.
 
 %% @doc Get a global variable by index.
 -spec global_get(non_neg_integer()) -> binary().
@@ -422,3 +427,96 @@ encode_vector(Elements) ->
 encode_name(Name) ->
     Bin = unicode:characters_to_binary(Name),
     <<(encode_uleb128(byte_size(Bin)))/binary, Bin/binary>>.
+
+%%=============================================================================
+%% WASM local variable atom mapping
+%%=============================================================================
+
+%% @doc Convert a WASM local atom (local0, local1, ...) to its integer index.
+-spec wasm_local_index(atom()) -> non_neg_integer().
+wasm_local_index(local0) -> 0;
+wasm_local_index(local1) -> 1;
+wasm_local_index(local2) -> 2;
+wasm_local_index(local3) -> 3;
+wasm_local_index(local4) -> 4;
+wasm_local_index(local5) -> 5;
+wasm_local_index(local6) -> 6;
+wasm_local_index(local7) -> 7;
+wasm_local_index(local8) -> 8;
+wasm_local_index(local9) -> 9;
+wasm_local_index(local10) -> 10;
+wasm_local_index(local11) -> 11;
+wasm_local_index(local12) -> 12;
+wasm_local_index(local13) -> 13;
+wasm_local_index(local14) -> 14;
+wasm_local_index(local15) -> 15;
+wasm_local_index(local16) -> 16;
+wasm_local_index(local17) -> 17;
+wasm_local_index(local18) -> 18;
+wasm_local_index(local19) -> 19;
+wasm_local_index(local20) -> 20;
+wasm_local_index(local21) -> 21;
+wasm_local_index(local22) -> 22;
+wasm_local_index(local23) -> 23;
+wasm_local_index(local24) -> 24;
+wasm_local_index(local25) -> 25;
+wasm_local_index(local26) -> 26;
+wasm_local_index(local27) -> 27;
+wasm_local_index(local28) -> 28;
+wasm_local_index(local29) -> 29;
+wasm_local_index(local30) -> 30;
+wasm_local_index(local31) -> 31;
+wasm_local_index(Atom) ->
+    %% For dynamically created local atoms beyond local31
+    "local" ++ IndexStr = atom_to_list(Atom),
+    list_to_integer(IndexStr).
+
+%% @doc Convert an integer index to a WASM local atom (local0, local1, ...).
+-spec index_to_wasm_local(non_neg_integer()) -> atom().
+index_to_wasm_local(0) -> local0;
+index_to_wasm_local(1) -> local1;
+index_to_wasm_local(2) -> local2;
+index_to_wasm_local(3) -> local3;
+index_to_wasm_local(4) -> local4;
+index_to_wasm_local(5) -> local5;
+index_to_wasm_local(6) -> local6;
+index_to_wasm_local(7) -> local7;
+index_to_wasm_local(8) -> local8;
+index_to_wasm_local(9) -> local9;
+index_to_wasm_local(10) -> local10;
+index_to_wasm_local(11) -> local11;
+index_to_wasm_local(12) -> local12;
+index_to_wasm_local(13) -> local13;
+index_to_wasm_local(14) -> local14;
+index_to_wasm_local(15) -> local15;
+index_to_wasm_local(16) -> local16;
+index_to_wasm_local(17) -> local17;
+index_to_wasm_local(18) -> local18;
+index_to_wasm_local(19) -> local19;
+index_to_wasm_local(20) -> local20;
+index_to_wasm_local(21) -> local21;
+index_to_wasm_local(22) -> local22;
+index_to_wasm_local(23) -> local23;
+index_to_wasm_local(24) -> local24;
+index_to_wasm_local(25) -> local25;
+index_to_wasm_local(26) -> local26;
+index_to_wasm_local(27) -> local27;
+index_to_wasm_local(28) -> local28;
+index_to_wasm_local(29) -> local29;
+index_to_wasm_local(30) -> local30;
+index_to_wasm_local(31) -> local31;
+index_to_wasm_local(N) ->
+    list_to_atom("local" ++ integer_to_list(N)).
+
+%% @doc Check if an atom is a WASM local variable atom.
+-spec is_wasm_local(term()) -> boolean().
+is_wasm_local(Atom) when is_atom(Atom) ->
+    case atom_to_list(Atom) of
+        "local" ++ Rest ->
+            case catch list_to_integer(Rest) of
+                N when is_integer(N), N >= 0 -> true;
+                _ -> false
+            end;
+        _ -> false
+    end;
+is_wasm_local(_) -> false.
