@@ -832,28 +832,127 @@ move_to_cp(State0, {y_reg, Y}) ->
     State2 = emit(State1, Code),
     free_native_register(State2, TempLocal).
 
-move_array_element(State0, {ptr, Base}, Index, {ptr, Dest}) ->
-    %% Load word at Base[Index] and store into Dest
+move_array_element(State0, Base, Index, {ptr, Dest}) when is_integer(Index) ->
+    %% Load word at Base[Index] and store into memory at [Dest]
+    BaseLocal = unwrap_local(Base),
     Code = <<
         (jit_wasm32_asm:local_get(Dest))/binary,
-        (jit_wasm32_asm:local_get(Base))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
         (jit_wasm32_asm:i32_load(2, Index * 4))/binary,
         (jit_wasm32_asm:i32_store(2, 0))/binary
     >>,
+    emit(State0, Code);
+move_array_element(State0, Base, Index, {x_reg, N}) when is_integer(Index) ->
+    %% Load word at Base[Index] and store into ctx->x[N]
+    BaseLocal = unwrap_local(Base),
+    Offset = ?CTX_X_OFFSET + N * 4,
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:i32_load(2, Index * 4))/binary,
+        (jit_wasm32_asm:i32_store(2, Offset))/binary
+    >>,
+    emit(State0, Code);
+move_array_element(State0, Base, Index, {y_reg, N}) when is_integer(Index) ->
+    %% Load word at Base[Index] and store into ctx->e[N]
+    BaseLocal = unwrap_local(Base),
+    {State1, TempLocal} = alloc_local(State0),
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?CTX_E_OFFSET))/binary,
+        (jit_wasm32_asm:local_set(TempLocal))/binary,
+        (jit_wasm32_asm:local_get(TempLocal))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:i32_load(2, Index * 4))/binary,
+        (jit_wasm32_asm:i32_store(2, N * 4))/binary
+    >>,
+    State2 = emit(State1, Code),
+    free_native_register(State2, TempLocal);
+move_array_element(State0, Base, Index, Dest) when is_integer(Index), is_integer(Dest) ->
+    %% Load word at Base[Index] and store into local Dest
+    BaseLocal = unwrap_local(Base),
+    Code = <<
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:i32_load(2, Index * 4))/binary,
+        (jit_wasm32_asm:local_set(Dest))/binary
+    >>,
+    emit(State0, Code);
+move_array_element(State0, Base, {free, IndexReg}, {ptr, Dest}) ->
+    %% Load word at Base[IndexReg * 4] and store into memory at [Dest]
+    BaseLocal = unwrap_local(Base),
+    Code = <<
+        (jit_wasm32_asm:local_get(Dest))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:local_get(IndexReg))/binary,
+        (jit_wasm32_asm:i32_const(2))/binary,
+        (jit_wasm32_asm:i32_shl())/binary,
+        (jit_wasm32_asm:i32_add())/binary,
+        (jit_wasm32_asm:i32_load(2, 0))/binary,
+        (jit_wasm32_asm:i32_store(2, 0))/binary
+    >>,
+    emit(State0, Code);
+move_array_element(State0, Base, {free, IndexReg}, {x_reg, N}) ->
+    %% Load word at Base[IndexReg * 4] and store into ctx->x[N]
+    BaseLocal = unwrap_local(Base),
+    Offset = ?CTX_X_OFFSET + N * 4,
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:local_get(IndexReg))/binary,
+        (jit_wasm32_asm:i32_const(2))/binary,
+        (jit_wasm32_asm:i32_shl())/binary,
+        (jit_wasm32_asm:i32_add())/binary,
+        (jit_wasm32_asm:i32_load(2, 0))/binary,
+        (jit_wasm32_asm:i32_store(2, Offset))/binary
+    >>,
+    emit(State0, Code);
+move_array_element(State0, Base, {free, IndexReg}, {y_reg, N}) ->
+    %% Load word at Base[IndexReg * 4] and store into ctx->e[N]
+    BaseLocal = unwrap_local(Base),
+    {State1, TempLocal} = alloc_local(State0),
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?CTX_E_OFFSET))/binary,
+        (jit_wasm32_asm:local_set(TempLocal))/binary,
+        (jit_wasm32_asm:local_get(TempLocal))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:local_get(IndexReg))/binary,
+        (jit_wasm32_asm:i32_const(2))/binary,
+        (jit_wasm32_asm:i32_shl())/binary,
+        (jit_wasm32_asm:i32_add())/binary,
+        (jit_wasm32_asm:i32_load(2, 0))/binary,
+        (jit_wasm32_asm:i32_store(2, N * 4))/binary
+    >>,
+    State2 = emit(State1, Code),
+    free_native_register(State2, TempLocal);
+move_array_element(State0, Base, {free, IndexReg}, Dest) when is_integer(Dest) ->
+    %% Load word at Base[IndexReg * 4] and store into local Dest
+    BaseLocal = unwrap_local(Base),
+    Code = <<
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
+        (jit_wasm32_asm:local_get(IndexReg))/binary,
+        (jit_wasm32_asm:i32_const(2))/binary,
+        (jit_wasm32_asm:i32_shl())/binary,
+        (jit_wasm32_asm:i32_add())/binary,
+        (jit_wasm32_asm:i32_load(2, 0))/binary,
+        (jit_wasm32_asm:local_set(Dest))/binary
+    >>,
     emit(State0, Code).
 
-move_to_array_element(State0, Value, {ptr, Base}, Index) ->
+move_to_array_element(State0, Value, Base, Index) ->
+    BaseLocal = unwrap_local(Base),
     Code = <<
-        (jit_wasm32_asm:local_get(Base))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
         (emit_value_to_stack(Value))/binary,
         (jit_wasm32_asm:i32_store(2, Index * 4))/binary
     >>,
     emit(State0, Code).
 
-move_to_array_element(State0, Value, {ptr, Base}, IndexLocal, _WordSize) ->
+move_to_array_element(State0, Value, Base, IndexLocal, _WordSize) ->
     %% Store value at Base + IndexLocal * 4
+    BaseLocal = unwrap_local(Base),
     Code = <<
-        (jit_wasm32_asm:local_get(Base))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
         (jit_wasm32_asm:local_get(IndexLocal))/binary,
         (jit_wasm32_asm:i32_const(2))/binary,
         (jit_wasm32_asm:i32_shl())/binary,
@@ -879,10 +978,11 @@ set_bs(State0, TermLocal) ->
 copy_to_native_register(State0, Value) ->
     move_to_native_register(State0, Value).
 
-get_array_element(State0, {ptr, Base}, Index) ->
+get_array_element(State0, Base, Index) ->
+    BaseLocal = unwrap_local(Base),
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
-        (jit_wasm32_asm:local_get(Base))/binary,
+        (jit_wasm32_asm:local_get(BaseLocal))/binary,
         (jit_wasm32_asm:i32_load(2, Index * 4))/binary,
         (jit_wasm32_asm:local_set(ResultLocal))/binary
     >>,
@@ -1179,6 +1279,11 @@ mask_to_locals(Mask, N, Acc) ->
         0 -> mask_to_locals(Mask bsr 1, N + 1, Acc)
     end.
 
+%% Unwrap a local reference: {ptr, L} -> L, {free, L} -> L, integer -> integer
+unwrap_local({ptr, L}) -> L;
+unwrap_local({free, L}) -> L;
+unwrap_local(L) when is_integer(L) -> L.
+
 %% Get bit position for a scratch local
 local_bit(Local) when Local >= ?FIRST_SCRATCH_LOCAL ->
     1 bsl (Local - ?FIRST_SCRATCH_LOCAL).
@@ -1193,6 +1298,11 @@ merge_used_regs(#state{used_regs = UR, max_scratch = MS} = State, OtherUR) ->
 %% Push a value onto the WASM operand stack.
 %% Bare integers are treated as local variable indices.
 %% For immediate constants, use {imm, Value} or encode directly.
+emit_value_to_stack(cp) ->
+    <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?CTX_CP_OFFSET))/binary
+    >>;
 emit_value_to_stack({free, Local}) ->
     jit_wasm32_asm:local_get(Local);
 emit_value_to_stack(Local) when is_integer(Local), Local >= 0 ->
