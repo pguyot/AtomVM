@@ -278,6 +278,14 @@ free_native_registers(State, [Val | Rest]) ->
 -spec free_native_register(state(), value()) -> state().
 free_native_register(
     #state{available_regs = Available0, used_regs = Used0} = State,
+    {wl, Local}
+) when Local >= ?FIRST_SCRATCH_LOCAL ->
+    Bit = local_bit(Local),
+    State#state{
+        available_regs = Available0 bor Bit, used_regs = Used0 band (bnot Bit)
+    };
+free_native_register(
+    #state{available_regs = Available0, used_regs = Used0} = State,
     Local
 ) when is_integer(Local), Local >= ?FIRST_SCRATCH_LOCAL ->
     Bit = local_bit(Local),
@@ -518,7 +526,7 @@ shift_right(State0, {free, Local}, Shift) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-shift_right(State0, Local, Shift) when is_integer(Local) ->
+shift_right(State0, {wl, _} = Local, Shift) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -530,7 +538,7 @@ shift_right(State0, Local, Shift) when is_integer(Local) ->
     State2 = emit(State1, Code),
     {State2#state{regs = Regs1}, ResultLocal}.
 
-shift_left(State0, Local, Shift) when is_integer(Local) ->
+shift_left(State0, {wl, _} = Local, Shift) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (jit_wasm32_asm:i32_const(Shift))/binary,
@@ -551,7 +559,7 @@ shift_right_arith(State0, {free, Local}, Shift) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-shift_right_arith(State0, Local, Shift) when is_integer(Local) ->
+shift_right_arith(State0, {wl, _} = Local, Shift) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -573,7 +581,7 @@ and_(State0, {free, Local}, Mask) when is_integer(Mask) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-and_(State0, Local, Mask) when is_integer(Local), is_integer(Mask) ->
+and_(State0, {wl, _} = Local, Mask) when is_integer(Mask) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -595,7 +603,7 @@ or_(State0, {free, Local}, ValOrReg) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-or_(State0, Local, ValOrReg) when is_integer(Local) ->
+or_(State0, {wl, _} = Local, ValOrReg) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
@@ -616,7 +624,7 @@ xor_(State0, {free, Local}, ValOrReg) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-xor_(State0, Local, ValOrReg) when is_integer(Local) ->
+xor_(State0, {wl, _} = Local, ValOrReg) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
@@ -637,7 +645,7 @@ add(State0, {free, Local}, ValOrReg) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-add(State0, Local, ValOrReg) when is_integer(Local) ->
+add(State0, {wl, _} = Local, ValOrReg) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
@@ -658,7 +666,7 @@ sub(State0, {free, Local}, ValOrReg) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-sub(State0, Local, ValOrReg) when is_integer(Local) ->
+sub(State0, {wl, _} = Local, ValOrReg) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
@@ -679,7 +687,7 @@ mul(State0, {free, Local}, ValOrReg) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-mul(State0, Local, ValOrReg) when is_integer(Local) ->
+mul(State0, {wl, _} = Local, ValOrReg) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (emit_value_to_stack(ValOrReg))/binary,
@@ -700,7 +708,7 @@ div_reg(State0, {free, Local}, Divisor) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-div_reg(State0, Local, Divisor) when is_integer(Local) ->
+div_reg(State0, {wl, _} = Local, Divisor) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -722,7 +730,7 @@ rem_reg(State0, {free, Local}, Divisor) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-rem_reg(State0, Local, Divisor) when is_integer(Local) ->
+rem_reg(State0, {wl, _} = Local, Divisor) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -863,7 +871,7 @@ move_array_element(State0, Base, Index, {y_reg, N}) when is_integer(Index) ->
     >>,
     State2 = emit(State1, Code),
     free_native_register(State2, TempLocal);
-move_array_element(State0, Base, Index, Dest) when is_integer(Index), is_integer(Dest) ->
+move_array_element(State0, Base, Index, {wl, _} = Dest) when is_integer(Index) ->
     %% Load word at Base[Index] and store into local Dest
     BaseLocal = unwrap_local(Base),
     Code = <<
@@ -920,7 +928,7 @@ move_array_element(State0, Base, {free, IndexReg}, {y_reg, N}) ->
     >>,
     State2 = emit(State1, Code),
     free_native_register(State2, TempLocal);
-move_array_element(State0, Base, {free, IndexReg}, Dest) when is_integer(Dest) ->
+move_array_element(State0, Base, {free, IndexReg}, {wl, _} = Dest) ->
     %% Load word at Base[IndexReg * 4] and store into local Dest
     BaseLocal = unwrap_local(Base),
     Code = <<
@@ -1246,14 +1254,14 @@ alloc_local(#state{available_regs = 0, used_regs = Used, max_scratch = MaxScratc
     {State#state{
         used_regs = Used bor Bit,
         max_scratch = MaxScratch + 1
-    }, Local};
+    }, {wl, Local}};
 alloc_local(#state{available_regs = Available, used_regs = Used} = State) ->
     Local = first_avail_local(Available),
     Bit = local_bit(Local),
     {State#state{
         available_regs = Available band (bnot Bit),
         used_regs = Used bor Bit
-    }, Local}.
+    }, {wl, Local}}.
 
 %% Get the first available local from bitmask
 first_avail_local(Mask) ->
@@ -1274,13 +1282,16 @@ mask_to_locals(Mask, N, Acc) ->
         0 -> mask_to_locals(Mask bsr 1, N + 1, Acc)
     end.
 
-%% Unwrap a local reference: {ptr, L} -> L, {free, L} -> L, integer -> integer
-unwrap_local({ptr, L}) -> L;
-unwrap_local({free, L}) -> L;
+%% Unwrap a local reference to raw integer for jit_wasm32_asm calls
+unwrap_local({wl, L}) -> L;
+unwrap_local({ptr, L}) -> unwrap_local(L);
+unwrap_local({free, L}) -> unwrap_local(L);
 unwrap_local(L) when is_integer(L) -> L.
 
 %% Get bit position for a scratch local
-local_bit(Local) when Local >= ?FIRST_SCRATCH_LOCAL ->
+local_bit({wl, Local}) when Local >= ?FIRST_SCRATCH_LOCAL ->
+    1 bsl (Local - ?FIRST_SCRATCH_LOCAL);
+local_bit(Local) when is_integer(Local), Local >= ?FIRST_SCRATCH_LOCAL ->
     1 bsl (Local - ?FIRST_SCRATCH_LOCAL).
 
 %% Merge used registers from two paths
@@ -1291,16 +1302,16 @@ merge_used_regs(#state{used_regs = UR, max_scratch = MS} = State, OtherUR) ->
     State#state{used_regs = MergedUR, available_regs = MergedAvail}.
 
 %% Push a value onto the WASM operand stack.
-%% Bare integers are treated as local variable indices.
-%% For immediate constants, use {imm, Value} or encode directly.
+%% {wl, N} tuples are WASM local variable references (from alloc_local).
+%% Bare integers are immediate constants (tagged term values from jit.erl).
 emit_value_to_stack(cp) ->
     <<
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:i32_load(2, ?CTX_CP_OFFSET))/binary
     >>;
+emit_value_to_stack({wl, _} = WL) ->
+    jit_wasm32_asm:local_get(WL);
 emit_value_to_stack({free, Local}) ->
-    jit_wasm32_asm:local_get(Local);
-emit_value_to_stack(Local) when is_integer(Local), Local >= 0 ->
     jit_wasm32_asm:local_get(Local);
 emit_value_to_stack({x_reg, N}) ->
     %% Load ctx->x[N]
@@ -1317,7 +1328,10 @@ emit_value_to_stack({y_reg, N}) ->
         (jit_wasm32_asm:i32_load(2, N * 4))/binary
     >>;
 emit_value_to_stack({ptr, Local}) ->
-    jit_wasm32_asm:local_get(Local).
+    jit_wasm32_asm:local_get(Local);
+emit_value_to_stack(Imm) when is_integer(Imm) ->
+    %% Immediate constant (tagged term value)
+    jit_wasm32_asm:i32_const(Imm).
 
 %% Emit code to set jit_state->continuation to a label's entry point.
 %% Stores (Label + 1) in continuation to distinguish from NULL (0).
@@ -1419,6 +1433,7 @@ emit_push_args(State0, [Arg | Rest]) ->
         {free, {ptr, Local}} -> jit_wasm32_asm:local_get(Local);
         {free, {x_reg, N}} -> emit_value_to_stack({x_reg, N});
         {free, {y_reg, N}} -> emit_value_to_stack({y_reg, N});
+        {free, {wl, _} = Local} -> jit_wasm32_asm:local_get(Local);
         {free, Local} when is_integer(Local) -> jit_wasm32_asm:local_get(Local);
         {ptr, Local} -> jit_wasm32_asm:local_get(Local);
         {avm_int64_t, Val} ->
@@ -1430,7 +1445,8 @@ emit_push_args(State0, [Arg | Rest]) ->
             >>;
         {x_reg, N} -> emit_value_to_stack({x_reg, N});
         {y_reg, N} -> emit_value_to_stack({y_reg, N});
-        Local when is_integer(Local) -> jit_wasm32_asm:local_get(Local)
+        {wl, _} = Local -> jit_wasm32_asm:local_get(Local);
+        Local when is_integer(Local) -> jit_wasm32_asm:i32_const(Local)
     end,
     State1 = emit(State0, Code),
     emit_push_args(State1, Rest).
@@ -1454,7 +1470,7 @@ emit_condition(State0, {Local, '<', Val}) when is_integer(Val) ->
     >>,
     State1 = maybe_free(State0, Local),
     emit(State1, Code);
-emit_condition(State0, {Local, '<', OtherLocal}) when is_integer(OtherLocal) ->
+emit_condition(State0, {Local, '<', {wl, _} = OtherLocal}) ->
     L = unwrap_free(Local),
     Code = <<
         (jit_wasm32_asm:local_get(L))/binary,
@@ -1490,7 +1506,7 @@ emit_condition(State0, {Local, '!=', Val}) when is_integer(Val) ->
     >>,
     State1 = maybe_free(State0, Local),
     emit(State1, Code);
-emit_condition(State0, {Local, '!=', OtherLocal}) when is_integer(OtherLocal) ->
+emit_condition(State0, {Local, '!=', {wl, _} = OtherLocal}) ->
     L = unwrap_free(Local),
     Code = <<
         (jit_wasm32_asm:local_get(L))/binary,
@@ -1554,6 +1570,7 @@ emit_and_conditions(State0, [Cond | Rest]) ->
     emit(State2, jit_wasm32_asm:i32_and()).
 
 unwrap_free({free, L}) -> L;
+unwrap_free({wl, _} = L) -> L;
 unwrap_free(L) -> L.
 
 maybe_free(State, {free, Local}) -> free_native_register(State, Local);

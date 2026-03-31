@@ -231,15 +231,18 @@ call_indirect(TypeIdx, TableIdx) ->
 %%=============================================================================
 
 %% @doc Get a local variable by index.
--spec local_get(non_neg_integer()) -> binary().
+-spec local_get(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
+local_get({wl, LocalIdx}) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>;
 local_get(LocalIdx) -> <<16#20, (encode_uleb128(LocalIdx))/binary>>.
 
 %% @doc Set a local variable by index.
--spec local_set(non_neg_integer()) -> binary().
+-spec local_set(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
+local_set({wl, LocalIdx}) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>;
 local_set(LocalIdx) -> <<16#21, (encode_uleb128(LocalIdx))/binary>>.
 
 %% @doc Tee a local variable (set and keep value on stack).
--spec local_tee(non_neg_integer()) -> binary().
+-spec local_tee(non_neg_integer() | {wl, non_neg_integer()}) -> binary().
+local_tee({wl, LocalIdx}) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>;
 local_tee(LocalIdx) -> <<16#22, (encode_uleb128(LocalIdx))/binary>>.
 
 %% @doc Get a global variable by index.
