@@ -751,18 +751,25 @@ static term add_boxed_helper(Context *ctx, uint32_t fail_label, uint32_t live, t
 term bif_erlang_add_2(Context *ctx, uint32_t fail_label, int live, term arg1, term arg2)
 {
     UNUSED(live);
+    term cp_before = ctx->cp;
 
+    term result;
     if (LIKELY(term_is_integer(arg1) && term_is_integer(arg2))) {
         // TODO: use long integer instead, and term_to_longint
         avm_int_t res;
         if (!BUILTIN_ADD_OVERFLOW((avm_int_t) (arg1 & ~TERM_INTEGER_TAG), (avm_int_t) (arg2 & ~TERM_INTEGER_TAG), &res)) {
-            return res | TERM_INTEGER_TAG;
+            result = res | TERM_INTEGER_TAG;
         } else {
-            return add_overflow_helper(ctx, fail_label, live, arg1, arg2);
+            result = add_overflow_helper(ctx, fail_label, live, arg1, arg2);
         }
     } else {
-        return add_boxed_helper(ctx, fail_label, live, arg1, arg2);
+        result = add_boxed_helper(ctx, fail_label, live, arg1, arg2);
     }
+    if (ctx->cp != cp_before) {
+        fprintf(stderr, "ADD BIF CORRUPTED CP: was 0x%x now 0x%x live=%d\n",
+            (unsigned)cp_before, (unsigned)ctx->cp, live);
+    }
+    return result;
 }
 
 term bif_erlang_plus_1(Context *ctx, uint32_t fail_label, int live, term arg1)
@@ -1033,19 +1040,26 @@ static term mul_boxed_helper(Context *ctx, uint32_t fail_label, uint32_t live, t
 term bif_erlang_mul_2(Context *ctx, uint32_t fail_label, int live, term arg1, term arg2)
 {
     UNUSED(live);
+    term cp_before = ctx->cp;
 
+    term result;
     if (LIKELY(term_is_integer(arg1) && term_is_integer(arg2))) {
         avm_int_t res;
         avm_int_t a = ((avm_int_t) (arg1 & ~TERM_INTEGER_TAG)) >> 2;
         avm_int_t b = ((avm_int_t) (arg2 & ~TERM_INTEGER_TAG)) >> 2;
         if (!BUILTIN_MUL_OVERFLOW(a, b, &res)) {
-            return res | TERM_INTEGER_TAG;
+            result = res | TERM_INTEGER_TAG;
         } else {
-            return mul_overflow_helper(ctx, fail_label, live, arg1, arg2);
+            result = mul_overflow_helper(ctx, fail_label, live, arg1, arg2);
         }
     } else {
-        return mul_boxed_helper(ctx, fail_label, live, arg1, arg2);
+        result = mul_boxed_helper(ctx, fail_label, live, arg1, arg2);
     }
+    if (ctx->cp != cp_before) {
+        fprintf(stderr, "MUL BIF CORRUPTED CP: was 0x%x now 0x%x live=%d arg1=0x%x arg2=0x%x\n",
+            (unsigned)cp_before, (unsigned)ctx->cp, live, (unsigned)arg1, (unsigned)arg2);
+    }
+    return result;
 }
 
 term bif_erlang_fdiv_2(Context *ctx, uint32_t fail_label, int live, term arg1, term arg2)

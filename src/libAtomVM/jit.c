@@ -272,6 +272,7 @@ static void jit_trim_live_regs(Context *ctx, uint32_t live)
 static Context *jit_return(Context *ctx, JITState *jit_state)
 {
     int module_index = ctx->cp >> 24;
+    //fprintf(stderr, "DEBUG jit_return: cp=0x%x module_index=%d offset=%d\n", (unsigned)ctx->cp, module_index, (int)((ctx->cp & 0xFFFFFF) >> 2));
     TRACE("jit_return: ctx->cp = %d, module_index = %d, offset = %d\n", (int) ctx->cp, module_index, (int) (ctx->cp & 0xFFFFFF) >> 2);
     Module *mod = globalcontext_get_module_by_index(ctx->global, module_index);
 
@@ -696,6 +697,7 @@ static BifImpl0 jit_get_imported_bif(JITState *jit_state, uint32_t bif)
     TRACE("jit_get_imported_bif: bif=%" PRIu32 "\n", bif);
     const struct ExportedFunction *exported_bif = jit_state->module->imported_funcs[bif];
     const BifImpl0 result = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif0_ptr;
+    //fprintf(stderr, "DEBUG get_imported_bif: bif=%u result=%p\n", bif, (void*)(uintptr_t)result);
     return result;
 }
 
@@ -751,8 +753,12 @@ static bool jit_test_heap(Context *ctx, JITState *jit_state, uint32_t heap_need,
 static term jit_put_list(Context *ctx, term head, term tail)
 {
     TRACE("jit_put_list: head=%p tail=%p\n", (void *) head, (void *) tail);
+    term cp_before = ctx->cp;
     term *list_elem = term_list_alloc(&ctx->heap);
     term t = term_list_init_prepend(list_elem, head, tail);
+    if (ctx->cp != cp_before) {
+        fprintf(stderr, "PUT_LIST CORRUPTED CP: was 0x%x now 0x%x\n", (unsigned)cp_before, (unsigned)ctx->cp);
+    }
     return t;
 }
 
@@ -764,6 +770,7 @@ static term jit_module_load_literal(Context *ctx, JITState *jit_state, int index
 
 static term jit_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
 {
+    //fprintf(stderr, "DEBUG alloc_boxed_integer_fragment: value=%lld\n", (long long) value);
     TRACE("jit_alloc_boxed_integer_fragment: value=%lld\n", (long long) value);
 #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
     if ((value < AVM_INT_MIN) || (value > AVM_INT_MAX)) {

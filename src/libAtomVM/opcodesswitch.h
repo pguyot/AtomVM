@@ -1690,10 +1690,12 @@ schedule_in:
             // __asm__ volatile("int $0x03");
             TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
             TRACE("JIT: native_pc=%p mod_idx=%d\n", (void *) native_pc, mod->module_index);
-            //fprintf(stderr, "DEBUG: native_pc=%p mod_idx=%d\n", (void*)native_pc, mod->module_index);
+            term saved_cp = ctx->cp;
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
+            if (ctx->cp != saved_cp && (ctx->cp & 0xF) != 0) {
+                fprintf(stderr, "CP CORRUPTED: was 0x%x now 0x%x native_pc=%p cont=%p\n", (unsigned)saved_cp, (unsigned)ctx->cp, (void*)native_pc, (void*)jit_state.continuation);
+            }
             TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
-            //fprintf(stderr, "DEBUG-RET: native_pc=%p cont=%p cp=0x%lx\n", (void *) native_pc, (void *) jit_state.continuation, (unsigned long) ctx->cp);
             remaining_reductions = jit_state.remaining_reductions;
             if (UNLIKELY(new_ctx != ctx)) {
                 ctx = new_ctx;
