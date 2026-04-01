@@ -454,7 +454,15 @@ static Context *jit_raw_raise(Context *ctx, JITState *jit_state)
 static Context *jit_schedule_next_cp(Context *ctx, JITState *jit_state)
 {
     TRACE("jit_schedule_next_cp: ctx->process_id = %" PRId32 "\n", ctx->process_id);
+#ifdef JIT_JUMPTABLE_IS_DATA
+    // WASM: continuation stores (label + 1); convert to real function pointer for schedule_in
+    {
+        int label = (int) (uintptr_t) jit_state->continuation - 1;
+        ctx->saved_function_ptr = module_get_native_entry_point(jit_state->module, label);
+    }
+#else
     ctx->saved_function_ptr = jit_state->continuation;
+#endif
     ctx->saved_module = jit_state->module;
     jit_state->remaining_reductions = 0;
     return scheduler_next(ctx->global, ctx);
@@ -463,7 +471,15 @@ static Context *jit_schedule_next_cp(Context *ctx, JITState *jit_state)
 static Context *jit_schedule_wait_cp(Context *ctx, JITState *jit_state)
 {
     TRACE("jit_schedule_wait_cp: ctx->process_id = %" PRId32 "\n", ctx->process_id);
+#ifdef JIT_JUMPTABLE_IS_DATA
+    // WASM: continuation stores (label + 1); convert to real function pointer for schedule_in
+    {
+        int label = (int) (uintptr_t) jit_state->continuation - 1;
+        ctx->saved_function_ptr = module_get_native_entry_point(jit_state->module, label);
+    }
+#else
     ctx->saved_function_ptr = jit_state->continuation;
+#endif
     ctx->saved_module = jit_state->module;
     jit_state->remaining_reductions = 0;
     return scheduler_wait(ctx);
@@ -1007,8 +1023,18 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
                 break;
             }
             case CodeServerResumeSignal: {
+#ifdef JIT_JUMPTABLE_IS_DATA
+                // WASM: saved_function_ptr contains raw label (set by jit_trap_and_load)
+                // Save it before context_process_code_server_resume_signal converts it
+                uint32_t resume_label = (uint32_t) (uintptr_t) ctx->saved_function_ptr;
+#endif
                 context_process_code_server_resume_signal(ctx);
+#ifdef JIT_JUMPTABLE_IS_DATA
+                // WASM: continuation expects (label + 1) encoding
+                jit_state->continuation = (ModuleNativeEntryPoint) (uintptr_t) (resume_label + 1);
+#else
                 jit_state->continuation = ctx->saved_function_ptr;
+#endif
                 break;
             }
             case NormalMessage: {

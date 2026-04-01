@@ -1925,6 +1925,11 @@ bool module_find_line(Module *mod, unsigned int offset, uint32_t *line, size_t *
     size_t i;
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+#ifdef JIT_JUMPTABLE_IS_DATA
+        // WASM: no labels_and_lines data available in native_code
+        UNUSED(i);
+        return false;
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2 + labels_count * 6;
@@ -1949,6 +1954,7 @@ bool module_find_line(Module *mod, unsigned int offset, uint32_t *line, size_t *
             prev_line_ref = line_ref;
         }
         return module_find_line_ref(mod, prev_line_ref, line, filename_len, filename);
+#endif /* !JIT_JUMPTABLE_IS_DATA */
     } else {
 #if defined(AVM_NO_EMU)
         return false;
@@ -2000,6 +2006,16 @@ COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, i
 
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+#ifdef JIT_JUMPTABLE_IS_DATA
+        // WASM: label is directly encoded in the CP offset
+        // mod_offset = label * JIT_JUMPTABLE_ENTRY_SIZE
+        if (label) {
+            *label = (int) (mod_offset / JIT_JUMPTABLE_ENTRY_SIZE);
+        }
+        if (l_off) {
+            *l_off = 0;
+        }
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2;
@@ -2038,6 +2054,7 @@ COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, i
         if (l_off) {
             *l_off = 0;
         }
+#endif
 #endif
 #if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
     } else {
@@ -2079,6 +2096,10 @@ uint32_t module_label_code_offset(Module *mod, int label)
 {
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
+#ifdef JIT_JUMPTABLE_IS_DATA
+        // WASM: offset = label * JIT_JUMPTABLE_ENTRY_SIZE
+        return (uint32_t) label * JIT_JUMPTABLE_ENTRY_SIZE;
+#else
         const uint8_t *labels_and_lines = (const uint8_t *) mod->native_code(NULL, NULL, NULL);
         int labels_count = READ_16_UNALIGNED(labels_and_lines);
         labels_and_lines += 2;
@@ -2093,6 +2114,7 @@ uint32_t module_label_code_offset(Module *mod, int label)
             labels_count--;
         }
         return 0;
+#endif
     } else {
 #endif
         uint8_t *code = &mod->code->code[0];
