@@ -1613,8 +1613,8 @@ emit_push_args(State0, [Arg | Rest]) ->
                 %% For 32-bit WASM, pass i64 as two i32 values
                 %% Low 32 bits first, then high 32 bits
                 <<
-                    (jit_wasm32_asm:i32_const(Val band 16#FFFFFFFF))/binary,
-                    (jit_wasm32_asm:i32_const((Val bsr 32) band 16#FFFFFFFF))/binary
+                    (jit_wasm32_asm:i32_const(to_i32(Val band 16#FFFFFFFF)))/binary,
+                    (jit_wasm32_asm:i32_const(to_i32((Val bsr 32) band 16#FFFFFFFF)))/binary
                 >>;
             {x_reg, N} ->
                 emit_value_to_stack({x_reg, N});
