@@ -106,7 +106,7 @@ jobs:
   compile_tests_jit:
 
     runs-on: ubuntu-24.04
-    container: erlang:27
+    container: erlang:28
 
     steps:
     - name: Checkout repo
