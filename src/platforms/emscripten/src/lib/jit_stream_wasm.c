@@ -50,8 +50,8 @@
 
 #ifndef AVM_NO_JIT
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <emscripten.h>
 
@@ -109,9 +109,9 @@ EM_JS(int, jit_compile_wasm_module, (const uint8_t *wasm_data, int wasm_size, vo
         // Prepare imports: the JIT module needs access to Emscripten's memory
         // and indirect function table for call_indirect
         var imports = {
-            env: {
-                memory: wasmInstance.exports.memory || Module['wasmMemory'],
-                __indirect_function_table: wasmTable
+            env : {
+                memory : wasmMemory,
+                __indirect_function_table : wasmTable
             }
         };
 
@@ -124,7 +124,7 @@ EM_JS(int, jit_compile_wasm_module, (const uint8_t *wasm_data, int wasm_size, vo
             var func = instance.exports[funcName];
             if (func) {
                 // addFunction registers the function and returns its table index
-                var funcPtr = addFunction(func, 'iiii');  // (i32, i32, i32) -> i32
+                var funcPtr = addFunction(func, 'iiii'); // (i32, i32, i32) -> i32
                 // Store the function pointer in the output table
                 HEAP32[(func_table >> 2) + i] = funcPtr;
             } else {

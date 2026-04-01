@@ -1689,6 +1689,7 @@ schedule_in:
             jit_state.remaining_reductions = remaining_reductions;
             // __asm__ volatile("int $0x03");
             TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
+            TRACE("JIT: native_pc=%p mod_idx=%d\n", (void *) native_pc, mod->module_index);
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
             TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
             remaining_reductions = jit_state.remaining_reductions;

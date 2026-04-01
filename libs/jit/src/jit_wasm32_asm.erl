@@ -34,9 +34,10 @@
 %% Integers use LEB128 variable-length encoding.
 
 -export([
-    %% LEB128 encoding
+    %% LEB128 encoding/decoding
     encode_uleb128/1,
     encode_sleb128/1,
+    decode_uleb128/1,
 
     %% WASM types
     type_i32/0,
@@ -147,6 +148,16 @@ encode_sleb128(Value) when Value >= -64, Value < 64 ->
     <<(Value band 16#7F):8>>;
 encode_sleb128(Value) ->
     <<1:1, (Value band 16#7F):7, (encode_sleb128(Value bsr 7))/binary>>.
+
+%% @doc Decode an unsigned LEB128 value from a binary, returning {Value, Rest}.
+-spec decode_uleb128(binary()) -> {non_neg_integer(), binary()}.
+decode_uleb128(Bin) ->
+    decode_uleb128(Bin, 0, 0).
+
+decode_uleb128(<<0:1, Val:7, Rest/binary>>, Acc, Shift) ->
+    {Acc bor (Val bsl Shift), Rest};
+decode_uleb128(<<1:1, Val:7, Rest/binary>>, Acc, Shift) ->
+    decode_uleb128(Rest, Acc bor (Val bsl Shift), Shift + 7).
 
 %%=============================================================================
 %% WASM value types

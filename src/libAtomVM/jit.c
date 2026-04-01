@@ -278,11 +278,13 @@ static Context *jit_return(Context *ctx, JITState *jit_state)
         // WASM: continuation stores (label + 1) to distinguish from NULL.
         // The dispatch loop converts this to a function pointer.
         int label = ((ctx->cp & 0xFFFFFF) >> 2) / JIT_JUMPTABLE_ENTRY_SIZE;
+        TRACE("JIT jit_return: cp=0x%x module_index=%d label=%d\n",
+            (unsigned) ctx->cp, module_index, label);
         jit_state->continuation = (ModuleNativeEntryPoint) (uintptr_t) (label + 1);
 #else
-        // return to native using pointer arithmetics on function pointers
-        const void *native_pc = ((const uint8_t *) mod->native_code) + ((ctx->cp & 0xFFFFFF) >> 2);
-        jit_state->continuation = (ModuleNativeEntryPoint) native_pc;
+    // return to native using pointer arithmetics on function pointers
+    const void *native_pc = ((const uint8_t *) mod->native_code) + ((ctx->cp & 0xFFFFFF) >> 2);
+    jit_state->continuation = (ModuleNativeEntryPoint) native_pc;
 #endif
 #ifndef AVM_NO_EMU
     }
