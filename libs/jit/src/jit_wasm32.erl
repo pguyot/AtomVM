@@ -1640,7 +1640,7 @@ emit_condition(State0, {Local, '<', Val}) when is_integer(Val) ->
     L = unwrap_free(Local),
     Code = <<
         (emit_unwrapped_to_stack(L))/binary,
-        (jit_wasm32_asm:i32_const(Val))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:i32_lt_s())/binary
     >>,
     State1 = maybe_free(State0, Local),
@@ -1657,7 +1657,7 @@ emit_condition(State0, {Local, '<', OtherLocal}) when is_atom(OtherLocal) ->
 emit_condition(State0, {Val, '<', Local}) when is_integer(Val) ->
     L = unwrap_free(Local),
     Code = <<
-        (jit_wasm32_asm:i32_const(Val))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:local_get(L))/binary,
         (jit_wasm32_asm:i32_lt_s())/binary
     >>,
@@ -1667,7 +1667,7 @@ emit_condition(State0, {Local, '==', Val}) when is_integer(Val) ->
     L = unwrap_free(Local),
     Code = <<
         (emit_unwrapped_to_stack(L))/binary,
-        (jit_wasm32_asm:i32_const(Val))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:i32_eq())/binary
     >>,
     State1 = maybe_free(State0, Local),
@@ -1676,7 +1676,7 @@ emit_condition(State0, {Local, '!=', Val}) when is_integer(Val) ->
     L = unwrap_free(Local),
     Code = <<
         (emit_unwrapped_to_stack(L))/binary,
-        (jit_wasm32_asm:i32_const(Val))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:i32_ne())/binary
     >>,
     State1 = maybe_free(State0, Local),
@@ -1719,7 +1719,7 @@ emit_condition(State0, {Local, '&', Mask, '!=', Val}) ->
         (emit_unwrapped_to_stack(L))/binary,
         (jit_wasm32_asm:i32_const(Mask))/binary,
         (jit_wasm32_asm:i32_and())/binary,
-        (jit_wasm32_asm:i32_const(Val))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:i32_ne())/binary
     >>,
     State1 = maybe_free(State0, Local),
