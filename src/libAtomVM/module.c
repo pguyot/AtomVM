@@ -1573,6 +1573,7 @@ static const struct ExportedFunction *module_create_function(Module *found_modul
         }
         mfunc->base.type = ModuleNativeFunction;
         mfunc->target = found_module;
+        mfunc->label = exported_label;
         mfunc->entry_point = module_get_native_entry_point(found_module, exported_label);
 
         return &mfunc->base;

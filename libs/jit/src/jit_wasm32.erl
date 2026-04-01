@@ -390,9 +390,42 @@ call_primitive_last(State0, Primitive, Args) ->
     }.
 
 call_primitive_with_cp(State0, Primitive, Args) ->
-    %% Set CP before calling the primitive
-    State1 = emit_set_cp(State0),
-    call_primitive_last(State1, Primitive, Args).
+    %% WASM: Split the function at the call site. The return from the called
+    %% primitive lands in a new WASM function (continuation label).
+
+    %% Allocate a new label number for the continuation
+    ContLabel = State0#state.labels_count + 1,
+    State1 = State0#state{labels_count = ContLabel},
+
+    %% Set CP to point to the continuation label
+    State2 = emit_set_cp_for_label(State1, ContLabel),
+
+    %% Call the primitive as tail call (ends current function)
+    State3 = call_primitive_last(State2, Primitive, Args),
+
+    %% Split: close current function, open continuation function
+    #state{
+        func_bodies = FuncBodies,
+        current_body = CurrentBody,
+        current_label = PrevLabel,
+        jump_table_start = JumpTableStart,
+        labels = Labels
+    } = State3,
+    FinalizedBody =
+        <<CurrentBody/binary, (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+            (jit_wasm32_asm:return())/binary>>,
+    NewFuncBodies = [{PrevLabel, FinalizedBody} | FuncBodies],
+    ContLabelOff = JumpTableStart + ContLabel * ?JUMP_TABLE_ENTRY_SIZE,
+    AllFree = (1 bsl State3#state.max_scratch) - 1,
+    State3#state{
+        func_bodies = NewFuncBodies,
+        current_body = <<>>,
+        current_label = ContLabel,
+        labels = [{ContLabel, ContLabelOff} | Labels],
+        available_regs = AllFree,
+        used_regs = 0,
+        regs = jit_regs:invalidate_all(State3#state.regs)
+    }.
 
 %%=============================================================================
 %% Control flow
@@ -1513,18 +1546,6 @@ emit_set_continuation_for_label(State, _RefLabel) ->
 %% On return, jit_return() computes:
 %%   label = ((cp & 0xFFFFFF) >> 2) / JUMP_TABLE_ENTRY_SIZE
 %% and uses module_get_native_entry_point(mod, label) to get the function pointer.
-%%
-%% At the time emit_set_cp is called, we don't know the exact return label.
-%% We use the current label's offset as the CP target. The caller (jit.erl)
-%% ensures that the return point is the immediately following label.
-emit_set_cp(State0) ->
-    LabelOffset =
-        case State0#state.current_label of
-            undefined -> 0;
-            CurLabel -> (CurLabel + 1) * ?JUMP_TABLE_ENTRY_SIZE
-        end,
-    emit_set_cp_for_offset(State0, LabelOffset).
-
 emit_set_cp_for_label(State0, Label) ->
     LabelOffset = Label * ?JUMP_TABLE_ENTRY_SIZE,
     emit_set_cp_for_offset(State0, LabelOffset).
