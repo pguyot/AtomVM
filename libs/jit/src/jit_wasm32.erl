@@ -1717,7 +1717,7 @@ emit_condition(State0, {Local, '&', Mask, '!=', Val}) ->
     L = unwrap_free(Local),
     Code = <<
         (emit_unwrapped_to_stack(L))/binary,
-        (jit_wasm32_asm:i32_const(Mask))/binary,
+        (jit_wasm32_asm:i32_const(to_i32(Mask)))/binary,
         (jit_wasm32_asm:i32_and())/binary,
         (jit_wasm32_asm:i32_const(to_i32(Val)))/binary,
         (jit_wasm32_asm:i32_ne())/binary
