@@ -1551,7 +1551,6 @@ emit_set_cp_for_offset(State0, LabelOffset) ->
 
 %% Emit code to call a primitive function
 emit_call_primitive(State0, Primitive, Args, ResultLocal, IsTailCall) ->
-    %% Count WASM-level arguments (avm_int64_t counts as 2 i32 args)
     WasmArgCount = count_wasm_args(Args),
     %% Push arguments onto the WASM stack
     State1 = emit_push_args(State0, Args),
@@ -1561,19 +1560,37 @@ emit_call_primitive(State0, Primitive, Args, ResultLocal, IsTailCall) ->
         (jit_wasm32_asm:i32_load(2, Primitive * 4))/binary
     >>,
     State2 = emit(State1, Code),
-    %% call_indirect with appropriate type index for the argument count
-    %% Type index = ArgCount - 1 (type 0 = 1 arg, type 1 = 2 args, etc.)
-    TypeIdx = WasmArgCount - 1,
+    %% call_indirect with appropriate type index for the argument count and return type
+    %% Types 0-7: (i32 x N) -> i32, for N=1..8
+    %% Types 8-15: (i32 x N) -> void, for N=1..8
+    %% Type 16: (i32, i64) -> i32 (for alloc_boxed_integer_fragment)
+    IsVoid = primitive_returns_void(Primitive),
+    TypeIdx = case primitive_special_type(Primitive) of
+        none ->
+            BaseTypeIdx = WasmArgCount - 1,
+            case IsVoid of
+                true -> BaseTypeIdx + 8;
+                false -> BaseTypeIdx
+            end;
+        SpecialTypeIdx ->
+            SpecialTypeIdx
+    end,
     State3 = emit(State2, jit_wasm32_asm:call_indirect(TypeIdx, 0)),
-    case IsTailCall of
-        true ->
-            %% Return the result directly
-            State4 = emit(State3, jit_wasm32_asm:return()),
-            State4;
-        false ->
-            %% Store the result in a local
-            State4 = emit(State3, jit_wasm32_asm:local_set(ResultLocal)),
-            State4
+    case {IsTailCall, IsVoid} of
+        {true, false} ->
+            %% Tail call with i32 return: return the result directly
+            emit(State3, jit_wasm32_asm:return());
+        {true, true} ->
+            %% Tail call with void return: return ctx
+            State4 = emit(State3, jit_wasm32_asm:local_get(?CTX_LOCAL)),
+            emit(State4, jit_wasm32_asm:return());
+        {false, false} ->
+            %% Non-tail call with i32 return: store result in local
+            emit(State3, jit_wasm32_asm:local_set(ResultLocal));
+        {false, true} ->
+            %% Non-tail call with void return: push dummy value and store
+            State4 = emit(State3, jit_wasm32_asm:i32_const(0)),
+            emit(State4, jit_wasm32_asm:local_set(ResultLocal))
     end.
 
 %% Emit code to push function arguments onto the WASM stack
@@ -1610,12 +1627,9 @@ emit_push_args(State0, [Arg | Rest]) ->
             {ptr, Local} ->
                 jit_wasm32_asm:local_get(Local);
             {avm_int64_t, Val} ->
-                %% For 32-bit WASM, pass i64 as two i32 values
-                %% Low 32 bits first, then high 32 bits
-                <<
-                    (jit_wasm32_asm:i32_const(to_i32(Val band 16#FFFFFFFF)))/binary,
-                    (jit_wasm32_asm:i32_const(to_i32((Val bsr 32) band 16#FFFFFFFF)))/binary
-                >>;
+                %% Pass as native WASM i64 - matches Emscripten's ABI where
+                %% int64_t parameters are compiled as WASM i64 type
+                jit_wasm32_asm:i64_const(Val);
             {x_reg, N} ->
                 emit_value_to_stack({x_reg, N});
             {y_reg, N} ->
@@ -1763,16 +1777,34 @@ emit_unwrapped_to_stack(L) when is_atom(L) ->
 emit_unwrapped_to_stack(Imm) when is_integer(Imm) ->
     jit_wasm32_asm:i32_const(to_i32(Imm)).
 
-%% Count WASM-level i32 arguments (avm_int64_t counts as 2)
+%% Returns true if a primitive C function returns void (no return value).
+%% These need a different WASM call_indirect type (void return instead of i32).
+%% Must be kept in sync with ModuleNativeInterface in jit.h.
+primitive_returns_void(?PRIM_TRIM_LIVE_REGS) -> true;
+primitive_returns_void(?PRIM_MAILBOX_REMOVE_MESSAGE) -> true;
+primitive_returns_void(?PRIM_TIMEOUT) -> true;
+primitive_returns_void(?PRIM_MAILBOX_NEXT) -> true;
+primitive_returns_void(?PRIM_CANCEL_TIMEOUT) -> true;
+primitive_returns_void(?PRIM_CLEAR_TIMEOUT_FLAG) -> true;
+primitive_returns_void(?PRIM_CONTEXT_ENSURE_FPREGS) -> true;
+primitive_returns_void(?PRIM_TERM_CONV_TO_FLOAT) -> true;
+primitive_returns_void(?PRIM_FNEGATE) -> true;
+primitive_returns_void(?PRIM_BITSTRING_COPY_MODULE_STR) -> true;
+primitive_returns_void(?PRIM_FREE) -> true;
+primitive_returns_void(_) -> false.
+
+%% Returns a special type index for primitives with non-standard WASM signatures
+%% (e.g., i64 parameters), or 'none' for standard all-i32 signatures.
+%% Must be kept in sync with ModuleNativeInterface in jit.h.
+primitive_special_type(?PRIM_ALLOC_BOXED_INTEGER_FRAGMENT) -> 16;
+primitive_special_type(_) -> none.
+
+%% Count WASM-level arguments.
+%% Each arg is one WASM value (i32 or i64). Primitives with i64 args must use
+%% primitive_special_type/1 for the correct type index since the standard type
+%% indices assume all-i32 signatures.
 count_wasm_args(Args) ->
-    lists:foldl(
-        fun
-            ({avm_int64_t, _}, Acc) -> Acc + 2;
-            (_, Acc) -> Acc + 1
-        end,
-        0,
-        Args
-    ).
+    length(Args).
 
 maybe_free(State, {free, Local}) -> free_native_register(State, Local);
 maybe_free(State, _) -> State.
@@ -1794,28 +1826,36 @@ free_func_ptr(State, _) -> State.
 %%   - Code section: function bodies
 %%
 %% Type indices:
-%%   0: (i32, i32, i32) -> i32  [entry point signature, used for all label functions]
+%%   0-7: (i32 x N) -> i32  for N=1..8  (e.g., Type 2 = entry point: 3 args -> i32)
+%%   8-15: (i32 x N) -> void for N=1..8  (for void-returning C primitives)
+%%   16: (i32, i64) -> i32  (for alloc_boxed_integer_fragment)
 %%
 %% Import indices:
 %%   0: env.memory (memory)
 %%   1: env.__indirect_function_table (table funcref)
-%%
-%% Note: The initial implementation uses type 0 for all call_indirect calls.
-%% This works for primitives with the entry point signature (3 args -> i32)
-%% but will need refinement for primitives with different signatures.
 %%=============================================================================
 
 assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
     Asm = jit_wasm32_asm,
 
-    %% Type section: define function types for different arities
-    %% Type N: (i32 x (N+1)) -> i32
-    %% Type 0: 1 arg, Type 1: 2 args, ..., Type 7: 8 args
-    %% The entry point type (3 args) is Type 2
-    Types = [
+    %% Type section: define function types for different arities and return types.
+    %% Types 0-7: (i32 x (N+1)) -> i32, for N=0..7 (1 to 8 args)
+    %% Types 8-15: (i32 x (N-7)) -> void, for N=8..15 (1 to 8 args)
+    %% Type 16: (i32, i64) -> i32 (for alloc_boxed_integer_fragment)
+    %% The entry point type (3 args -> i32) is Type 2
+    I32ReturnTypes = [
         Asm:encode_func_type(lists:duplicate(N, Asm:type_i32()), [Asm:type_i32()])
      || N <- lists:seq(1, 8)
     ],
+    VoidReturnTypes = [
+        Asm:encode_func_type(lists:duplicate(N, Asm:type_i32()), [])
+     || N <- lists:seq(1, 8)
+    ],
+    %% Special types for primitives with i64 parameters
+    SpecialTypes = [
+        Asm:encode_func_type([Asm:type_i32(), Asm:type_i64()], [Asm:type_i32()])
+    ],
+    Types = I32ReturnTypes ++ VoidReturnTypes ++ SpecialTypes,
     TypeSection = Asm:encode_type_section(Types),
 
     %% Import section:

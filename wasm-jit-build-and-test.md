@@ -78,11 +78,22 @@ The important line is `Return value: 17` (= 8 + 9).
 
 `add.beam` executes correctly and returns the expected value.
 
-`test_bs.beam` and other complex tests compile to valid WASM modules but
-crash at runtime with `null function or function signature mismatch` due to
-`call_indirect` type mismatches between the JIT-generated WASM module and
-Emscripten's function table. This needs investigation into how C primitive
-function signatures are mapped to WASM indirect call types.
+`test_bs.beam` and other complex tests previously crashed at runtime with
+`null function or function signature mismatch`. This was caused by two
+`call_indirect` type signature mismatches:
+
+1. **Void-returning primitives**: C functions like `jit_trim_live_regs`,
+   `mailbox_remove_message`, `timeout`, etc. return `void`, but the WASM
+   type section only had `(i32 x N) -> i32` types. The WASM runtime traps
+   when `call_indirect` type doesn't structurally match the target function.
+   **Fix**: Added void-returning types (types 8-15) to the WASM type section
+   and `primitive_returns_void/1` to select the correct type index.
+
+2. **i64 parameter mismatch**: `alloc_boxed_integer_fragment` takes
+   `avm_int64_t` which Emscripten compiles as native WASM `i64`, but the
+   JIT was splitting it into two `i32` values.
+   **Fix**: Added type 16 `(i32, i64) -> i32` and changed `emit_push_args`
+   to use `i64_const` for `avm_int64_t` arguments.
 
 ## Architecture overview
 
