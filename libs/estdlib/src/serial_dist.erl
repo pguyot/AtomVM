@@ -26,16 +26,45 @@
 %% This is particularly useful for microcontrollers that lack WiFi/TCP
 %% (e.g. STM32) but have UART available.
 %%
+%% <h3>Multi-port support</h3>
+%%
+%% Many MCUs have multiple UARTs (e.g. UART0 for console, UART1 and UART2
+%% for peer connections). This module supports opening several serial ports,
+%% each connecting to a different peer node. Pass a list of UART
+%% configurations via the `uart_ports' option:
+%%
+%% ```
+%% {ok, _} = net_kernel:start('mynode@serial.local', #{
+%%     name_domain => longnames,
+%%     proto_dist => serial_dist,
+%%     avm_dist_opts => #{
+%%         uart_ports => [
+%%             [{peripheral, "UART1"}, {speed, 115200}, {tx, 17}, {rx, 16}],
+%%             [{peripheral, "UART2"}, {speed, 115200}, {tx, 4}, {rx, 5}]
+%%         ],
+%%         uart_module => uart
+%%     }
+%% }).
+%% '''
+%%
+%% For a single port, the legacy `uart_opts' key is still supported:
+%%
+%% ```
+%% avm_dist_opts => #{
+%%     uart_opts => [{peripheral, "UART1"}, {speed, 115200}]
+%% }
+%% '''
+%%
 %% <h3>Peer-to-peer model</h3>
 %%
-%% Unlike TCP distribution, serial is point-to-point: one UART handles
-%% exactly one connection. A single link manager process owns all reads
-%% from the UART and arbitrates between incoming connections (accept)
-%% and outgoing connections (setup).
+%% Each UART handles exactly one connection. A coordinator process
+%% manages one link manager per UART port. Each link manager owns all
+%% reads from its UART and arbitrates between incoming connections
+%% (accept) and outgoing connections (setup).
 %%
-%% The link manager periodically sends sync markers (`<<16#AA, 16#55>>')
-%% on the UART so the peer can detect we are alive. When a peer wants to
-%% connect, it sends a preamble of repeated sync markers followed by a
+%% The link managers periodically send sync markers (`<<16#AA, 16#55>>')
+%% on their UART so the peer can detect we are alive. When a peer wants
+%% to connect, it sends a preamble of repeated sync markers followed by a
 %% framed handshake packet. Each frame on the wire uses the format:
 %%
 %% ```
@@ -47,20 +76,18 @@
 %% maximum frame size checks and CRC verification. On CRC failure the
 %% connection is torn down.
 %%
-%% <h3>Configuration</h3>
+%% <h3>BEAM compatibility</h3>
 %%
-%% Pass options via `avm_dist_opts' when starting `net_kernel':
+%% This module also works on BEAM (standard Erlang/OTP). On BEAM, start
+%% the VM with `-proto_dist serial' and configure UART options via
+%% application environment before calling `net_kernel:start/1':
 %%
 %% ```
-%% {ok, _} = net_kernel:start('mynode@serial.local', #{
-%%     name_domain => longnames,
-%%     proto_dist => serial_dist,
-%%     avm_dist_opts => #{
-%%         uart_opts => [{peripheral, "UART1"}, {speed, 115200},
-%%                       {tx, 17}, {rx, 16}],
-%%         uart_module => uart
-%%     }
+%% application:set_env(serial_dist, dist_opts, #{
+%%     uart_opts => [{peripheral, "/dev/ttyUSB0"}, {speed, 115200}],
+%%     uart_module => my_uart_module
 %% }).
+%% net_kernel:start(['mynode@serial.local', longnames]).
 %% '''
 %% @end
 %%-----------------------------------------------------------------------------
@@ -88,21 +115,60 @@
 listen(Name) ->
     listen(Name, #{}).
 
--spec listen(string(), map()) ->
+-spec listen(string(), map() | string() | atom()) ->
     {ok, {any(), #net_address{}, pos_integer()}} | {error, any()}.
-listen(_Name, Opts) ->
-    UartOpts = maps:get(uart_opts, Opts, [{peripheral, "UART1"}, {speed, 115200}]),
+listen(Name, Opts) when is_map(Opts) ->
+    %% AtomVM path: Opts comes from avm_dist_opts.
+    %% BEAM OTP 25+ may also pass an empty map.
+    %% Merge with application env to pick up BEAM-side config.
+    EnvOpts = beam_env_opts(),
+    EffectiveOpts = maps:merge(EnvOpts, Opts),
+    listen_impl(Name, EffectiveOpts);
+listen(Name, _Host) ->
+    %% BEAM path (OTP < 25): Host is a hostname string.
+    listen_impl(Name, beam_env_opts()).
+
+beam_env_opts() ->
+    case application:get_env(serial_dist, dist_opts) of
+        {ok, O} when is_map(O) -> O;
+        _ -> #{}
+    end.
+
+listen_impl(_Name, Opts) ->
     UartMod = maps:get(uart_module, Opts, uart),
-    case UartMod:open(UartOpts) of
-        {error, _} = Error ->
-            Error;
-        UartPort ->
+    UartConfigs = case maps:find(uart_ports, Opts) of
+        {ok, Ports} ->
+            Ports;
+        error ->
+            case maps:find(uart_opts, Opts) of
+                {ok, UartOpts} ->
+                    [UartOpts];
+                error ->
+                    %% Fallback: try SERIAL_DEVICE env var
+                    case os:getenv("SERIAL_DEVICE") of
+                        false ->
+                            [[{peripheral, "UART1"}, {speed, 115200}]];
+                        Device ->
+                            [[{peripheral, Device}, {speed, 115200}]]
+                    end
+            end
+    end,
+    OpenPorts = lists:filtermap(fun(UartOpts) ->
+        case UartMod:open(UartOpts) of
+            {error, _} -> false;
+            UartPort -> {true, {UartPort, UartMod}}
+        end
+    end, UartConfigs),
+    case OpenPorts of
+        [] ->
+            {error, no_uart_ports};
+        _ ->
             Address = #net_address{
                 host = serial,
                 protocol = serial,
                 family = serial
             },
-            {ok, {{UartPort, UartMod}, Address, 1}}
+            {ok, {OpenPorts, Address, 1}}
     end.
 
 -spec address() -> #net_address{}.
@@ -113,19 +179,59 @@ address() ->
         family = serial
     }.
 
-%% @doc Start the link manager process.
--spec accept({any(), module()}) -> pid().
-accept({UartPort, UartMod}) ->
+%% @doc Start the coordinator and link manager processes.
+%% One link manager is spawned per UART port.
+-spec accept([{any(), module()}]) -> pid().
+accept(Ports) when is_list(Ports) ->
     Kernel = self(),
     spawn_link(fun() ->
         register(serial_dist_link_manager, self()),
-        link_manager(Kernel, UartPort, UartMod, <<>>)
-    end).
+        Coordinator = self(),
+        Managers = [spawn_link(fun() ->
+            link_manager(Coordinator, UartPort, UartMod, <<>>)
+        end) || {UartPort, UartMod} <- Ports],
+        coordinator_loop(Kernel, Managers, [])
+    end);
+accept({UartPort, UartMod}) ->
+    accept([{UartPort, UartMod}]).
+
+%%--------------------------------------------------------------------
+%% Coordinator
+%%
+%% The coordinator routes messages between link managers and
+%% the net_kernel. It:
+%%   - Forwards accept notifications from link managers to kernel
+%%   - Forwards controller assignments from kernel back to managers
+%%   - Dispatches setup (outgoing) requests to an available manager
+%%--------------------------------------------------------------------
+
+coordinator_loop(Kernel, Managers, PendingAccepts) ->
+    receive
+        %% A link manager detected an incoming connection
+        {link_accept, ManagerPid, Ctrl} ->
+            Kernel ! {accept, self(), Ctrl, serial, serial},
+            coordinator_loop(Kernel, Managers, PendingAccepts ++ [ManagerPid]);
+        %% Kernel accepts the connection
+        {Kernel, controller, SupervisorPid} ->
+            [ManagerPid | Rest] = PendingAccepts,
+            ManagerPid ! {coordinator_accept, SupervisorPid},
+            coordinator_loop(Kernel, Managers, Rest);
+        %% Kernel rejects the connection
+        {Kernel, unsupported_protocol} ->
+            [ManagerPid | Rest] = PendingAccepts,
+            ManagerPid ! {coordinator_reject},
+            coordinator_loop(Kernel, Managers, Rest);
+        %% Outgoing connection request from setup
+        {setup, SetupPid} ->
+            [First | _] = Managers,
+            First ! {setup, SetupPid},
+            coordinator_loop(Kernel, Managers, PendingAccepts)
+    end.
 
 %%--------------------------------------------------------------------
 %% Link manager
 %%
-%% The link manager owns all UART reads. On each iteration it:
+%% One link manager per UART port. It:
 %%   1. Checks mailbox for {setup, Pid} (non-blocking)
 %%   2. Sends a sync marker so the peer knows we are alive
 %%   3. Reads from UART with a short timeout
@@ -137,11 +243,11 @@ accept({UartPort, UartMod}) ->
 %% flushed and the loop restarts cleanly.
 %%--------------------------------------------------------------------
 
-link_manager(Kernel, UartPort, UartMod, Buffer) ->
-    %% Check for setup request from net_kernel
+link_manager(Coordinator, UartPort, UartMod, Buffer) ->
+    %% Check for setup request from coordinator
     receive
         {setup, SetupPid} ->
-            do_setup_handshake(Kernel, UartPort, UartMod, SetupPid)
+            do_setup_handshake(Coordinator, UartPort, UartMod, SetupPid)
     after 0 ->
         ok
     end,
@@ -158,26 +264,26 @@ link_manager(Kernel, UartPort, UartMod, Buffer) ->
     case serial_dist_controller:scan_frame(NewBuffer, 16) of
         {ok, _Payload, _Rest} ->
             %% Complete frame found; pass raw buffer to accept
-            do_accept_handshake(Kernel, UartPort, UartMod, NewBuffer);
+            do_accept_handshake(Coordinator, UartPort, UartMod, NewBuffer);
         {crc_error, _} ->
             %% Bad data; discard and loop
-            link_manager(Kernel, UartPort, UartMod, <<>>);
+            link_manager(Coordinator, UartPort, UartMod, <<>>);
         {need_more, Trimmed} when byte_size(Trimmed) > 4 ->
             %% Partial frame in flight; enter accept, controller will read more
-            do_accept_handshake(Kernel, UartPort, UartMod, Trimmed);
+            do_accept_handshake(Coordinator, UartPort, UartMod, Trimmed);
         {need_more, Trimmed} ->
             %% Only sync bytes or too little data; keep buffered
-            link_manager(Kernel, UartPort, UartMod, Trimmed)
+            link_manager(Coordinator, UartPort, UartMod, Trimmed)
     end.
 
 %% Responder: handshake data arrived from peer.
-do_accept_handshake(Kernel, UartPort, UartMod, Data) ->
+do_accept_handshake(Coordinator, UartPort, UartMod, Data) ->
     {ok, Ctrl} = serial_dist_controller:start(UartPort, UartMod, Data),
-    Kernel ! {accept, self(), Ctrl, serial, serial},
+    Coordinator ! {link_accept, self(), Ctrl},
     receive
-        {Kernel, controller, SupervisorPid} ->
+        {coordinator_accept, SupervisorPid} ->
             true = serial_dist_controller:supervisor(Ctrl, SupervisorPid);
-        {Kernel, unsupported_protocol} ->
+        {coordinator_reject} ->
             exit(unsupported_protocol)
     end,
     %% Monitor controller -- if handshake fails, recover.
@@ -185,11 +291,11 @@ do_accept_handshake(Kernel, UartPort, UartMod, Data) ->
     receive
         {'DOWN', Ref, process, Ctrl, _Reason} ->
             flush_setup_messages(),
-            link_manager(Kernel, UartPort, UartMod, <<>>)
+            link_manager(Coordinator, UartPort, UartMod, <<>>)
     end.
 
 %% Initiator: send sync preamble, create controller and hand to setup process.
-do_setup_handshake(Kernel, UartPort, UartMod, SetupPid) ->
+do_setup_handshake(Coordinator, UartPort, UartMod, SetupPid) ->
     serial_dist_controller:send_preamble(UartMod, UartPort),
     {ok, Ctrl} = serial_dist_controller:start(UartPort, UartMod),
     SetupPid ! {link_manager, Ctrl},
@@ -197,7 +303,7 @@ do_setup_handshake(Kernel, UartPort, UartMod, SetupPid) ->
     receive
         {'DOWN', Ref, process, Ctrl, _Reason} ->
             flush_setup_messages(),
-            link_manager(Kernel, UartPort, UartMod, <<>>)
+            link_manager(Coordinator, UartPort, UartMod, <<>>)
     end.
 
 flush_setup_messages() ->
@@ -241,7 +347,7 @@ hs_data(Kernel, MyNode, DistCtrl, Allowed, OtherNode, OtherVersion, Type, Timer)
         request_type = Type
     }.
 
-%% @doc Initiate an outgoing connection via the link manager.
+%% @doc Initiate an outgoing connection via the coordinator.
 setup(Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     Kernel = self(),
     spawn_opt(
@@ -269,6 +375,8 @@ do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
             ?shutdown2(Node, no_link_manager)
     end.
 
+close(Ports) when is_list(Ports) ->
+    lists:foreach(fun({UartPort, UartMod}) -> UartMod:close(UartPort) end, Ports);
 close({UartPort, UartMod}) ->
     UartMod:close(UartPort);
 close(_) ->

@@ -841,6 +841,79 @@ jobs:
           echo "Elixir not installed, skipping Elixir tests"
         fi
 
+    - name: "Test: BEAM<->AtomVM serial distribution over socat"
+      if: matrix.library-arch == ''
+      timeout-minutes: 10
+      working-directory: build
+      run: |
+        ulimit -c unlimited
+        if ! command -v elixir >/dev/null 2>&1 || ! command -v mix >/dev/null 2>&1; then
+          echo "Elixir/mix not installed, skipping BEAM<->AtomVM serial dist test"
+          exit 0
+        fi
+        if ! command -v socat >/dev/null 2>&1; then
+          echo "socat not installed, skipping BEAM<->AtomVM serial dist test"
+          exit 0
+        fi
+
+        # Build the Elixir example project
+        cd ../examples/elixir/serial_dist_example
+        mix local.hex --force --if-missing
+        mix local.rebar --force --if-missing
+        mix deps.get
+        mix compile
+        cd "$OLDPWD"
+
+        # Create socat pair and capture PTY paths
+        SOCAT_LOG=$(mktemp)
+        socat -d -d pty,raw,echo=0 pty,raw,echo=0 2>"$SOCAT_LOG" &
+        SOCAT_PID=$!
+        for i in $(seq 1 20); do
+          if [ "$(grep -c 'PTY is' "$SOCAT_LOG")" -ge 2 ]; then
+            break
+          fi
+          sleep 0.2
+        done
+        PTY_A=$(grep 'PTY is' "$SOCAT_LOG" | head -1 | sed 's/.*PTY is //')
+        PTY_B=$(grep 'PTY is' "$SOCAT_LOG" | tail -1 | sed 's/.*PTY is //')
+        echo "socat PTYs: $PTY_A <-> $PTY_B"
+
+        if [ -z "$PTY_A" ] || [ -z "$PTY_B" ]; then
+          echo "Failed to get PTY paths from socat"
+          cat "$SOCAT_LOG"
+          kill $SOCAT_PID 2>/dev/null || true
+          rm -f "$SOCAT_LOG"
+          exit 1
+        fi
+
+        # Start AtomVM peer (listens for ping)
+        PTY_PATH="$PTY_B" ./src/AtomVM ./tests/libs/estdlib/test_serial_dist_beam_peer.avm &
+        ATOMVM_PID=$!
+        sleep 2
+
+        # Start BEAM peer (sends ping via serial_dist)
+        cd ../examples/elixir/serial_dist_example
+        BEAM_RESULT=$(PTY_PATH="$PTY_A" mix run --no-halt -e "SerialDistExample.beam_peer()" 2>&1) || true
+        cd "$OLDPWD"
+
+        echo "BEAM peer output: $BEAM_RESULT"
+
+        # Clean up
+        kill $ATOMVM_PID 2>/dev/null || true
+        kill $SOCAT_PID 2>/dev/null || true
+        wait $ATOMVM_PID 2>/dev/null || true
+        wait $SOCAT_PID 2>/dev/null || true
+        rm -f "$SOCAT_LOG"
+
+        # Check result
+        if echo "$BEAM_RESULT" | grep -q "pong"; then
+          echo "BEAM<->AtomVM serial distribution test PASSED"
+        else
+          echo "BEAM<->AtomVM serial distribution test FAILED"
+          echo "Expected 'pong' in output"
+          exit 1
+        fi
+
     - name: "Install and smoke test"
       working-directory: build
       run: |

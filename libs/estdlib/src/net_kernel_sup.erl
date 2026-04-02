@@ -73,15 +73,22 @@ start_link(Options) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [Options]).
 
 init(Options) ->
-    ChildrenSpec = [
-        #{
-            id => erl_epmd,
-            start => {erl_epmd, start_link, []},
-            restart => permanent,
-            shutdown => 2000,
-            type => worker,
-            modules => [erl_epmd]
-        },
+    ProtoDist = maps:get(proto_dist, hd(Options), socket_dist),
+    EpmdChildren = case ProtoDist of
+        serial_dist ->
+            %% Serial distribution doesn't need EPMD
+            [];
+        _ ->
+            [#{
+                id => erl_epmd,
+                start => {erl_epmd, start_link, []},
+                restart => permanent,
+                shutdown => 2000,
+                type => worker,
+                modules => [erl_epmd]
+            }]
+    end,
+    ChildrenSpec = EpmdChildren ++ [
         #{
             id => net_kernel,
             start => {net_kernel, start_link, Options},

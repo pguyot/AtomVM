@@ -20,16 +20,26 @@
 
 %% @doc Example: distributed Erlang over serial (UART).
 %%
-%% This example starts distribution using a UART connection instead of
-%% TCP/IP. It works on ESP32 and Unix (using a real serial device or a
-%% virtual serial port created with socat).
+%% This example starts distribution using one or more UART connections
+%% instead of TCP/IP. It works on ESP32 and Unix (using real serial
+%% devices or virtual serial ports created with socat).
 %%
-%% <h3>ESP32 wiring</h3>
+%% <h3>ESP32 wiring (single peer)</h3>
 %%
 %% ```
 %% ESP32 TX (GPIO 17) -> Peer RX
 %% ESP32 RX (GPIO 16) -> Peer TX
 %% ESP32 GND          -> Peer GND
+%% '''
+%%
+%% <h3>ESP32 with two peers</h3>
+%%
+%% Many ESP32 boards have UART1 and UART2. Set `SERIAL_MULTI=true'
+%% to connect to two peers simultaneously:
+%%
+%% ```
+%% UART1: TX=17, RX=16 -> Peer A
+%% UART2: TX=4,  RX=5  -> Peer B
 %% '''
 %%
 %% <h3>Unix with socat</h3>
@@ -54,16 +64,18 @@
 -export([start/0]).
 
 start() ->
-    UartOpts = uart_opts(),
-    NodeName = make_node_name(UartOpts),
+    UartConfigs = uart_configs(),
+    NodeName = make_node_name(hd(UartConfigs)),
+    DistOpts = case UartConfigs of
+        [Single] -> #{uart_opts => Single};
+        Multiple -> #{uart_ports => Multiple}
+    end,
     {ok, _NetKernelPid} = net_kernel:start(NodeName, #{
         name_domain => longnames,
         proto_dist => serial_dist,
-        avm_dist_opts => #{
-            uart_opts => UartOpts
-        }
+        avm_dist_opts => DistOpts
     }),
-    io:format("Distribution started over serial~n"),
+    io:format("Distribution started over serial (~p port(s))~n", [length(UartConfigs)]),
     io:format("Node: ~p~n", [node()]),
     net_kernel:set_cookie(<<"AtomVM">>),
     io:format("Cookie: ~s~n", [net_kernel:get_cookie()]),
@@ -88,12 +100,22 @@ basename(Path) ->
     end.
 
 %% Platform-specific UART configuration.
-uart_opts() ->
+%% Returns a list of UART option proplists (one per port).
+uart_configs() ->
     case erlang:system_info(machine) of
         "ATOM" ->
             case atomvm:platform() of
                 esp32 ->
-                    [{peripheral, "UART1"}, {speed, 115200}, {tx, 17}, {rx, 16}];
+                    case os:getenv("SERIAL_MULTI") of
+                        "true" ->
+                            %% Two UARTs: connect to two peers
+                            [
+                                [{peripheral, "UART1"}, {speed, 115200}, {tx, 17}, {rx, 16}],
+                                [{peripheral, "UART2"}, {speed, 115200}, {tx, 4}, {rx, 5}]
+                            ];
+                        _ ->
+                            [[{peripheral, "UART1"}, {speed, 115200}, {tx, 17}, {rx, 16}]]
+                    end;
                 generic_unix ->
                     Device = os:getenv("SERIAL_DEVICE"),
                     case Device of
@@ -102,7 +124,7 @@ uart_opts() ->
                             io:format("  e.g. /dev/ttyUSB0 or a socat pty~n"),
                             exit(no_serial_device);
                         _ ->
-                            [{peripheral, Device}, {speed, 115200}]
+                            [[{peripheral, Device}, {speed, 115200}]]
                     end;
                 Other ->
                     io:format("Error: unsupported platform ~p~n", [Other]),
@@ -110,6 +132,7 @@ uart_opts() ->
             end;
         "BEAM" ->
             io:format("Error: this example requires AtomVM~n"),
+            io:format("  See examples/elixir/serial_dist_example for BEAM usage~n"),
             exit(beam_not_supported)
     end.
 

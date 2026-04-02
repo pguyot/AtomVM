@@ -55,10 +55,8 @@
 % BEAM's dist_util expects packets to be list of integers.
 -ifdef(BEAM_INTERFACE).
 -define(POST_PROCESS(Packet), binary_to_list(Packet)).
--define(PRE_PROCESS(Packet), iolist_to_binary(Packet)).
 -else.
 -define(POST_PROCESS(Packet), Packet).
--define(PRE_PROCESS(Packet), Packet).
 -endif.
 
 -define(SYNC_MAGIC, <<16#AA, 16#55>>).
@@ -295,7 +293,7 @@ send_data_loop(#state{dhandle = DHandle, uart = Uart, uart_module = UartMod, sen
             ok = erlang:dist_ctrl_get_data_notification(DHandle),
             State;
         Data ->
-            DataBin = ?PRE_PROCESS(Data),
+            DataBin = iolist_to_binary(Data),
             DataSize = byte_size(DataBin),
             send_framed(UartMod, Uart, <<DataSize:32, DataBin/binary>>),
             send_data_loop(State#state{sent = Sent + 1})
