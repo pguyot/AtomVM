@@ -201,6 +201,8 @@ accept(Ports) when is_list(Ports) ->
         %% Trap exits so a single link manager crash doesn't
         %% tear down the coordinator and all other managers.
         process_flag(trap_exit, true),
+        %% Start the relay process for transparent routing
+        {ok, _} = dist_relay:start_link(),
         Coordinator = self(),
         Managers = [
             spawn_link(fun() ->
@@ -236,6 +238,9 @@ coordinator_loop(Kernel, ManagerStates, PendingAccepts, SetupAwards) ->
         %% Kernel accepts the connection
         {Kernel, controller, SupervisorPid} ->
             case PendingAccepts of
+                [{relay, ReplyPid} | Rest] ->
+                    ReplyPid ! {coordinator_accept, SupervisorPid},
+                    coordinator_loop(Kernel, ManagerStates, Rest, SetupAwards);
                 [ManagerPid | Rest] ->
                     ManagerPid ! {coordinator_accept, SupervisorPid},
                     coordinator_loop(Kernel, ManagerStates, Rest, SetupAwards);
@@ -246,12 +251,20 @@ coordinator_loop(Kernel, ManagerStates, PendingAccepts, SetupAwards) ->
         %% Kernel rejects the connection
         {Kernel, unsupported_protocol} ->
             case PendingAccepts of
+                [{relay, ReplyPid} | Rest] ->
+                    ReplyPid ! {coordinator_reject},
+                    coordinator_loop(Kernel, ManagerStates, Rest, SetupAwards);
                 [ManagerPid | Rest] ->
                     ManagerPid ! {coordinator_reject},
                     coordinator_loop(Kernel, ManagerStates, Rest, SetupAwards);
                 [] ->
                     coordinator_loop(Kernel, ManagerStates, PendingAccepts, SetupAwards)
             end;
+        %% Relay accept: a virtual controller from dist_relay needs to
+        %% go through the normal accept flow with net_kernel.
+        {relay_accept, VCtrl, ReplyPid} ->
+            Kernel ! {accept, self(), VCtrl, serial, serial},
+            coordinator_loop(Kernel, ManagerStates, PendingAccepts ++ [{relay, ReplyPid}], SetupAwards);
         %% Outgoing connection request: broadcast to all idle managers
         {setup, SetupPid} ->
             IdleManagers = [M || {M, idle} <- maps:to_list(ManagerStates)],
@@ -470,7 +483,8 @@ do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
                     dist_util:handshake_we_started(HSData);
                 {link_manager_unavailable} ->
                     demonitor(Ref, [flush]),
-                    ?shutdown2(Node, no_link_managers_available);
+                    %% No idle UARTs -- try to relay through a connected node.
+                    try_relay_setup(Kernel, Node, Type, MyNode, Timer);
                 {'DOWN', Ref, process, Mgr, _Reason} ->
                     ?shutdown2(Node, link_manager_died)
             after 5000 ->
@@ -479,6 +493,35 @@ do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
             end;
         _ ->
             ?shutdown2(Node, no_link_manager)
+    end.
+
+%% @private Try to establish a relayed connection to `Node' through
+%% one of the currently connected nodes.
+try_relay_setup(Kernel, Node, Type, MyNode, Timer) ->
+    case find_relay(Node, nodes()) of
+        {ok, RelayPid, Ref} ->
+            dist_util:reset_timer(Timer),
+            {ok, VCtrl} = dist_relay_controller:start(RelayPid, Ref),
+            true = serial_dist_controller:supervisor(VCtrl, self()),
+            HSData = hs_data(Kernel, MyNode, VCtrl, [], Node, 6, Type, Timer),
+            dist_util:handshake_we_started(HSData);
+        {error, Reason} ->
+            ?shutdown2(Node, {no_relay, Reason})
+    end.
+
+find_relay(_Node, []) ->
+    {error, no_relay_available};
+find_relay(Node, [RelayNode | Rest]) ->
+    case catch gen_server:call({dist_relay, RelayNode}, {can_route, Node}, 5000) of
+        true ->
+            case catch gen_server:call({dist_relay, RelayNode}, {setup_relay, Node}, 15000) of
+                {ok, Ref, RelayPid} ->
+                    {ok, RelayPid, Ref};
+                _ ->
+                    find_relay(Node, Rest)
+            end;
+        _ ->
+            find_relay(Node, Rest)
     end.
 
 close(Ports) when is_list(Ports) ->

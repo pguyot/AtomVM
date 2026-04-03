@@ -69,6 +69,9 @@ set(ERLANG_MODULES
     queue
     sets
     socket
+    bridge_dist
+    dist_relay
+    dist_relay_controller
     serial_dist
     serial_dist_controller
     socket_dist

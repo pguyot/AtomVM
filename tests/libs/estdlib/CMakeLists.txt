@@ -44,6 +44,8 @@ set(ERLANG_MODULES
     test_serial_dist
     test_serial_dist_socat
     test_serial_dist_socat_peer
+    test_serial_dist_relay_socat
+    test_serial_dist_relay_socat_peer
     test_serial_dist_beam_peer
     test_uart
     mock_uart_hal
@@ -78,15 +80,29 @@ pack_test(test_estdlib estdlib eavmlib avm_network avm_unix etest)
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/serial_dist_controller.beam
            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/serial_dist.beam
+           ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/dist_relay_controller.beam
+           ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/dist_relay.beam
+           ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/bridge_dist.beam
     COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/beam_beams
         && erlc +debug_info -DBEAM_INTERFACE
             -I ${CMAKE_SOURCE_DIR}/libs/include
             -o ${CMAKE_CURRENT_BINARY_DIR}/beam_beams
             ${CMAKE_SOURCE_DIR}/libs/estdlib/src/serial_dist_controller.erl
+        && erlc +debug_info -DBEAM_INTERFACE
+            -I ${CMAKE_SOURCE_DIR}/libs/include
+            -o ${CMAKE_CURRENT_BINARY_DIR}/beam_beams
+            ${CMAKE_SOURCE_DIR}/libs/estdlib/src/dist_relay_controller.erl
         && ${CMAKE_COMMAND} -E copy
             ${CMAKE_BINARY_DIR}/libs/estdlib/src/beams/serial_dist.beam
             ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/serial_dist.beam
+        && ${CMAKE_COMMAND} -E copy
+            ${CMAKE_BINARY_DIR}/libs/estdlib/src/beams/dist_relay.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/dist_relay.beam
+        && ${CMAKE_COMMAND} -E copy
+            ${CMAKE_BINARY_DIR}/libs/estdlib/src/beams/bridge_dist.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/bridge_dist.beam
     DEPENDS ${CMAKE_SOURCE_DIR}/libs/estdlib/src/serial_dist_controller.erl
+            ${CMAKE_SOURCE_DIR}/libs/estdlib/src/dist_relay_controller.erl
             estdlib
     COMMENT "Building BEAM peer modules for serial distribution tests"
     VERBATIM
@@ -95,6 +111,9 @@ add_custom_target(
     serial_dist_controller_beam ALL
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/serial_dist_controller.beam
             ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/serial_dist.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/dist_relay_controller.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/dist_relay.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/beam_beams/bridge_dist.beam
 )
 
 # Build a separate AVM for the serial distribution peer node
@@ -130,5 +149,30 @@ add_custom_command(
 add_custom_target(
     test_serial_dist_socat_peer ALL
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/test_serial_dist_socat_peer.avm
+)
+
+# Build a separate AVM for the serial distribution relay peer node
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/test_serial_dist_relay_socat_peer.avm
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/test_estdlib_lib.avm
+            ${CMAKE_BINARY_DIR}/libs/estdlib/src/estdlib${peer_precompiled_suffix}.avm
+            ${CMAKE_BINARY_DIR}/libs/eavmlib/src/eavmlib.avm
+            ${CMAKE_BINARY_DIR}/libs/avm_unix/src/avm_unix.avm
+            ${peer_jit_archives}
+            test_estdlib_lib estdlib eavmlib avm_unix ${peer_jit_targets} PackBEAM
+    COMMAND ${CMAKE_BINARY_DIR}/tools/packbeam/packbeam create
+        -s test_serial_dist_relay_socat_peer
+        ${CMAKE_CURRENT_BINARY_DIR}/test_serial_dist_relay_socat_peer.avm
+        ${CMAKE_CURRENT_BINARY_DIR}/test_estdlib_lib.avm
+        ${peer_jit_archives}
+        ${CMAKE_BINARY_DIR}/libs/estdlib/src/estdlib${peer_precompiled_suffix}.avm
+        ${CMAKE_BINARY_DIR}/libs/eavmlib/src/eavmlib.avm
+        ${CMAKE_BINARY_DIR}/libs/avm_unix/src/avm_unix.avm
+    COMMENT "Packing peer AVM for serial distribution relay tests"
+    VERBATIM
+)
+add_custom_target(
+    test_serial_dist_relay_socat_peer ALL
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/test_serial_dist_relay_socat_peer.avm
 )
 
