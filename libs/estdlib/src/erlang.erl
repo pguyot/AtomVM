@@ -132,6 +132,7 @@
     localtime/1,
     setnode/2,
     setnode/3,
+    nodes/0,
     is_alive/0,
     get_cookie/0,
     get_cookie/1,
@@ -1637,6 +1638,15 @@ setnode(_NodeName, _Creation) ->
 %% @hidden
 -spec setnode(node(), pid(), {non_neg_integer(), non_neg_integer()}) -> reference().
 setnode(_TargetNode, _ConnPid, _TargetFlagsCreation) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns a list of all connected nodes
+%% @doc     Return a list of all visible nodes connected to this node.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec nodes() -> [node()].
+nodes() ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------

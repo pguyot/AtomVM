@@ -897,6 +897,46 @@ void dist_send_unlink_id_ack(uint64_t unlink_id, term from_pid, term to_pid, Con
     dist_send_unlink_id_or_ack(OPERATION_UNLINK_ID_ACK, unlink_id, from_pid, to_pid, ctx);
 }
 
+static term nif_erlang_nodes_0(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    UNUSED(argv);
+
+    // First pass: count active connections
+    int count = 0;
+    struct ListHead *dist_connections = synclist_rdlock(&ctx->global->dist_connections);
+    struct ListHead *item;
+    LIST_FOR_EACH (item, dist_connections) {
+        struct DistConnection *dist_connection = GET_LIST_ENTRY(item, struct DistConnection, head);
+        if (dist_connection->connection_process_id != INVALID_PROCESS_ID) {
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        synclist_unlock(&ctx->global->dist_connections);
+        return term_nil();
+    }
+
+    if (UNLIKELY(memory_ensure_free_opt(ctx, count * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        synclist_unlock(&ctx->global->dist_connections);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    // Second pass: build list
+    term result = term_nil();
+    LIST_FOR_EACH (item, dist_connections) {
+        struct DistConnection *dist_connection = GET_LIST_ENTRY(item, struct DistConnection, head);
+        if (dist_connection->connection_process_id != INVALID_PROCESS_ID) {
+            term node_atom = term_from_atom_index(dist_connection->node_atom_index);
+            result = term_list_prepend(node_atom, result, &ctx->heap);
+        }
+    }
+    synclist_unlock(&ctx->global->dist_connections);
+
+    return result;
+}
+
 const struct Nif setnode_3_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_setnode_3
@@ -915,4 +955,9 @@ const struct Nif dist_ctrl_get_data_nif = {
 const struct Nif dist_ctrl_put_data_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_dist_ctrl_put_data
+};
+
+const struct Nif nodes_0_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_erlang_nodes_0
 };

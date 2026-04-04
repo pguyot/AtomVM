@@ -151,6 +151,7 @@ erlang:get_module_info/1, &get_module_info_nif
 erlang:get_module_info/2, &get_module_info_nif
 erlang:setnode/2, &setnode_2_nif
 erlang:setnode/3, &setnode_3_nif
+erlang:nodes/0, &nodes_0_nif
 erlang:dist_ctrl_get_data_notification/1, &dist_ctrl_get_data_notification_nif
 erlang:dist_ctrl_get_data/1, &dist_ctrl_get_data_nif
 erlang:dist_ctrl_put_data/2, &dist_ctrl_put_data_nif
