@@ -112,6 +112,7 @@ struct esp_task_wdt_user_handle_and_name {
 // NIFs
 //
 
+#ifndef ATOMVM_HAS_MBEDTLS
 static term nif_esp_random(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
@@ -152,6 +153,7 @@ static term nif_esp_random_bytes(Context *ctx, int argc, term argv[])
         return binary;
     }
 }
+#endif
 
 static term nif_esp_restart(Context *ctx, int argc, term argv[])
 {
@@ -945,6 +947,7 @@ static term nif_esp_timer_get_time(Context *ctx, int argc, term argv[])
 // NIF structures and dispatch
 //
 
+#ifndef ATOMVM_HAS_MBEDTLS
 static const struct Nif esp_random_nif =
 {
     .base.type = NIFFunctionType,
@@ -955,6 +958,7 @@ static const struct Nif esp_random_bytes_nif =
     .base.type = NIFFunctionType,
     .nif_ptr = nif_esp_random_bytes
 };
+#endif
 static const struct Nif esp_restart_nif =
 {
     .base.type = NIFFunctionType,
@@ -1114,6 +1118,7 @@ static const struct Nif esp_timer_get_time_nif =
 
 const struct Nif *platform_nifs_get_nif(const char *nifname)
 {
+#ifndef ATOMVM_HAS_MBEDTLS
     if (strcmp("atomvm:random/0", nifname) == 0) {
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &esp_random_nif;
@@ -1122,6 +1127,7 @@ const struct Nif *platform_nifs_get_nif(const char *nifname)
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &esp_random_bytes_nif;
     }
+#endif
     if (strcmp("esp:restart/0", nifname) == 0) {
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &esp_restart_nif;

@@ -54,20 +54,6 @@ static term nif_atomvm_platform(Context *ctx, int argc, term argv[])
     return EMSCRIPTEN_ATOM;
 }
 
-static term nif_atomvm_random(Context *ctx, int argc, term argv[])
-{
-    UNUSED(ctx);
-    UNUSED(argc);
-    UNUSED(argv);
-    float val1 = emscripten_random();
-    float val2 = emscripten_random();
-    uint32_t result = ((uint32_t) floor(val1 * (1 << 16))) << 16 | ((uint32_t) floor(val2 * (1 << 16)));
-    if (UNLIKELY(memory_ensure_free(ctx, BOXED_INT64_SIZE) != MEMORY_GC_OK)) {
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-    return term_make_maybe_boxed_int64(result, &ctx->heap);
-}
-
 static void do_run_script(GlobalContext *global, char *script, int sync, int sync_caller_pid)
 {
     emscripten_run_script(script);
@@ -160,10 +146,6 @@ static term nif_emscripten_promise_reject(Context *ctx, int argc, term argv[])
 static const struct Nif atomvm_platform_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_atomvm_platform
-};
-static const struct Nif atomvm_random_nif = {
-    .base.type = NIFFunctionType,
-    .nif_ptr = nif_atomvm_random
 };
 static const struct Nif emscripten_run_script_nif = {
     .base.type = NIFFunctionType,
@@ -773,13 +755,10 @@ HTML5_REGISTER_CALLBACK(touch, EMSCRIPTEN_EVENT_TOUCHCANCEL, touchcancel);
 const struct Nif *platform_nifs_get_nif(const char *nifname)
 {
     if (memcmp("atomvm:", nifname, strlen("atomvm:")) == 0) {
-        nifname += strlen("atomvm:");
-        if (strcmp("platform/0", nifname) == 0) {
+        if (strcmp("platform/0", nifname + strlen("atomvm:")) == 0) {
             return &atomvm_platform_nif;
         }
-        if (strcmp("random/0", nifname) == 0) {
-            return &atomvm_random_nif;
-        }
+        return otp_crypto_nif_get_nif(nifname);
     }
     if (memcmp("crypto:", nifname, strlen("crypto:")) == 0) {
         return otp_crypto_nif_get_nif(nifname);

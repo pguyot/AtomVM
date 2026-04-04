@@ -3214,8 +3214,7 @@ cleanup:
 }
 #endif
 
-// not static since we are using it elsewhere to provide backward compatibility
-term nif_crypto_strong_rand_bytes(Context *ctx, int argc, term argv[])
+static term nif_crypto_strong_rand_bytes(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
 
@@ -3342,6 +3341,28 @@ term nif_crypto_info_lib(Context *ctx, int argc, term argv[])
 #endif
 }
 
+static term nif_atomvm_random(Context *ctx, int argc, term argv[])
+{
+    UNUSED(ctx);
+    UNUSED(argc);
+    UNUSED(argv);
+    term ra[1] = { term_from_int(4) };
+    term t = nif_atomvm_rand_bytes(ctx, 1, ra);
+    if (term_is_invalid_term(t)) {
+        return t;
+    }
+    uint32_t *r = (uint32_t *) term_binary_data(t);
+    avm_int_t value = *r;
+    if (UNLIKELY(memory_ensure_free(ctx, BOXED_INT_SIZE) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    return term_make_boxed_int(value, &ctx->heap);
+}
+
+static const struct Nif atomvm_random_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_atomvm_random
+};
 static const struct Nif crypto_hash_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_crypto_hash
@@ -3445,6 +3466,15 @@ static const struct Nif crypto_info_lib = {
 
 const struct Nif *otp_crypto_nif_get_nif(const char *nifname)
 {
+    if (memcmp("atomvm:", nifname, strlen("atomvm:")) == 0) {
+        nifname += strlen("atomvm:");
+        if (strcmp("random/0", nifname) == 0) {
+            return &atomvm_random_nif;
+        }
+        if (strcmp("rand_bytes/1", nifname) == 0) {
+            return &crypto_strong_rand_bytes_nif;
+        }
+    }
     if (strncmp("crypto:", nifname, 7) == 0) {
         const char *rest = nifname + 7;
         if (strcmp("hash/2", rest) == 0) {

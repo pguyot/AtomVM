@@ -37,44 +37,6 @@
 // #define ENABLE_TRACE
 #include "trace.h"
 
-#if ATOMVM_HAS_MBEDTLS
-
-// declared in otp_crypt
-term nif_crypto_strong_rand_bytes(Context *ctx, int argc, term argv[]);
-
-static term nif_atomvm_rand_bytes(Context *ctx, int argc, term argv[])
-{
-    return nif_crypto_strong_rand_bytes(ctx, argc, argv);
-}
-
-static term nif_atomvm_random(Context *ctx, int argc, term argv[])
-{
-    UNUSED(ctx);
-    UNUSED(argc);
-    UNUSED(argv);
-    term ra[1] = { term_from_int(4) };
-    term t = nif_atomvm_rand_bytes(ctx, 1, ra);
-    if (term_is_invalid_term(t)) {
-        return t;
-    }
-    uint32_t *r = (uint32_t *) term_binary_data(t);
-    avm_int_t value = *r;
-    if (UNLIKELY(memory_ensure_free(ctx, BOXED_INT_SIZE) != MEMORY_GC_OK)) {
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-    return term_make_boxed_int(value, &ctx->heap);
-}
-
-static const struct Nif atomvm_rand_bytes_nif = {
-    .base.type = NIFFunctionType,
-    .nif_ptr = nif_atomvm_rand_bytes
-};
-static const struct Nif atomvm_random_nif = {
-    .base.type = NIFFunctionType,
-    .nif_ptr = nif_atomvm_random
-};
-#endif
-
 static term nif_atomvm_platform(Context *ctx, int argc, term argv[])
 {
     UNUSED(ctx);
@@ -91,16 +53,6 @@ static const struct Nif atomvm_platform_nif = {
 
 const struct Nif *platform_nifs_get_nif(const char *nifname)
 {
-#if ATOMVM_HAS_MBEDTLS
-    if (strcmp("atomvm:rand_bytes/1", nifname) == 0) {
-        TRACE("Resolved platform nif %s ...\n", nifname);
-        return &atomvm_rand_bytes_nif;
-    }
-    if (strcmp("atomvm:random/0", nifname) == 0) {
-        TRACE("Resolved platform nif %s ...\n", nifname);
-        return &atomvm_random_nif;
-    }
-#endif
     if (strcmp("atomvm:platform/0", nifname) == 0) {
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &atomvm_platform_nif;
