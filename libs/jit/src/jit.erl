@@ -85,18 +85,26 @@
 
 -record(state, {
     line_offsets :: [{integer(), integer()}],
+    current_line :: integer() | undefined,
     labels_count :: pos_integer(),
     atom_resolver :: fun((integer()) -> atom()),
     literal_resolver :: fun((integer()) -> any()),
     type_resolver :: fun((integer()) -> any()),
     import_resolver :: fun((integer()) -> {atom(), atom(), non_neg_integer()}),
-    tail_cache :: [{tuple(), non_neg_integer()}]
+    tail_cache :: tail_cache()
 }).
 
+-type tail_cache() :: [{tuple(), non_neg_integer()}] | disabled.
 -type stream() :: any().
 
 %%-define(TRACE(Fmt, Args), io:format(Fmt, Args)).
 -define(TRACE(Fmt, Args), ok).
+
+tail_cache_find(_Key, disabled) -> false;
+tail_cache_find(Key, TC) -> lists:keyfind(Key, 1, TC).
+
+tail_cache_store(_Key, _Value, disabled) -> disabled;
+tail_cache_store(Key, Value, TC) -> [{Key, Value} | TC].
 
 %%-define(ASSERT_ALL_NATIVE_FREE(St), MMod:assert_all_native_free(St)).
 %%-define(ASSERT(Expr), true = Expr).
@@ -129,12 +137,22 @@ compile(
 ) when OpcodeMax =< ?OPCODE_MAX ->
     State0 = #state{
         line_offsets = [],
+        current_line = undefined,
         labels_count = LabelsCount,
         atom_resolver = AtomResolver,
         literal_resolver = LiteralResolver,
         type_resolver = TypeResolver,
         import_resolver = ImportResolver,
-        tail_cache = []
+        tail_cache =
+            case erlang:function_exported(MMod, supports_tail_cache, 0) of
+                true ->
+                    case MMod:supports_tail_cache() of
+                        true -> [];
+                        false -> disabled
+                    end;
+                false ->
+                    []
+            end
     },
     MSt1 = MMod:jump_table(MSt0, LabelsCount),
     {State1, MSt2} = first_pass(Opcodes, MMod, MSt1, State0),
@@ -179,7 +197,7 @@ first_pass(<<?OP_FUNC_INFO, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} 
     TailCacheKey =
         {call_primitive_last, ?PRIM_RAISE_ERROR_MFA, [OffsetReg, FunctionAtomIndexReg, ArityReg]},
     {MSt4, State1} =
-        case lists:keyfind(TailCacheKey, 1, TC) of
+        case tail_cache_find(TailCacheKey, TC) of
             false ->
                 CacheOffset = MMod:offset(MSt3),
                 MSt4a = MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR_MFA, [
@@ -189,7 +207,7 @@ first_pass(<<?OP_FUNC_INFO, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} 
                     {free, FunctionAtomIndexReg},
                     {free, ArityReg}
                 ]),
-                {MSt4a, State0#state{tail_cache = [{TailCacheKey, CacheOffset} | TC]}};
+                {MSt4a, State0#state{tail_cache = tail_cache_store(TailCacheKey, CacheOffset, TC)}};
             {TailCacheKey, CacheOffset} ->
                 MSt4a = MMod:jump_to_offset(MSt3, CacheOffset),
                 MSt4b = MMod:free_native_registers(MSt4a, [
@@ -228,23 +246,25 @@ first_pass(<<?OP_CALL_LAST, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} 
     {NWords, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_CALL_LAST ~p, ~p, ~p\n", [_Arity, Label, NWords]),
     TailCacheKey0 = {op_call_last, NWords, Label},
-    case lists:keyfind(TailCacheKey0, 1, TC) of
+    case tail_cache_find(TailCacheKey0, TC) of
         false ->
             Offset0 = MMod:offset(MSt0),
             MSt1 = MMod:move_to_cp(MSt0, {y_reg, NWords}),
             MSt2 = MMod:increment_sp(MSt1, NWords + 1),
             TailCacheKey1 = {op_call_only, Label},
-            case lists:keyfind(TailCacheKey1, 1, TC) of
+            case tail_cache_find(TailCacheKey1, TC) of
                 false ->
                     Offset1 = MMod:offset(MSt2),
                     MSt3 = MMod:call_only_or_schedule_next(MSt2, Label),
                     State1 = State0#state{
-                        tail_cache = [{TailCacheKey1, Offset1}, {TailCacheKey0, Offset0} | TC]
+                        tail_cache = tail_cache_store(
+                            TailCacheKey1, Offset1, tail_cache_store(TailCacheKey0, Offset0, TC)
+                        )
                     };
                 {TailCacheKey1, Offset1} ->
                     MSt3 = MMod:jump_to_offset(MSt2, Offset1),
                     State1 = State0#state{
-                        tail_cache = [{TailCacheKey0, Offset0} | TC]
+                        tail_cache = tail_cache_store(TailCacheKey0, Offset0, TC)
                     }
             end;
         {TailCacheKey0, Offset0} ->
@@ -260,11 +280,11 @@ first_pass(<<?OP_CALL_ONLY, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} 
     {Label, Rest2} = decode_label(Rest1),
     ?TRACE("OP_CALL_ONLY ~p, ~p\n", [_Arity, Label]),
     TailCacheKey = {op_call_only, Label},
-    case lists:keyfind(TailCacheKey, 1, TC) of
+    case tail_cache_find(TailCacheKey, TC) of
         false ->
             Offset = MMod:offset(MSt0),
             MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
-            State1 = State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
+            State1 = State0#state{tail_cache = tail_cache_store(TailCacheKey, Offset, TC)};
         {TailCacheKey, Offset} ->
             MSt1 = MMod:jump_to_offset(MSt0, Offset),
             State1 = State0
@@ -278,11 +298,12 @@ first_pass(<<?OP_CALL_EXT, Rest0/binary>>, MMod, MSt0, State0) ->
     {Index, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_CALL_EXT ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1 = record_continuation_line(MMod, MSt1, State0),
     MSt2 = MMod:call_primitive_with_cp(MSt1, ?PRIM_CALL_EXT, [
         ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC_MFA
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    first_pass(Rest2, MMod, MSt2, State1);
 % 8
 first_pass(<<?OP_CALL_EXT_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -291,11 +312,12 @@ first_pass(<<?OP_CALL_EXT_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
     {NWords, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_CALL_EXT_LAST ~p, ~p, ~p\n", [Arity, Index, NWords]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1 = record_continuation_line(MMod, MSt1, State0),
     MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [
         ctx, jit_state, offset, Arity, Index, NWords
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest3, MMod, MSt2, State0);
+    first_pass(Rest3, MMod, MSt2, State1);
 % 9
 first_pass(<<?OP_BIF0, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -420,11 +442,11 @@ first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = St
     MSt5 = MMod:free_native_registers(MSt4, [CpReg0]),
     % Different module: use existing slow path
     TailCacheKey = {call_primitive_last, ?PRIM_RETURN},
-    case lists:keyfind(TailCacheKey, 1, TC) of
+    case tail_cache_find(TailCacheKey, TC) of
         false ->
             Offset = MMod:offset(MSt5),
             MSt6 = MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state]),
-            State1 = State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
+            State1 = State0#state{tail_cache = tail_cache_store(TailCacheKey, Offset, TC)};
         {TailCacheKey, Offset} ->
             MSt6 = MMod:jump_to_offset(MSt5, Offset),
             State1 = State0
@@ -879,12 +901,14 @@ first_pass(<<?OP_JUMP, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
     {Label, Rest1} = decode_label(Rest0),
     ?TRACE("OP_JUMP ~p\n", [Label]),
     TailCacheKey = {op_call_only, Label},
-    case lists:keyfind(TailCacheKey, 1, TC) of
+    case tail_cache_find(TailCacheKey, TC) of
         false ->
             Offset = MMod:offset(MSt0),
             MSt1 = MMod:call_only_or_schedule_next(MSt0, Label),
             ?ASSERT_ALL_NATIVE_FREE(MSt1),
-            first_pass(Rest1, MMod, MSt1, State0#state{tail_cache = [{TailCacheKey, Offset} | TC]});
+            first_pass(Rest1, MMod, MSt1, State0#state{
+                tail_cache = tail_cache_store(TailCacheKey, Offset, TC)
+            });
         {TailCacheKey, Offset} ->
             MSt1 = MMod:jump_to_offset(MSt0, Offset),
             ?ASSERT_ALL_NATIVE_FREE(MSt1),
@@ -1013,13 +1037,14 @@ first_pass(<<?OP_CALL_FUN, Rest0/binary>>, MMod, MSt0, State0) ->
     {ArgsCount, Rest1} = decode_literal(Rest0),
     ?TRACE("OP_CALL_FUN ~p\n", [ArgsCount]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1a = record_continuation_line(MMod, MSt1, State0),
     {MSt2, FuncReg} = read_any_xreg(ArgsCount, MMod, MSt1),
     {MSt3, Reg} = verify_is_function(FuncReg, MMod, MSt2),
     MSt4 = MMod:call_primitive_with_cp(MSt3, ?PRIM_CALL_FUN, [
         ctx, jit_state, offset, {free, Reg}, ArgsCount
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
-    first_pass(Rest1, MMod, MSt4, State0);
+    first_pass(Rest1, MMod, MSt4, State1a);
 % 77
 first_pass(<<?OP_IS_FUNCTION, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -1036,11 +1061,12 @@ first_pass(<<?OP_CALL_EXT_ONLY, Rest0/binary>>, MMod, MSt0, State0) ->
     {Index, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_CALL_EXT_ONLY ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1 = record_continuation_line(MMod, MSt1, State0),
     MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [
         ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    first_pass(Rest2, MMod, MSt2, State0);
+    first_pass(Rest2, MMod, MSt2, State1);
 % 96
 first_pass(<<?OP_FMOVE, ?COMPACT_EXTENDED_FP_REGISTER, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -1166,35 +1192,42 @@ first_pass(<<?OP_RAISE, Rest0/binary>>, MMod, MSt0, State0) ->
 first_pass(<<?OP_APPLY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Arity, Rest1} = decode_literal(Rest0),
-    {MSt1, Module} = read_any_xreg(Arity, MMod, MSt0),
-    {MSt2, Function} = read_any_xreg(Arity + 1, MMod, MSt1),
     ?TRACE("OP_APPLY ~p\n", [Arity]),
-    MSt3 = verify_is_atom(Module, 0, MMod, MSt2),
-    MSt4 = verify_is_atom(Function, 0, MMod, MSt3),
-    MSt5 = MMod:decrement_reductions_and_maybe_schedule_next(MSt4),
+    %% Decrement reductions before reading extended registers.
+    %% On WASM, decrement_reductions_and_maybe_schedule_next splits the
+    %% function; any scratch locals allocated before it would be lost.
+    %% The extended register reads and is_atom checks are idempotent, so
+    %% re-executing them after a yield is safe on all backends.
+    MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1a = record_continuation_line(MMod, MSt1, State0),
+    {MSt2, Module} = read_any_xreg(Arity, MMod, MSt1),
+    {MSt3, Function} = read_any_xreg(Arity + 1, MMod, MSt2),
+    MSt4 = verify_is_atom(Module, 0, MMod, MSt3),
+    MSt5 = verify_is_atom(Function, 0, MMod, MSt4),
     MSt6 = MMod:call_primitive_with_cp(MSt5, ?PRIM_APPLY, [
         ctx, jit_state, offset, {free, Module}, {free, Function}, Arity
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    first_pass(Rest1, MMod, MSt6, State0);
+    first_pass(Rest1, MMod, MSt6, State1a);
 % 113
 first_pass(<<?OP_APPLY_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Arity, Rest1} = decode_literal(Rest0),
     {NWords, Rest2} = decode_literal(Rest1),
-    {MSt1, Module} = read_any_xreg(Arity, MMod, MSt0),
-    {MSt2, Function} = read_any_xreg(Arity + 1, MMod, MSt1),
     ?TRACE("OP_APPLY_LAST ~p, ~p\n", [Arity, NWords]),
-    MSt3 = verify_is_atom(Module, 0, MMod, MSt2),
-    MSt4 = verify_is_atom(Function, 0, MMod, MSt3),
-    MSt5 = MMod:decrement_reductions_and_maybe_schedule_next(MSt4),
+    MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
+    State1 = record_continuation_line(MMod, MSt1, State0),
+    {MSt2, Module} = read_any_xreg(Arity, MMod, MSt1),
+    {MSt3, Function} = read_any_xreg(Arity + 1, MMod, MSt2),
+    MSt4 = verify_is_atom(Module, 0, MMod, MSt3),
+    MSt5 = verify_is_atom(Function, 0, MMod, MSt4),
     MSt6 = MMod:move_to_cp(MSt5, {y_reg, NWords}),
     MSt7 = MMod:increment_sp(MSt6, NWords + 1),
     MSt8 = MMod:call_primitive_last(MSt7, ?PRIM_APPLY, [
         ctx, jit_state, offset, {free, Module}, {free, Function}, Arity
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt8),
-    first_pass(Rest2, MMod, MSt8, State0);
+    first_pass(Rest2, MMod, MSt8, State1);
 % 114
 first_pass(<<?OP_IS_BOOLEAN, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -1709,7 +1742,8 @@ first_pass(
     MSt0 = ?DWARF_LINE(MMod, MSt, Line),
     Offset = MMod:offset(MSt0),
     first_pass(Rest1, MMod, MSt0, State0#state{
-        line_offsets = [{Line, Offset} | AccLines]
+        line_offsets = [{Line, Offset} | AccLines],
+        current_line = Line
     });
 % 154
 first_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
@@ -2422,17 +2456,21 @@ first_pass(<<?OP_CALL_FUN2, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {MSt1, Tag, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
     {ArgsCount, Rest2} = decode_literal(Rest1),
-    {MSt2, Fun, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
-    ?TRACE("OP_CALL_FUN2 ~p, ~p, ~p\n", [Tag, ArgsCount, Fun]),
+    ?TRACE("OP_CALL_FUN2 ~p, ~p\n", [Tag, ArgsCount]),
     % We ignore Tag (could be literal 0 or atom unsafe)
-    MSt3 = MMod:free_native_registers(MSt2, [Tag]),
-    MSt4 = MMod:decrement_reductions_and_maybe_schedule_next(MSt3),
+    MSt2 = MMod:free_native_registers(MSt1, [Tag]),
+    %% Decrement reductions before decoding Fun. On WASM,
+    %% decrement_reductions_and_maybe_schedule_next splits the function;
+    %% any scratch locals from decode_typed_compact_term would be lost.
+    MSt3 = MMod:decrement_reductions_and_maybe_schedule_next(MSt2),
+    State1a = record_continuation_line(MMod, MSt3, State0),
+    {MSt4, Fun, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt3, State1a),
     {MSt5, Reg} = verify_is_function(Fun, MMod, MSt4),
     MSt6 = MMod:call_primitive_with_cp(MSt5, ?PRIM_CALL_FUN, [
         ctx, jit_state, offset, {free, Reg}, ArgsCount
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    first_pass(Rest3, MMod, MSt6, State0);
+    first_pass(Rest3, MMod, MSt6, State1a);
 % 180
 first_pass(<<?OP_BADRECORD, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -3765,14 +3803,15 @@ op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
             % Strip tag from Reg1: value1 << 4
             {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
-            % Shift right by 4 to get raw value2 (shift discards the 4 tag bits)
-            {MSt4, Reg2} = MMod:shift_right(MSt3, {free, Reg2}, 4),
+            % Strip tag from Reg2 and arithmetic shift right by 4 to get raw value2
+            {MSt4, Reg2} = MMod:and_(MSt3, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt5, Reg2} = MMod:shift_right_arith(MSt4, {free, Reg2}, 4),
             % Multiply: (value1 << 4) * value2 = (value1 * value2) << 4
-            MSt5 = MMod:mul(MSt4, Reg1, Reg2),
+            MSt6 = MMod:mul(MSt5, Reg1, Reg2),
             % Add tag back
-            MSt6 = MMod:or_(MSt5, Reg1, ?TERM_INTEGER_TAG),
-            MSt7 = MMod:move_to_vm_register(MSt6, Reg1, Dest),
-            MMod:free_native_registers(MSt7, [Reg1, Reg2, Dest]);
+            MSt7 = MMod:or_(MSt6, Reg1, ?TERM_INTEGER_TAG),
+            MSt8 = MMod:move_to_vm_register(MSt7, Reg1, Dest),
+            MMod:free_native_registers(MSt8, [Reg1, Reg2, Dest]);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
@@ -3934,27 +3973,26 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
     case can_inline_pow2_div(Range1, Arg2Value, MMod) of
         true ->
             % Power-of-2 division: X div 2^k = X >> k for non-negative X
-            % The shift by (4+Shift) discards both the 4 tag bits and applies
-            % the division shift in one operation, so no AND to strip tags is needed.
             Shift = log2_pow2(Arg2Value),
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-            {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4 + Shift),
-            MSt3 = MMod:shift_left(MSt2, Reg1, 4),
-            MSt4 = MMod:or_(MSt3, Reg1, ?TERM_INTEGER_TAG),
-            MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
-            MMod:free_native_registers(MSt5, [Reg1, Dest]);
+            {MSt2, Reg1} = MMod:and_(MSt1, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4 + Shift),
+            MSt4 = MMod:shift_left(MSt3, Reg1, 4),
+            MSt5 = MMod:or_(MSt4, Reg1, ?TERM_INTEGER_TAG),
+            MSt6 = MMod:move_to_vm_register(MSt5, Reg1, Dest),
+            MMod:free_native_registers(MSt6, [Reg1, Dest]);
         false ->
             case can_inline_div(Range1, Range2, MMod) of
                 true ->
                     {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-                    % Shift right by 4 discards the tag bits
-                    {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
-                    {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
-                    {MSt4, QuotientReg} = MMod:div_(MSt3, Reg1, Reg2),
-                    MSt5 = MMod:shift_left(MSt4, QuotientReg, 4),
-                    MSt6 = MMod:or_(MSt5, QuotientReg, ?TERM_INTEGER_TAG),
-                    MSt7 = MMod:move_to_vm_register(MSt6, QuotientReg, Dest),
-                    MMod:free_native_registers(MSt7, [QuotientReg, Reg1, Reg2, Dest]);
+                    {MSt2, Reg1} = MMod:and_(MSt1, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+                    {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+                    {MSt4, Reg2} = MMod:move_to_native_register(MSt3, Arg2Value),
+                    {MSt5, QuotientReg} = MMod:div_(MSt4, Reg1, Reg2),
+                    MSt6 = MMod:shift_left(MSt5, QuotientReg, 4),
+                    MSt7 = MMod:or_(MSt6, QuotientReg, ?TERM_INTEGER_TAG),
+                    MSt8 = MMod:move_to_vm_register(MSt7, QuotientReg, Dest),
+                    MMod:free_native_registers(MSt8, [QuotientReg, Reg1, Reg2, Dest]);
                 false ->
                     op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
             end
@@ -3964,14 +4002,15 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
         true ->
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
-            % Shift right by 4 discards the tag bits
-            {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
-            {MSt4, Reg2} = MMod:shift_right_arith(MSt3, {free, Reg2}, 4),
-            {MSt5, QuotientReg} = MMod:div_(MSt4, Reg1, Reg2),
-            MSt6 = MMod:shift_left(MSt5, QuotientReg, 4),
-            MSt7 = MMod:or_(MSt6, QuotientReg, ?TERM_INTEGER_TAG),
-            MSt8 = MMod:move_to_vm_register(MSt7, QuotientReg, Dest),
-            MMod:free_native_registers(MSt8, [QuotientReg, Reg1, Reg2, Dest]);
+            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt4, Reg1} = MMod:shift_right_arith(MSt3, {free, Reg1}, 4),
+            {MSt5, Reg2} = MMod:and_(MSt4, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt6, Reg2} = MMod:shift_right_arith(MSt5, {free, Reg2}, 4),
+            {MSt7, QuotientReg} = MMod:div_(MSt6, Reg1, Reg2),
+            MSt8 = MMod:shift_left(MSt7, QuotientReg, 4),
+            MSt9 = MMod:or_(MSt8, QuotientReg, ?TERM_INTEGER_TAG),
+            MSt10 = MMod:move_to_vm_register(MSt9, QuotientReg, Dest),
+            MMod:free_native_registers(MSt10, [QuotientReg, Reg1, Reg2, Dest]);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
@@ -3993,14 +4032,14 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             case can_inline_div(Range1, Range2, MMod) of
                 true ->
                     {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-                    % Shift right by 4 discards the tag bits
-                    {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
-                    {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
-                    {MSt4, RemReg} = MMod:rem_(MSt3, Reg1, Reg2),
-                    MSt5 = MMod:shift_left(MSt4, RemReg, 4),
-                    MSt6 = MMod:or_(MSt5, RemReg, ?TERM_INTEGER_TAG),
-                    MSt7 = MMod:move_to_vm_register(MSt6, RemReg, Dest),
-                    MMod:free_native_registers(MSt7, [RemReg, Reg1, Reg2, Dest]);
+                    {MSt2, Reg1} = MMod:and_(MSt1, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+                    {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+                    {MSt4, Reg2} = MMod:move_to_native_register(MSt3, Arg2Value),
+                    {MSt5, RemReg} = MMod:rem_(MSt4, Reg1, Reg2),
+                    MSt6 = MMod:shift_left(MSt5, RemReg, 4),
+                    MSt7 = MMod:or_(MSt6, RemReg, ?TERM_INTEGER_TAG),
+                    MSt8 = MMod:move_to_vm_register(MSt7, RemReg, Dest),
+                    MMod:free_native_registers(MSt8, [RemReg, Reg1, Reg2, Dest]);
                 false ->
                     op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
             end
@@ -4010,14 +4049,15 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
         true ->
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
-            % Shift right by 4 discards the tag bits
-            {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
-            {MSt4, Reg2} = MMod:shift_right_arith(MSt3, {free, Reg2}, 4),
-            {MSt5, RemReg} = MMod:rem_(MSt4, Reg1, Reg2),
-            MSt6 = MMod:shift_left(MSt5, RemReg, 4),
-            MSt7 = MMod:or_(MSt6, RemReg, ?TERM_INTEGER_TAG),
-            MSt8 = MMod:move_to_vm_register(MSt7, RemReg, Dest),
-            MMod:free_native_registers(MSt8, [RemReg, Reg1, Reg2, Dest]);
+            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt4, Reg1} = MMod:shift_right_arith(MSt3, {free, Reg1}, 4),
+            {MSt5, Reg2} = MMod:and_(MSt4, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            {MSt6, Reg2} = MMod:shift_right_arith(MSt5, {free, Reg2}, 4),
+            {MSt7, RemReg} = MMod:rem_(MSt6, Reg1, Reg2),
+            MSt8 = MMod:shift_left(MSt7, RemReg, 4),
+            MSt9 = MMod:or_(MSt8, RemReg, ?TERM_INTEGER_TAG),
+            MSt10 = MMod:move_to_vm_register(MSt9, RemReg, Dest),
+            MMod:free_native_registers(MSt10, [RemReg, Reg1, Reg2, Dest]);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
@@ -4497,6 +4537,15 @@ memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_tu
     MSt3 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt2),
     MSt4 = MMod:move_to_vm_register(MSt3, ExtraRootXReg, ExtraRoot),
     {MSt4, ExtraRoot}.
+
+%% Record the current line at the current offset, so that continuation labels
+%% created by function-splitting operations (WASM) have line info.
+%% On native backends this is a no-op as the offset is within the existing range.
+record_continuation_line(_MMod, _MSt, #state{current_line = undefined} = State) ->
+    State;
+record_continuation_line(MMod, MSt, #state{current_line = Line, line_offsets = AccLines} = State) ->
+    Offset = MMod:offset(MSt),
+    State#state{line_offsets = [{Line, Offset} | AccLines]}.
 
 second_pass(MMod, MSt0, #state{line_offsets = Lines}) ->
     ?TRACE("SECOND PASS -- ~B lines\n", [length(Lines)]),
