@@ -27,6 +27,7 @@ set(ERLANG_MODULES
     i2c
     pico
     spi
+    usb
 )
 
 pack_archive(avm_rp2 DEPENDS_ON eavmlib ERLC_FLAGS +warnings_as_errors MODULES ${ERLANG_MODULES})

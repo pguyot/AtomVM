@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added Erlang distribution over serial (uart)
+- Added USB CDC port drivers for ESP32, RP2, and STM32 platforms
 
 ### Fixed
 - Stop using deprecated `term_from_int32` on STM32 platform

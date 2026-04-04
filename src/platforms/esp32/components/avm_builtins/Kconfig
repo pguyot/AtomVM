@@ -112,6 +112,15 @@ config AVM_ENABLE_UART_PORT_DRIVER
     bool "Enable UART port driver"
     default y
 
+config AVM_ENABLE_USB_CDC_PORT_DRIVER
+    bool "Enable USB CDC port driver"
+    depends on TINYUSB_CDC_ENABLED
+    default n
+    help
+        Enable USB CDC (Communications Device Class) port driver for
+        serial distribution over USB. Requires TinyUSB CDC to be enabled.
+        Use the 'usb' Erlang module with serial_dist for distribution.
+
 config AVM_ENABLE_OTP_CRYPTO_NIFS
     bool "Enable OTP Crypto NIFs"
     default y
