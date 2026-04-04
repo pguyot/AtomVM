@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Thumb-2 support to armv6m JIT backend, optimizing code for ARMv7-M and later cores
 - Added support for `binary:split/2,3` list patterns and `trim` / `trim_all` options
 - Added Erlang distribution over serial (uart)
+- Added USB CDC port drivers for ESP32, RP2, and STM32 platforms
 
 ### Changed
 - ~10% binary size reduction by rewriting module loading logic

@@ -31,6 +31,7 @@ set(AVM_BUILTIN_COMPONENT_SRCS
     "spi_driver.c"
     "storage_nif.c"
     "uart_driver.c"
+    "usb_cdc_driver.c"
     "otp_crypto_platform.c"
     "otp_net_platform.c"
     "otp_socket_platform.c"

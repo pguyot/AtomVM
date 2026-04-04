@@ -40,6 +40,10 @@ set(SOURCE_FILES
     ../../../../libAtomVM/portnifloader.c
 )
 
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+    list(APPEND SOURCE_FILES usb_cdc_driver.c)
+endif()
+
 set(
     PLATFORM_LIB_SUFFIX
     ${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
@@ -65,3 +69,10 @@ target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} SYSTEM PUBLIC
 target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC
     "${CMAKE_BINARY_DIR}/generated"
 )
+
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE AVM_USB_CDC_PORT_DRIVER_ENABLED)
+    if (TINYUSB_DIR)
+        target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE ${TINYUSB_DIR}/src)
+    endif()
+endif()
