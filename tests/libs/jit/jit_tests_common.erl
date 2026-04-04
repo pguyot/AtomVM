@@ -37,16 +37,13 @@ asm(Arch, Bin, Str) ->
                 {ok, AsCmd, ObjdumpCmd} ->
                     % Use unique temporary files to avoid conflicts
                     TempBase = "jit_test_" ++ integer_to_list(erlang:unique_integer([positive])),
-                    AsmFile = TempBase ++ ".S",
-                    ObjFile = TempBase ++ ".o",
+                    {AsmFile, ObjFile} = asm_file_exts(Arch, TempBase),
                     try
-                        ok = file:write_file(AsmFile, get_asm_header(Arch) ++ Str ++ "\n"),
-                        Cmd = lists:flatten(
-                            io_lib:format(
-                                "~s ~s -c ~s -o ~s && ~s -j .text -D ~s",
-                                [AsCmd, get_as_flags(Arch), AsmFile, ObjFile, ObjdumpCmd, ObjFile]
-                            )
+                        ok = file:write_file(
+                            AsmFile,
+                            get_asm_header(Arch) ++ Str ++ "\n" ++ get_asm_footer(Arch)
                         ),
+                        Cmd = asm_cmd(Arch, AsCmd, AsmFile, ObjdumpCmd, ObjFile),
                         Dump = os:cmd(Cmd),
                         DumpBin = list_to_binary(Dump),
                         DumpLines = binary:split(DumpBin, <<"\n">>, [global]),
@@ -82,6 +79,8 @@ find_binutils(Arch) ->
             find_binutils_beam(Arch)
     end.
 
+find_binutils_beam(wasm32) ->
+    find_binutils_from_list([{"wat2wasm", "wasm-objdump"}]);
 find_binutils_beam(Arch) ->
     Prefixes0 = toolchain_prefixes(Arch),
     Prefixes =
@@ -132,7 +131,15 @@ get_asm_header(x86_64) ->
 get_asm_header(riscv32) ->
     ".text\n";
 get_asm_header(riscv64) ->
-    ".text\n".
+    ".text\n";
+get_asm_header(wasm32) ->
+    "(module\n  (func\n".
+
+-spec get_asm_footer(atom()) -> string().
+get_asm_footer(wasm32) ->
+    "  ))\n";
+get_asm_footer(_Arch) ->
+    "".
 
 %% Get architecture-specific assembler flags
 -spec get_as_flags(atom()) -> string().
@@ -150,6 +157,32 @@ get_as_flags(riscv32) ->
     "-march=rv32imac";
 get_as_flags(riscv64) ->
     "-march=rv64imac -mabi=lp64".
+
+%% File extensions for assembler input/output
+-spec asm_file_exts(atom(), string()) -> {string(), string()}.
+asm_file_exts(wasm32, TempBase) ->
+    {TempBase ++ ".wat", TempBase ++ ".wasm"};
+asm_file_exts(_Arch, TempBase) ->
+    {TempBase ++ ".S", TempBase ++ ".o"}.
+
+%% Build the assemble + disassemble command.
+-spec asm_cmd(atom(), string(), string(), string(), string()) -> string().
+asm_cmd(wasm32, AsCmd, AsmFile, ObjdumpCmd, ObjFile) ->
+    lists:flatten(
+        io_lib:format(
+            "~s ~s -o ~s && ~s -d ~s"
+            " | grep '^ '"
+            " | sed -e 's/ | /\\t/' -e 's/: /:\\t/'",
+            [AsCmd, AsmFile, ObjFile, ObjdumpCmd, ObjFile]
+        )
+    );
+asm_cmd(Arch, AsCmd, AsmFile, ObjdumpCmd, ObjFile) ->
+    lists:flatten(
+        io_lib:format(
+            "~s ~s -c ~s -o ~s && ~s -j .text -D ~s",
+            [AsCmd, get_as_flags(Arch), AsmFile, ObjFile, ObjdumpCmd, ObjFile]
+        )
+    ).
 
 %% Parse objdump output lines and extract binary data
 -spec asm_lines([binary()], binary(), atom()) -> binary().
@@ -193,17 +226,28 @@ hex_to_bin(HexStr, Acc, Arch) ->
             <<Acc/binary, HexVal:NumBits/little>>
     end.
 
+%% Get the disassemblable portion of a stream.
+%% For wasm32, extracts the WASM module (skipping jump table header and lines data).
+%% For other architectures, returns the full stream.
+-spec stream_code(atom(), binary()) -> binary().
+stream_code(wasm32, Stream) ->
+    {WasmModule, _LinesData} = wasm_stream_extract(Stream),
+    WasmModule;
+stream_code(_Arch, Stream) ->
+    Stream.
+
 %% Assert that Stream matches the expected objdump output Dump.
 %% On mismatch, run objdump on both expected and actual binaries and diff -u.
 -spec assert_stream(atom(), binary(), binary()) -> ok.
 assert_stream(Arch, Dump, Stream) ->
     Expected = dump_to_bin(Dump),
-    case Expected =:= Stream of
+    Actual = stream_code(Arch, Stream),
+    case Expected =:= Actual of
         true ->
             ok;
         false ->
-            diff_disasm(Arch, Expected, Stream),
-            ?assertEqual(Expected, Stream)
+            diff_disasm(Arch, Expected, Actual),
+            ?assertEqual(Expected, Actual)
     end.
 
 %% Assert that Stream matches the expected objdump output Dump.
@@ -212,16 +256,17 @@ assert_stream(Arch, Dump, Stream) ->
 -spec assert_stream(atom(), binary(), binary(), string(), pos_integer()) -> ok.
 assert_stream(Arch, Dump, Stream, File, _Line) ->
     Expected = dump_to_bin(Dump),
-    case Expected =:= Stream of
+    Actual = stream_code(Arch, Stream),
+    case Expected =:= Actual of
         true ->
             ok;
         false ->
             case {erlang:system_info(machine), os:getenv("UPDATE_JIT_TESTS")} of
                 {"BEAM", Value} when Value =/= false ->
-                    update_test_source(Arch, Dump, Stream, File);
+                    update_test_source(Arch, Dump, Actual, File);
                 _ ->
-                    diff_disasm(Arch, Expected, Stream),
-                    ?assertEqual(Expected, Stream)
+                    diff_disasm(Arch, Expected, Actual),
+                    ?assertEqual(Expected, Actual)
             end
     end.
 
@@ -283,6 +328,19 @@ emit_chunk(RevChars) ->
     Val = list_to_integer(Chars, 16),
     <<Val:NumBits/little>>.
 
+%% Extract the WASM module from a wasm32 stream.
+%% Stream layout: num_entries(4) + wasm_offset(4) + lines_offset(4)
+%%                + entries(num_entries*4) + wasm_module + lines_data
+%% Returns {WasmModule, LinesData} where WasmModule is a complete .wasm binary.
+-spec wasm_stream_extract(binary()) -> {binary(), binary()}.
+wasm_stream_extract(
+    <<_NumEntries:32/little, WasmOffset:32/little, LinesOffset:32/little, _/binary>> = Stream
+) ->
+    %% Offsets are relative to the start of the stream (byte 0)
+    WasmModule = binary:part(Stream, WasmOffset, LinesOffset - WasmOffset),
+    LinesData = binary:part(Stream, LinesOffset, byte_size(Stream) - LinesOffset),
+    {WasmModule, LinesData}.
+
 %% Run objdump on both expected and actual binaries, then diff -u the outputs.
 -spec diff_disasm(atom(), binary(), binary()) -> ok.
 diff_disasm(Arch, Expected, Actual) ->
@@ -295,25 +353,11 @@ diff_disasm(Arch, Expected, Actual) ->
             ActFile = TempBase ++ "_actual.bin",
             ExpDis = TempBase ++ "_expected.dis",
             ActDis = TempBase ++ "_actual.dis",
-            ObjdumpFlags = get_objdump_flags(Arch),
             try
-                ok = file:write_file(ExpFile, Expected),
-                ok = file:write_file(ActFile, Actual),
-                Cleanup =
-                    "grep '^ '"
-                    " | sed -e 's/[[:space:]]*;.*$//' -e 's/[[:space:]]*\\/\\/.*$//'",
-                ObjdumpCmdExp = lists:flatten(
-                    io_lib:format(
-                        "~s -b binary ~s -D -z ~s | ~s > ~s",
-                        [ObjdumpCmd, ObjdumpFlags, ExpFile, Cleanup, ExpDis]
-                    )
-                ),
-                ObjdumpCmdAct = lists:flatten(
-                    io_lib:format(
-                        "~s -b binary ~s -D -z ~s | ~s > ~s",
-                        [ObjdumpCmd, ObjdumpFlags, ActFile, Cleanup, ActDis]
-                    )
-                ),
+                ok = write_disasm_input(Arch, ExpFile, Expected),
+                ok = write_disasm_input(Arch, ActFile, Actual),
+                ObjdumpCmdExp = disasm_cmd(Arch, ObjdumpCmd, ExpFile) ++ " > " ++ ExpDis,
+                ObjdumpCmdAct = disasm_cmd(Arch, ObjdumpCmd, ActFile) ++ " > " ++ ActDis,
                 os:cmd(ObjdumpCmdExp),
                 os:cmd(ObjdumpCmdAct),
                 DiffCmd = lists:flatten(
@@ -344,7 +388,38 @@ get_objdump_flags(riscv32) ->
 get_objdump_flags(arm_thumb2) ->
     "-marm --disassembler-options=force-thumb";
 get_objdump_flags(riscv64) ->
-    "-m riscv:rv64".
+    "-m riscv:rv64";
+get_objdump_flags(wasm32) ->
+    "".
+
+%% Write binary data to a file suitable for disassembly.
+%% For wasm32, wraps raw bytes in a WASM module; for others, writes raw bytes.
+-spec write_disasm_input(atom(), string(), binary()) -> ok.
+write_disasm_input(_Arch, File, Bin) ->
+    file:write_file(File, Bin).
+
+%% Build the full disassembly command for a given file.
+-spec disasm_cmd(atom(), string(), string()) -> string().
+disasm_cmd(wasm32, ObjdumpCmd, File) ->
+    lists:flatten(
+        io_lib:format(
+            "~s -d ~s 2>/dev/null"
+            " | grep '^ '"
+            " | sed -e 's/ | /\\t/' -e 's/: /:\\t/'",
+            [ObjdumpCmd, File]
+        )
+    );
+disasm_cmd(Arch, ObjdumpCmd, File) ->
+    ObjdumpFlags = get_objdump_flags(Arch),
+    Cleanup =
+        "grep '^ '"
+        " | sed -e 's/[[:space:]]*;.*$//' -e 's/[[:space:]]*\\/\\/.*$//'",
+    lists:flatten(
+        io_lib:format(
+            "~s -b binary ~s -D -z ~s | ~s",
+            [ObjdumpCmd, ObjdumpFlags, File, Cleanup]
+        )
+    ).
 
 %% Update the test source file when a stream assertion fails.
 -spec update_test_source(atom(), binary(), binary(), string()) -> ok.
@@ -362,18 +437,8 @@ update_test_source(Arch, OldDump, ActualStream, File) ->
 disassemble_stream(ObjdumpCmd, Arch, Stream) ->
     TmpFile = "jit_update_" ++ integer_to_list(erlang:unique_integer([positive])) ++ ".bin",
     try
-        ok = file:write_file(TmpFile, Stream),
-        ObjdumpFlags = get_objdump_flags(Arch),
-        Cleanup =
-            "grep '^ '"
-            " | sed -e 's/[[:space:]]*;.*$//' -e 's/[[:space:]]*\\/\\/.*$//'",
-        Cmd = lists:flatten(
-            io_lib:format(
-                "~s -b binary ~s -D -z ~s | ~s",
-                [ObjdumpCmd, ObjdumpFlags, TmpFile, Cleanup]
-            )
-        ),
-        os:cmd(Cmd)
+        ok = write_disasm_input(Arch, TmpFile, Stream),
+        os:cmd(disasm_cmd(Arch, ObjdumpCmd, TmpFile))
     after
         file:delete(TmpFile)
     end.

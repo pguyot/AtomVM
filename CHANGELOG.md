@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added generic unix support for uart using POSIX nifs
 - Added RISC-V 64-bit (RV64IMAC) JIT backend
 - Added arm32 JIT backend
+- Added WASM32 JIT backend for Emscripten platform
 - Added DWARF debug information support for JIT-compiled code
 - Added I2C and SPI APIs to rp2 platform
 - Added `code:get_object_code/1`

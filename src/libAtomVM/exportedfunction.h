@@ -117,11 +117,8 @@ struct ModuleFunction
 {
     struct ExportedFunction base;
     Module *target;
-    union
-    {
-        ModuleNativeEntryPoint entry_point;
-        int label;
-    };
+    int label;
+    ModuleNativeEntryPoint entry_point;
 };
 
 #define EXPORTED_FUNCTION_TO_BIF(func) \
