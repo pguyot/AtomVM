@@ -26,6 +26,54 @@
 
 %% Architecture-specific assembler validation
 -spec asm(atom(), binary(), string()) -> binary().
+asm(wasm32, Bin, Str) ->
+    %% For wasm32, only wat2wasm is needed — no wasm-objdump.
+    %% Compile the WAT fragment to a .wasm binary, extract code bytes using
+    %% wasm_code_bytes/1, then strip the implicit trailing end (0x0b) that
+    %% wat2wasm adds to every function, leaving just the instruction bytes.
+    case erlang:system_info(machine) of
+        "ATOM" ->
+            Bin;
+        "BEAM" ->
+            case find_wat2wasm() of
+                false ->
+                    Bin;
+                {ok, AsCmd} ->
+                    TempBase = "jit_test_" ++ integer_to_list(erlang:unique_integer([positive])),
+                    WatFile = TempBase ++ ".wat",
+                    WasmFile = TempBase ++ ".wasm",
+                    try
+                        ok = file:write_file(
+                            WatFile,
+                            get_asm_header(wasm32) ++ Str ++ "\n" ++ get_asm_footer(wasm32)
+                        ),
+                        os:cmd(AsCmd ++ " " ++ WatFile ++ " -o " ++ WasmFile),
+                        case file:read_file(WasmFile) of
+                            {ok, WasmBin} ->
+                                AllCodeBytes = wasm_code_bytes(WasmBin),
+                                %% Strip trailing end (0x0b) added implicitly by wat2wasm
+                                AsmBin = binary:part(AllCodeBytes, 0, byte_size(AllCodeBytes) - 1),
+                                if
+                                    AsmBin =:= Bin ->
+                                        ok;
+                                    true ->
+                                        io:format(
+                                            "expected: ~w~nactual:   ~w~n",
+                                            [Bin, AsmBin]
+                                        )
+                                end,
+                                ?assertEqual(AsmBin, Bin),
+                                Bin;
+                            {error, _} ->
+                                io:format("wat2wasm failed for: ~s~n", [Str]),
+                                Bin
+                        end
+                    after
+                        file:delete(WatFile),
+                        file:delete(WasmFile)
+                    end
+            end
+    end;
 asm(Arch, Bin, Str) ->
     case erlang:system_info(machine) of
         "ATOM" ->
@@ -80,7 +128,12 @@ find_binutils(Arch) ->
     end.
 
 find_binutils_beam(wasm32) ->
-    find_binutils_from_list([{"wat2wasm", "wasm-objdump"}]);
+    %% diff_disasm and update_test_source both need wasm-objdump; check for it explicitly.
+    case {os:cmd("which wat2wasm"), os:cmd("which wasm-objdump")} of
+        {[], _} -> false;
+        {_, []} -> false;
+        _ -> {ok, "wat2wasm", "wasm-objdump"}
+    end;
 find_binutils_beam(Arch) ->
     Prefixes0 = toolchain_prefixes(Arch),
     Prefixes =
@@ -103,6 +156,14 @@ toolchain_prefixes(Arch) ->
     ArchStr = atom_to_list(Arch),
     Variants = ["-esp-elf", "-unknown-elf", "-elf", "-none-eabi", "-linux-gnu", "-linux-gnueabihf"],
     [ArchStr ++ V || V <- Variants].
+
+%% Find wat2wasm for wasm32 asm() cross-validation (does not need wasm-objdump).
+-spec find_wat2wasm() -> {ok, string()} | false.
+find_wat2wasm() ->
+    case os:cmd("which wat2wasm") of
+        [] -> false;
+        _ -> {ok, "wat2wasm"}
+    end.
 
 %% Generic helper function to find binutils from a list
 -spec find_binutils_from_list([{string(), string()}]) -> {ok, string(), string()} | false.
@@ -133,7 +194,8 @@ get_asm_header(riscv32) ->
 get_asm_header(riscv64) ->
     ".text\n";
 get_asm_header(wasm32) ->
-    "(module\n  (func\n".
+    %% Include a memory so that memory instruction tests don't need extra module context.
+    "(module\n  (memory 1)\n  (func\n".
 
 -spec get_asm_footer(atom()) -> string().
 get_asm_footer(wasm32) ->
