@@ -227,14 +227,47 @@ hex_to_bin(HexStr, Acc, Arch) ->
     end.
 
 %% Get the disassemblable portion of a stream.
-%% For wasm32, extracts the WASM module (skipping jump table header and lines data).
+%% For wasm32, extracts the code instruction bytes from the WASM module embedded in
+%% the stream. These are the concatenated function body contents (local declarations
+%% + instructions), excluding the body_size and local_count uleb128 prefixes for each
+%% function — matching exactly what wasm-objdump -d shows in its hex columns.
 %% For other architectures, returns the full stream.
 -spec stream_code(atom(), binary()) -> binary().
 stream_code(wasm32, Stream) ->
     {WasmModule, _LinesData} = wasm_stream_extract(Stream),
-    WasmModule;
+    wasm_code_bytes(WasmModule);
 stream_code(_Arch, Stream) ->
     Stream.
+
+%% Extract the instruction bytes from a WASM module that wasm-objdump -d would show.
+%% Skips the module header, finds the code section (ID 10), then for each function body
+%% skips the body_size uleb128 and local_count uleb128, returning the rest.
+-spec wasm_code_bytes(binary()) -> binary().
+wasm_code_bytes(<<_Magic:4/binary, _Version:4/binary, Sections/binary>>) ->
+    wasm_code_bytes_sections(Sections).
+
+wasm_code_bytes_sections(<<>>) ->
+    <<>>;
+wasm_code_bytes_sections(<<SectionId:8, Rest0/binary>>) ->
+    {SectionSize, Rest1} = jit_wasm32_asm:decode_uleb128(Rest0),
+    <<SectionContent:SectionSize/binary, Rest2/binary>> = Rest1,
+    case SectionId of
+        10 ->
+            %% Code section found — extract instruction bytes from all function bodies
+            {_FuncCount, BodiesData} = jit_wasm32_asm:decode_uleb128(SectionContent),
+            wasm_code_bytes_bodies(BodiesData, <<>>);
+        _ ->
+            wasm_code_bytes_sections(Rest2)
+    end.
+
+wasm_code_bytes_bodies(<<>>, Acc) ->
+    Acc;
+wasm_code_bytes_bodies(Data, Acc) ->
+    {BodySize, Rest0} = jit_wasm32_asm:decode_uleb128(Data),
+    <<FuncBody:BodySize/binary, Rest1/binary>> = Rest0,
+    %% Skip local_count uleb128; the rest is local declarations + instructions
+    {_LocalCount, FuncBodyRest} = jit_wasm32_asm:decode_uleb128(FuncBody),
+    wasm_code_bytes_bodies(Rest1, <<Acc/binary, FuncBodyRest/binary>>).
 
 %% Assert that Stream matches the expected objdump output Dump.
 %% On mismatch, run objdump on both expected and actual binaries and diff -u.
@@ -263,7 +296,17 @@ assert_stream(Arch, Dump, Stream, File, _Line) ->
         false ->
             case {erlang:system_info(machine), os:getenv("UPDATE_JIT_TESTS")} of
                 {"BEAM", Value} when Value =/= false ->
-                    update_test_source(Arch, Dump, Actual, File);
+                    %% For wasm32, wasm-objdump needs the full WASM module binary,
+                    %% not just the extracted code bytes.
+                    DisasmInput =
+                        case Arch of
+                            wasm32 ->
+                                {WasmModule, _} = wasm_stream_extract(Stream),
+                                WasmModule;
+                            _ ->
+                                Actual
+                        end,
+                    update_test_source(Arch, Dump, DisasmInput, File);
                 _ ->
                     diff_disasm(Arch, Expected, Actual),
                     ?assertEqual(Expected, Actual)
@@ -343,6 +386,10 @@ wasm_stream_extract(
 
 %% Run objdump on both expected and actual binaries, then diff -u the outputs.
 -spec diff_disasm(atom(), binary(), binary()) -> ok.
+diff_disasm(wasm32, Expected, Actual) ->
+    %% For wasm32 the comparison is against code bytes, not a full WASM module, so
+    %% wasm-objdump cannot be used here. Print raw bytes for diagnostics.
+    io:format("expected bytes: ~w~nactual bytes:   ~w~n", [Expected, Actual]);
 diff_disasm(Arch, Expected, Actual) ->
     case find_binutils(Arch) of
         false ->
