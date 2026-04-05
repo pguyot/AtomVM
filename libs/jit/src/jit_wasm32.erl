@@ -111,8 +111,6 @@
 -include("primitives.hrl").
 -include("term.hrl").
 
--include("jit_backend_dwarf_impl.hrl").
-
 -define(ASSERT(Expr), true = Expr).
 
 %% WASM32 uses 32-bit pointers in Emscripten linear memory.
