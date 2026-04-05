@@ -22,6 +22,15 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% Cross-validate Bin against a WAT fragment using wat2wasm when available,
+%% then assert Value equals Bin.
+%% The WAT fragment is placed inside (module (memory 1) (func WATSTR )) and
+%% compiled with wat2wasm. The trailing implicit end (0x0b) is stripped so Bin
+%% contains only the instruction bytes, matching what jit_wasm32_asm produces.
+-define(_assertAsmEqual(Bin, WatStr, Value),
+    ?_assertEqual(jit_tests_common:asm(wasm32, Bin, WatStr), Value)
+).
+
 %%=============================================================================
 %% LEB128 encoding tests
 %%=============================================================================
@@ -78,20 +87,24 @@ blocktype_test_() ->
 
 control_flow_test_() ->
     [
-        ?_assertEqual(<<16#00>>, jit_wasm32_asm:unreachable()),
-        ?_assertEqual(<<16#01>>, jit_wasm32_asm:nop()),
+        %% Self-contained in a void function — cross-validate with wat2wasm.
+        ?_assertAsmEqual(<<16#00>>, "    (unreachable)", jit_wasm32_asm:unreachable()),
+        ?_assertAsmEqual(<<16#01>>, "    (nop)", jit_wasm32_asm:nop()),
+        ?_assertAsmEqual(<<16#0F>>, "    (return)", jit_wasm32_asm:return()),
+        %% Structured-control opcodes and end/else are encoding constants — no WAT needed.
         ?_assertEqual(<<16#02, 16#40>>, jit_wasm32_asm:block(jit_wasm32_asm:blocktype_void())),
         ?_assertEqual(<<16#02, 16#7F>>, jit_wasm32_asm:block(jit_wasm32_asm:blocktype_i32())),
         ?_assertEqual(<<16#03, 16#40>>, jit_wasm32_asm:loop(jit_wasm32_asm:blocktype_void())),
         ?_assertEqual(<<16#04, 16#40>>, jit_wasm32_asm:if_(jit_wasm32_asm:blocktype_void())),
         ?_assertEqual(<<16#05>>, jit_wasm32_asm:else_()),
-        ?_assertEqual(<<16#0B>>, jit_wasm32_asm:end_()),
-        ?_assertEqual(<<16#0F>>, jit_wasm32_asm:return())
+        ?_assertEqual(<<16#0B>>, jit_wasm32_asm:end_())
     ].
 
 br_test_() ->
     [
-        ?_assertEqual(<<16#0C, 0>>, jit_wasm32_asm:br(0)),
+        %% br 0 exits the current function block — valid in a void function.
+        ?_assertAsmEqual(<<16#0C, 0>>, "    (br 0)", jit_wasm32_asm:br(0)),
+        %% br with depth > 0 needs nested blocks; validate encoding only.
         ?_assertEqual(<<16#0C, 1>>, jit_wasm32_asm:br(1)),
         ?_assertEqual(<<16#0C, 5>>, jit_wasm32_asm:br(5))
     ].
@@ -135,15 +148,44 @@ call_indirect_test_() ->
 %%=============================================================================
 
 variable_test_() ->
+    Asm = jit_wasm32_asm,
     [
-        ?_assertEqual(<<16#20, 0>>, jit_wasm32_asm:local_get(0)),
-        ?_assertEqual(<<16#20, 3>>, jit_wasm32_asm:local_get(3)),
-        ?_assertEqual(<<16#21, 0>>, jit_wasm32_asm:local_set(0)),
-        ?_assertEqual(<<16#21, 5>>, jit_wasm32_asm:local_set(5)),
-        ?_assertEqual(<<16#22, 0>>, jit_wasm32_asm:local_tee(0)),
-        ?_assertEqual(<<16#22, 2>>, jit_wasm32_asm:local_tee(2)),
-        ?_assertEqual(<<16#23, 0>>, jit_wasm32_asm:global_get(0)),
-        ?_assertEqual(<<16#24, 1>>, jit_wasm32_asm:global_set(1))
+        %% local.get: self-contained (returns the param) — validate with wat2wasm.
+        ?_assertAsmEqual(
+            <<16#20, 0>>,
+            "    (param i32) (result i32)\n    (local.get 0)",
+            Asm:local_get(0)
+        ),
+        ?_assertAsmEqual(
+            <<16#20, 3>>,
+            "    (param i32 i32 i32 i32) (result i32)\n    (local.get 3)",
+            Asm:local_get(3)
+        ),
+        %% local.set: needs a value on the stack; test as (i32.const 0)(local.set N) sequence.
+        ?_assertAsmEqual(
+            <<16#41, 0, 16#21, 0>>,
+            "    (param i32)\n    (i32.const 0)\n    (local.set 0)",
+            <<(Asm:i32_const(0))/binary, (Asm:local_set(0))/binary>>
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 0, 16#21, 5>>,
+            "    (param i32 i32 i32 i32 i32 i32)\n    (i32.const 0)\n    (local.set 5)",
+            <<(Asm:i32_const(0))/binary, (Asm:local_set(5))/binary>>
+        ),
+        %% local.tee: consumes and re-pushes; test as (local.tee N (i32.const 0)) sequence.
+        ?_assertAsmEqual(
+            <<16#41, 0, 16#22, 0>>,
+            "    (param i32) (result i32)\n    (local.tee 0 (i32.const 0))",
+            <<(Asm:i32_const(0))/binary, (Asm:local_tee(0))/binary>>
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 0, 16#22, 2>>,
+            "    (param i32 i32 i32) (result i32)\n    (local.tee 2 (i32.const 0))",
+            <<(Asm:i32_const(0))/binary, (Asm:local_tee(2))/binary>>
+        ),
+        %% global.get/set need global declarations in the module — validate encoding only.
+        ?_assertEqual(<<16#23, 0>>, Asm:global_get(0)),
+        ?_assertEqual(<<16#24, 1>>, Asm:global_set(1))
     ].
 
 %%=============================================================================
@@ -151,35 +193,85 @@ variable_test_() ->
 %%=============================================================================
 
 memory_test_() ->
+    %% Load/store instructions need an address; we use (param i32)(local.get 0) as the
+    %% address arg, so Bin includes the local.get 0 prefix and Value is the combined sequence.
+    %% Stores also need a value arg; we use (i32.const 0) for that.
+    %% Default WAT alignment matches the align field stored in the binary:
+    %%   i32.load / i32.store  → log2(4) = 2
+    %%   i32.load16 / i32.store16 → log2(2) = 1
+    %%   i32.load8  / i32.store8  → log2(1) = 0
+    Asm = jit_wasm32_asm,
     [
         %% i32.load align=2 offset=0
-        ?_assertEqual(<<16#28, 2, 0>>, jit_wasm32_asm:i32_load(2, 0)),
-        %% i32.load align=2 offset=40 (0x28)
-        ?_assertEqual(<<16#28, 2, 40>>, jit_wasm32_asm:i32_load(2, 40)),
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#28, 2, 0>>,
+            "    (param i32) (result i32)\n    (i32.load (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load(2, 0))/binary>>
+        ),
+        %% i32.load align=2 offset=40
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#28, 2, 40>>,
+            "    (param i32) (result i32)\n    (i32.load offset=40 (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load(2, 40))/binary>>
+        ),
         %% i32.store align=2 offset=0
-        ?_assertEqual(<<16#36, 2, 0>>, jit_wasm32_asm:i32_store(2, 0)),
-        %% i32.store align=2 offset=112 (0x70)
-        ?_assertEqual(<<16#36, 2, 112>>, jit_wasm32_asm:i32_store(2, 112)),
-        %% i32.load8_s
-        ?_assertEqual(<<16#2C, 0, 0>>, jit_wasm32_asm:i32_load8_s(0, 0)),
-        %% i32.load8_u
-        ?_assertEqual(<<16#2D, 0, 0>>, jit_wasm32_asm:i32_load8_u(0, 0)),
-        %% i32.load16_s
-        ?_assertEqual(<<16#2E, 1, 0>>, jit_wasm32_asm:i32_load16_s(1, 0)),
-        %% i32.load16_u
-        ?_assertEqual(<<16#2F, 1, 0>>, jit_wasm32_asm:i32_load16_u(1, 0)),
-        %% i32.store8
-        ?_assertEqual(<<16#3A, 0, 0>>, jit_wasm32_asm:i32_store8(0, 0)),
-        %% i32.store16
-        ?_assertEqual(<<16#3B, 1, 0>>, jit_wasm32_asm:i32_store16(1, 0))
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#41, 0, 16#36, 2, 0>>,
+            "    (param i32)\n    (i32.store (local.get 0) (i32.const 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_const(0))/binary, (Asm:i32_store(2, 0))/binary>>
+        ),
+        %% i32.store align=2 offset=112
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#41, 0, 16#36, 2, 112>>,
+            "    (param i32)\n    (i32.store offset=112 (local.get 0) (i32.const 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_const(0))/binary, (Asm:i32_store(2, 112))/binary>>
+        ),
+        %% i32.load8_s align=0 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#2C, 0, 0>>,
+            "    (param i32) (result i32)\n    (i32.load8_s (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load8_s(0, 0))/binary>>
+        ),
+        %% i32.load8_u align=0 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#2D, 0, 0>>,
+            "    (param i32) (result i32)\n    (i32.load8_u (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load8_u(0, 0))/binary>>
+        ),
+        %% i32.load16_s align=1 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#2E, 1, 0>>,
+            "    (param i32) (result i32)\n    (i32.load16_s (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load16_s(1, 0))/binary>>
+        ),
+        %% i32.load16_u align=1 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#2F, 1, 0>>,
+            "    (param i32) (result i32)\n    (i32.load16_u (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load16_u(1, 0))/binary>>
+        ),
+        %% i32.store8 align=0 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#41, 0, 16#3A, 0, 0>>,
+            "    (param i32)\n    (i32.store8 (local.get 0) (i32.const 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_const(0))/binary, (Asm:i32_store8(0, 0))/binary>>
+        ),
+        %% i32.store16 align=1 offset=0
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#41, 0, 16#3B, 1, 0>>,
+            "    (param i32)\n    (i32.store16 (local.get 0) (i32.const 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_const(0))/binary, (Asm:i32_store16(1, 0))/binary>>
+        )
     ].
 
 memory_large_offset_test_() ->
+    Asm = jit_wasm32_asm,
     [
-        %% i32.load with offset requiring multi-byte LEB128
-        ?_assertEqual(
-            <<16#28, 2, 128, 2>>,
-            jit_wasm32_asm:i32_load(2, 256)
+        %% offset=256 requires a two-byte ULEB128 (<<128, 2>>); cross-validate with wat2wasm.
+        ?_assertAsmEqual(
+            <<16#20, 0, 16#28, 2, 128, 2>>,
+            "    (param i32) (result i32)\n    (i32.load offset=256 (local.get 0))",
+            <<(Asm:local_get(0))/binary, (Asm:i32_load(2, 256))/binary>>
         )
     ].
 
@@ -188,15 +280,24 @@ memory_large_offset_test_() ->
 %%=============================================================================
 
 const_test_() ->
+    %% i32.const/i64.const use signed LEB128 (SLEB128) encoding; cross-validate with
+    %% wat2wasm to confirm our encode_sleb128 matches the spec for these values.
+    Asm = jit_wasm32_asm,
     [
-        ?_assertEqual(<<16#41, 0>>, jit_wasm32_asm:i32_const(0)),
-        ?_assertEqual(<<16#41, 1>>, jit_wasm32_asm:i32_const(1)),
-        ?_assertEqual(<<16#41, 127>>, jit_wasm32_asm:i32_const(-1)),
-        ?_assertEqual(<<16#41, 192, 0>>, jit_wasm32_asm:i32_const(64)),
-        ?_assertEqual(<<16#41, 191, 127>>, jit_wasm32_asm:i32_const(-65)),
-        ?_assertEqual(<<16#42, 0>>, jit_wasm32_asm:i64_const(0)),
-        ?_assertEqual(<<16#42, 1>>, jit_wasm32_asm:i64_const(1)),
-        ?_assertEqual(<<16#42, 127>>, jit_wasm32_asm:i64_const(-1))
+        ?_assertAsmEqual(<<16#41, 0>>, "    (result i32)\n    (i32.const 0)", Asm:i32_const(0)),
+        ?_assertAsmEqual(<<16#41, 1>>, "    (result i32)\n    (i32.const 1)", Asm:i32_const(1)),
+        ?_assertAsmEqual(<<16#41, 127>>, "    (result i32)\n    (i32.const -1)", Asm:i32_const(-1)),
+        %% 64 requires two SLEB128 bytes (<<0xC0, 0x00>>)
+        ?_assertAsmEqual(
+            <<16#41, 192, 0>>, "    (result i32)\n    (i32.const 64)", Asm:i32_const(64)
+        ),
+        %% -65 requires two SLEB128 bytes (<<0xBF, 0x7F>>)
+        ?_assertAsmEqual(
+            <<16#41, 191, 127>>, "    (result i32)\n    (i32.const -65)", Asm:i32_const(-65)
+        ),
+        ?_assertAsmEqual(<<16#42, 0>>, "    (result i64)\n    (i64.const 0)", Asm:i64_const(0)),
+        ?_assertAsmEqual(<<16#42, 1>>, "    (result i64)\n    (i64.const 1)", Asm:i64_const(1)),
+        ?_assertAsmEqual(<<16#42, 127>>, "    (result i64)\n    (i64.const -1)", Asm:i64_const(-1))
     ].
 
 %%=============================================================================
