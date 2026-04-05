@@ -154,31 +154,17 @@
     offset :: non_neg_integer(),
     branches :: [{non_neg_integer(), non_neg_integer(), non_neg_integer()}],
     jump_table_start :: non_neg_integer(),
-    %% WASM uses local variables instead of registers.
-    %% available_regs/used_regs track scratch local indices (bitmask).
     available_regs :: non_neg_integer(),
     used_regs :: non_neg_integer(),
-    %% High-water mark of scratch locals allocated. When the initial pool
-    %% of NUM_SCRATCH_LOCALS is exhausted, new locals are allocated at
-    %% index FIRST_SCRATCH_LOCAL + max_scratch and max_scratch is incremented.
     max_scratch :: non_neg_integer(),
     labels :: [{integer() | reference(), integer()}],
     variant :: non_neg_integer(),
     regs :: jit_regs:regs(),
-    %% WASM-specific: accumulated function bodies (in reverse order).
-    %% Each entry is {Label, InstructionBytes} for a label's WASM code.
     func_bodies :: [{integer(), binary()}],
-    %% Current function body being built (accumulated instructions)
     current_body :: binary(),
-    %% Current label being built (or undefined)
     current_label :: integer() | reference() | undefined,
-    %% Number of labels in the module
     labels_count :: non_neg_integer(),
-    %% The most recent BEAM label (not a continuation label).
-    %% Used to track which function a continuation label belongs to.
     beam_label :: non_neg_integer() | undefined,
-    %% Mapping from continuation labels to their parent BEAM label.
-    %% Used for stacktrace function name resolution.
     cont_label_map :: [{non_neg_integer(), non_neg_integer()}]
 }).
 
@@ -206,11 +192,7 @@
     | {maybe_free_local(), '&', non_neg_integer(), '!=', integer()}
     | {{free, wasm_local()}, '==', {free, wasm_local()}}.
 
-%% Bitmask for scratch local availability.
-%% We have 8 scratch locals (indices 3-10).
--define(AVAILABLE_REGS_MASK,
-    (16#FF)
-).
+-define(AVAILABLE_REGS_MASK, 16#FF).
 
 %%=============================================================================
 %% Backend API implementation
@@ -220,9 +202,7 @@
 word_size() -> 4.
 
 %% WASM does not support the tail cache optimization because each BEAM label
-%% compiles to a separate WASM function. The tail cache caches code offsets
-%% within a function body for reuse by later identical instructions, but WASM
-%% functions cannot jump to arbitrary points in other functions.
+%% compiles to a separate WASM function.
 -spec supports_tail_cache() -> boolean().
 supports_tail_cache() -> false.
 
@@ -277,7 +257,6 @@ flush(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 
 -spec debugger(state()) -> state().
 debugger(State) ->
-    %% Emit unreachable as a debug trap in WASM
     emit(State, jit_wasm32_asm:unreachable()).
 
 -spec used_regs(state()) -> [wasm_local()].
@@ -321,7 +300,7 @@ assert_all_native_free(#state{max_scratch = MS} = State) ->
     ok.
 
 %%=============================================================================
-%% Jump table - for WASM this is a data array of function pointers
+%% Jump table
 %%=============================================================================
 
 -spec jump_table(state(), pos_integer()) -> state().
@@ -356,48 +335,25 @@ emit_n_times(StreamModule, Stream, Binary, N) when N > 0 ->
 update_branches(#state{branches = []} = State) ->
     State;
 update_branches(State) ->
-    %% For WASM, branches are resolved at label-add time.
-    %% Cross-label jumps set jit_state->continuation and return to C.
-    %% Any remaining unresolved branches are reference-labeled continuations
-    %% that will be handled by the WASM module structure.
+    %% Branches are resolved at label-add time in WASM.
     State#state{branches = []}.
 
 %%=============================================================================
 %% Primitive calls
 %%
-%% In WASM, calling a primitive means:
-%% 1. Push arguments onto the WASM operand stack
-%% 2. Load the function pointer from the native interface table
-%% 3. Use call_indirect to invoke it
-%%
-%% However, since WASM runs in Emscripten and all C functions are available,
-%% we emit WASM code that:
-%% - Loads arguments from the Context/JITState via i32.load
-%% - Calls the primitive C function through call_indirect
-%% - Stores results back
-%%
-%% For the initial implementation, we delegate all work to the C dispatch loop
-%% by setting continuation and returning. This avoids the complexity of
-%% emitting call_indirect for every primitive.
+%% Primitives are C functions called through call_indirect via the
+%% ModuleNativeInterface function pointer table.
 %%=============================================================================
 
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> {state(), wasm_local()}.
 call_primitive(State0, Primitive, Args) ->
-    %% Allocate a result local
     {State1, ResultLocal} = alloc_local(State0),
-    %% Emit code to call the primitive through the native interface table:
-    %% 1. Load function pointer from interface[Primitive]
-    %% 2. Push arguments
-    %% 3. call_indirect
-    %% 4. Store result in local
     State2 = emit_call_primitive(State1, Primitive, Args, ResultLocal, false),
-    %% After C function call, all register tracking is invalidated (callee may GC)
     Regs1 = jit_regs:invalidate_all(State2#state.regs),
     {State2#state{regs = Regs1}, ResultLocal}.
 
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_last(State0, Primitive, Args) ->
-    %% Tail call: emit the call and return the result directly
     State1 = emit_call_primitive(State0, Primitive, Args, none, true),
     AllFree = (1 bsl State1#state.max_scratch) - 1,
     State1#state{
@@ -407,18 +363,11 @@ call_primitive_last(State0, Primitive, Args) ->
     }.
 
 call_primitive_with_cp(State0, Primitive, Args) ->
-    %% WASM: Split the function at the call site. The return from the called
-    %% primitive lands in a new WASM function (continuation label).
-
-    %% Allocate a new label number for the continuation
+    %% Split the function: the return from the primitive lands in a continuation.
     ContLabel = State0#state.labels_count + 1,
     State0a = record_cont_label(State0, ContLabel),
     State1 = State0a#state{labels_count = ContLabel},
-
-    %% Set CP to point to the continuation label
     State2 = emit_set_cp_for_label(State1, ContLabel),
-
-    %% Call the primitive as tail call (ends current function)
     State3 = call_primitive_last(State2, Primitive, Args),
 
     %% Split: close current function, open continuation function
@@ -453,9 +402,7 @@ return_if_not_equal_to_ctx(
     #state{available_regs = Available0, used_regs = Used0} = State0,
     {free, Local}
 ) ->
-    %% if (Local != ctx) return Local;
     Code = <<
-        %% Push Local and ctx, compare
         (jit_wasm32_asm:local_get(Local))/binary,
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:i32_ne())/binary,
@@ -511,12 +458,8 @@ cond_jump_to_label(State, Cond, Label) ->
     if_block(State, Cond, fun(S) -> jump_to_label(S, Label) end).
 
 jump_to_continuation(State0, {free, OffsetLocal}) ->
-    %% Jump to the address stored in OffsetLocal (a byte offset in the jump table)
-    %% Convert to (label + 1) format expected by the C dispatch loop:
-    %%   label = offset / JUMP_TABLE_ENTRY_SIZE
-    %%   continuation = label + 1
+    %% Convert byte offset to continuation = offset / JUMP_TABLE_ENTRY_SIZE + 1
     Code = <<
-        %% Store (OffsetLocal / 4 + 1) into jit_state->continuation
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
         (jit_wasm32_asm:local_get(OffsetLocal))/binary,
         (jit_wasm32_asm:i32_const(?JUMP_TABLE_ENTRY_SIZE))/binary,
@@ -784,14 +727,11 @@ move_to_vm_register(State0, Value, {x_reg, N}) ->
     emit(State0, Code);
 move_to_vm_register(State0, Value, {y_reg, N}) ->
     %% Store value to ctx->e[N]
-    %% ctx->e is a pointer at CTX_E_OFFSET, then index by N * 4
     {State1, TempLocal} = alloc_local(State0),
     Code = <<
-        %% Load ctx->e (stack pointer)
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:i32_load(2, ?CTX_E_OFFSET))/binary,
         (jit_wasm32_asm:local_set(TempLocal))/binary,
-        %% Store value at e[N]
         (jit_wasm32_asm:local_get(TempLocal))/binary,
         (emit_value_to_stack(Value))/binary,
         (jit_wasm32_asm:i32_store(2, N * 4))/binary
@@ -823,7 +763,6 @@ move_to_vm_register(State0, {free, {ptr, Reg, WordOffset}}, {fp_reg, N}) ->
     emit(State3, Code).
 
 move_to_native_register(State, Reg) when is_atom(Reg) ->
-    %% Check if it's already a scratch local (localN where N >= FIRST_SCRATCH_LOCAL)
     case is_scratch_local(Reg) of
         true -> {State, Reg};
         false -> move_to_native_register_alloc(State, Reg)
@@ -871,7 +810,7 @@ move_to_cp(State0, {y_reg, Y}) ->
     free_native_register(State2, TempLocal).
 
 move_array_element(State0, Base, Index, {ptr, Dest}) when is_integer(Index) ->
-    %% Load word at Base[Index] and store into memory at [Dest]
+    %% Load Base[Index] and store to [Dest]
     BaseLocal = unwrap_local(Base),
     Code = <<
         (jit_wasm32_asm:local_get(Dest))/binary,
@@ -907,7 +846,7 @@ move_array_element(State0, Base, Index, {y_reg, N}) when is_integer(Index) ->
     State2 = emit(State1, Code),
     free_native_register(State2, TempLocal);
 move_array_element(State0, Base, Index, Dest) when is_integer(Index), is_atom(Dest) ->
-    %% Load word at Base[Index] and store into local Dest
+    %% Load Base[Index] into Dest
     BaseLocal = unwrap_local(Base),
     Code = <<
         (jit_wasm32_asm:local_get(BaseLocal))/binary,
@@ -1002,11 +941,9 @@ move_to_array_element(State0, Value, Base, IndexLocal, Offset) ->
 
 set_bs(State0, TermLocal) ->
     Code = <<
-        %% Store term to ctx->bs
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:local_get(TermLocal))/binary,
         (jit_wasm32_asm:i32_store(2, ?CTX_BS_OFFSET))/binary,
-        %% Store 0 to ctx->bs_offset
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:i32_const(0))/binary,
         (jit_wasm32_asm:i32_store(2, ?CTX_BS_OFFSET_OFFSET))/binary
@@ -1014,8 +951,6 @@ set_bs(State0, TermLocal) ->
     emit(State0, Code).
 
 copy_to_native_register(State0, Value) when is_atom(Value) ->
-    %% Always allocate a new local for the copy, even if Value is already
-    %% a scratch local. This ensures the copy is independent from the original.
     move_to_native_register_alloc(State0, Value);
 copy_to_native_register(State0, Value) ->
     move_to_native_register(State0, Value).
@@ -1055,11 +990,7 @@ set_continuation_to_label(State0, Label) ->
     emit_set_continuation_for_label(State0, Label).
 
 set_continuation_to_offset(State0) ->
-    %% WASM: Allocate a real continuation label (not a reference).
-    %% On native backends, this records a code offset that will be resolved
-    %% later. On WASM, we need an actual label number so that
-    %% emit_set_continuation_for_label stores a valid (label + 1) value
-    %% instead of NULL.
+    %% Allocate a continuation label (WASM needs a real label, not a code offset).
     ContLabel = State0#state.labels_count + 1,
     State1 = record_cont_label(State0, ContLabel),
     State2 = State1#state{labels_count = ContLabel},
@@ -1069,7 +1000,6 @@ set_continuation_to_offset(State0) ->
 
 -spec continuation_entry_point(state()) -> state().
 continuation_entry_point(State) ->
-    %% No-op for WASM, same as riscv32
     State.
 
 get_module_index(State0) ->
@@ -1089,56 +1019,41 @@ get_module_index(State0) ->
 %% Scheduling and reductions
 %%=============================================================================
 
-%% Record a continuation label → BEAM label mapping for stacktrace resolution.
 record_cont_label(#state{beam_label = undefined} = State, _ContLabel) ->
     State;
 record_cont_label(#state{beam_label = BeamLabel, cont_label_map = Map} = State, ContLabel) ->
     State#state{cont_label_map = [{ContLabel, BeamLabel} | Map]}.
 
 decrement_reductions_and_maybe_schedule_next(State0) ->
-    %% WASM: Split the function at this reduction check point.
-    %% Native backends use adr/lea to resume at the next instruction after
-    %% yielding; WASM cannot resume mid-function, so we create a continuation
-    %% function. Both the yield path and the non-yield path jump to it through
-    %% the C dispatch loop.
-    %%
-    %% Current function ends with:
-    %%   decrement reductions
-    %%   if zero: set continuation = ContLabel, call scheduler, return
-    %%   else: set continuation = ContLabel, return ctx
-    %% Continuation function (ContLabel) starts fresh for the call_ext code.
-
+    %% Split the function: WASM cannot resume mid-function after yielding,
+    %% so both paths (yield and non-yield) go through a continuation.
     ContLabel = State0#state.labels_count + 1,
     State0a = record_cont_label(State0, ContLabel),
     State1 = State0a#state{labels_count = ContLabel},
 
     {State2, TempLocal} = alloc_local(State1),
     Code = <<
-        %% Load reduction count
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
         (jit_wasm32_asm:i32_load(2, ?JITSTATE_REDUCTIONCOUNT_OFFSET))/binary,
         (jit_wasm32_asm:i32_const(1))/binary,
         (jit_wasm32_asm:i32_sub())/binary,
         (jit_wasm32_asm:local_tee(TempLocal))/binary,
-        %% Store decremented value back
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
         (jit_wasm32_asm:local_get(TempLocal))/binary,
         (jit_wasm32_asm:i32_store(2, ?JITSTATE_REDUCTIONCOUNT_OFFSET))/binary,
-        %% Check if zero
         (jit_wasm32_asm:local_get(TempLocal))/binary,
         (jit_wasm32_asm:i32_eqz())/binary
     >>,
     State3 = emit(State2, Code),
-    %% If reductions == 0: set continuation to ContLabel, yield to scheduler
     State4 = emit(State3, jit_wasm32_asm:if_(jit_wasm32_asm:blocktype_void())),
     State5 = emit_set_continuation_for_label(State4, ContLabel),
     State6 = call_primitive_last(State5, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     State7 = emit(State6, jit_wasm32_asm:end_()),
     State8 = free_native_register(State7, TempLocal),
-    %% If reductions > 0: jump to ContLabel via dispatch loop
+    %% Non-yield path: also go to ContLabel
     State9 = emit_set_continuation_for_label(State8, ContLabel),
 
-    %% Split: finalize current function, open continuation function
+    %% Finalize current function, open continuation
     #state{
         func_bodies = FuncBodies,
         current_body = CurrentBody,
@@ -1189,10 +1104,6 @@ call_or_schedule_next(State0, Label) ->
             (jit_wasm32_asm:return())/binary>>,
     NewFuncBodies = [{PrevLabel, FinalizedBody} | FuncBodies],
     ContLabelOff = JumpTableStart + ContLabel * ?JUMP_TABLE_ENTRY_SIZE,
-    %% The continuation function starts fresh but must declare enough locals
-    %% to cover any that jit.erl might allocate subsequently.
-    %% Preserve max_scratch from State3 (the high-water mark so far).
-    %% Reset used/available so all scratch locals are available.
     AllFree = (1 bsl State3#state.max_scratch) - 1,
     State3#state{
         func_bodies = NewFuncBodies,
@@ -1236,13 +1147,8 @@ call_only_or_schedule_next(State0, Label) ->
 %%=============================================================================
 
 call_func_ptr(State0, FuncPtrTuple, Args) ->
-    %% For WASM, function pointer calls go through call_indirect.
-    %% For BIFs loaded via get_imported_bif, the pointer is a WASM table index.
-    %%
-    %% Emit: push args, push func ptr, call_indirect
     {State1, ResultLocal} = alloc_local(State0),
     State2 = emit_push_args(State1, Args),
-    %% Push the function pointer onto the stack
     FuncPtrCode =
         case FuncPtrTuple of
             {free, Local} ->
@@ -1294,18 +1200,15 @@ return_labels_and_lines(
     %% Sort func_bodies by label number (ascending)
     SortedBodies = lists:keysort(1, [{L, B} || {L, B} <- FuncBodies1, is_integer(L)]),
 
-    %% Build a complete WASM module binary
     WasmModule = assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch),
 
-    %% Append the WASM module binary to the stream
     WasmOffset = StreamModule:offset(Stream0),
     Stream1 = StreamModule:append(Stream0, WasmModule),
 
-    %% Append line data after the WASM module
-    %% Format: lines_count:16/LE, (line_ref:16/LE, offset:32/LE) * lines_count
+    %% Lines: count:16/LE, (line_ref:16/LE, offset:32/LE)*
     LinesOffset = StreamModule:offset(Stream1),
     LinesTable = <<<<Line:16/little, Offset:32/little>> || {Line, Offset} <- SortedLines>>,
-    %% Append cont_label_map after lines: count:16/LE, (cont_label:16/LE, beam_label:16/LE)*
+    %% Cont label map: count:16/LE, (cont_label:16/LE, beam_label:16/LE)*
     ContMap = State#state.cont_label_map,
     ContMapTable = <<<<CL:16/little, BL:16/little>> || {CL, BL} <- ContMap>>,
     Stream2 = StreamModule:append(
@@ -1318,17 +1221,13 @@ return_labels_and_lines(
         >>
     ),
 
-    %% Patch the jump table header
-    %% Header layout: num_entries(4) + wasm_offset(4) + lines_offset(4) = 12 bytes
+    %% Patch jump table header: num_entries(4) + wasm_offset(4) + lines_offset(4)
     JumpTableDataStart = State#state.jump_table_start - 12,
-    %% Patch num_entries (bytes 0-3) to include continuation labels
     NumEntries = LabelsCount + 1,
     Stream3 = StreamModule:replace(Stream2, JumpTableDataStart, <<NumEntries:32/little>>),
-    %% Patch wasm_offset (bytes 4-7) relative to the jump table data start
     WasmOffsetPos = JumpTableDataStart + 4,
     RelativeWasmOffset = WasmOffset - JumpTableDataStart,
     Stream4 = StreamModule:replace(Stream3, WasmOffsetPos, <<RelativeWasmOffset:32/little>>),
-    %% Patch lines_offset (bytes 8-11) relative to the jump table data start
     LinesOffsetPos = JumpTableDataStart + 8,
     RelativeLinesOffset = LinesOffset - JumpTableDataStart,
     Stream5 = StreamModule:replace(Stream4, LinesOffsetPos, <<RelativeLinesOffset:32/little>>),
@@ -1394,9 +1293,7 @@ add_label(
     {wasm_cont, ContLabel},
     _Offset
 ) ->
-    %% WASM continuation label from set_continuation_to_offset.
-    %% Split the function: the previous body ends here, the continuation
-    %% label starts a new function body.
+    %% Continuation label: split the function here.
     NewFuncBodies =
         case PrevLabel of
             undefined ->
@@ -1440,19 +1337,16 @@ add_label(
         end,
     State#state{labels = [{Label, LabelOff} | Labels]}.
 
-%% @doc Get the register tracking state.
 get_regs_tracking(#state{regs = Regs}) -> Regs.
 
 %%=============================================================================
 %% Internal helpers
 %%=============================================================================
 
-%% Emit bytecode to the current label's body (accumulated per-label)
 emit(#state{current_body = Body} = State, Code) ->
     State#state{current_body = <<Body/binary, Code/binary>>}.
 
-%% Allocate a scratch local variable.
-%% When the initial pool is exhausted, dynamically extend with new locals.
+%% Allocate a scratch local, extending the pool if exhausted.
 alloc_local(#state{available_regs = 0, used_regs = Used, max_scratch = MaxScratch} = State) ->
     LocalIdx = ?FIRST_SCRATCH_LOCAL + MaxScratch,
     Bit = 1 bsl MaxScratch,
@@ -1496,29 +1390,13 @@ mask_to_locals(Mask, N, Acc) ->
         0 -> mask_to_locals(Mask bsr 1, N + 1, Acc)
     end.
 
-%% Check if an atom is a scratch local (local3, local4, ...)
-is_scratch_local(local3) ->
-    true;
-is_scratch_local(local4) ->
-    true;
-is_scratch_local(local5) ->
-    true;
-is_scratch_local(local6) ->
-    true;
-is_scratch_local(local7) ->
-    true;
-is_scratch_local(local8) ->
-    true;
-is_scratch_local(local9) ->
-    true;
-is_scratch_local(local10) ->
-    true;
 is_scratch_local(Atom) when is_atom(Atom) ->
     case atom_to_list(Atom) of
         "local" ++ Rest ->
-            case catch list_to_integer(Rest) of
-                N when is_integer(N), N >= ?FIRST_SCRATCH_LOCAL -> true;
-                _ -> false
+            try
+                list_to_integer(Rest) >= ?FIRST_SCRATCH_LOCAL
+            catch
+                error:badarg -> false
             end;
         _ ->
             false
@@ -1526,53 +1404,24 @@ is_scratch_local(Atom) when is_atom(Atom) ->
 is_scratch_local(_) ->
     false.
 
-%% Unwrap a local reference (stripping {ptr, _} and {free, _} wrappers)
 unwrap_local({ptr, L}) -> unwrap_local(L);
 unwrap_local({free, L}) -> unwrap_local(L);
 unwrap_local(L) when is_atom(L) -> L.
 
-%% Convert a WASM local integer index to an atom name
-index_to_local(0) ->
-    local0;
-index_to_local(1) ->
-    local1;
-index_to_local(2) ->
-    local2;
-index_to_local(3) ->
-    local3;
-index_to_local(4) ->
-    local4;
-index_to_local(5) ->
-    local5;
-index_to_local(6) ->
-    local6;
-index_to_local(7) ->
-    local7;
-index_to_local(8) ->
-    local8;
-index_to_local(9) ->
-    local9;
-index_to_local(10) ->
-    local10;
-index_to_local(N) when is_integer(N), N > 10 ->
+index_to_local(N) when is_integer(N) ->
     list_to_atom("local" ++ integer_to_list(N)).
 
-%% Get bit position for a scratch local (takes integer index or atom)
 local_bit(LocalAtom) when is_atom(LocalAtom) ->
     local_bit(jit_wasm32_asm:local_index(LocalAtom));
 local_bit(LocalIdx) when is_integer(LocalIdx), LocalIdx >= ?FIRST_SCRATCH_LOCAL ->
     1 bsl (LocalIdx - ?FIRST_SCRATCH_LOCAL).
 
-%% Merge used registers from two paths
 merge_used_regs(#state{used_regs = UR, max_scratch = MS} = State, OtherUR) ->
     MergedUR = UR bor OtherUR,
     AllFree = (1 bsl MS) - 1,
     MergedAvail = AllFree band (bnot MergedUR),
     State#state{used_regs = MergedUR, available_regs = MergedAvail}.
 
-%% Push a value onto the WASM operand stack.
-%% Atom names are WASM local variable references (from alloc_local).
-%% Bare integers are immediate constants (tagged term values from jit.erl).
 emit_value_to_stack(cp) ->
     <<
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
@@ -1581,8 +1430,6 @@ emit_value_to_stack(cp) ->
 emit_value_to_stack({free, Local}) when is_atom(Local) ->
     jit_wasm32_asm:local_get(Local);
 emit_value_to_stack({free, Imm}) when is_integer(Imm) ->
-    %% Immediate tagged value (e.g., from decode_compact_term for small integers)
-    %% Truncate to 32 bits since host Erlang may produce 64-bit terms
     jit_wasm32_asm:i32_const(to_i32(Imm));
 emit_value_to_stack({x_reg, N}) ->
     %% Load ctx->x[N]
@@ -1599,7 +1446,6 @@ emit_value_to_stack({y_reg, N}) ->
         (jit_wasm32_asm:i32_load(2, N * 4))/binary
     >>;
 emit_value_to_stack({ptr, Local}) ->
-    %% Dereference the pointer to get the value (used for extended x registers)
     <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (jit_wasm32_asm:i32_load(2, 0))/binary
@@ -1607,14 +1453,9 @@ emit_value_to_stack({ptr, Local}) ->
 emit_value_to_stack(Local) when is_atom(Local) ->
     jit_wasm32_asm:local_get(Local);
 emit_value_to_stack(Imm) when is_integer(Imm) ->
-    %% Immediate constant (tagged term value)
-    %% Truncate to signed 32-bit range since host Erlang uses 64-bit terms
     jit_wasm32_asm:i32_const(to_i32(Imm)).
 
-%% Emit code to set jit_state->continuation to a label's entry point.
-%% Stores (Label + 1) in continuation to distinguish from NULL (0).
-%% The C dispatch loop subtracts 1 and calls module_get_native_entry_point
-%% to convert the label number to an actual function pointer.
+%% Set jit_state->continuation = Label + 1 (0 means NULL/unset).
 emit_set_continuation_for_label(#state{} = State, Label) when is_integer(Label) ->
     Code = <<
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
@@ -1623,9 +1464,7 @@ emit_set_continuation_for_label(#state{} = State, Label) when is_integer(Label) 
     >>,
     emit(State, Code);
 emit_set_continuation_for_label(State, _RefLabel) ->
-    %% Reference labels: store 0 (NULL). The reference will be resolved
-    %% when the target label is added, but for WASM cross-label jumps
-    %% always go through the C dispatch loop anyway.
+    %% Unresolved reference label: store 0 (NULL).
     Code = <<
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
         (jit_wasm32_asm:i32_const(0))/binary,
@@ -1635,10 +1474,6 @@ emit_set_continuation_for_label(State, _RefLabel) ->
 
 %% Emit code to set up CP (continuation pointer for returns).
 %% CP format: (module_index << 24) | (label_offset << 2)
-%% where label_offset = label * JUMP_TABLE_ENTRY_SIZE (relative to jump_table_start).
-%% On return, jit_return() computes:
-%%   label = ((cp & 0xFFFFFF) >> 2) / JUMP_TABLE_ENTRY_SIZE
-%% and uses module_get_native_entry_point(mod, label) to get the function pointer.
 emit_set_cp_for_label(State0, Label) ->
     LabelOffset = Label * ?JUMP_TABLE_ENTRY_SIZE,
     emit_set_cp_for_offset(State0, LabelOffset).
@@ -1663,21 +1498,15 @@ emit_set_cp_for_offset(State0, LabelOffset) ->
     State7 = emit(State6, Code2),
     free_native_register(State7, ModIdxLocal).
 
-%% Emit code to call a primitive function
 emit_call_primitive(State0, Primitive, Args, ResultLocal, IsTailCall) ->
     WasmArgCount = count_wasm_args(Args),
-    %% Push arguments onto the WASM stack
     State1 = emit_push_args(State0, Args),
-    %% Load the function pointer from the native interface table
+    %% Load function pointer from native_interface[Primitive]
     Code = <<
         (jit_wasm32_asm:local_get(?NATIVE_INTERFACE_LOCAL))/binary,
         (jit_wasm32_asm:i32_load(2, Primitive * 4))/binary
     >>,
     State2 = emit(State1, Code),
-    %% call_indirect with appropriate type index for the argument count and return type
-    %% Types 0-7: (i32 x N) -> i32, for N=1..8
-    %% Types 8-15: (i32 x N) -> void, for N=1..8
-    %% Type 16: (i32, i64) -> i32 (for alloc_boxed_integer_fragment)
     IsVoid = primitive_returns_void(Primitive),
     TypeIdx =
         case primitive_special_type(Primitive) of
@@ -1708,7 +1537,6 @@ emit_call_primitive(State0, Primitive, Args, ResultLocal, IsTailCall) ->
             emit(State4, jit_wasm32_asm:local_set(ResultLocal))
     end.
 
-%% Emit code to push function arguments onto the WASM stack
 emit_push_args(State, []) ->
     State;
 emit_push_args(State0, [Arg | Rest]) ->
@@ -1730,7 +1558,6 @@ emit_push_args(State0, [Arg | Rest]) ->
             stack ->
                 jit_wasm32_asm:i32_const(0);
             {free, {ptr, Local}} ->
-                %% Dereference: push *Local (the term value), not the pointer
                 emit_value_to_stack({ptr, Local});
             {free, {x_reg, N}} ->
                 emit_value_to_stack({x_reg, N});
@@ -1743,8 +1570,6 @@ emit_push_args(State0, [Arg | Rest]) ->
             {ptr, Local} ->
                 jit_wasm32_asm:local_get(Local);
             {avm_int64_t, Val} ->
-                %% Pass as native WASM i64 - matches Emscripten's ABI where
-                %% int64_t parameters are compiled as WASM i64 type
                 jit_wasm32_asm:i64_const(Val);
             {x_reg, N} ->
                 emit_value_to_stack({x_reg, N});
@@ -1877,8 +1702,7 @@ emit_and_conditions(State0, [Cond | Rest]) ->
 unwrap_free({free, L}) -> L;
 unwrap_free(L) -> L.
 
-%% Truncate an Erlang integer to signed 32-bit range for WASM i32.const.
-%% Host Erlang may use 64-bit terms, so we must truncate to 32 bits.
+%% Truncate to signed i32 (host Erlang uses 64-bit terms).
 to_i32(Val) when is_integer(Val) ->
     Masked = Val band 16#FFFFFFFF,
     case Masked > 16#7FFFFFFF of
@@ -1886,15 +1710,11 @@ to_i32(Val) when is_integer(Val) ->
         false -> Masked
     end.
 
-%% Push an unwrapped value to the WASM stack.
-%% Atom locals use local_get; integers are immediate constants.
 emit_unwrapped_to_stack(L) when is_atom(L) ->
     jit_wasm32_asm:local_get(L);
 emit_unwrapped_to_stack(Imm) when is_integer(Imm) ->
     jit_wasm32_asm:i32_const(to_i32(Imm)).
 
-%% Returns true if a primitive C function returns void (no return value).
-%% These need a different WASM call_indirect type (void return instead of i32).
 %% Must be kept in sync with ModuleNativeInterface in jit.h.
 primitive_returns_void(?PRIM_TRIM_LIVE_REGS) -> true;
 primitive_returns_void(?PRIM_MAILBOX_REMOVE_MESSAGE) -> true;
@@ -1909,16 +1729,10 @@ primitive_returns_void(?PRIM_BITSTRING_COPY_MODULE_STR) -> true;
 primitive_returns_void(?PRIM_FREE) -> true;
 primitive_returns_void(_) -> false.
 
-%% Returns a special type index for primitives with non-standard WASM signatures
-%% (e.g., i64 parameters), or 'none' for standard all-i32 signatures.
 %% Must be kept in sync with ModuleNativeInterface in jit.h.
 primitive_special_type(?PRIM_ALLOC_BOXED_INTEGER_FRAGMENT) -> 16;
 primitive_special_type(_) -> none.
 
-%% Count WASM-level arguments.
-%% Each arg is one WASM value (i32 or i64). Primitives with i64 args must use
-%% primitive_special_type/1 for the correct type index since the standard type
-%% indices assume all-i32 signatures.
 count_wasm_args(Args) ->
     length(Args).
 
@@ -1931,34 +1745,17 @@ free_func_ptr(State, _) -> State.
 %%=============================================================================
 %% WASM module assembly
 %%
-%% Produces a complete, valid WebAssembly module binary from the accumulated
-%% per-label function bodies.
-%%
-%% Module structure:
-%%   - Type section: function signatures
-%%   - Import section: Emscripten's memory and indirect function table
-%%   - Function section: type indices for each function
-%%   - Export section: "f0", "f1", ... for each label function
-%%   - Code section: function bodies
+%% Assembles accumulated per-label function bodies into a complete WASM module.
 %%
 %% Type indices:
-%%   0-7: (i32 x N) -> i32  for N=1..8  (e.g., Type 2 = entry point: 3 args -> i32)
-%%   8-15: (i32 x N) -> void for N=1..8  (for void-returning C primitives)
-%%   16: (i32, i64) -> i32  (for alloc_boxed_integer_fragment)
-%%
-%% Import indices:
-%%   0: env.memory (memory)
-%%   1: env.__indirect_function_table (table funcref)
+%%   0-7:  (i32 x N) -> i32   for N=1..8  (Type 2 = entry point signature)
+%%   8-15: (i32 x N) -> void  for N=1..8
+%%   16:   (i32, i64) -> i32  (alloc_boxed_integer_fragment)
 %%=============================================================================
 
 assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
     Asm = jit_wasm32_asm,
 
-    %% Type section: define function types for different arities and return types.
-    %% Types 0-7: (i32 x (N+1)) -> i32, for N=0..7 (1 to 8 args)
-    %% Types 8-15: (i32 x (N-7)) -> void, for N=8..15 (1 to 8 args)
-    %% Type 16: (i32, i64) -> i32 (for alloc_boxed_integer_fragment)
-    %% The entry point type (3 args -> i32) is Type 2
     I32ReturnTypes = [
         Asm:encode_func_type(lists:duplicate(N, Asm:type_i32()), [Asm:type_i32()])
      || N <- lists:seq(1, 8)
@@ -1967,16 +1764,12 @@ assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
         Asm:encode_func_type(lists:duplicate(N, Asm:type_i32()), [])
      || N <- lists:seq(1, 8)
     ],
-    %% Special types for primitives with i64 parameters
     SpecialTypes = [
         Asm:encode_func_type([Asm:type_i32(), Asm:type_i64()], [Asm:type_i32()])
     ],
     Types = I32ReturnTypes ++ VoidReturnTypes ++ SpecialTypes,
     TypeSection = Asm:encode_type_section(Types),
 
-    %% Import section:
-    %%   import 0: "env" "memory" memory {min: 256}
-    %%   import 1: "env" "__indirect_function_table" table funcref {min: 0}
     MemoryImport = <<
         (Asm:encode_name("env"))/binary,
         (Asm:encode_name("memory"))/binary,
@@ -2002,19 +1795,15 @@ assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
     >>,
     ImportSection = Asm:encode_section(2, Asm:encode_vector([MemoryImport, TableImport])),
 
-    %% Function section: all label functions use type 2 (3 args: ctx, jit_state, native_interface)
+    %% Function section: all functions use type 2 (3 i32 args -> i32)
     NumFunctions = LabelsCount + 1,
     FunctionTypeIndices = lists:duplicate(NumFunctions, 2),
     FunctionSection = Asm:encode_function_section(FunctionTypeIndices),
 
-    %% Export section: export each label function as "f0", "f1", ...
+    %% Export section: "f0", "f1", ...
     Exports = lists:map(
         fun(LabelIdx) ->
             FuncName = "f" ++ integer_to_list(LabelIdx),
-            %% Function index = LabelIdx (since imports don't count as function indices
-            %% in the function section, but they DO count in the function index space)
-            %% Import functions: 0 = memory, 1 = table (these are NOT function imports)
-            %% So function indices start at 0 for our defined functions.
             <<
                 (Asm:encode_name(FuncName))/binary,
                 %% export kind: function
@@ -2027,13 +1816,11 @@ assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
     ),
     ExportSection = Asm:encode_export_section(Exports),
 
-    %% Code section: function bodies
-    %% Each function has 3 params (i32 each) + MaxScratch i32 locals
+    %% Code section
     ScratchLocals = [{MaxScratch, Asm:type_i32()}],
     FuncBodiesEncoded = build_func_bodies(SortedBodies, 0, NumFunctions, ScratchLocals, Asm),
     CodeSection = Asm:encode_code_section(FuncBodiesEncoded),
 
-    %% Assemble the complete module
     <<
         (Asm:wasm_magic())/binary,
         (Asm:wasm_version())/binary,
@@ -2044,8 +1831,7 @@ assemble_wasm_module(SortedBodies, LabelsCount, MaxScratch) ->
         CodeSection/binary
     >>.
 
-%% Build encoded function bodies for all labels (0 to NumFunctions-1).
-%% Labels that don't have compiled code get a stub that returns ctx.
+%% Labels without compiled code get a stub returning ctx.
 build_func_bodies(SortedBodies, Idx, NumFunctions, ScratchLocals, Asm) ->
     build_func_bodies(SortedBodies, Idx, NumFunctions, ScratchLocals, Asm, []).
 
@@ -2057,11 +1843,10 @@ build_func_bodies(SortedBodies, Idx, NumFunctions, ScratchLocals, Asm, Acc) ->
     Body =
         case lists:keyfind(Idx, 1, SortedBodies) of
             {Idx, InstrBytes} ->
-                %% Real function body: locals + instructions + end
                 Expr = <<InstrBytes/binary, (Asm:end_())/binary>>,
                 Asm:encode_func_body(ScratchLocals, Expr);
             false ->
-                %% Stub: return ctx (local 0)
+                %% Stub: return ctx
                 StubExpr = <<
                     (Asm:local_get(0))/binary,
                     (Asm:end_())/binary
