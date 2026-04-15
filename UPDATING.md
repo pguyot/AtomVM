@@ -35,6 +35,7 @@ standard Erlang/OTP API, that takes maps instead of proplists.
 The `main.avm` offset is now `0x250000` for all images (previously `0x210000` for Erlang-only).
 Update flashing offsets in your tooling, build scripts, and `mix.exs` or `rebar.config` if you
 were using the `0x210000` offset.
+- emscripten is now invoked with EXPORT_ES6 and generated scripts are ES6 modules with .mjs suffix
 
 ## v0.6.4 -> v0.6.5
 
