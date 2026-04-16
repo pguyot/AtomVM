@@ -67,17 +67,17 @@ FetchContent_MakeAvailable(cmsis_core)
 #   HAL driver:   https://github.com/STMicroelectronics/stm32<family>xx_hal_driver.git
 # Exceptions are handled with _SDK_<family>_CMSIS_REPO / _SDK_<family>_HAL_REPO overrides.
 set(_SDK_f2  "v2.2.6;v1.2.9")
-set(_SDK_f4  "v2.6.10;v1.8.3")
+set(_SDK_f4  "v2.6.11;v1.8.3")
 set(_SDK_f7  "v1.2.10;v1.3.3")
-set(_SDK_g0  "v1.4.4;v1.4.6")
+set(_SDK_g0  "v1.4.5;v1.4.6")
 set(_SDK_g4  "v1.2.6;v1.2.6")
-set(_SDK_h5  "v1.2.0;v1.2.0")
-set(_SDK_h7  "v1.10.4;v1.11.3")
+set(_SDK_h5  "v1.6.0;v1.6.0")
+set(_SDK_h7  "v1.10.7;v1.11.3")
 set(_SDK_l4  "v1.7.5;v1.13.6")
 set(_SDK_l5  "v1.0.7;v1.0.7")
 set(_SDK_u3  "v1.3.0;v1.2.0")
-set(_SDK_u5  "v1.4.0;v1.6.0")
-set(_SDK_wb  "v1.12.2;v1.14.3")
+set(_SDK_u5  "v1.4.2;v1.6.0")
+set(_SDK_wb  "v1.12.3;v1.14.3")
 
 # U3 uses hyphens instead of underscores in repo names
 set(_SDK_u3_CMSIS_REPO "https://github.com/STMicroelectronics/cmsis-device-u3.git")
