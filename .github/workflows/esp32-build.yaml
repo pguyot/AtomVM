@@ -56,11 +56,11 @@ jobs:
         - esp-idf-target: "esp32p4"
           idf-version: 'release-v5.4'
         - esp-idf-target: "esp32p4"
-          idf-version: 'v5.5.3'
+          idf-version: 'v5.5.4'
         - esp-idf-target: "esp32s3"
-          idf-version: 'v5.5.3'
+          idf-version: 'v5.5.4'
         - esp-idf-target: "esp32"
-          idf-version: 'v5.4.3'
+          idf-version: 'v5.5.4'
           libsodium: 'ON'
 
     steps:
