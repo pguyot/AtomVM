@@ -51,7 +51,7 @@ endif ()
 FetchContent_Declare(
     cmsis_core
     GIT_REPOSITORY https://github.com/STMicroelectronics/cmsis_core.git
-    GIT_TAG        v5.9.0
+    GIT_TAG        v6.3.0
     GIT_SHALLOW    TRUE
 )
 FetchContent_GetProperties(cmsis_core)
