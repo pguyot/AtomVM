@@ -63,6 +63,8 @@ struct Module;
 typedef struct Module Module;
 #endif
 
+#ifndef AVM_NO_JIT
+
 // Interface to native code:
 // Entry point returns the current (or new) context
 // jit_state->remaining_reductions is updated.
@@ -208,16 +210,19 @@ enum TrapAndLoadResult
 #ifdef __x86_64__
 #define JIT_ARCH_TARGET JIT_ARCH_X86_64
 #define JIT_JUMPTABLE_ENTRY_SIZE 5
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #if defined(__arm64__) || defined(__aarch64__)
 #define JIT_ARCH_TARGET JIT_ARCH_AARCH64
 #define JIT_JUMPTABLE_ENTRY_SIZE 4
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #if defined(__arm__) && defined(AVM_JIT_ARM32)
 #define JIT_ARCH_TARGET JIT_ARCH_ARM32
 #define JIT_JUMPTABLE_ENTRY_SIZE 8
+#define JIT_JUMPTABLE_OFFSET 0
 #elif defined(__arm__)
 #define JIT_ARCH_TARGET JIT_ARCH_ARMV6M
 #ifdef AVM_JIT_THUMB2
@@ -225,22 +230,26 @@ enum TrapAndLoadResult
 #else
 #define JIT_JUMPTABLE_ENTRY_SIZE 12
 #endif
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #if defined(__riscv) && (__riscv_xlen == 32)
 #define JIT_ARCH_TARGET JIT_ARCH_RISCV32
 #define JIT_JUMPTABLE_ENTRY_SIZE 8
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #if defined(__riscv) && (__riscv_xlen == 64)
 #define JIT_ARCH_TARGET JIT_ARCH_RISCV64
 #define JIT_JUMPTABLE_ENTRY_SIZE 8
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #ifdef __wasm__
 #define JIT_ARCH_TARGET JIT_ARCH_WASM32
 #define JIT_JUMPTABLE_ENTRY_SIZE 4
 #define JIT_JUMPTABLE_IS_DATA
+#define JIT_JUMPTABLE_OFFSET 0
 #endif
 
 #ifndef JIT_ARCH_TARGET
