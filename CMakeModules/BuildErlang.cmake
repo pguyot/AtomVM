@@ -82,7 +82,7 @@ endmacro()
 macro(pack_precompiled_archive avm_name)
     pack_archive(${avm_name} ${ARGN})
 
-    set(multiValueArgs ERLC_FLAGS MODULES PRECOMPILED_MODULES)
+    set(multiValueArgs ERLC_FLAGS MODULES PRECOMPILED_MODULES DEPENDS_ON)
     cmake_parse_arguments(PACK_ARCHIVE "" "" "${multiValueArgs}" ${ARGN})
 
     if(NOT AVM_DISABLE_JIT OR AVM_ENABLE_PRECOMPILED)
@@ -305,7 +305,7 @@ endmacro()
 
 macro(pack_runnable avm_name main)
 
-    set(multiValueArgs DIALYZE_AGAINST TARGETS)
+    set(multiValueArgs DIALYZE_AGAINST TARGETS JIT_ARCHIVES)
     cmake_parse_arguments(PACK_RUNNABLE "" "" "${multiValueArgs}" ${ARGN})
 
     add_custom_command(
@@ -430,37 +430,23 @@ macro(pack_runnable avm_name main)
                 VERBATIM
             )
 
-            # Include JIT compiler as individual BEAM files (not the precompiled archive).
-            # Using jit-${arch}.avm (precompiled) would be ~1.4MB just for the JIT compiler,
-            # which combined with estdlib exceeds the 1MB esp32 boot partition limit.
-            # The JIT compiler starts as BEAM and gets JIT-compiled at runtime.
-            set(pack_runnable_${avm_name}_jit_beam_files_${jit_target_arch_variant}
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_regs.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_stream_binary.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_stream_flash.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_stream_mmap.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}.beam
-                ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_${jit_target_arch}_asm.beam
-            )
-            if(NOT AVM_DISABLE_JIT_DWARF)
-                list(APPEND pack_runnable_${avm_name}_jit_beam_files_${jit_target_arch_variant}
-                    ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_dwarf.beam)
+            # Build esp32boot with fully AOT archives (native code, no bytecode, no JIT compiler).
+            # JIT_ARCHIVES limits which libraries are included in the JIT boot AVM;
+            # defaults to the same set as the non-JIT AVM.
+            if(PACK_RUNNABLE_JIT_ARCHIVES)
+                set(_jit_archive_list "${PACK_RUNNABLE_JIT_ARCHIVES}")
+            else()
+                set(_jit_archive_list "${PACK_RUNNABLE_UNPARSED_ARGUMENTS}")
             endif()
-            if("${jit_target_arch_variant}" MATCHES "thumb2")
-                list(APPEND pack_runnable_${avm_name}_jit_beam_files_${jit_target_arch_variant}
-                    ${CMAKE_BINARY_DIR}/libs/jit/src/beams/jit_armv7m_asm.beam)
-            endif()
-
-            set(pack_runnable_${avm_name}_jit_regular_archives_${jit_target_arch_variant} "")
-            set(pack_runnable_${avm_name}_jit_archive_targets_${jit_target_arch_variant} jit)
-            foreach(archive_name ${PACK_RUNNABLE_UNPARSED_ARGUMENTS})
+            set(pack_runnable_${avm_name}_jit_archives_${jit_target_arch_variant} "")
+            set(pack_runnable_${avm_name}_jit_archive_targets_${jit_target_arch_variant} "")
+            foreach(archive_name ${_jit_archive_list})
                 if(${archive_name} STREQUAL "exavmlib")
-                    list(APPEND pack_runnable_${avm_name}_jit_regular_archives_${jit_target_arch_variant}
+                    list(APPEND pack_runnable_${avm_name}_jit_archives_${jit_target_arch_variant}
                         ${CMAKE_BINARY_DIR}/libs/${archive_name}/lib/${archive_name}.avm)
                 else()
-                    list(APPEND pack_runnable_${avm_name}_jit_regular_archives_${jit_target_arch_variant}
-                        ${CMAKE_BINARY_DIR}/libs/${archive_name}/src/${archive_name}.avm)
+                    list(APPEND pack_runnable_${avm_name}_jit_archives_${jit_target_arch_variant}
+                        ${CMAKE_BINARY_DIR}/libs/${archive_name}/src/${archive_name}-${jit_target_arch_variant}.avm)
                 endif()
                 list(APPEND pack_runnable_${avm_name}_jit_archive_targets_${jit_target_arch_variant} ${archive_name})
             endforeach()
@@ -469,15 +455,13 @@ macro(pack_runnable avm_name main)
                 OUTPUT ${avm_name}-${jit_target_arch_variant}.avm
                 DEPENDS
                     ${CMAKE_CURRENT_BINARY_DIR}/${jit_target_arch_variant}/${main}.beam
-                    ${pack_runnable_${avm_name}_jit_beam_files_${jit_target_arch_variant}}
-                    ${pack_runnable_${avm_name}_jit_regular_archives_${jit_target_arch_variant}}
+                    ${pack_runnable_${avm_name}_jit_archives_${jit_target_arch_variant}}
                     ${pack_runnable_${avm_name}_jit_archive_targets_${jit_target_arch_variant}}
                     PackBEAM
                 COMMAND ${CMAKE_BINARY_DIR}/tools/packbeam/packbeam create ${PACKBEAM_PRUNE_ARGS} -s ${main} ${INCLUDE_LINES}
                     ${avm_name}-${jit_target_arch_variant}.avm
                     ${CMAKE_CURRENT_BINARY_DIR}/${jit_target_arch_variant}/${main}.beam
-                    ${pack_runnable_${avm_name}_jit_beam_files_${jit_target_arch_variant}}
-                    ${pack_runnable_${avm_name}_jit_regular_archives_${jit_target_arch_variant}}
+                    ${pack_runnable_${avm_name}_jit_archives_${jit_target_arch_variant}}
                 COMMENT "Packing JIT runnable ${avm_name}-${jit_target_arch_variant}.avm"
                 VERBATIM
             )
