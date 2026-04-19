@@ -49,6 +49,7 @@
 
 #if ESP_IDF_VERSION_MAJOR >= 5
 #include "esp_chip_info.h"
+#include <spi_flash_mmap.h>
 #endif
 
 #include <esp_vfs_eventfd.h>
@@ -348,6 +349,28 @@ const void *esp32_sys_mmap_partition(const char *partition_name, spi_flash_mmap_
     }
     ESP_LOGI(TAG, "Loaded BEAM partition %s at address 0x%"PRIx32" (size=%"PRIu32" bytes)",
         partition_name, partition->address, partition->size);
+
+#ifndef CONFIG_IDF_TARGET_ARCH_RISCV
+    // On Xtensa, flash DROM is not executable. Map each AVM partition via the
+    // instruction bus (IBUS) as well so that AOT native code chunks can be
+    // executed directly from flash. Handles are kept alive for the VM lifetime.
+#ifndef AVM_NO_JIT
+    static spi_flash_mmap_handle_t s_ibus_part_handles[4];
+    static int s_ibus_part_count = 0;
+
+    if (s_ibus_part_count < 4) {
+        const void *ibus_ptr;
+        if (esp_partition_mmap(partition, 0, partition->size, SPI_FLASH_MMAP_INST,
+                &ibus_ptr, &s_ibus_part_handles[s_ibus_part_count]) == ESP_OK) {
+            s_ibus_part_count++;
+        } else {
+            ESP_LOGW(TAG, "Failed to map partition %s for instruction access", partition_name);
+        }
+    } else {
+        ESP_LOGW(TAG, "Too many AVM partitions for Xtensa IBUS mapping");
+    }
+#endif // AVM_NO_JIT
+#endif // CONFIG_IDF_TARGET_ARCH_RISCV
 
     return mapped_memory;
 }
@@ -881,6 +904,18 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *code, size_t code_size
     }
 #endif
     // ESP32-C6, H2, and P4 have unified DROM/IROM, no conversion needed
+#else
+    // On Xtensa, DROM (0x3F4xxxxx) is not executable. Convert to the IBUS
+    // (IROM) address using the physical address as an intermediate step.
+    // This requires the partition to have been mapped via SPI_FLASH_MMAP_INST
+    // by esp32_sys_mmap_partition (done at partition load time).
+    size_t phys = spi_flash_cache2phys((const void *) addr);
+    if (phys != SPI_FLASH_CACHE2PHYS_FAIL) {
+        const void *ibus_addr = spi_flash_phys2cache(phys, SPI_FLASH_MMAP_INST);
+        if (ibus_addr != NULL) {
+            addr = (uintptr_t) ibus_addr;
+        }
+    }
 #endif
 
     return (ModuleNativeEntryPoint) addr;
