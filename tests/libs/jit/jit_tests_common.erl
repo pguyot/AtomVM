@@ -163,6 +163,7 @@ toolchain_prefixes(Arch) ->
         "-unknown-elf",
         "-elf",
         "-none-eabi",
+        "-linux",
         "-linux-gnu",
         "-linux-gnueabihf",
         "-buildroot-linux-uclibc"
