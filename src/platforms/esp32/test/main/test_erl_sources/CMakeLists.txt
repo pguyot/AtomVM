@@ -20,6 +20,24 @@
 
 add_library(esp32_test_modules)
 
+# CONFIG_* is available here because idf_component_register was already called
+# by the parent main/CMakeLists.txt. Replicate the JIT detection logic from
+# components/libatomvm/CMakeLists.txt since that directory's variables do not
+# propagate into this sibling subdirectory scope.
+if(CONFIG_JIT_ENABLED)
+    if (${IDF_TARGET} MATCHES "esp32c2|esp32c3|esp32c5|esp32c6|esp32c61|esp32h2|esp32p4")
+        set(AVM_DISABLE_JIT OFF)
+        set(AVM_JIT_TARGET_ARCH riscv32)
+    elseif(${IDF_TARGET} MATCHES "esp32|esp32s2|esp32s3")
+        set(AVM_DISABLE_JIT OFF)
+        set(AVM_JIT_TARGET_ARCH xtensa)
+    else()
+        set(AVM_DISABLE_JIT ON)
+    endif()
+else()
+    set(AVM_DISABLE_JIT ON)
+endif()
+
 include(ExternalProject)
 if(NOT AVM_DISABLE_JIT)
 set(host_atomvm_jit_target "--target=jit")
@@ -72,7 +90,7 @@ function(compile_erlang_no_jit module_name)
 endfunction()
 
 compile_erlang(test_jit_compile)
-compile_erlang_no_jit(test_jit_simple)
+compile_erlang(test_jit_simple)
 compile_erlang(test_esp_partition)
 compile_erlang(test_esp_timer_get_time)
 compile_erlang(test_file)
@@ -98,6 +116,7 @@ compile_erlang(test_wifi_scan)
 
 set(erlang_test_beams
     test_jit_compile.beam
+    test_jit_simple.beam
     test_esp_partition.beam
     test_esp_timer_get_time.beam
     test_file.beam
@@ -125,27 +144,27 @@ set(erlang_test_beams
 if(NOT AVM_DISABLE_JIT)
     set(erlang_test_beams_${AVM_JIT_TARGET_ARCH} ${erlang_test_beams})
     list(TRANSFORM erlang_test_beams_${AVM_JIT_TARGET_ARCH} PREPEND ${AVM_JIT_TARGET_ARCH}/)
-    # test_jit_simple is always plain BEAM (no JIT precompile) so the code_server
-    # can compile it at runtime via jit_stream_flash, testing the full JIT pipeline.
+    # All test modules (including test_jit_simple) are JIT-precompiled for the target arch.
+    # test_jit_compile (precompiled) calls test_jit_simple:run() (also precompiled).
+    # Use the non-JIT atomvmlib to keep the binary small enough to fit in flash.
+    # In AVM_NO_EMU mode, tests that call estdlib functions will fail, but that is
+    # acceptable for QEMU testing where only the JIT-precompiled code path is verified.
     set(erlang_test_beams_to_package
-        ${erlang_test_beams_${AVM_JIT_TARGET_ARCH}}
-        test_jit_simple.beam)
+        ${erlang_test_beams_${AVM_JIT_TARGET_ARCH}})
     set(erlang_test_beams_depends
         ${erlang_test_beams}
-        ${erlang_test_beams_${AVM_JIT_TARGET_ARCH}}
-        test_jit_simple.beam)
-    set(jit_avm_arg HostAtomVM-prefix/src/HostAtomVM-build/libs/jit/src/jit.avm)
+        ${erlang_test_beams_${AVM_JIT_TARGET_ARCH}})
+    set(atomvmlib_avm "HostAtomVM-prefix/src/HostAtomVM-build/libs/atomvmlib-esp32.avm")
 else()
-    set(erlang_test_beams_to_package ${erlang_test_beams} test_jit_simple.beam)
-    set(erlang_test_beams_depends ${erlang_test_beams} test_jit_simple.beam)
-    set(jit_avm_arg "")
+    set(erlang_test_beams_to_package ${erlang_test_beams})
+    set(erlang_test_beams_depends ${erlang_test_beams})
+    set(atomvmlib_avm "HostAtomVM-prefix/src/HostAtomVM-build/libs/atomvmlib-esp32.avm")
 endif()
 
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/esp32_test_modules.avm"
     COMMAND HostAtomVM-prefix/src/HostAtomVM-build/tools/packbeam/packbeam create esp32_test_modules.avm
-        HostAtomVM-prefix/src/HostAtomVM-build/libs/atomvmlib-esp32.avm
-        ${jit_avm_arg}
+        ${atomvmlib_avm}
         ${erlang_test_beams_to_package}
     DEPENDS
         HostAtomVM
