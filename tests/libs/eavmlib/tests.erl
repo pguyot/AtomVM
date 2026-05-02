@@ -23,12 +23,15 @@
 -export([start/0]).
 
 start() ->
-    etest:test([
+    BaseTests = [
         test_dir,
         test_file,
-        test_http_server,
-        test_mdns,
         test_port,
-        test_timer_manager,
-        test_ahttp_client
-    ]).
+        test_timer_manager
+    ],
+    NetworkingTests =
+        case atomvm:platform() of
+            wasi -> [];
+            _ -> [test_http_server, test_mdns, test_ahttp_client]
+        end,
+    etest:test(BaseTests ++ NetworkingTests).

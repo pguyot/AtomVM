@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added I2C and SPI APIs to stm32 platform
 - Added `Transfer-Encoding: chunked` response support to `ahttp_client`, including HTTP trailers
 - Added `proc_lib:init_fail/2,3`
+- Added WASI platform, with `wasm32-wasip1` (no SMP, no networking),
+  `wasm32-wasip1-threads` (SMP, no networking) and `wasm32-wasip2` (no SMP,
+  networking via `wasi:sockets@0.2.x`) target triples
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
