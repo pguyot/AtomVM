@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer lines return `{error, {parser, {line_too_long, Prefix}}}` with the first 128 bytes of
   the offending line. Callers whose upstream servers emit unusually large headers must account
   for this limit
+- `socket:setopt(Socket, {socket, reuseaddr}, _Value)` and
+  `socket:setopt(Socket, {socket, linger}, _Value)` are accepted on platforms
+  that do not implement the options
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
@@ -50,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `ahttp_client` crash on non-numeric or negative `Content-Length` values
 - Fixed `ahttp_client` crash on headers with empty or all-whitespace values
 - Fixed a bug in `supervisor` handling of failing child
+- `socket:recv/3` and `socket:recvfrom/3` now tolerate spurious select wakeups
+- `gen_tcp_socket` and `gen_udp_socket` no longer leak `pending_selects` entries
+- `socket:send/2` and `socket:sendto/3` now wait via select
+- `socket:bind`, `socket:listen`, `socket:accept`, `socket:connect`,
+  `socket:shutdown`, `socket:sockname`, `socket:peername`, `socket:recv`,
+  `socket:recvfrom`, `socket:send` and `socket:sendto` operating on a fd
+  that was already closed by another process now return `{error, closed}`
+  rather than `{error, ebadf}`
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
