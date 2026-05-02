@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added UART API to rp2 platform
 - Added `"USB_SERIAL_JTAG"` peripheral to the ESP32 `uart` module on chips with a built-in
   USB-Serial-JTAG controller (C3/C5/C6/C61/H2/H21/H4/P4/S3)
+- Added WASI platform, with `wasm32-wasip1` (no SMP, no networking),
+  `wasm32-wasip1-threads` (SMP, no networking) and `wasm32-wasip2` (no SMP,
+  networking via `wasi:sockets@0.2.x`) target triples
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
