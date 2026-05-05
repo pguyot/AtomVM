@@ -172,9 +172,26 @@ If the Erlang source was compiled with debug information and the BEAM Line chunk
 ```
 
 ```{note}
-LLDB 19 has a regression in the JIT loader that causes hangs when resolving breakpoints in JIT-loaded modules. Use LLDB 20 or later.
-On macOS, you can use lldb that ships with Xcode 26+ or install lldb 20 from [MacPorts](https://www.macports.org/) (`port install lldb-20`) or
-build from the [LLVM project source](https://github.com/llvm/llvm-project).
+Upstream LLVM LLDB 19 and Apple LLDB versions earlier than `lldb-2100` (shipped in Xcode 26.4 and later) hang when resolving pending source-line breakpoints against JIT-emitted DWARF.
+
+Workarounds without changing lldb:
+
+* Set breakpoints by symbol name (`breakpoint set -n 'mod:fun/N'`) instead of file/line
+* Defer source-line breakpoints until after the relevant module has been JIT-registered (e.g. break first on a symbol, then add the source-line breakpoint, then continue).
+
+For a fresh lldb:
+
+* On macOS 26, the LLDB shipped with the CommandLineTools is already at `lldb-2100` (independent of the active Xcode), so a quick fix is to invoke it directly:
+
+```shell
+$ /Library/Developer/CommandLineTools/usr/bin/lldb -- ...
+```
+
+Alternatively, switch the active Xcode to 26.4 or later (`sudo xcode-select -s /Applications/Xcode_26.4.app`).
+
+* On any platform, install upstream LLDB 20 or later with `sudo port install lldb-20` from [MacPorts](https://www.macports.org/), `brew install llvm` (Homebrew), or build from the [LLVM project source](https://github.com/llvm/llvm-project). A self-signed `lldb` binary on macOS needs a debugger entitlement.
+
+`lldb --version` reports the version: `lldb-1703.x` and earlier are affected; `lldb-2100.x` and upstream LLDB 20+ are fixed.
 ```
 
 ### Disassembling precompiled modules
