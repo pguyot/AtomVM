@@ -880,7 +880,7 @@ static term nif_atomvm_subprocess(Context *ctx, int argc, term argv[])
         if (UNLIKELY((r = posix_spawnattr_init(&spawn_attrs)) != 0)) {
             break;
         }
-        if (UNLIKELY((r = posix_spawnattr_setflags(&spawn_attrs, HAVE_POSIX_SPAWN_CLOEXEC_DEFAULT)) != 0)) {
+        if (UNLIKELY((r = posix_spawnattr_setflags(&spawn_attrs, POSIX_SPAWN_CLOEXEC_DEFAULT)) != 0)) {
             break;
         }
         if (UNLIKELY((r = posix_spawn(&pid, path, &file_actions, &spawn_attrs, args, envp)) != 0)) {
@@ -921,7 +921,7 @@ static term nif_atomvm_subprocess(Context *ctx, int argc, term argv[])
         closefrom(2);
 #else
         int maxfd = sysconf(_SC_OPEN_MAX);
-        for (int fd = 3; fd < maxfd; fd++) {
+        for (int fd = 2; fd < maxfd; fd++) {
             close(fd);
         }
 #endif
