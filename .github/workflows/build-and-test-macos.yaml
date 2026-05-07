@@ -83,7 +83,7 @@ jobs:
           https://cdn.jsdelivr.net/hex
 
     - name: "Install deps"
-      run: brew update && HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install gperf doxygen socat ${{ matrix.mbedtls }}
+      run: brew update && HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install coreutils gperf doxygen socat ${{ matrix.mbedtls }}
 
     - name: "Workaround for nxdomain random issues"
       run: |
@@ -147,9 +147,23 @@ jobs:
 
     - name: "Test: dwarf (test_executable_line)"
       if: matrix.cmake_opts_other == '-DAVM_DISABLE_JIT=OFF -DAVM_DISABLE_JIT_DWARF=OFF'
+      timeout-minutes: 4
       working-directory: build
+      env:
+        # Apple lldb < 2100 hangs forever resolving pending source-line
+        # breakpoints against JIT-emitted DWARF on macOS 26 (the active
+        # Xcode 26.2 lldb is 1703.x). The CommandLineTools lldb is at
+        # 2100 and works.
+        LLDB: /Library/Developer/CommandLineTools/usr/bin/lldb
       run: |
-        OUTPUT=$(lldb -b \
+        [ -x "$LLDB" ] || { echo "FAIL: $LLDB not executable"; exit 1; }
+        echo "## using $LLDB"
+        "$LLDB" --version | head -2
+        LOG=/tmp/lldb-test_executable_line.log
+        set +e
+        gtimeout --foreground -k 30 120 "$LLDB" -b \
+          -o "log enable -f /tmp/lldb-jit-loader.log lldb jit" \
+          -o "log enable -f /tmp/lldb-gdb-test.log gdb-remote packets" \
           -o "settings set plugin.jit-loader.gdb.enable on" \
           -o "breakpoint set -f test_executable_line.erl -l 49" \
           -o "breakpoint set -f test_executable_line.erl -l 52" \
@@ -157,10 +171,17 @@ jobs:
           -o "print term_to_int(ctx->x[0])" \
           -o "c" \
           -o "print term_to_int(ctx->x[0])" \
-          -- ./tests/test-erlang test_executable_line 2>&1)
-        echo "$OUTPUT"
-        # Extract printed values in order
-        VALUES=$(echo "$OUTPUT" | sed -n 's/.*(\(avm_int_t\)) \(-\{0,1\}[0-9][0-9]*\).*/\2/p')
+          -o "quit" \
+          -- ./tests/test-erlang test_executable_line 2>&1 | tee "$LOG"
+        LLDB_RC=${PIPESTATUS[0]}
+        set -e
+        if [ "$LLDB_RC" -eq 124 ] || [ "$LLDB_RC" -eq 137 ]; then
+          echo "FAIL: lldb timed out (rc=$LLDB_RC)"
+          [ -f /tmp/lldb-jit-loader.log ] && { echo "## jit log"; head -200 /tmp/lldb-jit-loader.log; }
+          [ -f /tmp/lldb-gdb-test.log ] && { echo "## gdb-remote packets (tail)"; tail -120 /tmp/lldb-gdb-test.log; }
+          exit 1
+        fi
+        VALUES=$(sed -n 's/^(\(avm_int_t\)) \(-\{0,1\}[0-9][0-9]*\).*/\2/p' "$LOG")
         FIRST=$(echo "$VALUES" | sed -n '1p')
         SECOND=$(echo "$VALUES" | sed -n '2p')
         if [ "$FIRST" != "42" ]; then
@@ -175,9 +196,15 @@ jobs:
 
     - name: "Test: dwarf (test_debug_line)"
       if: matrix.cmake_opts_other == '-DAVM_DISABLE_JIT=OFF -DAVM_DISABLE_JIT_DWARF=OFF'
+      timeout-minutes: 6
       working-directory: build
+      env:
+        LLDB: /Library/Developer/CommandLineTools/usr/bin/lldb
       run: |
-        OUTPUT=$(lldb -b \
+        [ -x "$LLDB" ] || { echo "FAIL: $LLDB not executable"; exit 1; }
+        LOG=/tmp/lldb-test_debug_line.log
+        set +e
+        gtimeout --foreground -k 30 240 "$LLDB" -b \
           -o "settings set plugin.jit-loader.gdb.enable on" \
           -o "breakpoint set -f test_debug_line.erl -l 49" \
           -o "breakpoint set -f test_debug_line.erl -l 52" \
@@ -185,10 +212,15 @@ jobs:
           -o "print term_to_int(N)" \
           -o "c" \
           -o "print term_to_int(Z)" \
-          -- ./tests/test-erlang test_debug_line 2>&1)
-        echo "$OUTPUT"
-        # Extract printed values in order
-        VALUES=$(echo "$OUTPUT" | sed -n 's/.*(\(avm_int_t\)) \(-\{0,1\}[0-9][0-9]*\).*/\2/p')
+          -o "quit" \
+          -- ./tests/test-erlang test_debug_line 2>&1 | tee "$LOG"
+        LLDB_RC=${PIPESTATUS[0]}
+        set -e
+        if [ "$LLDB_RC" -eq 124 ] || [ "$LLDB_RC" -eq 137 ]; then
+          echo "FAIL: lldb timed out (rc=$LLDB_RC)"
+          exit 1
+        fi
+        VALUES=$(sed -n 's/^(\(avm_int_t\)) \(-\{0,1\}[0-9][0-9]*\).*/\2/p' "$LOG")
         FIRST=$(echo "$VALUES" | sed -n '1p')
         SECOND=$(echo "$VALUES" | sed -n '2p')
         if [ "$FIRST" != "42" ]; then
