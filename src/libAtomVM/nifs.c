@@ -1968,6 +1968,78 @@ term nif_erlang_universaltime_0(Context *ctx, int argc, term argv[])
 extern char **environ;
 #endif
 
+static struct tm *tzstr_localtime_r(
+    const time_t *timer, struct tm *result, const char *tzstr, GlobalContext *global)
+{
+#ifdef AVM_NO_SMP
+    UNUSED(global);
+#endif
+    errno = 0;
+
+    struct tm *localtime;
+
+#if !AVM_TZ_USE_SETENV_FALLBACK
+    char *tz_env_entry = NULL;
+    if (tzstr) {
+        size_t tz_len = strlen(tzstr);
+        tz_env_entry = malloc(tz_len + 4); // "TZ=" + tzstr + '\0'
+        if (UNLIKELY(tz_env_entry == NULL)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        memcpy(tz_env_entry, "TZ=", 3);
+        memcpy(tz_env_entry + 3, tzstr, tz_len + 1);
+    }
+
+    SMP_SPINLOCK_LOCK(&global->env_spinlock);
+    if (tzstr) {
+        char *tz_environ[] = { tz_env_entry, NULL };
+        char **saved_environ = environ;
+        environ = tz_environ;
+        tzset();
+        localtime = localtime_r(timer, result);
+        environ = saved_environ;
+        tzset();
+    } else {
+        tzset();
+        localtime = localtime_r(timer, result);
+    }
+    SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+
+    free(tz_env_entry);
+#else
+    SMP_SPINLOCK_LOCK(&global->env_spinlock);
+    if (tzstr) {
+        char *oldtz_env = getenv("TZ");
+        char *oldtz = NULL;
+        if (oldtz_env) {
+            oldtz = strdup(oldtz_env);
+            if (UNLIKELY(oldtz == NULL)) {
+                SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+                errno = ENOMEM;
+                return NULL;
+            }
+        }
+        setenv("TZ", tzstr, 1);
+        tzset();
+        localtime = localtime_r(timer, result);
+        if (oldtz) {
+            setenv("TZ", oldtz, 1);
+            free(oldtz);
+        } else {
+            unsetenv("TZ");
+        }
+        tzset();
+    } else {
+        tzset();
+        localtime = localtime_r(timer, result);
+    }
+    SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+#endif
+
+    return localtime;
+}
+
 term nif_erlang_localtime(Context *ctx, int argc, term argv[])
 {
     char *tz;
@@ -1985,70 +2057,15 @@ term nif_erlang_localtime(Context *ctx, int argc, term argv[])
     sys_time(&ts);
 
     struct tm storage;
-    struct tm *localtime;
-
-#if !AVM_TZ_USE_SETENV_FALLBACK
-    char *tz_env_entry = NULL;
-    if (tz) {
-        size_t tz_len = strlen(tz);
-        tz_env_entry = malloc(tz_len + 4); // "TZ=" + tz + '\0'
-        if (UNLIKELY(tz_env_entry == NULL)) {
-            free(tz);
-            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-        }
-        memcpy(tz_env_entry, "TZ=", 3);
-        memcpy(tz_env_entry + 3, tz, tz_len + 1);
-    }
-
-    SMP_SPINLOCK_LOCK(&ctx->global->env_spinlock);
-    if (tz) {
-        char *tz_environ[] = { tz_env_entry, NULL };
-        char **saved_environ = environ;
-        environ = tz_environ;
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-        environ = saved_environ;
-        tzset();
-    } else {
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-    }
-    SMP_SPINLOCK_UNLOCK(&ctx->global->env_spinlock);
-
-    free(tz_env_entry);
-#else
-    SMP_SPINLOCK_LOCK(&ctx->global->env_spinlock);
-    if (tz) {
-        char *oldtz_env = getenv("TZ");
-        char *oldtz = NULL;
-        if (oldtz_env) {
-            oldtz = strdup(oldtz_env);
-            if (UNLIKELY(oldtz == NULL)) {
-                SMP_SPINLOCK_UNLOCK(&ctx->global->env_spinlock);
-                free(tz);
-                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-            }
-        }
-        setenv("TZ", tz, 1);
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-        if (oldtz) {
-            setenv("TZ", oldtz, 1);
-            free(oldtz);
-        } else {
-            unsetenv("TZ");
-        }
-        tzset();
-    } else {
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-    }
-    SMP_SPINLOCK_UNLOCK(&ctx->global->env_spinlock);
-#endif
+    struct tm *localtime = tzstr_localtime_r(&ts.tv_sec, &storage, tz, ctx->global);
+    int localtime_errno = errno;
 
     free(tz);
 
     if (UNLIKELY(localtime == NULL)) {
+        if (localtime_errno == ENOMEM) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
         RAISE_ERROR(BADARG_ATOM);
     }
 
