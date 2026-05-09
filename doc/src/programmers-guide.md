@@ -1911,7 +1911,7 @@ The AtomVM UART implementation uses the AtomVM Port mechanism and must be initia
 The first parameter indicates the ESP32 UART hardware interface.  Valid values are:
 
 ```erlang
-"UART0" | "UART1" | "UART2"
+"UART0" | "UART1" | "UART2" | "USB_SERIAL_JTAG"
 ```
 
 The second parameter is a properties list, containing the following elements:
@@ -1940,6 +1940,26 @@ For example,
 ```erlang
 UART = uart:open("UART0", [{rx, 3}, {tx, 1}, {speed, 9600}])
 ```
+
+#### USB-Serial-JTAG
+
+On ESP32 chips that integrate a USB-Serial-JTAG controller (C3/C5/C6/C61/H2/H21/H4/P4/S3),
+the controller can be opened as if it were a UART by passing `"USB_SERIAL_JTAG"`
+as the peripheral name:
+
+```erlang
+USB = uart:open("USB_SERIAL_JTAG", [])
+```
+
+Pin and line-coding options (`rx`, `tx`, `speed`, `data_bits`, `stop_bits`,
+`flow_control`, `parity`) are parsed and validated like regular UART options,
+but otherwise ignored: the device's USB pins and framing are fixed in hardware.
+The `read/1,2` and `write/2` operations behave the same as for a real UART, so
+the same code path works for both hardware UART and the integrated USB CDC
+interface.
+
+This requires `SOC_USB_SERIAL_JTAG_SUPPORTED` in the target SoC and is therefore
+not available on the original ESP32 or ESP32-S2 (which use the OTG controller instead).
 
 Once the port is opened, you can use the returned `UART` instance to read and write bytes to the attached device.
 

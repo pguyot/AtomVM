@@ -22,12 +22,26 @@
 #ifdef CONFIG_AVM_ENABLE_UART_PORT_DRIVER
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <driver/uart.h>
 #include <esp_log.h>
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
 #include <soc/gpio_num.h>
+#endif
+
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#include <driver/usb_serial_jtag.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/ringbuf.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#define AVM_USJ_RX_BUF_SIZE 1024
+#define AVM_USJ_TX_BUF_SIZE 1024
+#define AVM_USJ_READ_CHUNK 64
+#define AVM_USJ_READ_TIMEOUT_MS 50
+#define AVM_USJ_STOP_TIMEOUT_MS 200
 #endif
 
 #include "atom.h"
@@ -71,6 +85,13 @@ struct UARTData
     term reader_process_pid;
     uint64_t reader_ref_ticks;
     uint8_t uart_num;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    bool use_usj;
+    volatile bool usj_stop;
+    RingbufHandle_t usj_rx_ringbuf;
+    TaskHandle_t usj_reader_task;
+    SemaphoreHandle_t usj_reader_stopped;
+#endif
 #ifndef AVM_NO_SMP
     Mutex *reader_lock;
 #endif
@@ -115,6 +136,74 @@ static void safe_update_reader_data(struct UARTData *uart_data, term pid, uint64
     SMP_MUTEX_UNLOCK(uart_data->reader_lock);
 }
 
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+static void usj_reader_task(void *arg)
+{
+    struct UARTData *uart_data = arg;
+    uint8_t buf[AVM_USJ_READ_CHUNK];
+    while (!uart_data->usj_stop) {
+        int n = usb_serial_jtag_read_bytes(buf, sizeof(buf), pdMS_TO_TICKS(AVM_USJ_READ_TIMEOUT_MS));
+        if (n <= 0) {
+            continue;
+        }
+        if (xRingbufferSend(uart_data->usj_rx_ringbuf, buf, n, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGW(TAG, "USB_SERIAL_JTAG rx ringbuf full, dropping %d bytes", n);
+            continue;
+        }
+        uart_event_t event = { .type = UART_DATA, .size = 0 };
+        if (uxQueueMessagesWaiting(uart_data->rxqueue) == 0
+            && xQueueSend(uart_data->rxqueue, &event, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "USB_SERIAL_JTAG event queue full");
+        }
+    }
+    if (uart_data->usj_reader_stopped != NULL) {
+        xSemaphoreGive(uart_data->usj_reader_stopped);
+    }
+    vTaskDelete(NULL);
+}
+
+static void usj_stop_reader_task(struct UARTData *uart_data)
+{
+    if (uart_data->usj_reader_task != NULL) {
+        uart_data->usj_stop = true;
+        if (uart_data->usj_reader_stopped != NULL
+            && xSemaphoreTake(uart_data->usj_reader_stopped, pdMS_TO_TICKS(AVM_USJ_STOP_TIMEOUT_MS)) != pdTRUE) {
+            ESP_LOGW(TAG, "USB_SERIAL_JTAG reader task did not stop cleanly");
+            vTaskDelete(uart_data->usj_reader_task);
+        }
+        uart_data->usj_reader_task = NULL;
+    }
+    if (uart_data->usj_reader_stopped != NULL) {
+        vSemaphoreDelete(uart_data->usj_reader_stopped);
+        uart_data->usj_reader_stopped = NULL;
+    }
+}
+
+static size_t usj_rx_available(struct UARTData *uart_data)
+{
+    UBaseType_t avail = 0;
+    vRingbufferGetInfo(uart_data->usj_rx_ringbuf, NULL, NULL, NULL, NULL, &avail);
+    return (size_t) avail;
+}
+
+static size_t usj_drain_rx(struct UARTData *uart_data, uint8_t *out, size_t max_len)
+{
+    size_t total = 0;
+    while (total < max_len) {
+        size_t recv_size = 0;
+        void *item = xRingbufferReceiveUpTo(uart_data->usj_rx_ringbuf,
+            &recv_size, 0, max_len - total);
+        if (item == NULL || recv_size == 0) {
+            break;
+        }
+        memcpy(out + total, item, recv_size);
+        total += recv_size;
+        vRingbufferReturnItem(uart_data->usj_rx_ringbuf, item);
+    }
+    return total;
+}
+#endif
+
 EventListener *uart_interrupt_callback(GlobalContext *glb, EventListener *listener)
 {
     struct UARTData *uart_data = GET_LIST_ENTRY(listener, struct UARTData, listener);
@@ -125,17 +214,49 @@ EventListener *uart_interrupt_callback(GlobalContext *glb, EventListener *listen
             case UART_DATA_BREAK:
             case UART_DATA:
                 if (uart_data->reader_process_pid != term_invalid_term()) {
-                    int bin_size = term_binary_heap_size(event.size);
+                    size_t count = event.size;
+                    uint8_t *usj_buf = NULL;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+                    if (uart_data->use_usj) {
+                        count = usj_rx_available(uart_data);
+                        if (count == 0) {
+                            break;
+                        }
+                        usj_buf = malloc(count);
+                        if (IS_NULL_PTR(usj_buf)) {
+                            fprintf(stderr, "Failed to allocate memory size %i: %s:%i.\n", (int) count, __FILE__, __LINE__);
+                            AVM_ABORT();
+                        }
+                        count = usj_drain_rx(uart_data, usj_buf, count);
+                        if (count == 0) {
+                            free(usj_buf);
+                            break;
+                        }
+                    }
+#endif
+                    int bin_size = term_binary_heap_size(count);
 
                     Heap heap;
                     if (UNLIKELY(memory_init_heap(&heap, bin_size + REF_SIZE + TUPLE_SIZE(2) * 2) != MEMORY_GC_OK)) {
+                        free(usj_buf);
                         fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
                         AVM_ABORT();
                     }
 
-                    term bin = term_create_uninitialized_binary(event.size, &heap, glb);
+                    term bin = term_create_uninitialized_binary(count, &heap, glb);
                     uint8_t *bin_buf = (uint8_t *) term_binary_data(bin);
-                    uart_read_bytes(uart_data->uart_num, bin_buf, event.size, portMAX_DELAY);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+                    if (uart_data->use_usj) {
+                        memcpy(bin_buf, usj_buf, count);
+                        free(usj_buf);
+                    }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+                    if (!uart_data->use_usj)
+#endif
+                    {
+                        uart_read_bytes(uart_data->uart_num, bin_buf, count, portMAX_DELAY);
+                    }
 
                     term ok_tuple = term_alloc_tuple(2, &heap);
                     term_put_tuple_element(ok_tuple, 0, OK_ATOM);
@@ -201,8 +322,6 @@ static int get_uart_pin_opt(term opts, term pin_name)
 
 Context *uart_driver_create_port(GlobalContext *global, term opts)
 {
-    Context *ctx = context_new(global);
-
     term uart_name_term = interop_kv_get_value_default(opts, ATOM_STR("\xA", "peripheral"),
         UNDEFINED_ATOM, global);
     term uart_speed_term = interop_proplist_get_value_default(opts, SPEED_ATOM, term_from_int(115200));
@@ -236,22 +355,29 @@ Context *uart_driver_create_port(GlobalContext *global, term opts)
         return NULL;
     }
 
-    uint8_t uart_num;
-    if (!strcmp(uart_name, "UART0")) {
-        uart_num = UART_NUM_0;
-    } else if (!strcmp(uart_name, "UART1")) {
-        uart_num = UART_NUM_1;
-    }
+    uint8_t uart_num = 0;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    bool use_usj = (strcmp(uart_name, "USB_SERIAL_JTAG") == 0);
+    if (!use_usj) {
+#endif
+        if (!strcmp(uart_name, "UART0")) {
+            uart_num = UART_NUM_0;
+        } else if (!strcmp(uart_name, "UART1")) {
+            uart_num = UART_NUM_1;
+        }
 #if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
-    else if (!strcmp(uart_name, "UART2")) {
-        uart_num = UART_NUM_2;
+        else if (!strcmp(uart_name, "UART2")) {
+            uart_num = UART_NUM_2;
+        }
+#endif
+        else {
+            free(uart_name);
+            ESP_LOGE(TAG, "invalid uart bus name!");
+            return NULL;
+        }
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
     }
 #endif
-    else {
-        free(uart_name);
-        ESP_LOGE(TAG, "invalid uart bus name!");
-        return NULL;
-    }
     free(uart_name);
 
     avm_int_t uart_speed = term_to_int(uart_speed_term);
@@ -288,62 +414,154 @@ Context *uart_driver_create_port(GlobalContext *global, term opts)
             return NULL;
     }
 
-    uart_hw_flowcontrol_t flow_control = interop_atom_term_select_int(flow_control_table, flow_control_term, ctx->global);
+    uart_hw_flowcontrol_t flow_control = interop_atom_term_select_int(flow_control_table, flow_control_term, global);
     if (flow_control < 0) {
         ESP_LOGE(TAG, "invalid flow_control!");
         return NULL;
     }
 
-    uart_parity_t parity = interop_atom_term_select_int(parity_table, parity_term, ctx->global);
+    uart_parity_t parity = interop_atom_term_select_int(parity_table, parity_term, global);
     if (parity < 0) {
         ESP_LOGE(TAG, "invalid parity!");
         return NULL;
     }
 
-    uart_config_t uart_config = {
-#if ESP_IDF_VERSION_MAJOR >= 5
-        .source_clk = UART_SCLK_DEFAULT,
-#endif
-        .baud_rate = uart_speed,
-        .data_bits = data_bits,
-        .parity = parity,
-        .stop_bits = stop_bits,
-        .flow_ctrl = flow_control
-    };
-    uart_param_config(uart_num, &uart_config);
-
-    uart_set_pin(uart_num, tx_pin, rx_pin, rts_pin, cts_pin);
-
     size_t alloc_size = sizeof(struct UARTData);
-    struct UARTData *uart_data = malloc(alloc_size);
+    struct UARTData *uart_data = calloc(1, alloc_size);
     if (IS_NULL_PTR(uart_data)) {
         fprintf(stderr, "Failed to allocate memory size %i: %s:%i.\n", (int) alloc_size, __FILE__, __LINE__);
         AVM_ABORT();
     }
     uart_data->listener.handler = uart_interrupt_callback;
-    sys_register_listener(global, &uart_data->listener);
     uart_data->reader_process_pid = term_invalid_term();
     uart_data->reader_ref_ticks = 0;
     uart_data->uart_num = uart_num;
-    ctx->native_handler = uart_driver_consume_mailbox;
-    ctx->platform_data = uart_data;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    uart_data->use_usj = use_usj;
+#endif
 
-    if (uart_driver_install(uart_num, UART_BUF_SIZE, 0, event_queue_len, &uart_data->rxqueue, 0) != ESP_OK) {
-        ESP_LOGE(TAG, "failed to install uart driver.");
-        free(uart_data);
-        return NULL;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (use_usj) {
+        usb_serial_jtag_driver_config_t usj_cfg = {
+            .rx_buffer_size = AVM_USJ_RX_BUF_SIZE,
+            .tx_buffer_size = AVM_USJ_TX_BUF_SIZE,
+        };
+        if (usb_serial_jtag_driver_install(&usj_cfg) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to install USB_SERIAL_JTAG driver.");
+            free(uart_data);
+            return NULL;
+        }
+        uart_data->rxqueue = xQueueCreate(event_queue_len, sizeof(uart_event_t));
+        if (uart_data->rxqueue == NULL) {
+            ESP_LOGE(TAG, "failed to create USB_SERIAL_JTAG event queue.");
+            usb_serial_jtag_driver_uninstall();
+            free(uart_data);
+            return NULL;
+        }
+        uart_data->usj_rx_ringbuf = xRingbufferCreate(AVM_USJ_RX_BUF_SIZE, RINGBUF_TYPE_BYTEBUF);
+        if (uart_data->usj_rx_ringbuf == NULL) {
+            ESP_LOGE(TAG, "failed to create USB_SERIAL_JTAG ringbuf.");
+            vQueueDelete(uart_data->rxqueue);
+            usb_serial_jtag_driver_uninstall();
+            free(uart_data);
+            return NULL;
+        }
+        uart_data->usj_reader_stopped = xSemaphoreCreateBinary();
+        if (uart_data->usj_reader_stopped == NULL) {
+            ESP_LOGE(TAG, "failed to create USB_SERIAL_JTAG reader semaphore.");
+            vRingbufferDelete(uart_data->usj_rx_ringbuf);
+            vQueueDelete(uart_data->rxqueue);
+            usb_serial_jtag_driver_uninstall();
+            free(uart_data);
+            return NULL;
+        }
     }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (!use_usj)
+#endif
+    {
+        uart_config_t uart_config = {
+#if ESP_IDF_VERSION_MAJOR >= 5
+            .source_clk = UART_SCLK_DEFAULT,
+#endif
+            .baud_rate = uart_speed,
+            .data_bits = data_bits,
+            .parity = parity,
+            .stop_bits = stop_bits,
+            .flow_ctrl = flow_control
+        };
+        uart_param_config(uart_num, &uart_config);
+        uart_set_pin(uart_num, tx_pin, rx_pin, rts_pin, cts_pin);
+
+        if (uart_driver_install(uart_num, UART_BUF_SIZE, 0, event_queue_len, &uart_data->rxqueue, 0) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to install uart driver.");
+            free(uart_data);
+            return NULL;
+        }
+    }
+
     uart_data->listener.sender = uart_data->rxqueue;
-    if (xQueueAddToSet(uart_data->rxqueue, event_set) != pdPASS) {
-        ESP_LOGE(TAG, "failed to establish uart queue.");
-        free(uart_data);
-        return NULL;
-    }
-
 #ifndef AVM_NO_SMP
     uart_data->reader_lock = smp_mutex_create();
 #endif
+    sys_register_listener(global, &uart_data->listener);
 
+    // xQueueAddToSet requires an empty queue; drain stale events from the IDF
+    // RX ISR and retry. Bail out only if AddToSet fails on an empty queue.
+    // With `use_usj`, the queue is only fed with the task created afterwards,
+    // so the loop only makes sense with the ISR path, code looks cleaner with a
+    // unified loop.
+    while (xQueueAddToSet(uart_data->rxqueue, event_set) != pdPASS) {
+        uart_event_t stale_event;
+        if (xQueueReceive(uart_data->rxqueue, &stale_event, 0) != pdTRUE) {
+            ESP_LOGE(TAG, "failed to establish uart queue.");
+            sys_unregister_listener(global, &uart_data->listener);
+#ifndef AVM_NO_SMP
+            smp_mutex_destroy(uart_data->reader_lock);
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+            if (use_usj) {
+                vSemaphoreDelete(uart_data->usj_reader_stopped);
+                vRingbufferDelete(uart_data->usj_rx_ringbuf);
+                vQueueDelete(uart_data->rxqueue);
+                usb_serial_jtag_driver_uninstall();
+            }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+            if (!use_usj)
+#endif
+            {
+                uart_driver_delete(uart_num);
+            }
+            free(uart_data);
+            return NULL;
+        }
+    }
+
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (use_usj) {
+        if (xTaskCreate(usj_reader_task, "usj_reader", 2560, uart_data,
+                tskIDLE_PRIORITY + 1, &uart_data->usj_reader_task) != pdPASS) {
+            ESP_LOGE(TAG, "failed to spawn USB_SERIAL_JTAG reader task.");
+            xQueueRemoveFromSet(uart_data->rxqueue, event_set);
+            sys_unregister_listener(global, &uart_data->listener);
+#ifndef AVM_NO_SMP
+            smp_mutex_destroy(uart_data->reader_lock);
+#endif
+            vSemaphoreDelete(uart_data->usj_reader_stopped);
+            vRingbufferDelete(uart_data->usj_rx_ringbuf);
+            vQueueDelete(uart_data->rxqueue);
+            usb_serial_jtag_driver_uninstall();
+            free(uart_data);
+            return NULL;
+        }
+    }
+#endif
+
+    Context *ctx = context_new(global);
+    ctx->native_handler = uart_driver_consume_mailbox;
+    ctx->platform_data = uart_data;
     return ctx;
 }
 
@@ -370,19 +588,58 @@ static void uart_driver_do_read(Context *ctx, GenMessage gen_message)
         return;
     }
 
-    size_t count;
-    uart_get_buffered_data_len(uart_data->uart_num, &count);
+    size_t count = 0;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (uart_data->use_usj) {
+        count = usj_rx_available(uart_data);
+    }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (!uart_data->use_usj)
+#endif
+    {
+        uart_get_buffered_data_len(uart_data->uart_num, &count);
+    }
 
     if (count > 0) {
+        uint8_t *usj_buf = NULL;
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+        if (uart_data->use_usj) {
+            usj_buf = malloc(count);
+            if (IS_NULL_PTR(usj_buf)) {
+                fprintf(stderr, "Failed to allocate memory size %i: %s:%i.\n", (int) count, __FILE__, __LINE__);
+                AVM_ABORT();
+            }
+            count = usj_drain_rx(uart_data, usj_buf, count);
+            if (count == 0) {
+                free(usj_buf);
+                safe_update_reader_data(uart_data, pid, ref_ticks);
+                return;
+            }
+        }
+#endif
         int bin_size = term_binary_heap_size(count);
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, bin_size + TUPLE_SIZE(2) * 2, 1, &ref, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            free(usj_buf);
             ESP_LOGE(TAG, "[uart_driver_do_read] Failed to allocate space for return value");
             globalcontext_send_message(glb, local_pid, OUT_OF_MEMORY_ATOM);
+            return;
         }
 
         term bin = term_create_uninitialized_binary(count, &ctx->heap, glb);
         uint8_t *bin_buf = (uint8_t *) term_binary_data(bin);
-        uart_read_bytes(uart_data->uart_num, bin_buf, count, portMAX_DELAY);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+        if (uart_data->use_usj) {
+            memcpy(bin_buf, usj_buf, count);
+            free(usj_buf);
+        }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+        if (!uart_data->use_usj)
+#endif
+        {
+            uart_read_bytes(uart_data->uart_num, bin_buf, count, portMAX_DELAY);
+        }
 
         term ok_tuple = term_alloc_tuple(2, &ctx->heap);
         term_put_tuple_element(ok_tuple, 0, OK_ATOM);
@@ -447,7 +704,17 @@ static void uart_driver_do_write(Context *ctx, GenMessage gen_message)
             return;
     }
 
-    uart_write_bytes(uart_data->uart_num, buffer, buffer_size);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (uart_data->use_usj) {
+        usb_serial_jtag_write_bytes(buffer, buffer_size, portMAX_DELAY);
+    }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (!uart_data->use_usj)
+#endif
+    {
+        uart_write_bytes(uart_data->uart_num, buffer, buffer_size);
+    }
 
     free(buffer);
 
@@ -472,13 +739,39 @@ static void uart_driver_do_close(Context *ctx, GenMessage gen_message)
     smp_mutex_destroy(uart_data->reader_lock);
 #endif
 
-    term result;
-    esp_err_t err = uart_driver_delete(uart_data->uart_num);
-    if (UNLIKELY(err != ESP_OK)) {
-        ESP_LOGE(TAG, "Failed to delete UART driver. Error: %s", esp_err_to_name(err));
-        result = ERROR_ATOM;
-    } else {
-        result = OK_ATOM;
+    term result = OK_ATOM;
+    if (uart_data->rxqueue != NULL) {
+        xQueueRemoveFromSet(uart_data->rxqueue, event_set);
+    }
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (uart_data->use_usj) {
+        usj_stop_reader_task(uart_data);
+        if (uart_data->usj_rx_ringbuf != NULL) {
+            vRingbufferDelete(uart_data->usj_rx_ringbuf);
+        }
+        if (uart_data->rxqueue != NULL) {
+            vQueueDelete(uart_data->rxqueue);
+        }
+        esp_err_t err = usb_serial_jtag_driver_uninstall();
+        if (UNLIKELY(err != ESP_OK)) {
+            ESP_LOGE(TAG, "Failed to uninstall USB_SERIAL_JTAG driver: %s", esp_err_to_name(err));
+            result = ERROR_ATOM;
+        } else {
+            result = OK_ATOM;
+        }
+    }
+#endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    if (!uart_data->use_usj)
+#endif
+    {
+        esp_err_t err = uart_driver_delete(uart_data->uart_num);
+        if (UNLIKELY(err != ESP_OK)) {
+            ESP_LOGE(TAG, "Failed to delete UART driver. Error: %s", esp_err_to_name(err));
+            result = ERROR_ATOM;
+        } else {
+            result = OK_ATOM;
+        }
     }
 
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 1, &ref, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
