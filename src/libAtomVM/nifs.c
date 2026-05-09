@@ -1949,6 +1949,97 @@ term nif_erlang_universaltime_0(Context *ctx, int argc, term argv[])
     return build_datetime_from_tm(ctx, gmtime_r(&ts.tv_sec, &broken_down_time));
 }
 
+// setenv leaks the prior "TZ=value" string on overwrite (unbounded on
+// newlib/picolibc, bounded on glibc; some putenv impls leak similarly).
+// See: https://github.com/espressif/esp-idf/issues/3046
+//
+// Workaround: under env_spinlock, briefly swap environ to a minimal
+// {"TZ=...", NULL} array around tzset()/localtime_r(), then restore.
+// During the swap, any code reading environ without env_spinlock (e.g.
+// a concurrent posix_spawn) will see only the TZ entry.
+//
+// Define AVM_TZ_USE_SETENV_FALLBACK=1 to opt into the (leaky) setenv
+// path on platforms that don't expose a writable environ.
+#ifndef AVM_TZ_USE_SETENV_FALLBACK
+#define AVM_TZ_USE_SETENV_FALLBACK 0
+#endif
+
+#if !AVM_TZ_USE_SETENV_FALLBACK
+extern char **environ;
+#endif
+
+static struct tm *tzstr_localtime_r(
+    const time_t *timer, struct tm *result, const char *tzstr, GlobalContext *global)
+{
+#ifdef AVM_NO_SMP
+    UNUSED(global);
+#endif
+    errno = 0;
+
+    struct tm *localtime;
+
+#if !AVM_TZ_USE_SETENV_FALLBACK
+    char *tz_env_entry = NULL;
+    if (tzstr) {
+        size_t tz_len = strlen(tzstr);
+        tz_env_entry = malloc(tz_len + 4); // "TZ=" + tzstr + '\0'
+        if (UNLIKELY(tz_env_entry == NULL)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        memcpy(tz_env_entry, "TZ=", 3);
+        memcpy(tz_env_entry + 3, tzstr, tz_len + 1);
+    }
+
+    SMP_SPINLOCK_LOCK(&global->env_spinlock);
+    if (tzstr) {
+        char *tz_environ[] = { tz_env_entry, NULL };
+        char **saved_environ = environ;
+        environ = tz_environ;
+        tzset();
+        localtime = localtime_r(timer, result);
+        environ = saved_environ;
+        tzset();
+    } else {
+        tzset();
+        localtime = localtime_r(timer, result);
+    }
+    SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+
+    free(tz_env_entry);
+#else
+    SMP_SPINLOCK_LOCK(&global->env_spinlock);
+    if (tzstr) {
+        char *oldtz_env = getenv("TZ");
+        char *oldtz = NULL;
+        if (oldtz_env) {
+            oldtz = strdup(oldtz_env);
+            if (UNLIKELY(oldtz == NULL)) {
+                SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+                errno = ENOMEM;
+                return NULL;
+            }
+        }
+        setenv("TZ", tzstr, 1);
+        tzset();
+        localtime = localtime_r(timer, result);
+        if (oldtz) {
+            setenv("TZ", oldtz, 1);
+            free(oldtz);
+        } else {
+            unsetenv("TZ");
+        }
+        tzset();
+    } else {
+        tzset();
+        localtime = localtime_r(timer, result);
+    }
+    SMP_SPINLOCK_UNLOCK(&global->env_spinlock);
+#endif
+
+    return localtime;
+}
+
 term nif_erlang_localtime(Context *ctx, int argc, term argv[])
 {
     char *tz;
@@ -1966,31 +2057,18 @@ term nif_erlang_localtime(Context *ctx, int argc, term argv[])
     sys_time(&ts);
 
     struct tm storage;
-    struct tm *localtime;
-
-#ifndef AVM_NO_SMP
-    smp_spinlock_lock(&ctx->global->env_spinlock);
-#endif
-    if (tz) {
-        char *oldtz = getenv("TZ");
-        setenv("TZ", tz, 1);
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-        if (oldtz) {
-            setenv("TZ", oldtz, 1);
-        } else {
-            unsetenv("TZ");
-        }
-    } else {
-        // Call tzset to handle DST changes
-        tzset();
-        localtime = localtime_r(&ts.tv_sec, &storage);
-    }
-#ifndef AVM_NO_SMP
-    smp_spinlock_unlock(&ctx->global->env_spinlock);
-#endif
+    struct tm *localtime = tzstr_localtime_r(&ts.tv_sec, &storage, tz, ctx->global);
+    int localtime_errno = errno;
 
     free(tz);
+
+    if (UNLIKELY(localtime == NULL)) {
+        if (localtime_errno == ENOMEM) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
     return build_datetime_from_tm(ctx, localtime);
 }
 
@@ -2065,25 +2143,19 @@ static term nif_os_getenv_1(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-#ifndef AVM_NO_SMP
-    smp_spinlock_lock(&ctx->global->env_spinlock);
-#endif
+    SMP_SPINLOCK_LOCK(&ctx->global->env_spinlock);
 
     const char *env_var_value_tmp = getenv(env_var);
     free(env_var);
 
     if (IS_NULL_PTR(env_var_value_tmp)) {
-#ifndef AVM_NO_SMP
-        smp_spinlock_unlock(&ctx->global->env_spinlock);
-#endif
+        SMP_SPINLOCK_UNLOCK(&ctx->global->env_spinlock);
         return FALSE_ATOM;
     }
 
     char *env_var_value = strdup(env_var_value_tmp);
 
-#ifndef AVM_NO_SMP
-    smp_spinlock_unlock(&ctx->global->env_spinlock);
-#endif
+    SMP_SPINLOCK_UNLOCK(&ctx->global->env_spinlock);
 
     if (IS_NULL_PTR(env_var_value)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
