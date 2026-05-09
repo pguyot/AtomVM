@@ -20,12 +20,23 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <avmpack.h>
 #include <defaultatoms.h>
 #include <scheduler.h>
 #include <sys.h>
+
+#ifdef ATOMVM_HAS_MBEDTLS
+#include <mbedtls/platform_time.h>
+#include <sys_mbedtls.h>
+
+/* Minimum bytes the entropy pool collects from a hardware source before
+ * it's considered seeded. mbedTLS defines this as MBEDTLS_ENTROPY_MIN_HARDWARE
+ * in the private library/entropy_poll.h header; use the same value. */
+#define STM32_ENTROPY_MIN_HARDWARE 32
+#endif
 
 // #define ENABLE_TRACE
 #include <trace.h>
@@ -61,6 +72,10 @@ extern uint8_t _ebss, _stack;
 
 static uint8_t *_cur_brk = NULL;
 static uint8_t *_heap_end = NULL;
+
+#ifdef ATOMVM_HAS_MBEDTLS
+static int stm32_rng_hw_init(struct STM32PlatformData *platform);
+#endif
 
 /*
  * If not overridden, this puts the heap into the left
@@ -205,11 +220,40 @@ void sys_init_platform(GlobalContext *glb)
     }
     glb->platform_data = platform;
     list_init(&platform->locked_pins);
+#ifdef ATOMVM_HAS_MBEDTLS
+    platform->entropy_is_initialized = false;
+    platform->random_is_initialized = false;
+    if (stm32_rng_hw_init(platform) != 0) {
+        AVM_LOGE(TAG, "Failed to initialize RNG peripheral");
+        AVM_ABORT();
+    }
+#endif
 }
 
 void sys_free_platform(GlobalContext *glb)
 {
-    UNUSED(glb);
+    struct STM32PlatformData *platform = glb->platform_data;
+#ifdef ATOMVM_HAS_MBEDTLS
+    if (platform->random_is_initialized) {
+        mbedtls_ctr_drbg_free(&platform->random_ctx);
+    }
+    if (platform->entropy_is_initialized) {
+        mbedtls_entropy_free(&platform->entropy_ctx);
+    }
+    // HAL_RNG_Init succeeded in stm32_rng_hw_init or we aborted
+    HAL_RNG_DeInit(&platform->rng);
+#endif
+
+    struct ListHead *item;
+    struct ListHead *tmp;
+    MUTABLE_LIST_FOR_EACH (item, tmp, &platform->locked_pins) {
+        struct LockedPin *gpio_pin = GET_LIST_ENTRY(item, struct LockedPin, locked_pins_list_head);
+        list_remove(item);
+        free(gpio_pin);
+    }
+
+    free(platform);
+    glb->platform_data = NULL;
 }
 
 void sys_poll_events(GlobalContext *glb, int timeout_ms)
@@ -378,3 +422,133 @@ void sys_release_native_code(ModuleNativeEntryPoint entry_point)
     UNUSED(entry_point);
 }
 #endif
+
+#ifdef ATOMVM_HAS_MBEDTLS
+
+/*
+ * Hardware-backed entropy via STM32 TRNG.
+ */
+static int stm32_rng_hw_init(struct STM32PlatformData *platform)
+{
+#if defined(RCC_OSCILLATORTYPE_HSI48) && defined(RCC_RNGCLKSOURCE_HSI48)
+    /* Newer families (F7/G4/H5/H7/L4/L5/U3/U5/WB) gate the RNG on a 48 MHz
+     * kernel clock that HSI48 can provide independently of the system PLL.
+     * Bring HSI48 up and select it as the RNG clock source so the
+     * peripheral works without depending on the specific PLL layout.
+     * OscillatorType is HSI48 only; HAL_RCC_OscConfig won't touch the PLL
+     * fields, which differ across families (.PLL on H7, .PLL1/.PLL2 on
+     * U3/U5). */
+    RCC_OscInitTypeDef osc_init = { 0 };
+    osc_init.OscillatorType = RCC_OSCILLATORTYPE_HSI48;
+    osc_init.HSI48State = RCC_HSI48_ON;
+    if (HAL_RCC_OscConfig(&osc_init) != HAL_OK) {
+        return -1;
+    }
+
+    RCC_PeriphCLKInitTypeDef periph = { 0 };
+    periph.PeriphClockSelection = RCC_PERIPHCLK_RNG;
+    periph.RngClockSelection = RCC_RNGCLKSOURCE_HSI48;
+    if (HAL_RCCEx_PeriphCLKConfig(&periph) != HAL_OK) {
+        return -1;
+    }
+#else
+    /* F2/F4 take their RNG kernel clock from PLL48CLK (PLL_VCO / PLLQ),
+     * which clock_config_f{2,4}.c already configures for ~48 MHz. */
+#endif
+
+    __HAL_RCC_RNG_CLK_ENABLE();
+    memset(&platform->rng, 0, sizeof(platform->rng));
+    platform->rng.Instance = RNG;
+    if (HAL_RNG_Init(&platform->rng) != HAL_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen)
+{
+    GlobalContext *global = data;
+    if (IS_NULL_PTR(global) || IS_NULL_PTR(global->platform_data)) {
+        return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+    }
+
+    struct STM32PlatformData *platform = global->platform_data;
+
+    size_t written = 0;
+    while (written < len) {
+        uint32_t r;
+        if (HAL_RNG_GenerateRandomNumber(&platform->rng, &r) != HAL_OK) {
+            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+        }
+        size_t chunk = len - written;
+        if (chunk > sizeof(r)) {
+            chunk = sizeof(r);
+        }
+        memcpy(output + written, &r, chunk);
+        written += chunk;
+    }
+    *olen = written;
+    return 0;
+}
+
+mbedtls_ms_time_t mbedtls_ms_time(void)
+{
+    return (mbedtls_ms_time_t) HAL_GetTick();
+}
+
+int sys_mbedtls_entropy_func(void *entropy, unsigned char *buf, size_t size)
+{
+    return mbedtls_entropy_func(entropy, buf, size);
+}
+
+mbedtls_entropy_context *sys_mbedtls_get_entropy_context_lock(GlobalContext *global)
+{
+    struct STM32PlatformData *platform = global->platform_data;
+    if (!platform->entropy_is_initialized) {
+        mbedtls_entropy_init(&platform->entropy_ctx);
+        int entropy_err = mbedtls_entropy_add_source(&platform->entropy_ctx,
+            mbedtls_hardware_poll, global,
+            STM32_ENTROPY_MIN_HARDWARE,
+            MBEDTLS_ENTROPY_SOURCE_STRONG);
+        if (UNLIKELY(entropy_err != 0)) {
+            AVM_LOGE(TAG, "mbedtls_entropy_add_source failed: %d", entropy_err);
+            AVM_ABORT();
+        }
+        platform->entropy_is_initialized = true;
+    }
+    return &platform->entropy_ctx;
+}
+
+void sys_mbedtls_entropy_context_unlock(GlobalContext *global)
+{
+    UNUSED(global);
+}
+
+mbedtls_ctr_drbg_context *sys_mbedtls_get_ctr_drbg_context_lock(GlobalContext *global)
+{
+    struct STM32PlatformData *platform = global->platform_data;
+    if (!platform->random_is_initialized) {
+        mbedtls_ctr_drbg_init(&platform->random_ctx);
+
+        mbedtls_entropy_context *entropy_ctx = sys_mbedtls_get_entropy_context_lock(global);
+        sys_mbedtls_entropy_context_unlock(global);
+
+        const char *seed = "AtomVM STM32 Mbed-TLS initial seed.";
+        int seed_err = mbedtls_ctr_drbg_seed(&platform->random_ctx,
+            sys_mbedtls_entropy_func, entropy_ctx,
+            (const unsigned char *) seed, strlen(seed));
+        if (UNLIKELY(seed_err != 0)) {
+            AVM_LOGE(TAG, "mbedtls_ctr_drbg_seed failed: %d", seed_err);
+            AVM_ABORT();
+        }
+        platform->random_is_initialized = true;
+    }
+    return &platform->random_ctx;
+}
+
+void sys_mbedtls_ctr_drbg_context_unlock(GlobalContext *global)
+{
+    UNUSED(global);
+}
+
+#endif /* ATOMVM_HAS_MBEDTLS */

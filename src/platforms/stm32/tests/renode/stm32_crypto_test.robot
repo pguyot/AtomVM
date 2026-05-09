@@ -18,10 +18,25 @@
 # SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 #
 
-include(BuildErlang)
+*** Settings ***
+Suite Setup       Setup
+Suite Teardown    Teardown
+Test Setup        Reset Emulation
+Resource          ${RENODEKEYWORDS}
 
-pack_runnable(stm32_boot_test test_boot)
-pack_runnable(stm32_gpio_test test_gpio eavmlib avm_stm32)
-pack_runnable(stm32_i2c_test test_i2c eavmlib avm_stm32)
-pack_runnable(stm32_spi_test test_spi eavmlib avm_stm32)
-pack_runnable(stm32_crypto_test test_crypto estdlib)
+*** Variables ***
+${UART}           sysbus.usart1
+${PLATFORM}       REQUIRED
+${ELF}            REQUIRED
+${AVM}            REQUIRED
+${AVM_ADDRESS}    0x08060000
+
+*** Test Cases ***
+AtomVM Should Generate Strong Random Bytes
+    Execute Command    mach create
+    Execute Command    machine LoadPlatformDescription ${PLATFORM}
+    Execute Command    sysbus LoadELF ${ELF}
+    Execute Command    sysbus LoadBinary ${AVM} ${AVM_ADDRESS}
+    Create Terminal Tester    ${UART}
+    Start Emulation
+    Wait For Line On Uart    crypto_done    timeout=60

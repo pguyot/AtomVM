@@ -42,10 +42,13 @@ usart1: UART.STM32F7_USART @ sysbus <0x40011000, +0x100>
 
 // RCC Python peripheral at 0x58024400.
 // H7 RCC register layout:
-//   CR (0x00):   HSION[0], HSIRDY[2], CSION[7], CSIRDY[8],
-//                HSEON[16], HSERDY[17], PLL1ON[24], PLL1RDY[25],
-//                PLL2ON[26], PLL2RDY[27], PLL3ON[28], PLL3RDY[29]
-//   CFGR (0x10): SW[2:0], SWS[5:3]
+//   CR (0x00):     HSION[0], HSIRDY[2], CSION[7], CSIRDY[8],
+//                  HSI48ON[12], HSI48RDY[13],
+//                  HSEON[16], HSERDY[17], PLL1ON[24], PLL1RDY[25],
+//                  PLL2ON[26], PLL2RDY[27], PLL3ON[28], PLL3RDY[29]
+//   CFGR (0x10):   SW[2:0], SWS[5:3]
+//   D2CCIP2R(0x54): RNGSEL[31:30] (RNG kernel-clock source mux,
+//                  HSI48 = 0b00); pass-through (default Python handler).
 rcc: Python.PythonPeripheral @ sysbus 0x58024400
     size: 0x400
     initable: true
@@ -63,12 +66,13 @@ elif request.IsRead:
         cr = regs.get(0x0, 0x83)
         hsion = cr & 0x1
         csion = (cr >> 7) & 0x1
+        hsi48on = (cr >> 12) & 0x1
         hseon = (cr >> 16) & 0x1
         pll1on = (cr >> 24) & 0x1
         pll2on = (cr >> 26) & 0x1
         pll3on = (cr >> 28) & 0x1
-        cr &= ~((1 << 2) | (1 << 8) | (1 << 17) | (1 << 25) | (1 << 27) | (1 << 29))
-        request.Value = cr | (hsion << 2) | (csion << 8) | (hseon << 17) | (pll1on << 25) | (pll2on << 27) | (pll3on << 29)
+        cr &= ~((1 << 2) | (1 << 8) | (1 << 13) | (1 << 17) | (1 << 25) | (1 << 27) | (1 << 29))
+        request.Value = cr | (hsion << 2) | (csion << 8) | (hsi48on << 13) | (hseon << 17) | (pll1on << 25) | (pll2on << 27) | (pll3on << 29)
     else:
         request.Value = regs.get(request.Offset, 0)
 '''
@@ -124,6 +128,10 @@ gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x58020400, +0x400>
 i2c1: I2C.STM32F7_I2C @ sysbus 0x40005400
     EventInterrupt -> nvic@31
     ErrorInterrupt -> nvic@32
+
+// Renode 1.16.1 ships this peripheral as STM32F4_RNG; it was renamed to
+// STM32_RNG upstream after 1.16.1 was tagged.
+rng: Miscellaneous.STM32F4_RNG @ sysbus 0x48021800
 
 sysbus:
     init:
