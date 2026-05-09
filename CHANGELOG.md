@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Transfer-Encoding: chunked` response support to `ahttp_client`, including HTTP trailers
 - Added `proc_lib:init_fail/2,3`
 - Added UART API to rp2 platform
+- Added USB CDC port drivers for ESP32, RP2, and STM32 platforms
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
