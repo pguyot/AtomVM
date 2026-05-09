@@ -143,9 +143,22 @@ elseif (STM32_FAMILY_SHORT STREQUAL "wb")
     } >RAM_SHARED AT> FLASH]=])
 endif()
 
+# Per ST AN4230 Rev 13, Table 2:
+# https://www.st.com/resource/en/application_note/dm00073853-stm32-microcontroller-random-number-generation-validation-using-the-nist-statistical-test-suite-stmicroelectronics.pdf
+if (DEVICE_LOWER MATCHES "^stm32(f2|f7|g4|h5|h7|l4|u3|u5|wb)")
+    set(STM32_HAS_RNG TRUE)
+elseif (DEVICE_LOWER MATCHES "^stm32f4(05|15|07|17|10|12|13|23|27|37|29|39|69|79)")
+    set(STM32_HAS_RNG TRUE)
+elseif (DEVICE_LOWER MATCHES "^stm32g0(41|61|81|c1)")
+    set(STM32_HAS_RNG TRUE)
+else()
+    set(STM32_HAS_RNG FALSE)
+endif()
+
 message("-----------Device Info-----------")
 message(STATUS "Device      : ${DEVICE}")
 message(STATUS "Family      : ${STM32_FAMILY}")
 message(STATUS "CPU         : ${STM32_CPU}")
 message(STATUS "FPU         : ${STM32_FPU}")
 message(STATUS "Arch Flags  : ${_arch_flags_str}")
+message(STATUS "Has RNG     : ${STM32_HAS_RNG}")
