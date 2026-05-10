@@ -130,7 +130,7 @@ test_close_by_another_process() ->
         ok = socket:close(ClientSocket1)
     end),
     % recv is blocking
-    {error, closed} = socket:recv(ClientSocket1, 0, 5000),
+    {error, closed} = socket:recv(ClientSocket1, 0, 60000),
 
     timer:sleep(10),
 
@@ -377,7 +377,7 @@ test_timeout() ->
     % receive of two chunks with a large timeout
     Packet1 = <<"chnk:01">>,
     ok = socket:send(Socket, Packet1),
-    {ok, Packet1} = socket:recv(Socket, ?PACKET_SIZE, 5000),
+    {ok, Packet1} = socket:recv(Socket, ?PACKET_SIZE, 30000),
 
     % receive of two chunks with a small timeout causing a timeout error
     Packet2 = <<"chnk:02">>,

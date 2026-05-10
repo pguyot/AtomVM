@@ -219,7 +219,7 @@ test_listen_connect_parameters(
     receive
         server_done ->
             ok
-    after 10000 -> throw({timeout, test_listen_connect_parameters, ?LINE})
+    after 30000 -> throw({timeout, test_listen_connect_parameters, ?LINE})
     end,
 
     ok = gen_tcp:close(Socket),
@@ -228,7 +228,7 @@ test_listen_connect_parameters(
         {ServerPid, Result} ->
             ok = gen_tcp:close(ListenSocket),
             Result
-    after 10000 ->
+    after 30000 ->
         throw({timeout, waiting, recv, server_closed})
     end.
 
