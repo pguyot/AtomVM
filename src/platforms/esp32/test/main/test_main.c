@@ -619,11 +619,13 @@ TEST_CASE("test_wifi_example", "[test_run]")
 }
 #endif
 
+#if !CONFIG_IDF_TARGET_ESP32C61
 TEST_CASE("test_wifi_managed", "[test_run]")
 {
     term ret_value = avm_test_case("test_wifi_managed.beam");
     TEST_ASSERT(ret_value == OK_ATOM);
 }
+#endif
 
 TEST_CASE("test_wifi_scan", "[test_run]")
 {

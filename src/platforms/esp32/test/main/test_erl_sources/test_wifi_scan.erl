@@ -52,7 +52,7 @@ wifi_scan_test() ->
                         io:format("network:wifi_scan found ~p networks.\n", [Num]),
                         lists:foreach(
                             fun(
-                                _Network = #{
+                                #{
                                     authmode := Mode,
                                     bssid := BSSID,
                                     channel := Number,
@@ -61,10 +61,22 @@ wifi_scan_test() ->
                                     ssid := SSID
                                 }
                             ) ->
-                                io:format(
-                                    "Network: ~p, BSSID: ~p, signal ~p dBm, Security: ~p, channel ~p, hidden: ~p\n",
-                                    [SSID, BSSID, DBm, Mode, Number, Hidden]
-                                )
+                                io:put_chars([
+                                    "Network: ",
+                                    SSID,
+                                    ", BSSID: ",
+                                    bssid_hex(BSSID),
+                                    ", signal ",
+                                    integer_to_list(DBm),
+                                    " dBm",
+                                    ", Security: ",
+                                    atom_to_list(Mode),
+                                    ", channel ",
+                                    integer_to_list(Number),
+                                    ", hidden: ",
+                                    atom_to_list(Hidden),
+                                    "\n"
+                                ])
                             end,
                             Networks
                         ),
@@ -81,6 +93,29 @@ wifi_scan_test() ->
         {error, Reason} ->
             erlang:error({network_start_failed, Reason})
     end.
+
+%% Inline hex formatter — Important on
+%% tiny-RAM targets (esp32c61) where it can OOM.
+bssid_hex(<<A, B, C, D, E, F>>) ->
+    [
+        byte_hex(A),
+        $:,
+        byte_hex(B),
+        $:,
+        byte_hex(C),
+        $:,
+        byte_hex(D),
+        $:,
+        byte_hex(E),
+        $:,
+        byte_hex(F)
+    ].
+
+byte_hex(B) ->
+    [hex_char(B bsr 4), hex_char(B band 16#0F)].
+
+hex_char(N) when N < 10 -> $0 + N;
+hex_char(N) -> $a + N - 10.
 
 deny_concurrent_scan_test() ->
     case network:start([{sta, [managed, {scan_dwell_ms, 400}]}]) of
