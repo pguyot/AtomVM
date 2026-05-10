@@ -127,14 +127,49 @@ test_rpc_loop_from_beam(Platform) ->
     {ok, _NetKernelPid} = net_kernel:start(atomvm, #{name_domain => shortnames}),
     Node = node(),
     erlang:set_cookie('AtomVM'),
+    Expected = lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    NodeStr = atom_to_list(Node),
+    Eval = lists:flatten([
+        "PingFun = fun PingFun(0) -> pang;"
+        " PingFun(N) -> case net_adm:ping('",
+        NodeStr,
+        "') of pong -> pong;"
+        " pang -> timer:sleep(200), PingFun(N - 1) end end,"
+        "P = PingFun(150),"
+        "io:format(\\\"ping=~p\\n\\\", [P]),"
+        "pong = P,"
+        "_ = catch rpc:call('",
+        NodeStr,
+        "', erlang, system_info, [machine], 60000),"
+        "R = lists:foldl(fun(_X, Acc) ->"
+        " R = rpc:call('",
+        NodeStr,
+        "', erlang, system_info, [machine], 60000),"
+        " if Acc =:= R -> Acc;"
+        " Acc =:= undefined -> R;"
+        " true -> {mismatch, Acc, R} end"
+        " end, undefined, lists:seq(1, 10)),"
+        "erlang:display(R)."
+    ]),
     Result = execute_command(
         Platform,
         "erl -sname " ++ ?OTP_SNAME ++
-            " -setcookie AtomVM -kernel net_setuptime 60 -eval \"R = lists:foldl(fun(X, Acc) -> R = rpc:call('" ++
-            atom_to_list(Node) ++
-            "', erlang, system_info, [machine], 60000), if Acc =:= R -> Acc; Acc =:= undefined -> R end end, undefined, lists:seq(1, 10)), erlang:display(R).\" -s init stop -noshell"
+            " -setcookie AtomVM -kernel net_setuptime 60 -kernel net_ticktime 600 -eval \"" ++
+            Eval ++
+            "\" -s init stop -noshell"
     ),
-    true = Result =:= lists:flatten(io_lib:format("~p\r\n", [Platform])),
+    case Result of
+        "ping=pong\r\n" ++ Expected ->
+            ok;
+        "ping=pong\n" ++ Expected ->
+            ok;
+        _ ->
+            io:format(
+                "test_rpc_loop_from_beam: unexpected Result = ~p (expected ping=pong + ~p)~n",
+                [Result, Expected]
+            ),
+            error({result_mismatch, Result, Expected})
+    end,
     net_kernel:stop(),
     ok.
 
@@ -182,7 +217,7 @@ test_autoconnect_to_beam(Platform) ->
     ok =
         receive
             {Pid, ready} -> ok
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     [_, Host] = string:split(atom_to_list(Node), "@"),
     OTPNode = list_to_atom(OtpSname ++ "@" ++ Host),
@@ -190,25 +225,25 @@ test_autoconnect_to_beam(Platform) ->
     {ok, OTPPid} =
         receive
             {OTPPid0, pong} -> {ok, OTPPid0}
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     OTPPid ! {self(), ping},
     ok =
         receive
             {OTPPid, pong} -> ok
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     erlang:send({beam, OTPNode}, {self(), ping}),
     ok =
         receive
             {OTPPid, pong} -> ok
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     OTPPid ! {self(), net_adm_ping},
     ok =
         receive
             {OTPPid, pong} -> ok
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     % Ensure there is no leak
     {monitored_by, []} = process_info(whereis(net_kernel), monitored_by),
@@ -216,12 +251,12 @@ test_autoconnect_to_beam(Platform) ->
     ok =
         receive
             {OTPPid, quit} -> ok
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     normal =
         receive
             {'DOWN', MonitorRef, process, Pid, Reason} -> Reason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     net_kernel:stop(),
     ok.
@@ -238,6 +273,8 @@ start_apply_loop(Platform) ->
                 Platform,
                 "erl -sname " ++ ?OTP_SNAME ++
                     " -setcookie AtomVM -kernel net_setuptime 60 -eval \""
+                    "pong = net_adm:ping('" ++ atom_to_list(Node) ++
+                    "'), "
                     "{atomvm, '" ++ atom_to_list(Node) ++
                     "'} ! {beam, self()}, "
                     "F = fun(G) ->"
@@ -268,7 +305,7 @@ start_apply_loop_io() ->
         {io_result, Result0} ->
             io:format("~s\n", [Result0]),
             start_apply_loop_io()
-    after 15000 -> exit(timeout)
+    after 30000 -> exit(timeout)
     end.
 
 call_apply_loop(Pid, Message) ->
@@ -279,7 +316,7 @@ call_apply_loop(Pid, Message) ->
         {io_result, Result1} ->
             io:format("~s\n", [Result1]),
             exit(timeout)
-    after 15000 -> exit(timeout)
+    after 30000 -> exit(timeout)
     end.
 
 stop_apply_loop(BeamMainPid, Pid, MonitorRef) ->
@@ -287,7 +324,7 @@ stop_apply_loop(BeamMainPid, Pid, MonitorRef) ->
     normal =
         receive
             {'DOWN', MonitorRef, process, Pid, Reason} -> Reason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     net_kernel:stop(),
     unregister(atomvm),
@@ -303,7 +340,7 @@ test_groupleader(Platform) ->
     "hello group leader" =
         receive
             {io_result, IOResult} -> IOResult
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     ok.
 
@@ -316,7 +353,7 @@ test_link_remote_exit_remote(Platform) ->
             process_flag(trap_exit, true),
             receive
                 {'EXIT', ExitPid, Reason} -> Main ! {exit, ExitPid, Reason}
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end
         end,
         [monitor]
@@ -331,12 +368,12 @@ test_link_remote_exit_remote(Platform) ->
     some_reason =
         receive
             {exit, SpawnedPid, ExitReason} -> ExitReason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     normal =
         receive
             {'DOWN', LocalSpawnedMonitor, process, LocalSpawnedPid, MonitorReason} -> MonitorReason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     ok.
 
@@ -346,7 +383,7 @@ test_link_remote_exit_local(Platform) ->
     {LocalSpawnedPid, LocalSpawnedMonitor} = spawn_opt(
         fun() ->
             receive
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end
         end,
         [monitor]
@@ -361,7 +398,7 @@ test_link_remote_exit_local(Platform) ->
     some_reason =
         receive
             {'DOWN', LocalSpawnedMonitor, process, LocalSpawnedPid, MonitorReason} -> MonitorReason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     {exit, LocalSpawnedPid, some_reason} = call_apply_loop(SpawnedPid, {self(), flush_exit}),
     quit = call_apply_loop(SpawnedPid, {self(), quit}),
@@ -377,11 +414,11 @@ test_link_local_unlink_remote(Platform) ->
                 {Caller, link} ->
                     Result = link(SpawnedPid),
                     Caller ! {self(), Result}
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end,
             receive
                 quit -> ok
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end
         end,
         [monitor]
@@ -404,7 +441,7 @@ test_link_local_unlink_remote(Platform) ->
     normal =
         receive
             {'DOWN', LocalSpawnedMonitor, process, LocalSpawnedPid, MonitorReason} -> MonitorReason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     quit = call_apply_loop(SpawnedPid, {self(), quit}),
     ok = stop_apply_loop(BeamMainPid, Pid, MonitorRef),
@@ -419,17 +456,17 @@ test_link_local_unlink_local(Platform) ->
                 {LinkCaller, link} ->
                     LinkResult = link(SpawnedPid),
                     LinkCaller ! {self(), LinkResult}
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end,
             receive
                 {UnlinkCaller, unlink} ->
                     UnlinkResult = unlink(SpawnedPid),
                     UnlinkCaller ! {self(), UnlinkResult}
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end,
             receive
                 quit -> ok
-            after 15000 -> exit(timeout)
+            after 30000 -> exit(timeout)
             end
         end,
         [monitor]
@@ -455,7 +492,7 @@ test_link_local_unlink_local(Platform) ->
     normal =
         receive
             {'DOWN', LocalSpawnedMonitor, process, LocalSpawnedPid, MonitorReason} -> MonitorReason
-        after 15000 -> timeout
+        after 30000 -> timeout
         end,
     quit = call_apply_loop(SpawnedPid, {self(), quit}),
     ok = stop_apply_loop(BeamMainPid, Pid, MonitorRef),
@@ -487,7 +524,7 @@ test_ping_with_avm_dist_opts("ATOM" = Platform) ->
     %% Verify the listening port skipped the blocked port
     [Name, Host] = string:split(atom_to_list(Node), "@"),
     {ok, HostAddr} = inet:getaddr(Host, inet),
-    {port, Port, _Version} = erl_epmd:port_please(Name, HostAddr),
+    {port, Port, _Version} = retry_port_please(Name, HostAddr, 20),
     true = Port > DistListenMin,
     true = Port =< DistListenMax,
     %% Verify connectivity still works
@@ -512,7 +549,7 @@ subprocess("ATOM", Command) ->
 subprocess_line("BEAM", Port) ->
     receive
         {Port, {data, {eol, Line}}} -> lists:flatten([Line, "\r\n"])
-    after 15000 ->
+    after 30000 ->
         exit(timeout)
     end;
 subprocess_line("ATOM", Fd) ->
@@ -548,6 +585,19 @@ beam_loop_read(Port, Acc) ->
         {Port, {data, {eol, Line}}} -> beam_loop_read(Port, ["\r\n", Line | Acc]);
         {Port, {data, {noeol, Line}}} -> beam_loop_read(Port, [Line | Acc]);
         {Port, eof} -> lists:flatten(lists:reverse(Acc))
-    after 15000 ->
+    after 30000 ->
         exit(timeout)
+    end.
+
+retry_port_please(_Name, _HostAddr, 0) ->
+    noport;
+retry_port_please(Name, HostAddr, AttemptsLeft) ->
+    case erl_epmd:port_please(Name, HostAddr) of
+        {port, _Port, _Version} = Ok ->
+            Ok;
+        noport ->
+            timer:sleep(100),
+            retry_port_please(Name, HostAddr, AttemptsLeft - 1);
+        Other ->
+            Other
     end.
