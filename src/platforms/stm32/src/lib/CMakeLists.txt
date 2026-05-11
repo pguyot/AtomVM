@@ -21,6 +21,26 @@
 cmake_minimum_required (VERSION 3.13)
 project (libAtomVMPlatformSTM32)
 
+if (STM32_HAS_RNG)
+    # Skip mbedTLS programs/tests that pull in POSIX-only code (sockets,
+    # stdio, etc.) and won't link on bare metal anyway.
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+
+    include(FetchMbedTLS)
+
+    # Apply our user config only to the mbedtls targets, not to the rest
+    # of the firmware.
+    set(_mbedtls_stm32_cfg "MBEDTLS_USER_CONFIG_FILE=\"${CMAKE_CURRENT_SOURCE_DIR}/mbedtls_stm32_user_config.h\"")
+    foreach(_tgt mbedcrypto mbedtls mbedx509)
+        if(TARGET ${_tgt})
+            target_compile_definitions(${_tgt} PRIVATE "${_mbedtls_stm32_cfg}")
+        endif()
+    endforeach()
+    unset(_mbedtls_stm32_cfg)
+    unset(_tgt)
+endif()
+
 set(HEADER_FILES
     avm_devcfg.h
     avm_log.h
@@ -41,6 +61,14 @@ set(SOURCE_FILES
     ../../../../libAtomVM/portnifloader.c
 )
 
+if (STM32_HAS_RNG)
+    list(APPEND HEADER_FILES
+        ../../../../libAtomVM/otp_crypto.h)
+    list(APPEND SOURCE_FILES
+        ../../../../libAtomVM/otp_crypto.c
+        otp_crypto_platform.c)
+endif()
+
 set(
     PLATFORM_LIB_SUFFIX
     ${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
@@ -53,6 +81,12 @@ if(CMAKE_COMPILER_IS_GNUCC)
 endif()
 
 target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC libAtomVM)
+if (STM32_HAS_RNG)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC ATOMVM_HAS_MBEDTLS)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC
+        "MBEDTLS_USER_CONFIG_FILE=\"${CMAKE_CURRENT_SOURCE_DIR}/mbedtls_stm32_user_config.h\"")
+    target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC MbedTLS::mbedcrypto)
+endif()
 target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC ${LINK_OPTIONS} -Wl,--whole-archive ${CMAKE_CURRENT_BINARY_DIR}/liblibAtomVMGeneric-arm.a -Wl,--no-whole-archive)
 
 # Include HAL/CMSIS headers

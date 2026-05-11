@@ -23,6 +23,10 @@
 #include <platform_nifs.h>
 #include <term.h>
 
+#ifdef ATOMVM_HAS_MBEDTLS
+#include <otp_crypto.h>
+#endif
+
 // #define ENABLE_TRACE
 #include <trace.h>
 
@@ -47,9 +51,5 @@ const struct Nif *platform_nifs_get_nif(const char *nifname)
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &atomvm_platform_nif;
     }
-    const struct Nif *nif = nif_collection_resolve_nif(nifname);
-    if (nif) {
-        return nif;
-    }
-    return NULL;
+    return nif_collection_resolve_nif(nifname);
 }
