@@ -32,10 +32,12 @@ flash:
 // HAL_RCC_ClockConfig to hang.
 //
 // L5 RCC register layout:
-//   CR (0x00):   MSION[0], MSIRDY[1], HSION[8], HSIRDY[10],
-//                HSEON[16], HSERDY[17], PLLON[24], PLLRDY[25],
-//                PLLSAI1ON[26], PLLSAI1RDY[27], PLLSAI2ON[28], PLLSAI2RDY[29]
+//   CR (0x00):    MSION[0], MSIRDY[1], HSION[8], HSIRDY[10],
+//                 HSEON[16], HSERDY[17], PLLON[24], PLLRDY[25],
+//                 PLLSAI1ON[26], PLLSAI1RDY[27], PLLSAI2ON[28], PLLSAI2RDY[29]
 //   CFGR (0x08): SW[1:0], SWS[3:2]
+//   CRRCR (0x98): HSI48ON[0], HSI48RDY[1] (latch RDY from ON; needed for
+//                 mbedTLS/RNG clock setup)
 rcc: Python.PythonPeripheral @ sysbus 0x40021000
     size: 0x400
     initable: true
@@ -59,6 +61,11 @@ elif request.IsRead:
         pllsai2on = (cr >> 28) & 0x1
         cr &= ~((1 << 1) | (1 << 10) | (1 << 17) | (1 << 25) | (1 << 27) | (1 << 29))
         request.Value = cr | (msion << 1) | (hsion << 10) | (hseon << 17) | (pllon << 25) | (pllsai1on << 27) | (pllsai2on << 29)
+    elif request.Offset == 0x98:
+        crrcr = regs.get(0x98, 0)
+        hsi48on = crrcr & 0x1
+        crrcr &= ~(1 << 1)
+        request.Value = crrcr | (hsi48on << 1)
     else:
         request.Value = regs.get(request.Offset, 0)
 '''
@@ -107,3 +114,8 @@ elif request.IsRead:
     if request.Offset == 0x04:
         request.Value = (request.Value | 0x2) & ~0x1
 '''
+
+// L5 RNG (not modeled in renode 1.16.1's stm32l552.repl).
+// Renode 1.16.1 ships this peripheral as STM32F4_RNG; it was renamed to
+// STM32_RNG upstream after 1.16.1 was tagged.
+rng: Miscellaneous.STM32F4_RNG @ sysbus 0x420c0800
