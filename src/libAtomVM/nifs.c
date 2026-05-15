@@ -3393,9 +3393,14 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
     uint8_t return_used = 0;
-    if (argc == 2
-        && interop_proplist_get_value_default(argv[1], USED_ATOM, FALSE_ATOM) == TRUE_ATOM) {
-        return_used = 1;
+    external_term_read_opts_t read_opts = ExternalTermReadNoOpts;
+    if (argc == 2) {
+        if (interop_proplist_get_value_default(argv[1], USED_ATOM, FALSE_ATOM) == TRUE_ATOM) {
+            return_used = 1;
+        }
+        if (interop_proplist_get_value_default(argv[1], SAFE_ATOM, FALSE_ATOM) == TRUE_ATOM) {
+            read_opts |= ExternalTermReadSafe;
+        }
     }
 
     GlobalContext *glb = ctx->global;
@@ -3403,7 +3408,7 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
     size_t required_heap;
     size_t bytes_read;
     external_term_read_result_t res = external_term_validate_buf(term_binary_data(binary),
-        term_binary_size(binary), ExternalTermReadNoOpts, &required_heap, &bytes_read, glb);
+        term_binary_size(binary), read_opts, &required_heap, &bytes_read, glb);
     if (UNLIKELY(res != ExternalTermReadOk)) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -3418,7 +3423,7 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
 
     term dst;
     res = external_term_deserialize_buf(term_binary_data(binary), term_binary_size(binary),
-        ExternalTermReadNoOpts, &ctx->heap, &dst, glb);
+        read_opts, &ctx->heap, &dst, glb);
     if (UNLIKELY(res != ExternalTermReadOk)) {
         RAISE_ERROR(BADARG_ATOM);
     }
