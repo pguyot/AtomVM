@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Transfer-Encoding: chunked` response support to `ahttp_client`, including HTTP trailers
 - Added `proc_lib:init_fail/2,3`
 - Added UART API to rp2 platform
+- Added `"USB_SERIAL_JTAG"` peripheral to the ESP32 `uart` module on chips with a built-in
+  USB-Serial-JTAG controller (C3/C5/C6/C61/H2/H21/H4/P4/S3)
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
