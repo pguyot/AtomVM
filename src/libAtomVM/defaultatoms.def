@@ -71,6 +71,7 @@ X(SHORT_ATOM, "\x5", "short")
 
 X(LOW_ENTROPY_ATOM, "\xB", "low_entropy")
 X(USED_ATOM, "\x4", "used")
+X(SAFE_ATOM, "\x4", "safe")
 X(START_ATOM, "\x5", "start")
 
 X(UNDEF_ATOM, "\x5", "undef")

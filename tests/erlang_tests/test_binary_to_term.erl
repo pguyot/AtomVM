@@ -154,6 +154,9 @@ start() ->
     ok = test_encode_port(),
     ok = test_atom_encoding(),
     ok = test_encode_resource(),
+    ok = test_safe_option(),
+    ok = test_invalid_export_fun_encoding(),
+    ok = test_atom_utf8_ext_node(),
     0.
 
 test_reverse(T, Interop) ->
@@ -1003,6 +1006,302 @@ test_atom_encoding() ->
     true = compare_pair_encoding(latin1_as_utf8_2),
     true = compare_pair_encoding(latin1_as_utf8_3),
     true = compare_pair_encoding(long_with_two_bytes_length),
+    ok.
+
+% Build the SMALL_ATOM_UTF8_EXT (tag 119) encoding for a fresh atom name,
+% without writing the atom as a literal anywhere (which would add it to the
+% atom table at module load).
+make_fresh_small_atom_bin(Name) when is_list(Name) ->
+    Bytes = list_to_binary(Name),
+    Len = byte_size(Bytes),
+    true = Len =< 255,
+    <<131, 119, Len, Bytes/binary>>.
+
+make_fresh_atom_utf8_bin(Name) when is_list(Name) ->
+    Bytes = list_to_binary(Name),
+    Len = byte_size(Bytes),
+    <<131, 118, Len:16, Bytes/binary>>.
+
+% ATOM_EXT (tag 100): latin1-encoded
+make_fresh_atom_ext_bin(Bytes) when is_binary(Bytes) ->
+    Len = byte_size(Bytes),
+    <<131, 100, Len:16, Bytes/binary>>.
+
+unique_atom_name(Suffix) ->
+    PidStr = pid_to_list(self()),
+    Now = integer_to_list(erlang:system_time(microsecond)),
+    "atomvm_safe_" ++ Suffix ++ "_" ++ Now ++ "_" ++ PidStr.
+
+test_safe_option() ->
+    foo = binary_to_term(<<131, 119, 3, "foo">>, [safe]),
+    {foo, bar} = binary_to_term(
+        <<131, 104, 2, 119, 3, "foo", 119, 3, "bar">>, [safe]
+    ),
+    true = binary_to_term(<<131, 119, 4, "true">>, [safe]),
+
+    42 = binary_to_term(<<131, 97, 42>>, [safe]),
+    [] = binary_to_term(<<131, 106>>, [safe]),
+    <<"hi">> = binary_to_term(<<131, 109, 0, 0, 0, 2, "hi">>, [safe]),
+
+    {32768, 6} = binary_to_term(<<131, 98, 0, 0, 128, 0, 127>>, [safe, used]),
+
+    FreshName1 = unique_atom_name("one"),
+    FreshBin1 = make_fresh_small_atom_bin(FreshName1),
+    ok = expect_badarg(fun() -> binary_to_term(FreshBin1, [safe]) end),
+    FreshAtom1 = binary_to_term(FreshBin1),
+    true = is_atom(FreshAtom1),
+    FreshAtom1 = binary_to_term(FreshBin1, [safe]),
+
+    % ATOM_UTF8_EXT
+    FreshName2 = unique_atom_name("two"),
+    FreshBin2 = make_fresh_atom_utf8_bin(FreshName2),
+    ok = expect_badarg(fun() -> binary_to_term(FreshBin2, [safe]) end),
+    FreshAtom2 = binary_to_term(FreshBin2),
+    true = is_atom(FreshAtom2),
+    FreshAtom2 = binary_to_term(FreshBin2, [safe]),
+
+    % ATOM_EXT (tag 100), pure ASCII payload
+    FreshName2a = unique_atom_name("twoa"),
+    FreshBin2a = make_fresh_atom_ext_bin(list_to_binary(FreshName2a)),
+    ok = expect_badarg(fun() -> binary_to_term(FreshBin2a, [safe]) end),
+    FreshAtom2a = binary_to_term(FreshBin2a),
+    true = is_atom(FreshAtom2a),
+    FreshAtom2a = binary_to_term(FreshBin2a, [safe]),
+
+    % ATOM_EXT (tag 100), latin1 with non-ASCII bytes
+    FreshName2bAscii = unique_atom_name("twob"),
+    Latin1Tail = <<16#E9, 16#FF, 16#C0>>,
+    FreshBytes2b = <<(list_to_binary(FreshName2bAscii))/binary, Latin1Tail/binary>>,
+    FreshBin2b = make_fresh_atom_ext_bin(FreshBytes2b),
+    ok = expect_badarg(fun() -> binary_to_term(FreshBin2b, [safe]) end),
+    FreshAtom2b = binary_to_term(FreshBin2b),
+    true = is_atom(FreshAtom2b),
+    FreshAtom2b = binary_to_term(FreshBin2b, [safe]),
+
+    ExpectedUtf8Tail = unicode:characters_to_binary(Latin1Tail, latin1, utf8),
+    ExpectedUtf8 = <<(list_to_binary(FreshName2bAscii))/binary, ExpectedUtf8Tail/binary>>,
+    ExpectedUtf8 = atom_to_binary(FreshAtom2b, utf8),
+
+    FreshName3 = unique_atom_name("three"),
+    NameBin3 = list_to_binary(FreshName3),
+    NameLen3 = byte_size(NameBin3),
+    TupleWithFresh =
+        <<131, 104, 2, 97, 1, 119, NameLen3, NameBin3/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(TupleWithFresh, [safe]) end),
+    {1, _} = binary_to_term(TupleWithFresh),
+    ok = expect_badarg(
+        fun() ->
+            FreshName4 = unique_atom_name("four"),
+            NameBin4 = list_to_binary(FreshName4),
+            NameLen4 = byte_size(NameBin4),
+            ListWithFresh =
+                <<131, 108, 0, 0, 0, 1, 119, NameLen4, NameBin4/binary, 106>>,
+            binary_to_term(ListWithFresh, [safe])
+        end
+    ),
+    % MAP_EXT
+    ok = expect_badarg(
+        fun() ->
+            FreshName5 = unique_atom_name("five"),
+            NameBin5 = list_to_binary(FreshName5),
+            NameLen5 = byte_size(NameBin5),
+            MapWithFresh =
+                <<131, 116, 0, 0, 0, 1, 97, 1, 119, NameLen5, NameBin5/binary>>,
+            binary_to_term(MapWithFresh, [safe])
+        end
+    ),
+
+    % EXPORT_EXT — M:F/A must resolve to an existing export under [safe]
+    ModuleBin = atom_to_binary(?MODULE, utf8),
+    ModuleLen = byte_size(ModuleBin),
+    ExportBinExisting =
+        <<131, 113, 119, ModuleLen, ModuleBin/binary, 119, 2, "id", 97, 1>>,
+    ExportFun = binary_to_term(ExportBinExisting, [safe]),
+    true = is_function(ExportFun),
+
+    FreshModName = unique_atom_name("modname"),
+    FreshModBin = list_to_binary(FreshModName),
+    FreshModLen = byte_size(FreshModBin),
+    ExportBinFreshMod =
+        <<131, 113, 119, FreshModLen, FreshModBin/binary, 119, 2, "id", 97, 1>>,
+    ok = expect_badarg(fun() -> binary_to_term(ExportBinFreshMod, [safe]) end),
+    ExportFun2 = binary_to_term(ExportBinFreshMod),
+    true = is_function(ExportFun2),
+
+    % EXPORT_EXT with existing atoms but the function does not exist in the
+    % loaded module — [safe] must reject, plain decode must build the fun.
+    ExportBinNonexistentFun =
+        <<131, 113, 119, ModuleLen, ModuleBin/binary, 119, 2, "id", 97, 99>>,
+    ok = expect_badarg(fun() -> binary_to_term(ExportBinNonexistentFun, [safe]) end),
+    NonexistentFun = binary_to_term(ExportBinNonexistentFun),
+    true = is_function(NonexistentFun),
+
+    % EXPORT_EXT for a BIF — [safe] must accept.
+    BifBin = <<131, 113, 119, 6, "erlang", 119, 1, "+", 97, 2>>,
+    BifFun = binary_to_term(BifBin, [safe]),
+    true = is_function(BifFun),
+
+    % EXPORT_EXT with arity 256 — outside the valid 0..255 range.
+    %% encoded as INTEGER_EXT (98), 32-bit signed
+    InvalidArityBin =
+        <<131, 113, 119, ModuleLen, ModuleBin/binary, 119, 2, "id", 98, 0, 0, 1, 0>>,
+    ok = expect_badarg(fun() -> binary_to_term(InvalidArityBin, [safe]) end),
+
+    % NEW_FUN_EXT
+    LocalFun = fun(X) -> X * 2 end,
+    NewFunBin = term_to_binary(LocalFun),
+    DecodedFun = binary_to_term(NewFunBin, [safe]),
+    true = is_function(DecodedFun),
+
+    % NEW_FUN_EXT with num_free = 0 referencing a fresh module atom.
+    % The whole fresh-atom check would otherwise be skipped when no free
+    % variables are captured, letting [safe] accept a binary that creates
+    % a brand-new module atom.
+    FreshFunMod = unique_atom_name("newfunmod"),
+    FreshFunModBin = list_to_binary(FreshFunMod),
+    FreshFunModLen = byte_size(FreshFunModBin),
+    ModuleSelfBin = atom_to_binary(?MODULE, utf8),
+    ModuleSelfLen = byte_size(ModuleSelfBin),
+    NewFunBody =
+        <<119, FreshFunModLen, FreshFunModBin/binary, 97, 0, 97, 0, 88, 119, ModuleSelfLen,
+            ModuleSelfBin/binary, 0:32, 0:32, 0:32>>,
+    NewFunRest =
+        <<1, 0:128, 0:32, 0:32, NewFunBody/binary>>,
+    NewFunSize = byte_size(NewFunRest) + 4,
+    NewFunFreshBin = <<131, 112, NewFunSize:32, NewFunRest/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(NewFunFreshBin, [safe]) end),
+    DecodedFreshFun = binary_to_term(NewFunFreshBin),
+    true = is_function(DecodedFreshFun),
+
+    % NEW_FUN_EXT with num_free = 0 whose embedded pid carries a fresh node
+    % atom — [safe] must reject the entire fun.
+    FreshFunPidNode = unique_atom_name("funpidnode"),
+    FreshFunPidNodeBin = list_to_binary(FreshFunPidNode),
+    FreshFunPidNodeLen = byte_size(FreshFunPidNodeBin),
+    NewFunFreshPidBody =
+        <<119, ModuleSelfLen, ModuleSelfBin/binary, 97, 0, 97, 0, 88, 119, FreshFunPidNodeLen,
+            FreshFunPidNodeBin/binary, 0:32, 0:32, 0:32>>,
+    NewFunFreshPidRest = <<1, 0:128, 0:32, 0:32, NewFunFreshPidBody/binary>>,
+    NewFunFreshPidSize = byte_size(NewFunFreshPidRest) + 4,
+    NewFunFreshPidBin = <<131, 112, NewFunFreshPidSize:32, NewFunFreshPidRest/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(NewFunFreshPidBin, [safe]) end),
+    DecodedFreshPidFun = binary_to_term(NewFunFreshPidBin),
+    true = is_function(DecodedFreshPidFun),
+
+    % NEW_FUN_EXT with num_free = 1 whose captured free var is a fresh atom
+    % — [safe] must reject.
+    FreshFreeVar = unique_atom_name("freevar"),
+    FreshFreeVarBin = list_to_binary(FreshFreeVar),
+    FreshFreeVarLen = byte_size(FreshFreeVarBin),
+    NewFunFreshFreeBody =
+        <<119, ModuleSelfLen, ModuleSelfBin/binary, 97, 0, 97, 0, 88, 119, ModuleSelfLen,
+            ModuleSelfBin/binary, 0:32, 0:32, 0:32, 119, FreshFreeVarLen, FreshFreeVarBin/binary>>,
+    NewFunFreshFreeRest = <<1, 0:128, 0:32, 1:32, NewFunFreshFreeBody/binary>>,
+    NewFunFreshFreeSize = byte_size(NewFunFreshFreeRest) + 4,
+    NewFunFreshFreeBin =
+        <<131, 112, NewFunFreshFreeSize:32, NewFunFreshFreeRest/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(NewFunFreshFreeBin, [safe]) end),
+    DecodedFreshFreeFun = binary_to_term(NewFunFreshFreeBin),
+    true = is_function(DecodedFreshFreeFun),
+
+    FreshNodeName = unique_atom_name("nodename"),
+    NodeBin = list_to_binary(FreshNodeName),
+    NodeLen = byte_size(NodeBin),
+    PidWithFreshNode =
+        <<131, 88, 119, NodeLen, NodeBin/binary, 1:32, 0:32, 0:32>>,
+    ok = expect_badarg(fun() -> binary_to_term(PidWithFreshNode, [safe]) end),
+    DecodedPid = binary_to_term(PidWithFreshNode),
+    true = is_pid(DecodedPid),
+
+    PidWithFreshNode2 =
+        <<131, 88, 119, NodeLen, NodeBin/binary, 2:32, 0:32, 0:32>>,
+    DecodedPid2 = binary_to_term(PidWithFreshNode2, [safe]),
+    true = is_pid(DecodedPid2),
+
+    ok.
+
+test_invalid_export_fun_encoding() ->
+    ModuleSelfBin = atom_to_binary(?MODULE, utf8),
+    ModuleSelfLen = byte_size(ModuleSelfBin),
+    PidBin = <<88, 119, ModuleSelfLen, ModuleSelfBin/binary, 0:32, 0:32, 0:32>>,
+
+    %% EXPORT_EXT with non-atom module
+    ok = expect_badarg(
+        fun() ->
+            binary_to_term(<<131, 113, 97, 42, 119, 3, "foo", 97, 0>>)
+        end
+    ),
+    %% EXPORT_EXT with non-atom function
+    ok = expect_badarg(
+        fun() ->
+            binary_to_term(<<131, 113, 119, 3, "foo", 97, 42, 97, 0>>)
+        end
+    ),
+    %% EXPORT_EXT with non-integer arity (atom in place of arity)
+    ok = expect_badarg(
+        fun() ->
+            binary_to_term(<<131, 113, 119, 3, "foo", 119, 3, "bar", 119, 3, "baz">>)
+        end
+    ),
+
+    %% NEW_FUN_EXT with non-atom module
+    Body1 = <<97, 42, 97, 0, 97, 0, PidBin/binary>>,
+    Rest1 = <<1, 0:128, 0:32, 0:32, Body1/binary>>,
+    Size1 = byte_size(Rest1) + 4,
+    Bin1 = <<131, 112, Size1:32, Rest1/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(Bin1) end),
+
+    %% NEW_FUN_EXT with non-integer old_index (atom in place)
+    Body2 =
+        <<119, ModuleSelfLen, ModuleSelfBin/binary, 119, 3, "abc", 97, 0, PidBin/binary>>,
+    Rest2 = <<1, 0:128, 0:32, 0:32, Body2/binary>>,
+    Size2 = byte_size(Rest2) + 4,
+    Bin2 = <<131, 112, Size2:32, Rest2/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(Bin2) end),
+
+    %% NEW_FUN_EXT with non-integer old_uniq (atom in place)
+    Body3 =
+        <<119, ModuleSelfLen, ModuleSelfBin/binary, 97, 0, 119, 3, "abc", PidBin/binary>>,
+    Rest3 = <<1, 0:128, 0:32, 0:32, Body3/binary>>,
+    Size3 = byte_size(Rest3) + 4,
+    Bin3 = <<131, 112, Size3:32, Rest3/binary>>,
+    ok = expect_badarg(fun() -> binary_to_term(Bin3) end),
+
+    %% NEW_FUN_EXT with non-pid in pid slot (integer in place).
+    %% OTP < 27 accepts this; OTP 27+ and AtomVM reject it.
+    case get_otp_version() of
+        OTPVersion when is_integer(OTPVersion), OTPVersion < 27 ->
+            ok;
+        _ ->
+            Body4 =
+                <<119, ModuleSelfLen, ModuleSelfBin/binary, 97, 0, 97, 0, 97, 42>>,
+            Rest4 = <<1, 0:128, 0:32, 0:32, Body4/binary>>,
+            Size4 = byte_size(Rest4) + 4,
+            Bin4 = <<131, 112, Size4:32, Rest4/binary>>,
+            ok = expect_badarg(fun() -> binary_to_term(Bin4) end)
+    end,
+    ok.
+
+test_atom_utf8_ext_node() ->
+    %% OTP accepts ATOM_UTF8_EXT (tag 118) for the embedded node atom in
+    %% NEW_PID_EXT, V4_PORT_EXT, and NEWER_REFERENCE_EXT, even though OTP29
+    %% encoder always emits SMALL_ATOM_UTF8_EXT for short node names.
+    NodeUtf8 = <<118, 0, 13, "nonode@nohost">>,
+
+    %% NEW_PID_EXT
+    PidBin = <<131, 88, NodeUtf8/binary, 1:32, 0:32, 0:32>>,
+    Pid = binary_to_term(PidBin),
+    true = is_pid(Pid),
+
+    %% V4_PORT_EXT
+    PortBin = <<131, 120, NodeUtf8/binary, 1:64, 0:32>>,
+    Port = binary_to_term(PortBin),
+    true = is_port(Port),
+
+    %% NEWER_REFERENCE_EXT
+    RefBin = <<131, 90, 0, 2, NodeUtf8/binary, 0:32, 1:32, 2:32>>,
+    Ref = binary_to_term(RefBin),
+    true = is_reference(Ref),
     ok.
 
 make_binterm_fun(Id) ->

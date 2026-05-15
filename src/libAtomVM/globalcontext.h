@@ -427,6 +427,27 @@ static inline term globalcontext_insert_atom_maybe_copy(GlobalContext *glb, cons
 }
 
 /**
+ * @brief Look up an existing atom by data and length, without creating a new one.
+ *
+ * @details Like \c globalcontext_insert_atom_maybe_copy, but returns an invalid
+ * term if the atom is not already in the table.
+ * @param glb the global context.
+ * @param atom_data the atom data
+ * @param atom_len the atom data length
+ * @returns the atom term if already present, otherwise \c term_invalid_term().
+ */
+static inline term globalcontext_existing_atom_from_buf(GlobalContext *glb, const uint8_t *atom_data, size_t atom_len)
+{
+    atom_index_t global_atom_index;
+    enum AtomTableEnsureAtomResult ensure_result = atom_table_ensure_atom(
+        glb->atom_table, atom_data, atom_len, AtomTableAlreadyExisting, &global_atom_index);
+    if (ensure_result != AtomTableEnsureAtomOk) {
+        return term_invalid_term();
+    }
+    return term_from_atom_index(global_atom_index);
+}
+
+/**
  * @brief Compares an atom table index with an AtomString.
  *
  * @details Checks if the given atom table index and the given AtomString refers to the same atom.

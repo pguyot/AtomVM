@@ -64,11 +64,16 @@ typedef enum
  * @brief Options for external term read operations.
  *
  * Passed to validate and deserialize functions to control their behavior.
- * Reserved for future use; pass \c ExternalTermReadNoOpts for now.
+ * Values are bit flags and can be combined with bitwise OR.
+ *
+ * \c ExternalTermReadSafe matches the OTP \c safe option of
+ * \c binary_to_term/2: it forbids creation of new atoms (directly or
+ * embedded in pids/ports/refs/funs).
  */
 typedef enum
 {
-    ExternalTermReadNoOpts
+    ExternalTermReadNoOpts = 0,
+    ExternalTermReadSafe = 1
 } external_term_read_opts_t;
 
 /**
