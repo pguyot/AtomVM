@@ -212,13 +212,17 @@ validate_peripheral([$U, $A, $R, $T | N] = Value) ->
     try list_to_integer(N) of
         _ -> Value
     catch
-        error:_ -> {bardarg, {peripheral, Value}}
+        error:_ -> error(badarg, [{peripheral, Value}])
     end;
 validate_peripheral(<<"UART", N/binary>> = Value) ->
     try binary_to_integer(N) of
         _ -> Value
     catch
-        error:_ -> {bardarg, {peripheral, Value}}
+        error:_ -> error(badarg, [{peripheral, Value}])
     end;
+validate_peripheral("USB_SERIAL_JTAG" = Value) ->
+    Value;
+validate_peripheral(<<"USB_SERIAL_JTAG">> = Value) ->
+    Value;
 validate_peripheral(Value) ->
-    throw({bardarg, {peripheral, Value}}).
+    error(badarg, [{peripheral, Value}]).
