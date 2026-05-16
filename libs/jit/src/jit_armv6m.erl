@@ -72,7 +72,9 @@
     return_labels_and_lines/2,
     add_label/2,
     add_label/3,
-    xor_/3
+    xor_/3,
+    set_vm_record_type/3,
+    get_vm_record_type/2
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -4416,6 +4418,16 @@ add_label(#state{labels = Labels} = State, Label, Offset) ->
 -spec dwarf_x_reg_offset() -> non_neg_integer().
 dwarf_x_reg_offset() ->
     element(2, ?X_REG(0)).
+
+%% @doc Record a type assertion for a VM x/y register. The assertion is
+%% invalidated automatically by the same hooks that invalidate `regs` tracking
+%% (writes to the VM register, C calls clobbering x regs, labels).
+set_vm_record_type(#state{regs = Regs} = State, VmLoc, Type) ->
+    State#state{regs = jit_regs:set_vm_type(Regs, VmLoc, Type)}.
+
+%% @doc Look up the type assertion previously recorded for a VM x/y register.
+get_vm_record_type(#state{regs = Regs}, VmLoc) ->
+    jit_regs:get_vm_type(Regs, VmLoc).
 
 -ifdef(JIT_DWARF).
 %%-----------------------------------------------------------------------------
