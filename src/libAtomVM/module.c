@@ -54,7 +54,12 @@
 #endif
 
 // BEAM Type constants from OTP source code:
-// /opt/src/otp/lib/compiler/src/beam_types.erl lines 1446-1461
+// /opt/src/otp/lib/compiler/src/beam_types.erl
+//
+// Bits 0..11 are stable across v3 (OTP 27/28) and v4 (OTP 29). Bit 12 is the
+// native-record bit introduced in v4; in v3 it was the HAS_LOWER_BOUND flag.
+// The three flag bits shifted up by one in v4 to make room for the new type
+// bit, so the layout has to be parsed using version-aware masks below.
 #define BEAM_TYPE_ATOM (1 << 0)
 #define BEAM_TYPE_BITSTRING (1 << 1)
 #define BEAM_TYPE_CONS (1 << 2)
@@ -67,14 +72,24 @@
 #define BEAM_TYPE_PORT (1 << 9)
 #define BEAM_TYPE_REFERENCE (1 << 10)
 #define BEAM_TYPE_TUPLE (1 << 11)
+#define BEAM_TYPE_RECORD (1 << 12) // v4 only
 
-#define BEAM_TYPE_HAS_LOWER_BOUND (1 << 12)
-#define BEAM_TYPE_HAS_UPPER_BOUND (1 << 13)
-#define BEAM_TYPE_HAS_UNIT (1 << 14)
+// v3 flag bits (OTP 27/28).
+#define BEAM_TYPE_V3_HAS_LOWER_BOUND (1 << 12)
+#define BEAM_TYPE_V3_HAS_UPPER_BOUND (1 << 13)
+#define BEAM_TYPE_V3_HAS_UNIT (1 << 14)
+// v4 flag bits (OTP 29+). The native-record bit at position 12 pushed these up.
+#define BEAM_TYPE_V4_HAS_LOWER_BOUND (1 << 13)
+#define BEAM_TYPE_V4_HAS_UPPER_BOUND (1 << 14)
+#define BEAM_TYPE_V4_HAS_UNIT (1 << 15)
 
 // BEAM Types version from OTP source code:
 // /opt/src/otp/lib/compiler/src/beam_types.hrl line 22
-#define BEAM_TYPES_VERSION 3
+//
+// AtomVM understands v3 (OTP 27/28) and v4 (OTP 29+). Older versions are
+// reported as 'any', which is a safe fallback for JIT type-driven passes.
+#define BEAM_TYPES_VERSION_V3 3
+#define BEAM_TYPES_VERSION_V4 4
 
 #define LITT_UNCOMPRESSED_SIZE_OFFSET 8
 #define LITT_HEADER_SIZE 12
@@ -1411,13 +1426,32 @@ term module_get_type_by_index(const Module *mod, int type_index, Context *ctx)
     uint32_t count = READ_32_UNALIGNED(types_data + 4);
 
     // Check if version is supported
-    if (version != BEAM_TYPES_VERSION) {
+    if (version != BEAM_TYPES_VERSION_V3 && version != BEAM_TYPES_VERSION_V4) {
         return globalcontext_make_atom(ctx->global, ATOM_STR("\x3", "any"));
     }
 
     // Check bounds
     if (type_index >= (int) count) {
         return globalcontext_make_atom(ctx->global, ATOM_STR("\x3", "any"));
+    }
+
+    // Pick the per-version flag layout. v4 adds BEAM_TYPE_RECORD at bit 12 and
+    // pushes the bound/unit flags up by one. Mask out the flag bits when
+    // selecting type bits — v3 uses 0xFFF (bits 0..11), v4 uses 0x1FFF (0..12).
+    uint16_t has_lower_bound_mask;
+    uint16_t has_upper_bound_mask;
+    uint16_t has_unit_mask;
+    uint16_t type_bits_mask;
+    if (version == BEAM_TYPES_VERSION_V4) {
+        has_lower_bound_mask = BEAM_TYPE_V4_HAS_LOWER_BOUND;
+        has_upper_bound_mask = BEAM_TYPE_V4_HAS_UPPER_BOUND;
+        has_unit_mask = BEAM_TYPE_V4_HAS_UNIT;
+        type_bits_mask = 0x1FFF;
+    } else {
+        has_lower_bound_mask = BEAM_TYPE_V3_HAS_LOWER_BOUND;
+        has_upper_bound_mask = BEAM_TYPE_V3_HAS_UPPER_BOUND;
+        has_unit_mask = BEAM_TYPE_V3_HAS_UNIT;
+        type_bits_mask = 0xFFF;
     }
 
     // Skip to type data
@@ -1430,13 +1464,13 @@ term module_get_type_by_index(const Module *mod, int type_index, Context *ctx)
         pos += 2;
 
         // Skip extra data if present
-        if (type_bits & BEAM_TYPE_HAS_LOWER_BOUND) {
+        if (type_bits & has_lower_bound_mask) {
             pos += 8;
         }
-        if (type_bits & BEAM_TYPE_HAS_UPPER_BOUND) {
+        if (type_bits & has_upper_bound_mask) {
             pos += 8;
         }
-        if (type_bits & BEAM_TYPE_HAS_UNIT) {
+        if (type_bits & has_unit_mask) {
             pos += 1;
         }
     }
@@ -1452,24 +1486,24 @@ term module_get_type_by_index(const Module *mod, int type_index, Context *ctx)
     bool has_lower = false;
     bool has_upper = false;
 
-    if (type_bits & BEAM_TYPE_HAS_LOWER_BOUND) {
+    if (type_bits & has_lower_bound_mask) {
         lower_bound = (int64_t) READ_64_UNALIGNED(pos);
         pos += 8;
         has_lower = true;
     }
-    if (type_bits & BEAM_TYPE_HAS_UPPER_BOUND) {
+    if (type_bits & has_upper_bound_mask) {
         upper_bound = (int64_t) READ_64_UNALIGNED(pos);
         pos += 8;
         has_upper = true;
     }
-    if (type_bits & BEAM_TYPE_HAS_UNIT) {
+    if (type_bits & has_unit_mask) {
         unit = *pos + 1; // Stored as unit-1
         pos += 1;
     }
 
     // Decode type based on TypeBits (matching jit_precompile.erl exact pattern matching)
     // From OTP source code: /opt/src/otp/lib/compiler/src/beam_types.erl decode_type function
-    uint16_t type_pattern = type_bits & 0xFFF; // Mask out flags, keep type bits
+    uint16_t type_pattern = type_bits & type_bits_mask;
 
     switch (type_pattern) {
         case BEAM_TYPE_ATOM:
@@ -1580,6 +1614,12 @@ term module_get_type_by_index(const Module *mod, int type_index, Context *ctx)
 
         case BEAM_TYPE_TUPLE:
             return globalcontext_make_atom(ctx->global, ATOM_STR("\x7", "t_tuple"));
+
+        case BEAM_TYPE_RECORD:
+            // v4 only — the rich #t_record{} fields (module/name/fields) are
+            // not carried in the Type chunk, so the JIT sees this as the
+            // bare "native record" abstract type.
+            return globalcontext_make_atom(ctx->global, ATOM_STR("\x8", "t_record"));
 
         default:
             // Default fallback for any other combination or union types
