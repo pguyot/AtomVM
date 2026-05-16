@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added PPP over a UART to the `network` module on ESP32 (opt-in with `CONFIG_AVM_ENABLE_PPP=y`,
   which needs `CONFIG_LWIP_PPP_SUPPORT=y`): `{ppp, [...]}` in `network:start/1` runs the link on a
   UART whose other end is ready for it, such as a cellular modem the application has dialed
+- Added support for native records introduced with OTP29
+- Added generational garbage collection: minor collections only copy recently allocated data and
+  promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
+  `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
+  sweep on every collection), inspect with `process_info/2`
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.
@@ -39,10 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing macOS 15 coverage is unchanged
 - `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now process nested lists, tuples
   and maps iteratively
-- Added generational garbage collection: minor collections only copy recently allocated data and
-  promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
-  `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
-  sweep on every collection), inspect with `process_info/2`
 - Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
   stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
   scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
