@@ -603,6 +603,26 @@ unsigned long memory_estimate_usage(term t)
                         }
                     } break;
 
+                    case TERM_BOXED_RECORD: {
+                        // header arity = num_fields + 1 (definition pointer slot)
+                        int header_arity = term_get_size_from_boxed_header(boxed_value_0);
+                        acc += header_arity + 1;
+                        size_t num_fields = (size_t) header_arity - 1;
+                        if (num_fields > 0) {
+                            for (size_t i = 1; i < num_fields; i++) {
+                                if (UNLIKELY(temp_stack_push(&temp_stack,
+                                                 term_get_record_value(t, i))
+                                        != TempStackOk)) {
+                                    // TODO: handle failed malloc
+                                    AVM_ABORT();
+                                }
+                            }
+                            t = term_get_record_value(t, 0);
+                        } else {
+                            t = term_nil();
+                        }
+                    } break;
+
                     case TERM_BOXED_MAP: {
                         int map_size = term_get_map_size(t);
                         acc += term_map_size_in_terms(map_size);
@@ -861,6 +881,11 @@ static void memory_scan_and_rewrite(size_t count, term *terms, const term *old_s
             switch (t & TERM_BOXED_TAG_MASK) {
                 case TERM_BOXED_TUPLE:
                     // Skip header and process elements
+                    break;
+
+                case TERM_BOXED_RECORD:
+                    // Skip header and the raw RecordDef* slot; field values follow as normal terms.
+                    ptr++;
                     break;
 
                 case TERM_BOXED_BIN_MATCH_STATE: {
