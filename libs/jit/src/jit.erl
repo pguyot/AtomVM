@@ -2643,7 +2643,244 @@ first_pass(<<?OP_BIF3, Rest0/binary>>, MMod, MSt0, State0) ->
     ]),
     MSt7 = bif_faillabel_test(FailLabel, MMod, MSt6, {free, ResultReg}, {free, Dest}),
     ?ASSERT_ALL_NATIVE_FREE(MSt7),
-    first_pass(Rest6, MMod, MSt7, State0).
+    first_pass(Rest6, MMod, MSt7, State0);
+% 186
+first_pass(<<?OP_IS_ANY_NATIVE_RECORD, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Label, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    ?TRACE("OP_IS_ANY_NATIVE_RECORD ~p, ~p\n", [Label, Src]),
+    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Src),
+    MSt3 = cond_jump_to_label(
+        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    ),
+    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, TagReg} = MMod:get_array_element(MSt4, Reg, 0),
+    MSt6 = cond_jump_to_label(
+        {TagReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_RECORD}, Label, MMod, MSt5
+    ),
+    MSt7 = MMod:free_native_registers(MSt6, [Reg, TagReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt7),
+    first_pass(Rest2, MMod, MSt7, State0);
+% 187
+first_pass(
+    <<?OP_IS_NATIVE_RECORD, Rest0/binary>>,
+    MMod,
+    MSt0,
+    #state{atom_resolver = AtomResolver} = State0
+) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Label, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {ModAtomIndex, Rest3} = decode_atom(Rest2),
+    {NameAtomIndex, Rest4} = decode_atom(Rest3),
+    ?TRACE("OP_IS_NATIVE_RECORD ~p, ~p, ~p, ~p\n", [Label, Src, ModAtomIndex, NameAtomIndex]),
+    {MSt2, ModAtom} =
+        case maps:find(AtomResolver(ModAtomIndex), ?DEFAULT_ATOMS) of
+            error ->
+                MMod:call_primitive(
+                    MSt1, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, ModAtomIndex]
+                );
+            {ok, ModVal} ->
+                {MSt1, ModVal}
+        end,
+    {MSt3, NameAtom} =
+        case maps:find(AtomResolver(NameAtomIndex), ?DEFAULT_ATOMS) of
+            error ->
+                MMod:call_primitive(
+                    MSt2, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, NameAtomIndex]
+                );
+            {ok, NameVal} ->
+                {MSt2, NameVal}
+        end,
+    {MSt4, ResultReg} = MMod:call_primitive(MSt3, ?PRIM_IS_RECORD_OF, [
+        {free, Src}, {free, ModAtom}, {free, NameAtom}
+    ]),
+    MSt5 = cond_jump_to_label({{free, ResultReg}, '==', 0}, Label, MMod, MSt4),
+    ?ASSERT_ALL_NATIVE_FREE(MSt5),
+    first_pass(Rest4, MMod, MSt5, State0);
+% 188
+first_pass(
+    <<?OP_GET_RECORD_ELEMENTS, Rest0/binary>>,
+    MMod,
+    MSt0,
+    #state{atom_resolver = AtomResolver} = State0
+) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {ListLen, Rest3} = decode_extended_list_header(Rest2),
+    ?TRACE("OP_GET_RECORD_ELEMENTS ~p, ~p, ~p\n", [Fail, Src, ListLen]),
+    NumPairs = ListLen div 2,
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
+    {MSt3, SrcPtrReg} = MMod:copy_to_native_register(MSt2, SrcReg),
+    {MSt4, SrcPtrReg} = MMod:and_(MSt3, {free, SrcPtrReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, Rest4} = lists:foldl(
+        fun(_Idx, {ASt0, ARest0}) ->
+            {AtomIndex, ARest1} = decode_atom(ARest0),
+            {ASt1, Dest, ARest2} = decode_dest(ARest1, MMod, ASt0),
+            ASt2 = MMod:free_native_registers(ASt1, [Dest]),
+            {ASt3, FieldName} =
+                case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
+                    error ->
+                        MMod:call_primitive(
+                            ASt2, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
+                        );
+                    {ok, Val} ->
+                        {ASt2, Val}
+                end,
+            {ASt4, PosReg} = MMod:call_primitive(ASt3, ?PRIM_RECORD_FIELD_POS, [
+                SrcReg, {free, FieldName}
+            ]),
+            ASt5 = cond_jump_to_label({{free, PosReg}, '==', 0}, Fail, MMod, ASt4),
+            {ASt5, ARest2}
+        end,
+        {MSt4, Rest3},
+        lists:seq(1, NumPairs)
+    ),
+    {MSt6, _} = lists:foldl(
+        fun(_Idx, {ASt0, ARest0}) ->
+            {AtomIndex, ARest1} = decode_atom(ARest0),
+            {ASt1, Dest, ARest2} = decode_dest(ARest1, MMod, ASt0),
+            {ASt2, FieldName} =
+                case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
+                    error ->
+                        MMod:call_primitive(
+                            ASt1, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
+                        );
+                    {ok, Val} ->
+                        {ASt1, Val}
+                end,
+            {ASt3, PosReg} = MMod:call_primitive(ASt2, ?PRIM_RECORD_FIELD_POS, [
+                SrcReg, {free, FieldName}
+            ]),
+            ASt4 = MMod:move_array_element(ASt3, SrcPtrReg, {free, PosReg}, Dest),
+            ASt5 = MMod:free_native_registers(ASt4, [Dest]),
+            {ASt5, ARest2}
+        end,
+        {MSt5, Rest3},
+        lists:seq(1, NumPairs)
+    ),
+    MSt7 = MMod:free_native_registers(MSt6, [SrcReg, SrcPtrReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt7),
+    first_pass(Rest4, MMod, MSt7, State0);
+% 189
+first_pass(<<?OP_PUT_RECORD, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {_Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Id, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt3, Dest, Rest4} = decode_dest(Rest3, MMod, MSt2),
+    {Live, Rest5} = decode_literal(Rest4),
+    {ListLen, Rest6} = decode_extended_list_header(Rest5),
+    ?TRACE("OP_PUT_RECORD ~p, ~p, ~p, ~p, ~p\n", [_Fail, Id, Src, Dest, Live]),
+    NumPairs = ListLen div 2,
+    {MSt4, ArityReg} = MMod:call_primitive(MSt3, ?PRIM_RECORD_DEF_ARITY, [
+        ctx, jit_state, {free, Id}
+    ]),
+    MSt6 = MMod:add(MSt4, ArityReg, 2),
+    {MSt7, TrimReg} = MMod:call_primitive(MSt6, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+    MSt8 = MMod:free_native_registers(MSt7, [TrimReg]),
+    {MSt8a, NewSrc} = memory_ensure_free_with_extra_root(Src, Live, {free, ArityReg}, MMod, MSt8),
+    {MSt9, NewId, _} = decode_compact_term(Rest1, MMod, MSt8a, State0),
+    {MSt10, KVReg} =
+        if
+            NumPairs > 0 ->
+                MMod:call_primitive(MSt9, ?PRIM_MALLOC, [
+                    ctx, jit_state, NumPairs * 2 * MMod:word_size()
+                ]);
+            true ->
+                MMod:move_to_native_register(MSt9, 0)
+        end,
+    MSt11 =
+        if
+            NumPairs > 0 -> handle_error_if({KVReg, '==', 0}, MMod, MSt10);
+            true -> MSt10
+        end,
+    {MSt12, Rest7} = lists:foldl(
+        fun(Index, {ASt0, ARest0}) ->
+            {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
+            {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
+            ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
+            ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
+            ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
+            {ASt5, ARest2}
+        end,
+        {MSt11, Rest6},
+        lists:seq(0, NumPairs - 1)
+    ),
+    {MSt13, ResultReg} = MMod:call_primitive(MSt12, ?PRIM_PUT_RECORD, [
+        ctx, jit_state, {free, NewId}, {free, NewSrc}, NumPairs, KVReg
+    ]),
+    MSt14 =
+        if
+            NumPairs > 0 ->
+                {Ms, FreeReg} = MMod:call_primitive(MSt13, ?PRIM_FREE, [{free, KVReg}]),
+                MMod:free_native_registers(Ms, [FreeReg]);
+            true ->
+                MMod:free_native_registers(MSt13, [KVReg])
+        end,
+    MSt15 = handle_error_if({ResultReg, '==', 0}, MMod, MSt14),
+    MSt16 = MMod:move_to_vm_register(MSt15, ResultReg, Dest),
+    MSt17 = MMod:free_native_registers(MSt16, [ResultReg, Dest]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt17),
+    first_pass(Rest7, MMod, MSt17, State0);
+% 190
+first_pass(
+    <<?OP_IS_RECORD_ACCESSIBLE, Rest0/binary>>,
+    MMod,
+    MSt0,
+    #state{atom_resolver = AtomResolver} = State0
+) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Label, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {ScopeAtomIndex, Rest3} = decode_atom(Rest2),
+    ?TRACE("OP_IS_RECORD_ACCESSIBLE ~p, ~p, ~p\n", [Label, Src, ScopeAtomIndex]),
+    {MSt2, ScopeAtom} =
+        case maps:find(AtomResolver(ScopeAtomIndex), ?DEFAULT_ATOMS) of
+            error ->
+                MMod:call_primitive(
+                    MSt1, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, ScopeAtomIndex]
+                );
+            {ok, ScopeVal} ->
+                {MSt1, ScopeVal}
+        end,
+    {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_IS_RECORD_ACCESSIBLE, [
+        ctx, jit_state, {free, Src}, {free, ScopeAtom}
+    ]),
+    MSt4 = cond_jump_to_label({{free, ResultReg}, '==', 0}, Label, MMod, MSt3),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest3, MMod, MSt4, State0);
+% 191
+first_pass(
+    <<?OP_GET_RECORD_FIELD, Rest0/binary>>,
+    MMod,
+    MSt0,
+    #state{atom_resolver = AtomResolver} = State0
+) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {FailLabel, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Id, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {FieldAtomIndex, Rest4} = decode_atom(Rest3),
+    {MSt3, Dest, Rest5} = decode_dest(Rest4, MMod, MSt2),
+    ?TRACE("OP_GET_RECORD_FIELD ~p, ~p, ~p, ~p, ~p\n", [FailLabel, Src, Id, FieldAtomIndex, Dest]),
+    {MSt4, FieldAtom} =
+        case maps:find(AtomResolver(FieldAtomIndex), ?DEFAULT_ATOMS) of
+            error ->
+                MMod:call_primitive(
+                    MSt3, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, FieldAtomIndex]
+                );
+            {ok, FieldVal} ->
+                {MSt3, FieldVal}
+        end,
+    {MSt5, ResultReg} = MMod:call_primitive(MSt4, ?PRIM_GET_RECORD_FIELD, [
+        ctx, FailLabel, {free, Src}, {free, Id}, {free, FieldAtom}
+    ]),
+    MSt6 = bif_faillabel_test(FailLabel, MMod, MSt5, {free, ResultReg}, {free, Dest}),
+    ?ASSERT_ALL_NATIVE_FREE(MSt6),
+    first_pass(Rest5, MMod, MSt6, State0).
 
 first_pass_bs_create_bin_compute_size(
     AtomType, Src, _Size, _SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
@@ -4566,6 +4803,12 @@ memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_at
     ]),
     MSt4 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt3),
     MMod:move_to_native_register(MSt4, ExtraRootXReg);
+memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_integer(ExtraRoot) ->
+    {MSt1, MemoryEnsureFreeReg} = MMod:call_primitive(MSt0, ?PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS, [
+        ctx, jit_state, Size, Live, ?MEMORY_CAN_SHRINK
+    ]),
+    MSt2 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt1),
+    {MSt2, ExtraRoot};
 memory_ensure_free_with_extra_root(ExtraRoot, Live, Size, MMod, MSt0) when is_tuple(ExtraRoot) ->
     ExtraRootXReg =
         if

@@ -67,6 +67,7 @@ set(ERLANG_MODULES
     logger_std_h
     proplists
     queue
+    records
     sets
     socket
     serial_dist

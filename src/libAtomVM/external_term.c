@@ -23,6 +23,7 @@
 #include "context.h"
 #include "list.h"
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +54,7 @@
 #define SMALL_BIG_EXT 110
 #define NEW_FUN_EXT 112
 #define EXPORT_EXT 113
+#define RECORD_EXT 67
 #define MAP_EXT 116
 #define ATOM_UTF8_EXT 118
 #define SMALL_ATOM_UTF8_EXT 119
@@ -313,6 +315,26 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
             }
             return SMALL_ATOM_EXT_BASE_SIZE + atom_len;
         }
+    } else if (term_is_record(t)) {
+        const struct RecordDef *def = term_get_record_def(t);
+        size_t num_fields = def->num_fields;
+        size_t k;
+        if (!IS_NULL_PTR(buf)) {
+            buf[0] = RECORD_EXT;
+            WRITE_32_UNALIGNED(buf + 1, (int32_t) num_fields);
+            buf[5] = def->is_exported ? 1 : 0;
+        }
+        k = 6;
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, def->module, glb);
+        k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, def->name, glb);
+        for (size_t i = 0; i < num_fields; i++) {
+            k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, def->fields[i].name, glb);
+        }
+        for (size_t i = 0; i < num_fields; i++) {
+            k += serialize_term(IS_NULL_PTR(buf) ? NULL : buf + k, term_get_record_value(t, i), glb);
+        }
+        return k;
+
     } else if (term_is_tuple(t)) {
         size_t arity = term_get_tuple_arity(t);
         size_t k;
@@ -713,6 +735,64 @@ static term parse_external_terms(const uint8_t *external_term_buf, size_t *eterm
 
             *eterm_size = buf_pos;
             return tuple;
+        }
+
+        case RECORD_EXT: {
+            uint32_t num_fields = READ_32_UNALIGNED(external_term_buf + 1);
+            uint8_t exported_byte = external_term_buf[5];
+            if (UNLIKELY(exported_byte > 1)) {
+                return term_invalid_term();
+            }
+            bool is_exported = exported_byte != 0;
+            size_t buf_pos = 6;
+
+            size_t element_size = 0;
+            term module_atom = parse_external_terms(external_term_buf + buf_pos,
+                &element_size, copy, heap, glb);
+            if (UNLIKELY(term_is_invalid_term(module_atom)) || !term_is_atom(module_atom)) {
+                return term_invalid_term();
+            }
+            buf_pos += element_size;
+
+            term name_atom = parse_external_terms(external_term_buf + buf_pos,
+                &element_size, copy, heap, glb);
+            if (UNLIKELY(term_is_invalid_term(name_atom)) || !term_is_atom(name_atom)) {
+                return term_invalid_term();
+            }
+            buf_pos += element_size;
+
+            const struct RecordDef *def
+                = module_find_record_def_global(glb, module_atom, name_atom);
+            if (UNLIKELY(def == NULL || def->num_fields != num_fields
+                    || def->is_exported != is_exported)) {
+                return term_invalid_term();
+            }
+
+            for (size_t i = 0; i < num_fields; i++) {
+                term key = parse_external_terms(external_term_buf + buf_pos,
+                    &element_size, copy, heap, glb);
+                if (UNLIKELY(term_is_invalid_term(key)) || key != def->fields[i].name) {
+                    return term_invalid_term();
+                }
+                buf_pos += element_size;
+            }
+
+            term record = term_alloc_record(def, num_fields, heap);
+            for (size_t i = 0; i < num_fields; i++) {
+                term_put_record_value(record, i, term_nil());
+            }
+            for (size_t i = 0; i < num_fields; i++) {
+                term value = parse_external_terms(external_term_buf + buf_pos,
+                    &element_size, copy, heap, glb);
+                if (UNLIKELY(term_is_invalid_term(value))) {
+                    return value;
+                }
+                term_put_record_value(record, i, value);
+                buf_pos += element_size;
+            }
+
+            *eterm_size = buf_pos;
+            return record;
         }
 
         case NIL_EXT: {
@@ -1123,6 +1203,59 @@ static int calculate_heap_usage(const uint8_t *external_term_buf, size_t remaini
                 remaining -= element_size;
                 heap_usage += u;
 
+                buf_pos += element_size;
+            }
+
+            *eterm_size = buf_pos;
+            return heap_usage;
+        }
+
+        case RECORD_EXT: {
+            if (UNLIKELY(remaining < 6)) {
+                return INVALID_TERM_SIZE;
+            }
+            uint32_t num_fields = READ_32_UNALIGNED(external_term_buf + 1);
+            remaining -= 6;
+            if (UNLIKELY(remaining < num_fields)) {
+                return INVALID_TERM_SIZE;
+            }
+            if (UNLIKELY(num_fields > (uint32_t) (INT_MAX / 4))) {
+                return INVALID_TERM_SIZE;
+            }
+            size_t buf_pos = 6;
+            int heap_usage = (int) (num_fields + 2); // record instance words
+
+            size_t atoms_count = 2 + num_fields;
+            for (size_t i = 0; i < atoms_count; i++) {
+                size_t element_size = 0;
+                int u = calculate_heap_usage(external_term_buf + buf_pos, remaining, &element_size, copy);
+                if (UNLIKELY(u == INVALID_TERM_SIZE)) {
+                    return INVALID_TERM_SIZE;
+                }
+                if (UNLIKELY(remaining < element_size)) {
+                    return INVALID_TERM_SIZE;
+                }
+                if (UNLIKELY(u > INT_MAX - heap_usage)) {
+                    return INVALID_TERM_SIZE;
+                }
+                heap_usage += u;
+                remaining -= element_size;
+                buf_pos += element_size;
+            }
+            for (size_t i = 0; i < num_fields; i++) {
+                size_t element_size = 0;
+                int u = calculate_heap_usage(external_term_buf + buf_pos, remaining, &element_size, copy);
+                if (UNLIKELY(u == INVALID_TERM_SIZE)) {
+                    return INVALID_TERM_SIZE;
+                }
+                if (UNLIKELY(remaining < element_size)) {
+                    return INVALID_TERM_SIZE;
+                }
+                if (UNLIKELY(u > INT_MAX - heap_usage)) {
+                    return INVALID_TERM_SIZE;
+                }
+                heap_usage += u;
+                remaining -= element_size;
                 buf_pos += element_size;
             }
 
