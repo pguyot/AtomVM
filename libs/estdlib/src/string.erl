@@ -187,7 +187,7 @@ trim(String) ->
 %% <<".Hello">>'''
 %% @end
 %%-----------------------------------------------------------------------------
--spec trim(String :: string, Direction :: atom()) -> string() | char().
+-spec trim(String :: string(), Direction :: atom()) -> string() | char().
 trim(String, leading) ->
     triml(String);
 trim(String, trailing) ->
