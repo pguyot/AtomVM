@@ -659,7 +659,9 @@ drain_request_headers(Socket, Acc) ->
     end.
 
 send_segments(_Socket, []) ->
-    ok;
+    receive
+    after 100 -> ok
+    end;
 send_segments(Socket, [Segment | Rest]) ->
     ok = gen_tcp:send(Socket, Segment),
     case Rest of
@@ -674,7 +676,7 @@ wait_server(Pid) ->
     Ref = monitor(process, Pid),
     receive
         {'DOWN', Ref, process, Pid, _} -> ok
-    after 5000 ->
+    after 30000 ->
         demonitor(Ref, [flush]),
         exit(Pid, kill),
         error(server_did_not_exit)

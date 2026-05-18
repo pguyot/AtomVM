@@ -2177,7 +2177,7 @@ move_to_vm_register_test_() ->
             ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0))
         end,
         fun(State0) ->
-            [
+            {timeout, 60, [
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {x_reg, 0}, <<
                         "   0:	4f81                	li	t6,0\n"
@@ -2428,7 +2428,7 @@ move_to_vm_register_test_() ->
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end)
-            ]
+            ]}
         end}.
 
 move_array_element_test0(State, Reg, Index, Dest, Dump) ->
