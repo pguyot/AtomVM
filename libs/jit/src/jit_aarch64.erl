@@ -180,7 +180,7 @@
     | {maybe_free_aarch64_register(), '<', aarch64_register()}
     | {maybe_free_aarch64_register(), '<u', aarch64_register()}
     | {integer(), '<', maybe_free_aarch64_register()}
-    | {maybe_free_aarch64_register(), '==', integer()}
+    | {maybe_free_aarch64_register(), '==', aarch64_register() | integer()}
     | {maybe_free_aarch64_register(), '!=', aarch64_register() | integer()}
     | {'(int)', maybe_free_aarch64_register(), '==', integer()}
     | {'(int)', maybe_free_aarch64_register(), '!=', aarch64_register() | integer()}
@@ -1002,7 +1002,7 @@ if_block_cond(
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '==', Val}
-) when is_integer(Val) ->
+) when is_integer(Val) orelse ?IS_GPR(Val) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
