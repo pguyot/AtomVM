@@ -404,8 +404,8 @@ first_pass(
     {FailLabel, Rest1} = decode_label(Rest0),
     {Bif, Rest2} = decode_literal(Rest1),
     {BifModule, BifFunName, 2} = ImportResolver(Bif),
-    {MSt1, Arg1, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
-    {MSt2, Arg2, Rest4} = decode_compact_term(Rest3, MMod, MSt1, State0),
+    {MSt1, Arg1, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest4} = decode_typed_compact_term(Rest3, MMod, MSt1, State0),
     {MSt3, Dest, Rest5} = decode_dest(Rest4, MMod, MSt2),
     ?TRACE("OP_BIF2 ~p, ~p (~p:~p/2), ~p, ~p, ~p\n", [
         FailLabel, Bif, BifModule, BifFunName, Arg1, Arg2, Dest
@@ -3520,9 +3520,9 @@ first_pass_bs_match_skip(MatchState, BSOffsetReg, J0, Rest0, MMod, MSt0) ->
 % inline fast paths for a few hot BIFs, otherwise fall back to a generic
 % indirect call.
 op_bif2(MMod, MSt0, FailLabel, erlang, element, _Bif, Index, Tuple, Dest) ->
-    op_bif2_element(MMod, MSt0, FailLabel, unwrap_typed(Index), unwrap_typed(Tuple), Dest);
+    op_bif2_element(MMod, MSt0, FailLabel, Index, Tuple, Dest);
 op_bif2(MMod, MSt0, FailLabel, _Module, _Function, Bif, Arg1, Arg2, Dest) ->
-    op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest).
+    op_bif2_default(MMod, MSt0, FailLabel, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest).
 
 op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest) ->
     {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
@@ -3536,33 +3536,51 @@ op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest) ->
 %% Inline erlang:element/2: verify Index is a small int and Tuple is a boxed
 %% tuple with arity >= Index >= 1, then read the element directly.  Any check
 %% failure jumps to FailLabel (or raises badarg if FailLabel=0).
+%%
+%% Type-driven simplification: if Tuple is statically known to be a tuple,
+%% skip the boxed-primary check and the boxed-tuple-tag check.
 op_bif2_element(MMod, MSt0, FailLabel, Index, Tuple, Dest) ->
-    {MSt1, IndexReg} = MMod:move_to_native_register(MSt0, Index),
+    TupleIsTuple = is_known_tuple(Tuple),
+    Index1 = unwrap_typed(Index),
+    Tuple1 = unwrap_typed(Tuple),
+    {MSt1, IndexReg} = MMod:move_to_native_register(MSt0, Index1),
     MSt2 = cond_raise_badarg_or_jump_to_fail_label(
         {IndexReg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
         FailLabel,
         MMod,
         MSt1
     ),
-    {MSt3, TupleReg} = MMod:move_to_native_register(MSt2, Tuple),
-    MSt4 = cond_raise_badarg_or_jump_to_fail_label(
-        {TupleReg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
-        FailLabel,
-        MMod,
-        MSt3
-    ),
+    {MSt3, TupleReg} = MMod:move_to_native_register(MSt2, Tuple1),
+    MSt4 =
+        case TupleIsTuple of
+            true ->
+                MSt3;
+            false ->
+                cond_raise_badarg_or_jump_to_fail_label(
+                    {TupleReg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+                    FailLabel,
+                    MMod,
+                    MSt3
+                )
+        end,
     %% Strip primary tag bits to get the heap pointer
     {MSt5, TupleReg} = MMod:and_(MSt4, {free, TupleReg}, ?TERM_PRIMARY_CLEAR_MASK),
     %% Allocate a fresh register for the header so we can keep TupleReg
     %% alive for the final indexed read.
     {MSt6, HeaderReg} = MMod:copy_to_native_register(MSt5, TupleReg),
     MSt7 = MMod:move_array_element(MSt6, HeaderReg, 0, HeaderReg),
-    MSt8 = cond_raise_badarg_or_jump_to_fail_label(
-        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
-        FailLabel,
-        MMod,
-        MSt7
-    ),
+    MSt8 =
+        case TupleIsTuple of
+            true ->
+                MSt7;
+            false ->
+                cond_raise_badarg_or_jump_to_fail_label(
+                    {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+                    FailLabel,
+                    MMod,
+                    MSt7
+                )
+        end,
     %% Convert the term-encoded Index to a raw integer (>> 4)
     {MSt9, IndexInt} = MMod:shift_right(MSt8, {free, IndexReg}, 4),
     MSt10 = cond_raise_badarg_or_jump_to_fail_label(
@@ -3590,6 +3608,9 @@ op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, erlang, 'byte_size', Arg, Dest) ->
 % Default: call BIF via function pointer
 op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg, Dest) ->
     op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg), Dest).
+
+is_known_tuple({typed, _Arg, t_tuple}) -> true;
+is_known_tuple(_) -> false.
 
 op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest) ->
     CappedLive =
