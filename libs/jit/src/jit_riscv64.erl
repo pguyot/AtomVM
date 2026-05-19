@@ -201,7 +201,7 @@
     {riscv64_register(), '<', integer()}
     | {maybe_free_riscv64_register(), '<', riscv64_register()}
     | {integer(), '<', maybe_free_riscv64_register()}
-    | {maybe_free_riscv64_register(), '==', integer()}
+    | {maybe_free_riscv64_register(), '==', riscv64_register() | integer()}
     | {maybe_free_riscv64_register(), '!=', riscv64_register() | integer()}
     | {'(int)', maybe_free_riscv64_register(), '==', integer()}
     | {'(int)', maybe_free_riscv64_register(), '!=', riscv64_register() | integer()}
