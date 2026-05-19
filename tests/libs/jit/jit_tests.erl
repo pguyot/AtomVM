@@ -903,3 +903,43 @@ typed_is_ge_lit_typed_x86_64_test() ->
         fun length_import_resolver/1
     ),
     ok.
+
+% typed_select_val_int: select_val on typed integer (from length/1 result)
+% f(List) when is_list(List) -> N = length(List),
+%     case N of 0 -> zero; 1 -> one; 2 -> two; _ -> other end.
+-define(CODE_TYPED_SELECT_VAL_INT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 11, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 21, 3, 153, 32, 124, 5, 16, 0, 87, 3, 16, 3, 59, 87, 3, 32, 101, 23, 96, 1, 85,
+        17, 69, 33, 53, 1, 48, 64, 82, 3, 19, 1, 64, 64, 98, 3, 19, 1, 80, 64, 114, 3, 19, 1, 96,
+        64, 130, 3, 19, 1, 112, 153, 0, 2, 18, 146, 0, 1, 128, 64, 18, 3, 78, 16, 16, 1, 144, 153,
+        0, 2, 18, 146, 16, 1, 160, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_SELECT_VAL_INT,
+    <<255, 255, 255, 246, 8, 20, 116, 121, 112, 101, 100, 95, 115, 101, 108, 101, 99, 116, 95, 118,
+        97, 108, 95, 105, 110, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110,
+        103, 116, 104, 48, 116, 119, 111, 48, 111, 110, 101, 64, 122, 101, 114, 111, 80, 111, 116,
+        104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101,
+        116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_SELECT_VAL_INT, ?TYPE_TYPED_IS_LT_BOTH).
+
+typed_select_val_int_x86_64_test() ->
+    % select_val on a typed integer source: typed code may be the same size as
+    % untyped (bignum sources fall back to PRIM_TERM_COMPARE — see
+    % can_inline_select_val_src/1 — so this test just verifies compilation).
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_SELECT_VAL_INT,
+        ?ATU8_TYPED_SELECT_VAL_INT,
+        ?TYPE_TYPED_SELECT_VAL_INT,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_SELECT_VAL_INT,
+        ?ATU8_TYPED_SELECT_VAL_INT,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) =< byte_size(UntypedCode)),
+    ok.

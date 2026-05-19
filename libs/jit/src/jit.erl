@@ -835,28 +835,15 @@ first_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
 % 59
 first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
+    {MSt1, SrcValue, Rest1} = decode_typed_compact_term(Rest0, MMod, MSt0, State0),
     {DefaultLabel, Rest2} = decode_label(Rest1),
     {ListSize, Rest3} = decode_extended_list_header(Rest2),
     ?TRACE("OP_SELECT_VAL ~p, ~p", [SrcValue, DefaultLabel]),
-    {MSt2, Rest4} = lists:foldl(
-        fun(_Index, {AccMSt0, AccRest0}) ->
-            {AccMSt1, CmpValue, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
-            {JmpLabel, AccRest2} = decode_label(AccRest1),
-            ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
-            {AccMSt2, ResultReg} = MMod:call_primitive(AccMSt1, ?PRIM_TERM_COMPARE, [
-                ctx, jit_state, {free, CmpValue}, SrcValue, ?TERM_COMPARE_EXACT
-            ]),
-            AccMSt3 = handle_error_if(
-                {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, AccMSt2
-            ),
-            AccMSt4 = cond_jump_to_label(
-                {'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, JmpLabel, MMod, AccMSt3
-            ),
-            {AccMSt4, AccRest2}
-        end,
-        {MSt1, Rest3},
-        lists:seq(0, (ListSize div 2) - 1)
+    %% Load SrcValue once into a native register so we can reuse it across
+    %% all comparisons (only valid when we use the inline cmp; the primitive
+    %% path frees its args).
+    {MSt2, Rest4} = op_select_val_loop(
+        MMod, MSt1, SrcValue, Rest3, ListSize div 2, State0
     ),
     ?TRACE("\n", []),
     MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
@@ -4640,6 +4627,69 @@ op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
         MMod,
         MSt2
     ).
+
+%% OP_SELECT_VAL loop: emit a chain of cmp/branch comparisons. When both
+%% sides are statically known to be immediates (atoms/small ints), we can
+%% compare tagged values directly with cmp + b.eq. Otherwise fall back to
+%% PRIM_TERM_COMPARE.
+op_select_val_loop(MMod, MSt0, SrcValue, Rest0, N, State) when N > 0 ->
+    case can_inline_select_val_src(SrcValue) of
+        true ->
+            op_select_val_inline_loop(MMod, MSt0, SrcValue, Rest0, N, State);
+        false ->
+            op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State)
+    end;
+op_select_val_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest}.
+
+op_select_val_inline_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest};
+op_select_val_inline_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
+    {MSt1, CmpValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
+    {JmpLabel, Rest2} = decode_label(Rest1),
+    ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
+    %% Load SrcValue into a register (hits cache after the first iteration).
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, unwrap_typed(SrcValue)),
+    MSt3 =
+        case CmpValue of
+            Imm when is_integer(Imm) ->
+                MSta = cond_jump_to_label({SrcReg, '==', Imm}, JmpLabel, MMod, MSt2),
+                %% SrcReg is still reserved; free it so the next iteration's
+                %% move_to_native_register sees it as available and reuses cache.
+                MMod:free_native_registers(MSta, [SrcReg]);
+            _ ->
+                Cmp = unwrap_typed(CmpValue),
+                {MSt2a, CmpReg} = MMod:move_to_native_register(MSt2, Cmp),
+                %% Compare two registers; both get freed by if_block. The cache
+                %% in #regs.contents preserves the SrcValue → SrcReg mapping so
+                %% the next iteration can recover it without re-loading.
+                cond_jump_to_label({{free, CmpReg}, '==', {free, SrcReg}}, JmpLabel, MMod, MSt2a)
+        end,
+    op_select_val_inline_loop(MMod, MSt3, SrcValue, Rest2, N - 1, State).
+
+op_select_val_default_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest};
+op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
+    {MSt1, CmpValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
+    {JmpLabel, Rest2} = decode_label(Rest1),
+    ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
+    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_COMPARE, [
+        ctx, jit_state, {free, unwrap_typed(CmpValue)}, unwrap_typed(SrcValue), ?TERM_COMPARE_EXACT
+    ]),
+    MSt3 = handle_error_if(
+        {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt2
+    ),
+    MSt4 = cond_jump_to_label(
+        {'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, JmpLabel, MMod, MSt3
+    ),
+    op_select_val_default_loop(MMod, MSt4, SrcValue, Rest2, N - 1, State).
+
+%% A SrcValue is select_val-inline-able when it's known to be an immediate
+%% term (atom, pid, or a small integer). Bignums use a boxed representation
+%% so tagged-value comparison is not safe — fall back to PRIM_TERM_COMPARE.
+can_inline_select_val_src({typed, _, t_atom}) -> true;
+can_inline_select_val_src({typed, _, pid}) -> true;
+can_inline_select_val_src(_) -> false.
 
 term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
     {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
