@@ -405,7 +405,10 @@ assert_stream(Arch, Dump, Stream) ->
         true ->
             ok;
         false ->
-            diff_disasm(Arch, Expected, Actual),
+            case erlang:system_info(machine) of
+                "BEAM" -> diff_disasm(Arch, Expected, Actual);
+                "ATOM" -> ok
+            end,
             ?assertEqual(Expected, Actual)
     end.
 
@@ -433,8 +436,10 @@ assert_stream(Arch, Dump, Stream, File, _Line) ->
                                 Actual
                         end,
                     update_test_source(Arch, Dump, DisasmInput, File);
-                _ ->
-                    diff_disasm(Arch, Expected, Actual)
+                {"BEAM", _} ->
+                    diff_disasm(Arch, Expected, Actual);
+                {"ATOM", _} ->
+                    ok
             end,
             ?assertEqual(Expected, Actual)
     end.
