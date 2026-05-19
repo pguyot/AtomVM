@@ -4154,6 +4154,27 @@ unwrap_typed(Arg) -> Arg.
 
 % Optimized >= comparison for typed integers
 % Test if Arg1 >= Arg2, jump to Label if false (i.e., if Arg1 < Arg2)
+op_is_ge(
+    MMod,
+    MSt0,
+    Label,
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}}
+) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            %% Both known small integers: tagged-value comparison works because
+            %% both have the same tag bits (15) in the low 4 positions, so the
+            %% relative order matches the integer order.
+            {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+            MSt3 = cond_jump_to_label(
+                {{free, Arg1Reg}, '<', Arg2Reg}, Label, MMod, MSt2
+            ),
+            MMod:free_native_registers(MSt3, [Arg2Reg]);
+        false ->
+            op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2)
+    end;
 op_is_ge(MMod, MSt0, Label, Arg1, {typed, Arg2, {t_integer, _Range}}) when is_integer(Arg1) ->
     % Arg1 is integer literal (already tagged by decode_compact_term), Arg2 is typed integer
     % If Arg2 is boxed (bignum), the comparison result depends on the sign
@@ -4200,6 +4221,9 @@ op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range}}, Arg2) when is_in
     cond_jump_to_label({{free, Arg1Reg}, '<', Arg2}, Label, MMod, MSt2);
 % Fallback: use term_compare
 op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
+    op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2).
+
+op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
         ctx,
         jit_state,
@@ -4210,10 +4234,36 @@ op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
 
+%% Optimized < comparison for typed integers.
+%% Both-small-integer case: tagged cmp + if_else_block to invert.
+op_is_lt(
+    MMod,
+    MSt0,
+    Label,
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}}
+) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+            MSt3 = MMod:if_else_block(
+                MSt2,
+                {{free, Arg1Reg}, '<', Arg2Reg},
+                fun(BSt0) -> BSt0 end,
+                fun(BSt0) -> MMod:jump_to_label(BSt0, Label) end
+            ),
+            MMod:free_native_registers(MSt3, [Arg2Reg]);
+        false ->
+            op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2)
+    end;
 %% Fallback: use term_compare. The literal-first and typed-literal-second
 %% cases never reach here: OTP's beam_jump rewrites `is_lt` with a typed
 %% integer arg and an integer literal arg to `is_ge` with args swapped.
 op_is_lt(MMod, MSt0, Label, Arg1, Arg2) ->
+    op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2).
+
+op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
         ctx,
         jit_state,
@@ -4247,9 +4297,10 @@ op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Ar
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
-            cond_jump_to_label(
+            MSt3 = cond_jump_to_label(
                 {{free, Arg1Reg}, '!=', Arg2Reg}, Label, MMod, MSt2
-            );
+            ),
+            MMod:free_native_registers(MSt3, [Arg2Reg]);
         false ->
             op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
     end;
@@ -4292,9 +4343,10 @@ op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
-            cond_jump_to_label(
+            MSt3 = cond_jump_to_label(
                 {{free, Arg1Reg}, '==', Arg2Reg}, Label, MMod, MSt2
-            );
+            ),
+            MMod:free_native_registers(MSt3, [Arg2Reg]);
         false ->
             op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
     end;
