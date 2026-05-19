@@ -59,6 +59,9 @@ jobs:
           idf-version: 'v5.5.3'
         - esp-idf-target: "esp32s3"
           idf-version: 'v5.5.3'
+        - esp-idf-target: "esp32s3"
+          idf-version: 'v5.5.3'
+          usb-serial: 'ON'
         - esp-idf-target: "esp32"
           idf-version: 'v5.4.3'
           libsodium: 'ON'
@@ -84,11 +87,23 @@ jobs:
         . $IDF_PATH/export.sh
         idf.py add-dependency "espressif/libsodium^1.0.20~4"
 
-    - name: Build with idf.py
-      shell: bash
+    - name: Add ESP TinyUSB dependency
+      if: matrix.usb-serial == 'ON'
       working-directory: ./src/platforms/esp32/
       run: |
         . $IDF_PATH/export.sh
+        idf.py add-dependency "espressif/esp_tinyusb^2.0.0"
+
+    - name: Build with idf.py
+      shell: bash
+      working-directory: ./src/platforms/esp32/
+      env:
+        USB_SERIAL: ${{ matrix.usb-serial || 'OFF' }}
+      run: |
+        . $IDF_PATH/export.sh
+        if [[ "${USB_SERIAL}" == "ON" ]]; then
+          echo 'CONFIG_USE_USB_SERIAL=y' >> sdkconfig.defaults.in
+        fi
         export IDF_TARGET=${{matrix.esp-idf-target}}
         idf.py set-target ${{matrix.esp-idf-target}}
         idf.py ${{ matrix.libsodium == 'ON' && '-DAVM_USE_LIBSODIUM=ON' || '' }} build
