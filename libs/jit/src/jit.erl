@@ -4175,13 +4175,22 @@ op_gc_bif2_bsl(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
                     MSt2 = MMod:move_to_vm_register(MSt1, Reg, Dest),
                     MMod:free_native_registers(MSt2, [Reg, Dest]);
                 _ ->
-                    % Strip tag, shift left, re-tag
+                    % Shift tagged value left, then subtract 15*(2^N - 1) to fix
+                    % the tag bits. Saves the explicit tag-strip:
+                    %   (a*16+15) << N = (a<<N)*16 + 15*2^N
+                    %   target = (a<<N)*16 + 15
+                    %   diff = 15*(2^N - 1)
+                    %
+                    % This is 2 instructions (lsl + sub) vs 3 (and + lsl + orr)
+                    % for small N where the immediate fits. For large N or
+                    % unencodable immediates, op_imm falls back to mov+sub which
+                    % matches the original count.
                     {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
-                    {MSt2, Reg} = MMod:and_(MSt1, {free, Reg}, bnot (?TERM_IMMED_TAG_MASK)),
-                    MSt3 = MMod:shift_left(MSt2, Reg, ShiftAmount),
-                    MSt4 = MMod:or_(MSt3, Reg, ?TERM_INTEGER_TAG),
-                    MSt5 = MMod:move_to_vm_register(MSt4, Reg, Dest),
-                    MMod:free_native_registers(MSt5, [Reg, Dest])
+                    MSt2 = MMod:shift_left(MSt1, Reg, ShiftAmount),
+                    Diff = ?TERM_IMMED_TAG_MASK * ((1 bsl ShiftAmount) - 1),
+                    MSt3 = MMod:sub(MSt2, Reg, Diff),
+                    MSt4 = MMod:move_to_vm_register(MSt3, Reg, Dest),
+                    MMod:free_native_registers(MSt4, [Reg, Dest])
             end;
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
