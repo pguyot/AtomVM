@@ -189,7 +189,7 @@
     | {maybe_free_armv6m_register(), '<', armv6m_register()}
     | {maybe_free_armv6m_register(), '<u', armv6m_register()}
     | {integer(), '<', maybe_free_armv6m_register()}
-    | {maybe_free_armv6m_register(), '==', integer()}
+    | {maybe_free_armv6m_register(), '==', armv6m_register() | integer()}
     | {maybe_free_armv6m_register(), '!=', armv6m_register() | integer()}
     | {'(int)', maybe_free_armv6m_register(), '==', integer()}
     | {'(int)', maybe_free_armv6m_register(), '!=', armv6m_register() | integer()}
@@ -1411,6 +1411,22 @@ if_block_cond(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_armv6m_asm:cmp(Reg, Val),
+    CC = ne,
+    ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    State2 = State1#state{stream = Stream1},
+    {State2, CC, byte_size(I1)};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '==', RegB}
+) when is_atom(RegB) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_armv6m_asm:cmp(Reg, RegB),
     CC = ne,
     ?ASSERT(byte_size(jit_armv6m_asm:bcc(CC, 0)) =:= 2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFF:16>>),
