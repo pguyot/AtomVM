@@ -55,7 +55,9 @@
     str/3,
     tst/2,
     tst_w/2,
+    stp/3,
     stp/4,
+    ldp/3,
     ldp/4,
     subs/3,
     adr/2,
@@ -658,6 +660,27 @@ stp(Rn, Rm, {Base, Imm}, '!') when
             RnNum):32/little
     >>.
 
+%% STP signed offset: stp Rn, Rm, [Base, #Imm]
+-spec stp(aarch64_gpr_register(), aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) ->
+    binary().
+stp(Rn, Rm, {Base, Imm}) when
+    is_atom(Rn),
+    is_atom(Rm),
+    is_atom(Base),
+    is_integer(Imm),
+    Imm >= -512,
+    Imm =< 504,
+    (Imm rem 8) =:= 0
+->
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    BaseNum = reg_to_num(Base),
+    %% STP signed offset encoding: 1010100100|imm7|base|rm|rn
+    <<
+        (16#A9000000 bor (((Imm div 8) band 16#7F) bsl 15) bor (BaseNum bsl 5) bor (RmNum bsl 10) bor
+            RnNum):32/little
+    >>.
+
 %% Emit a load pair (LDP) instruction for 64-bit registers
 %% ldp(Rn, Rm, {Base}, Imm) -> binary()
 -spec ldp(aarch64_gpr_register(), aarch64_gpr_register(), {aarch64_gpr_register()}, integer()) ->
@@ -677,6 +700,27 @@ ldp(Rn, Rm, {Base}, Imm) when
     %% LDP encoding: 1010100011|imm7|base|rm|rn
     <<
         (16#A8C00000 bor (((Imm div 8) band 16#7F) bsl 15) bor (BaseNum bsl 5) bor (RmNum bsl 10) bor
+            RnNum):32/little
+    >>.
+
+%% LDP signed offset: ldp Rn, Rm, [Base, #Imm]
+-spec ldp(aarch64_gpr_register(), aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) ->
+    binary().
+ldp(Rn, Rm, {Base, Imm}) when
+    is_atom(Rn),
+    is_atom(Rm),
+    is_atom(Base),
+    is_integer(Imm),
+    Imm >= -512,
+    Imm =< 504,
+    (Imm rem 8) =:= 0
+->
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    BaseNum = reg_to_num(Base),
+    %% LDP signed offset encoding: 1010100101|imm7|base|rm|rn
+    <<
+        (16#A9400000 bor (((Imm div 8) band 16#7F) bsl 15) bor (BaseNum bsl 5) bor (RmNum bsl 10) bor
             RnNum):32/little
     >>.
 
