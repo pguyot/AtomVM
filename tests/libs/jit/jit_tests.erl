@@ -574,16 +574,16 @@ fuse_tuple_multi_get_x86_64_test() ->
     ),
     % All three elements loaded from the same untagged pointer:
     %   4c 8b 58 08    mov  0x8(%rax),%r11     (element 0 -> x[1])
-    %   4c 89 5f 38    mov  %r11,0x38(%rdi)
+    %   4c 89 5f 60    mov  %r11,0x60(%rdi)
     %   4c 8b 58 10    mov  0x10(%rax),%r11    (element 1 -> x[2])
-    %   4c 89 5f 40    mov  %r11,0x40(%rdi)
+    %   4c 89 5f 68    mov  %r11,0x68(%rdi)
     %   4c 8b 58 18    mov  0x18(%rax),%r11    (element 2 -> x[0])
     ?assertMatch(
         {_, _},
         binary:match(
             CompiledCode,
-            <<16#4c, 16#8b, 16#58, 16#08, 16#4c, 16#89, 16#5f, 16#38, 16#4c, 16#8b, 16#58, 16#10,
-                16#4c, 16#89, 16#5f, 16#40, 16#4c, 16#8b, 16#58, 16#18>>
+            <<16#4c, 16#8b, 16#58, 16#08, 16#4c, 16#89, 16#5f, 16#60, 16#4c, 16#8b, 16#58, 16#10,
+                16#4c, 16#89, 16#5f, 16#68, 16#4c, 16#8b, 16#58, 16#18>>
         )
     ),
     ok.

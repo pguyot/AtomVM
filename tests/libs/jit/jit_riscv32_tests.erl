@@ -2074,7 +2074,7 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	01852f83          	lw	t6,24(a0)\n"
+        "   0:	02c52f83          	lw	t6,44(a0)\n"
         "   4:	0085af83          	lw	t6,8(a1)\n"
         "   8:	1ffd                	addi	t6,t6,-1\n"
         "   a:	01f5a423          	sw	t6,8(a1)\n"
@@ -2085,7 +2085,7 @@ decrement_reductions_invalidates_cache_test() ->
         "  1a:	01f5a223          	sw	t6,4(a1)\n"
         "  1e:	00862f83          	lw	t6,8(a2)\n"
         "  22:	8f82                	jr	t6\n"
-        "  24:	01852f83          	lw	t6,24(a0)"
+        "  24:	02c52f83          	lw	t6,44(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3594,7 +3594,7 @@ fixed_dst_x_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:  02052f83            lw  t6,32(a0)"
+        "   0:	03452f83          	lw	t6,52(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3607,8 +3607,8 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:  01452f83            lw  t6,20(a0)\n"
-        "   4:  008faf03            lw  t5,8(t6)"
+        "   0:	02852f83          	lw	t6,40(a0)\n"
+        "   4:	008faf03          	lw	t5,8(t6)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3705,7 +3705,7 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	01852f03          	lw	t5,24(a0)\n"
+        "   2:	02c52f03          	lw	t5,44(a0)\n"
         "   6:	000f9563          	bnez	t6,0x10\n"
         "   a:	00062f83          	lw	t6,0(a2)\n"
         "   e:	8f82                	jr	t6"
@@ -3719,7 +3719,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	01852f03          	lw	t5,24(a0)\n"
+        "   2:	02c52f03          	lw	t5,44(a0)\n"
         "   6:	000f9663          	bnez	t6,0x12\n"
         "   a:	ffff                	.insn	2, 0xffff\n"
         "   c:	ffff                	.insn	2, 0xffff\n"
@@ -3735,7 +3735,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	01852f03          	lw	t5,24(a0)\n"
+        "   2:	02c52f03          	lw	t5,44(a0)\n"
         "   6:	000f9363          	bnez	t6,0xc\n"
         "   a:	a8dd                	j	0x100"
     >>,
@@ -3756,7 +3756,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	10000f93          	li	t6,256\n"
         "   4:	4f05                	li	t5,1\n"
-        "   6:	01852e83          	lw	t4,24(a0)\n"
+        "   6:	02c52e83          	lw	t4,44(a0)\n"
         "   a:	000f1763          	bnez	t5,0x18\n"
         "   e:	00000f17          	auipc	t5,0x0\n"
         "  12:	1f49                	addi	t5,t5,-14 # 0x0\n"
@@ -3773,10 +3773,10 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {State4, _Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 5}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	02c52f83          	lw	t6,44(a0)\n"
-        "   4:	01852f03          	lw	t5,24(a0)\n"
+        "   0:	04052f83          	lw	t6,64(a0)\n"
+        "   4:	02c52f03          	lw	t5,44(a0)\n"
         "   8:	000f2e83          	lw	t4,0(t5)\n"
-        "   c:	03d52623          	sw	t4,44(a0)"
+        "   c:	05d52023          	sw	t4,64(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3831,8 +3831,8 @@ cached_move_to_vm_x_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	01c52f83          	lw	t6,28(a0)\n"
-        "   4:	01f52c23          	sw	t6,24(a0)"
+        "   0:	03052f83          	lw	t6,48(a0)\n"
+        "   4:	03f52623          	sw	t6,44(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3844,9 +3844,9 @@ cached_move_to_vm_y_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	01452f03          	lw	t5,20(a0)\n"
+        "   0:	02852f03          	lw	t5,40(a0)\n"
         "   4:	000f2f83          	lw	t6,0(t5)\n"
-        "   8:	01f52c23          	sw	t6,24(a0)"
+        "   8:	03f52623          	sw	t6,44(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
 
@@ -3859,6 +3859,6 @@ cached_move_to_vm_imm_reuse_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump = <<
         "   0:	02a00f93          	li	t6,42\n"
-        "   4:	01f52c23          	sw	t6,24(a0)"
+        "   4:	03f52623          	sw	t6,44(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).

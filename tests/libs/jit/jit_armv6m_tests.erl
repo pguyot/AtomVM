@@ -2486,7 +2486,7 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	6987      	ldr	r7, [r0, #24]\n"
+        "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
         "   2:	9e00      	ldr	r6, [sp, #0]\n"
         "   4:	68b7      	ldr	r7, [r6, #8]\n"
         "   6:	3f01      	subs	r7, #1\n"
@@ -2501,7 +2501,7 @@ decrement_reductions_invalidates_cache_test() ->
         "  18:	46b6      	mov	lr, r6\n"
         "  1a:	bdf2      	pop	{r1, r4, r5, r6, r7, pc}\n"
         "  1c:	b5f2      	push	{r1, r4, r5, r6, r7, lr}\n"
-        "  1e:	6987      	ldr	r7, [r0, #24]"
+        "  1e:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm, Dump, Stream).
 
@@ -4112,7 +4112,7 @@ fixed_dst_x_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	6a03      	ldr	r3, [r0, #32]"
+        "   0:	6b43      	ldr	r3, [r0, #52]	@ 0x34"
     >>,
     ?assertStream(arm, Dump, Stream).
 
@@ -4125,7 +4125,7 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	6947      	ldr	r7, [r0, #20]\n"
+        "   0:	6a87      	ldr	r7, [r0, #40]	@ 0x28\n"
         "   2:	68b9      	ldr	r1, [r7, #8]"
     >>,
     ?assertStream(arm, Dump, Stream).
@@ -4245,7 +4245,7 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	2701      	movs	r7, #1\n"
-        "   2:	6986      	ldr	r6, [r0, #24]\n"
+        "   2:	6ac6      	ldr	r6, [r0, #44]	@ 0x2c\n"
         "   4:	2f00      	cmp	r7, #0\n"
         "   6:	d104      	bne.n	0x12\n"
         "   8:	6817      	ldr	r7, [r2, #0]\n"
@@ -4263,7 +4263,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	2701      	movs	r7, #1\n"
-        "   2:	6986      	ldr	r6, [r0, #24]\n"
+        "   2:	6ac6      	ldr	r6, [r0, #44]	@ 0x2c\n"
         "   4:	2f00      	cmp	r7, #0\n"
         "   6:	d105      	bne.n	0x14\n"
         "   8:	ffff ffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
@@ -4279,7 +4279,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	2701      	movs	r7, #1\n"
-        "   2:	6986      	ldr	r6, [r0, #24]\n"
+        "   2:	6ac6      	ldr	r6, [r0, #44]	@ 0x2c\n"
         "   4:	2f00      	cmp	r7, #0\n"
         "   6:	d100      	bne.n	0xa\n"
         "   8:	e07a      	b.n	0x100"
@@ -4302,7 +4302,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
         "   0:	27ff      	movs	r7, #255	@ 0xff\n"
         "   2:	3701      	adds	r7, #1\n"
         "   4:	2601      	movs	r6, #1\n"
-        "   6:	6985      	ldr	r5, [r0, #24]\n"
+        "   6:	6ac5      	ldr	r5, [r0, #44]	@ 0x2c\n"
         "   8:	2e00      	cmp	r6, #0\n"
         "   a:	d108      	bne.n	0x1e\n"
         "   c:	a600      	add	r6, pc, #0	@ (adr r6, 0x10)\n"
@@ -4367,8 +4367,8 @@ cached_move_to_vm_x_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	69c7      	ldr	r7, [r0, #28]\n"
-        "   2:	6187      	str	r7, [r0, #24]"
+        "   0:	6b07      	ldr	r7, [r0, #48]	@ 0x30\n"
+        "   2:	62c7      	str	r7, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm, Dump, Stream).
 
@@ -4380,9 +4380,9 @@ cached_move_to_vm_y_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	6946      	ldr	r6, [r0, #20]\n"
+        "   0:	6a86      	ldr	r6, [r0, #40]	@ 0x28\n"
         "   2:	6837      	ldr	r7, [r6, #0]\n"
-        "   4:	6187      	str	r7, [r0, #24]"
+        "   4:	62c7      	str	r7, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm, Dump, Stream).
 
@@ -4394,8 +4394,8 @@ cached_move_to_vm_imm_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	272a      	movs	r7, #42\n"
-        "   2:	6187      	str	r7, [r0, #24]"
+        "   0:	272a      	movs	r7, #42	@ 0x2a\n"
+        "   2:	62c7      	str	r7, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm, Dump, Stream).
 
