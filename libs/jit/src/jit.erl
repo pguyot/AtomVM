@@ -4111,13 +4111,17 @@ op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             Arg2Value = Arg2 bsr 4,
             case Arg2Value of
                 C when C > 1 ->
-                    % Strip tag, multiply by constant, re-tag
+                    %% Multiply the tagged value by C, then subtract 15*(C-1)
+                    %% to fix the tag bits in one step.
+                    %%   (a*16+15) * C = (a*C)*16 + 15*C
+                    %%   target        = (a*C)*16 + 15
+                    %%   diff          = 15*(C - 1)
                     {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
-                    {MSt2, Reg} = MMod:and_(MSt1, {free, Reg}, bnot (?TERM_IMMED_TAG_MASK)),
-                    MSt3 = MMod:mul(MSt2, Reg, C),
-                    MSt4 = MMod:or_(MSt3, Reg, ?TERM_INTEGER_TAG),
-                    MSt5 = MMod:move_to_vm_register(MSt4, Reg, Dest),
-                    MMod:free_native_registers(MSt5, [Reg, Dest]);
+                    MSt2 = MMod:mul(MSt1, Reg, C),
+                    Diff = ?TERM_IMMED_TAG_MASK * (C - 1),
+                    MSt3 = MMod:sub(MSt2, Reg, Diff),
+                    MSt4 = MMod:move_to_vm_register(MSt3, Reg, Dest),
+                    MMod:free_native_registers(MSt4, [Reg, Dest]);
                 _ ->
                     % 0 or 1 would need special handling (0 produces wrong
                     % tag, 1 is identity), and negative constants require
