@@ -81,6 +81,8 @@ Context *context_new(GlobalContext *glb)
     ctx->min_heap_size = 0;
     ctx->max_heap_size = 0;
     ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
+    ctx->fullsweep_after = 65535;
+    ctx->gc_count = 0;
     ctx->has_min_heap_size = 0;
     ctx->has_max_heap_size = 0;
 
@@ -138,6 +140,14 @@ void context_destroy(Context *ctx)
 {
     // Hold and release the spin lock for timers and cancel any timer
     scheduler_cancel_timeout(ctx);
+
+    // If the process was never scheduled (still in Spawning state),
+    // it is still in the waiting_processes list and must be removed.
+    if (ctx->flags & Spawning) {
+        SMP_SPINLOCK_LOCK(&ctx->global->processes_spinlock);
+        list_remove(&ctx->processes_list_head);
+        SMP_SPINLOCK_UNLOCK(&ctx->global->processes_spinlock);
+    }
 
     // Another process can get an access to our mailbox until this point.
     struct ListHead *processes_table_list = synclist_wrlock(&ctx->global->processes_table);
@@ -533,6 +543,7 @@ bool context_get_process_info(Context *ctx, term *out, size_t *term_size, term a
         case MESSAGE_QUEUE_LEN_ATOM:
         case REGISTERED_NAME_ATOM:
         case MEMORY_ATOM:
+        case FULLSWEEP_AFTER_ATOM:
             ret_size = TUPLE_SIZE(2);
             break;
         case LINKS_ATOM: {
@@ -680,6 +691,12 @@ bool context_get_process_info(Context *ctx, term *out, size_t *term_size, term a
                 }
             }
             term_put_tuple_element(ret, 1, list);
+            break;
+        }
+
+        case FULLSWEEP_AFTER_ATOM: {
+            term_put_tuple_element(ret, 0, FULLSWEEP_AFTER_ATOM);
+            term_put_tuple_element(ret, 1, term_from_int(ctx->fullsweep_after));
             break;
         }
 
@@ -1216,6 +1233,14 @@ COLD_FUNC void context_dump(Context *ctx)
         }
 
         ct++;
+    }
+
+    fprintf(stderr, "\n\nHeap\n----\n");
+    fprintf(stderr, "young heap: %zu words\n", (size_t) (ctx->heap.heap_end - ctx->heap.heap_start));
+    if (ctx->heap.old_heap_start) {
+        fprintf(stderr, "old heap: %zu words (used: %zu)\n",
+            (size_t) (ctx->heap.old_heap_end - ctx->heap.old_heap_start),
+            (size_t) (ctx->heap.old_heap_ptr - ctx->heap.old_heap_start));
     }
 
     fprintf(stderr, "\n\nMailbox\n-------\n");
