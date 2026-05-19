@@ -943,3 +943,33 @@ typed_select_val_int_x86_64_test() ->
     ),
     ?assert(byte_size(TypedCode) =< byte_size(UntypedCode)),
     ok.
+
+% typed_is_not_eq_exact_typed_lit: is_ne_exact with bounded typed first arg and literal second arg
+% f(A) when is_list(A), length(A) =/= 5 -> not_five; f(_) -> other.
+-define(CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 53, 3, 124, 53, 16, 0, 87, 3, 16, 3, 44, 53, 87, 3, 32, 81, 64, 82, 3, 19, 1, 48,
+        64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2,
+        18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+    <<255, 255, 255, 248, 8, 31, 116, 121, 112, 101, 100, 95, 105, 115, 95, 110, 111, 116, 95, 101,
+        113, 95, 101, 120, 97, 99, 116, 95, 116, 121, 112, 101, 100, 95, 108, 105, 116, 16, 102, 96,
+        101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 128, 110, 111, 116, 95, 102,
+        105, 118, 101, 80, 111, 116, 104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110,
+        102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
+
+typed_is_not_eq_exact_typed_lit_x86_64_test() ->
+    % is_ne_exact with typed first arg and integer literal second: bignum-aware inline path.
+    % Emits more code than term_compare call but avoids dynamic dispatch.
+    % Just verify compilation succeeds without error.
+    _TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        ?TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        fun length_import_resolver/1
+    ),
+    ok.
