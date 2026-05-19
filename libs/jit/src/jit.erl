@@ -1760,17 +1760,15 @@ first_pass(<<?OP_GC_BIF3, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {FailLabel, Rest1} = decode_label(Rest0),
     {Live, Rest2} = decode_literal(Rest1),
-    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
     CappedLive =
         if
             Live > ?MAX_REG -> ?MAX_REG;
             true -> Live
         end,
     {Bif, Rest3} = decode_literal(Rest2),
-    {MSt3, FuncPtr} = MMod:call_primitive(MSt2, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt3, FuncPtr} = MMod:call_primitive(
+        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
+    ),
     {MSt4, Arg1, Rest4} = decode_compact_term(Rest3, MMod, MSt3, State0),
     {MSt5, Arg2, Rest5} = decode_compact_term(Rest4, MMod, MSt4, State0),
     {MSt6, Arg3, Rest6} = decode_compact_term(Rest5, MMod, MSt5, State0),
@@ -3590,16 +3588,14 @@ op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg, Dest) ->
     op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg), Dest).
 
 op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest) ->
-    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
     CappedLive =
         if
             Live > ?MAX_REG -> ?MAX_REG;
             true -> Live
         end,
-    {MSt3, FuncPtr} = MMod:call_primitive(MSt2, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt3, FuncPtr} = MMod:call_primitive(
+        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
+    ),
     {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
         ctx, FailLabel, CappedLive, {free, Arg}
     ]),
@@ -3863,16 +3859,14 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, Arg2, Des
     op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest).
 
 op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
-    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
     CappedLive =
         if
             Live > ?MAX_REG -> ?MAX_REG;
             true -> Live
         end,
-    {MSt3, FuncPtr} = MMod:call_primitive(MSt2, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt3, FuncPtr} = MMod:call_primitive(
+        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
+    ),
     {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
         ctx, FailLabel, CappedLive, {free, Arg1}, {free, Arg2}
     ]),
