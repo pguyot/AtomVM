@@ -297,12 +297,11 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	b8 01 00 00 00       	mov    $0x1,%eax\n"
-        "   5:	4c 8b 5f 30          	mov    0x30(%rdi),%r11\n"
+        "   5:	4c 8b 5f 58          	mov    0x58(%rdi),%r11\n"
         "   9:	48 85 c0             	test   %rax,%rax\n"
         "   c:	75 05                	jne    0x13\n"
         "   e:	48 8b 02             	mov    (%rdx),%rax\n"
-        "  11:	ff                   	.byte 0xff\n"
-        "  12:	e0                   	.byte 0xe0"
+        "  11:	ff e0                	jmp    *%rax"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -313,7 +312,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	b8 01 00 00 00       	mov    $0x1,%eax\n"
-        "   5:	4c 8b 5f 30          	mov    0x30(%rdi),%r11\n"
+        "   5:	4c 8b 5f 58          	mov    0x58(%rdi),%r11\n"
         "   9:	48 85 c0             	test   %rax,%rax\n"
         "   c:	75 05                	jne    0x13\n"
         "   e:	e9 fc ff ff ff       	jmp    0xf"
@@ -327,7 +326,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	b8 01 00 00 00       	mov    $0x1,%eax\n"
-        "   5:	4c 8b 5f 30          	mov    0x30(%rdi),%r11\n"
+        "   5:	4c 8b 5f 58          	mov    0x58(%rdi),%r11\n"
         "   9:	48 85 c0             	test   %rax,%rax\n"
         "   c:	75 05                	jne    0x13\n"
         "   e:	e9 ed 00 00 00       	jmp    0x100"
@@ -349,14 +348,12 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	b8 00 01 00 00       	mov    $0x100,%eax\n"
         "   5:	41 bb 01 00 00 00    	mov    $0x1,%r11d\n"
-        "   b:	4c 8b 57 30          	mov    0x30(%rdi),%r10\n"
+        "   b:	4c 8b 57 58          	mov    0x58(%rdi),%r10\n"
         "   f:	4d 85 db             	test   %r11,%r11\n"
         "  12:	75 0d                	jne    0x21\n"
-        "  14:	4c 8d 1d e5 ff ff ff 	lea    -0x1b(%rip),%r11\n"
+        "  14:	4c 8d 1d e5 ff ff ff 	lea    -0x1b(%rip),%r11        # 0x0\n"
         "  1b:	49 01 c3             	add    %rax,%r11\n"
-        "  1e:	41                   	rex.B\n"
-        "  1f:	ff                   	.byte 0xff\n"
-        "  20:	e3                   	.byte 0xe3"
+        "  1e:	41 ff e3             	jmp    *%r11"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -368,10 +365,10 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {State4, _Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 5}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-        "   4:	4c 8b 5f 30          	mov    0x30(%rdi),%r11\n"
-        "   8:	4d 8b 13             	mov    (%r11),%r10\n"
-        "   b:	4c 89 57 58          	mov    %r10,0x58(%rdi)"
+        "   0:	48 8b 87 80 00 00 00 	mov    0x80(%rdi),%rax\n"
+        "   7:	4c 8b 5f 58          	mov    0x58(%rdi),%r11\n"
+        "   b:	4d 8b 13             	mov    (%r11),%r10\n"
+        "   e:	4c 89 97 80 00 00 00 	mov    %r10,0x80(%rdi)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1522,14 +1519,14 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
         "   4:	ff 4e 10             	decl   0x10(%rsi)\n"
         "   7:	75 11                	jne    0x1a\n"
         "   9:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x1a\n"
         "  10:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
         "  14:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
         "  18:	ff e0                	jmp    *%rax\n"
-        "  1a:	48 8b 47 30          	mov    0x30(%rdi),%rax"
+        "  1a:	48 8b 47 58          	mov    0x58(%rdi),%rax"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2038,7 +2035,7 @@ cached_move_to_vm_large_imm_reuse_test() ->
     Dump = <<
         "   0:	48 b8 00 00 00 00 01 	movabs $0x100000000,%rax\n"
         "   7:	00 00 00 \n"
-        "   a:	48 89 47 30          	mov    %rax,0x30(%rdi)"
+        "   a:	48 89 47 58          	mov    %rax,0x58(%rdi)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2050,8 +2047,8 @@ cached_move_to_vm_x_reg_reuse_test() ->
     {State2, rax} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	48 8b 47 38          	mov    0x38(%rdi),%rax\n"
-        "   4:	48 89 47 30          	mov    %rax,0x30(%rdi)"
+        "   0:	48 8b 47 60          	mov    0x60(%rdi),%rax\n"
+        "   4:	48 89 47 58          	mov    %rax,0x58(%rdi)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2063,9 +2060,9 @@ cached_move_to_vm_y_reg_reuse_test() ->
     {State2, rax} = ?BACKEND:move_to_native_register(State1, {y_reg, 0}),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	48 8b 47 28          	mov    0x28(%rdi),%rax\n"
+        "   0:	48 8b 47 50          	mov    0x50(%rdi),%rax\n"
         "   4:	48 8b 00             	mov    (%rax),%rax\n"
-        "   7:	48 89 47 30          	mov    %rax,0x30(%rdi)"
+        "   7:	48 89 47 58          	mov    %rax,0x58(%rdi)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2077,7 +2074,7 @@ cached_move_to_array_element_x_reg_reuse_test() ->
     {State2, rax} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
         "   4:	49 89 43 10          	mov    %rax,0x10(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
@@ -2094,7 +2091,7 @@ if_block_large_cond_reuse_imm_test() ->
     end),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	48 8b 47 30          	mov    0x30(%rdi),%rax\n"
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
         "   4:	49 bb 00 00 00 00 01 	movabs $0x100000000,%r11\n"
         "   b:	00 00 00 \n"
         "   e:	4c 39 d8             	cmp    %r11,%rax\n"

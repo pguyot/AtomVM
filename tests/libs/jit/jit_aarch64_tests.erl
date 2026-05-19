@@ -328,7 +328,7 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9401808 	ldr	x8, [x0, #48]\n"
+        "   4:	f9402c08 	ldr	x8, [x0, #88]\n"
         "   8:	b5000067 	cbnz	x7, 0x14\n"
         "   c:	f9400047 	ldr	x7, [x2]\n"
         "  10:	d61f00e0 	br	x7"
@@ -342,7 +342,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9401808 	ldr	x8, [x0, #48]\n"
+        "   4:	f9402c08 	ldr	x8, [x0, #88]\n"
         "   8:	b5000047 	cbnz	x7, 0x10\n"
         "   c:	14000000 	b	0xc"
     >>,
@@ -355,7 +355,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9401808 	ldr	x8, [x0, #48]\n"
+        "   4:	f9402c08 	ldr	x8, [x0, #88]\n"
         "   8:	b5000047 	cbnz	x7, 0x10\n"
         "   c:	1400003d 	b	0x100"
     >>,
@@ -376,7 +376,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	d2802007 	mov	x7, #0x100\n"
         "   4:	d2800028 	mov	x8, #0x1\n"
-        "   8:	f9401809 	ldr	x9, [x0, #48]\n"
+        "   8:	f9402c09 	ldr	x9, [x0, #88]\n"
         "   c:	b5000088 	cbnz	x8, 0x1c\n"
         "  10:	10ffff88 	adr	x8, 0x0\n"
         "  14:	8b070108 	add	x8, x8, x7\n"
@@ -392,10 +392,10 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {State4, _Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 5}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
-        "   4:	f9401808 	ldr	x8, [x0, #48]\n"
+        "   0:	f9404007 	ldr	x7, [x0, #128]\n"
+        "   4:	f9402c08 	ldr	x8, [x0, #88]\n"
         "   8:	f9400109 	ldr	x9, [x8]\n"
-        "   c:	f9002c09 	str	x9, [x0, #88]"
+        "   c:	f9004009 	str	x9, [x0, #128]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1669,7 +1669,7 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
+        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
         "   4:	b9401027 	ldr	w7, [x1, #16]\n"
         "   8:	f10004e7 	subs	x7, x7, #0x1\n"
         "   c:	b9001027 	str	w7, [x1, #16]\n"
@@ -1678,7 +1678,7 @@ decrement_reductions_invalidates_cache_test() ->
         "  18:	f9000427 	str	x7, [x1, #8]\n"
         "  1c:	f9400847 	ldr	x7, [x2, #16]\n"
         "  20:	d61f00e0 	br	x7\n"
-        "  24:	f9401807 	ldr	x7, [x0, #48]"
+        "  24:	f9402c07 	ldr	x7, [x0, #88]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2381,7 +2381,7 @@ fixed_dst_x_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9402008 	ldr	x8, [x0, #64]"
+        "   0:	f9403408 	ldr	x8, [x0, #104]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2394,7 +2394,7 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9401408 	ldr	x8, [x0, #40]\n"
+        "   0:	f9402808 	ldr	x8, [x0, #80]\n"
         "   4:	f9400908 	ldr	x8, [x8, #16]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
@@ -2409,8 +2409,8 @@ cached_move_to_vm_x_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9401c07 	ldr	x7, [x0, #56]\n"
-        "   4:	f9001807 	str	x7, [x0, #48]"
+        "   0:	f9403007 	ldr	x7, [x0, #96]\n"
+        "   4:	f9002c07 	str	x7, [x0, #88]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2424,8 +2424,8 @@ cached_move_to_vm_y_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9401407 	ldr	x7, [x0, #40]\n"
+        "   0:	f9402807 	ldr	x7, [x0, #80]\n"
         "   4:	f94000e7 	ldr	x7, [x7]\n"
-        "   8:	f9001807 	str	x7, [x0, #48]"
+        "   8:	f9002c07 	str	x7, [x0, #88]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
