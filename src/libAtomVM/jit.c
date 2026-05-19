@@ -889,6 +889,20 @@ static BifImpl0 jit_get_imported_bif(JITState *jit_state, uint32_t bif)
     return result;
 }
 
+// Resolve an imported BIF function pointer for an OP_GC_BIF{1,2,3} call site:
+// first do the extended-register cleanup that the gc_bif would otherwise need
+// (since the BIF can trigger GC and we must drop dead extended regs first),
+// then return the BIF function pointer. Folding both into a single call avoids
+// one caller-save push/pop sequence at every gc_bif call site.
+static BifImpl0 jit_get_imported_gcbif(Context *ctx, JITState *jit_state, uint32_t live, uint32_t bif)
+{
+    if (UNLIKELY(!list_is_empty(&ctx->extended_x_regs))) {
+        destroy_extended_registers(ctx, live);
+    }
+    const struct ExportedFunction *exported_bif = jit_state->module->imported_funcs[bif];
+    return EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif0_ptr;
+}
+
 static bool jit_deallocate(Context *ctx, JITState *jit_state, uint32_t n_words)
 {
     TRACE("jit_deallocate: n_words=%" PRIu32 "\n", n_words);
@@ -2305,7 +2319,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_is_record_of,
     jit_is_record_accessible,
     jit_get_record_field,
-    jit_put_record_resolved
+    jit_put_record_resolved,
+    jit_get_imported_gcbif
 };
 
 #endif
