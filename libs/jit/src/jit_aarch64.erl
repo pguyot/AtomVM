@@ -2328,18 +2328,48 @@ copy_to_native_register(State, Reg) ->
 %%-----------------------------------------------------------------------------
 -spec move_to_cp(state(), vm_register()) -> state().
 move_to_cp(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
-        State,
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        used_regs = Used,
+        regs = Regs0
+    } = State,
     {y_reg, Y}
 ) ->
-    Reg = first_avail(Avail),
-    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_aarch64_asm:ldr(Reg, {Reg, Y * ?WORD_SIZE}),
-    I3 = jit_aarch64_asm:str(Reg, ?CP),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:set_contents(Regs0, Reg, {y_reg, Y}),
-    State#state{stream = Stream1, regs = Regs1}.
+    %% Use two temp registers: BaseReg keeps y_regs_base alive after this op
+    %% so a subsequent increment_sp / y_reg access can reuse it. BaseReg is
+    %% reserved (marked used) and released by the next op that consumes it
+    %% (currently increment_sp).
+    BaseReg = first_avail(Avail),
+    BaseBit = reg_bit(BaseReg),
+    Avail1 = Avail band (bnot BaseBit),
+    case Avail1 of
+        0 ->
+            %% Only one register available, fall back to single-temp version.
+            I1 = jit_aarch64_asm:ldr(BaseReg, ?Y_REGS),
+            I2 = jit_aarch64_asm:ldr(BaseReg, {BaseReg, Y * ?WORD_SIZE}),
+            I3 = jit_aarch64_asm:str(BaseReg, ?CP),
+            Code = <<I1/binary, I2/binary, I3/binary>>,
+            Stream1 = StreamModule:append(Stream0, Code),
+            Regs1 = jit_regs:set_contents(Regs0, BaseReg, {y_reg, Y}),
+            State#state{stream = Stream1, regs = Regs1};
+        _ ->
+            ValReg = first_avail(Avail1),
+            I1 = jit_aarch64_asm:ldr(BaseReg, ?Y_REGS),
+            I2 = jit_aarch64_asm:ldr(ValReg, {BaseReg, Y * ?WORD_SIZE}),
+            I3 = jit_aarch64_asm:str(ValReg, ?CP),
+            Code = <<I1/binary, I2/binary, I3/binary>>,
+            Stream1 = StreamModule:append(Stream0, Code),
+            %% Reserve BaseReg with y_regs_base contents so it isn't reused.
+            Regs1 = jit_regs:set_contents(Regs0, BaseReg, y_regs_base),
+            State#state{
+                stream = Stream1,
+                available_regs = Avail band (bnot BaseBit),
+                used_regs = Used bor BaseBit,
+                regs = Regs1
+            }
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Increment the stack pointer (SP) by a given offset.
@@ -2350,18 +2380,41 @@ move_to_cp(
 %%-----------------------------------------------------------------------------
 -spec increment_sp(state(), integer()) -> state().
 increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
-        State,
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        used_regs = Used,
+        regs = Regs0
+    } = State,
     Offset
 ) ->
-    Reg = first_avail(Avail),
-    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_aarch64_asm:add(Reg, Reg, Offset * ?WORD_SIZE),
-    I3 = jit_aarch64_asm:str(Reg, ?Y_REGS),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    %% If a previous move_to_cp reserved y_regs_base in a register, reuse it
+    %% and release the reservation.
+    case jit_regs:find_reg_with_contents(Regs0, y_regs_base) of
+        {ok, CachedBase} ->
+            I1 = jit_aarch64_asm:add(CachedBase, CachedBase, Offset * ?WORD_SIZE),
+            I2 = jit_aarch64_asm:str(CachedBase, ?Y_REGS),
+            Code = <<I1/binary, I2/binary>>,
+            Stream1 = StreamModule:append(Stream0, Code),
+            Bit = reg_bit(CachedBase),
+            Regs1 = jit_regs:invalidate_reg(Regs0, CachedBase),
+            State#state{
+                stream = Stream1,
+                available_regs = Avail bor Bit,
+                used_regs = Used band (bnot Bit),
+                regs = Regs1
+            };
+        none ->
+            Reg = first_avail(Avail),
+            I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
+            I2 = jit_aarch64_asm:add(Reg, Reg, Offset * ?WORD_SIZE),
+            I3 = jit_aarch64_asm:str(Reg, ?Y_REGS),
+            Code = <<I1/binary, I2/binary, I3/binary>>,
+            Stream1 = StreamModule:append(Stream0, Code),
+            Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+            State#state{stream = Stream1, regs = Regs1}
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Set the continuation address to point to a specific label. The actual
