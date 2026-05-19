@@ -27,6 +27,11 @@
 -record(#point{x = 0, y = 0, z = 0}).
 -record(#empty{}).
 -record(#with_list_default{items = [a, b, c]}).
+-record(#with_complex_defaults{
+    tuple_val = {alpha, {beta, gamma}},
+    list_val = [one, two, {three, four}],
+    big_val = 16#123456789ABCDEF0
+}).
 
 id(X) -> X.
 
@@ -65,6 +70,9 @@ start() ->
     ok = test_gc_stress_with_records(),
     ok = test_empty_record_ordering(),
     ok = test_records_module_inspectors(),
+    ok = test_put_record_defaults_gc_stress(),
+    ok = test_records_get_definition_complex_defaults(),
+    ok = test_records_get_definition_no_silent_default_loss(),
     0.
 
 test_construct_and_access() ->
@@ -715,6 +723,48 @@ test_records_module_inspectors() ->
     end),
     badarg = catch_error(fun() -> records:get_definition(<<"foo">>, x) end),
 
+    ok.
+
+test_put_record_defaults_gc_stress() ->
+    Records = build_complex_default_list(128, []),
+    erlang:garbage_collect(),
+    ok = verify_complex_defaults(Records),
+    ok.
+
+build_complex_default_list(0, Acc) ->
+    Acc;
+build_complex_default_list(N, Acc) ->
+    R = ?MODULE:id(#with_complex_defaults{}),
+    build_complex_default_list(N - 1, [R | Acc]).
+
+verify_complex_defaults([]) ->
+    ok;
+verify_complex_defaults([R | Rest]) ->
+    {alpha, {beta, gamma}} = R#with_complex_defaults.tuple_val,
+    [one, two, {three, four}] = R#with_complex_defaults.list_val,
+    16#123456789ABCDEF0 = R#with_complex_defaults.big_val,
+    verify_complex_defaults(Rest).
+
+test_records_get_definition_complex_defaults() ->
+    {#{is_exported := false}, Fields} =
+        records:get_definition(test_native_records, with_complex_defaults),
+    [
+        {tuple_val, {alpha, {beta, gamma}}},
+        {list_val, [one, two, {three, four}]},
+        {big_val, 16#123456789ABCDEF0}
+    ] = Fields,
+    ok.
+
+test_records_get_definition_no_silent_default_loss() ->
+    %% Regression for the silent default-decode loss: a field whose stored
+    %% default decodes successfully must round-trip to a {Name, Default}
+    %% tuple, never appear as a bare Name atom.
+    {#{is_exported := false}, FieldsP} =
+        records:get_definition(test_native_records, point),
+    [{x, 0}, {y, 0}, {z, 0}] = FieldsP,
+    {#{is_exported := false}, FieldsW} =
+        records:get_definition(test_native_records, with_list_default),
+    [{items, [a, b, c]}] = FieldsW,
     ok.
 
 catch_error(Fun) ->

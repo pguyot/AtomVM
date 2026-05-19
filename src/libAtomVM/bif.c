@@ -519,6 +519,16 @@ term bif_records_get_definition_2(Context *ctx, uint32_t fail_label, int live, t
             } else {
                 defaults[i] = module_decode_record_default(
                     owning, ctx, def->fields[i].default_encoded);
+                // term_invalid_term() is also our sentinel for
+                // "no default", so a failed decode would silently
+                // promote the field to "no default". Treat it as OOM
+                // instead — module_decode_record_default's failure
+                // modes (boxed-int alloc, oversized encodings on a
+                // valid Recs chunk) are dominated by alloc failure.
+                if (UNLIKELY(term_is_invalid_term(defaults[i]))) {
+                    free(defaults);
+                    RAISE_ERROR_BIF(fail_label, OUT_OF_MEMORY_ATOM);
+                }
             }
         }
     }

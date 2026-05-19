@@ -1045,13 +1045,13 @@ static enum ModuleLoadResult module_load_records_table(Module *mod, const uint8_
     }
 
     // Write through a non-const local during load; publish to the
-    // const-qualified mod->records_table once fully initialized.
+    // const-qualified mod->records_table once fully initialized so a
+    // failed/partial load leaves the module with records_count == 0
+    // and module_destroy has nothing to walk.
     struct RecordDef *table = calloc(num_records, sizeof(struct RecordDef));
     if (IS_NULL_PTR(table)) {
         return MODULE_ERROR_FAILED_ALLOCATION;
     }
-    mod->records_table = table;
-    mod->records_count = num_records;
 
     term module_atom = module_get_name(mod);
     for (uint32_t r = 0; r < num_records; r++) {
@@ -1093,7 +1093,7 @@ static enum ModuleLoadResult module_load_records_table(Module *mod, const uint8_
             }
             fields = calloc(num_fields, sizeof(struct RecordFieldDef));
             if (IS_NULL_PTR(fields)) {
-                return MODULE_ERROR_FAILED_ALLOCATION;
+                goto alloc_failed;
             }
             table[r].fields = fields;
         }
@@ -1123,11 +1123,24 @@ static enum ModuleLoadResult module_load_records_table(Module *mod, const uint8_
         }
     }
 
+    mod->records_table = table;
+    mod->records_count = num_records;
     return MODULE_LOAD_OK;
 
 truncated:
     fprintf(stderr, "Error: Recs chunk truncated or malformed.\n");
+    for (uint32_t r = 0; r < num_records; r++) {
+        free((struct RecordFieldDef *) table[r].fields);
+    }
+    free(table);
     return MODULE_ERROR_INVALID;
+
+alloc_failed:
+    for (uint32_t r = 0; r < num_records; r++) {
+        free((struct RecordFieldDef *) table[r].fields);
+    }
+    free(table);
+    return MODULE_ERROR_FAILED_ALLOCATION;
 }
 
 #undef RECS_RANGE_CHECK_VALUE
@@ -1155,6 +1168,9 @@ const struct RecordDef *module_find_record_def_global(
     return module_find_record_def(mod, record_name);
 }
 
+// Allocates via heap fragments (memory_heap_append_heap), not GC. Callers
+// (OP_PUT_RECORD, bif_records_get_definition_2, jit_put_record) rely on this
+// so terms already produced in the same loop remain valid across iterations.
 term module_decode_record_default(Module *mod, Context *ctx, const uint8_t *pc)
 {
     uint8_t b0 = pc[0];

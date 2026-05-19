@@ -44,6 +44,11 @@ were using the `0x210000` offset.
   * `AtomVM.worker.js` is no longer emitted; only `AtomVM.mjs` and `AtomVM.wasm` are needed
 - Native records (OTP 29+) require packbeam to preserve the new `Recs` BEAM chunk. Use
   `atomvm_packbeam` 0.8.3 or newer
+- Native-record binaries (`RECORD_EXT`) currently decode only if the receiving AtomVM
+  instance already has the defining module loaded with a matching `Recs` definition.
+  Unlike OTP 29, AtomVM does not yet reconstruct a record definition from the binary
+  alone, so cross-node and offline interchange of native records is limited. The on-wire
+  format itself is byte-compatible with OTP 29.
 
 ## v0.6.4 -> v0.6.5
 
