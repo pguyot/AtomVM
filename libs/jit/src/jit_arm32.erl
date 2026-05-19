@@ -169,7 +169,7 @@
     | {maybe_free_arm32_register(), '<', arm32_register()}
     | {maybe_free_arm32_register(), '<u', arm32_register()}
     | {integer(), '<', maybe_free_arm32_register()}
-    | {maybe_free_arm32_register(), '==', integer()}
+    | {maybe_free_arm32_register(), '==', arm32_register() | integer()}
     | {maybe_free_arm32_register(), '!=', arm32_register() | integer()}
     | {'(int)', maybe_free_arm32_register(), '==', integer()}
     | {'(int)', maybe_free_arm32_register(), '!=', arm32_register() | integer()}
@@ -1143,6 +1143,22 @@ if_block_cond(
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_arm32_asm:cmp(al, Reg, Val),
+    CC = ne,
+    ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFFFFFF:32>>),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    State2 = State1#state{stream = Stream1},
+    {State2, CC, byte_size(I1)};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '==', RegB}
+) when is_atom(RegB) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_arm32_asm:cmp(al, Reg, RegB),
     CC = ne,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFFFFFF:32>>),
