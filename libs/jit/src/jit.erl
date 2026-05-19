@@ -4075,11 +4075,12 @@ op_gc_bif2_bxor(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Rang
 ->
     case is_small_integer_range(Range1, Range2, MMod) of
         true ->
+            %% XOR with tag-stripped literal preserves Arg1's tag bits in one op:
+            %% (a*16+15) XOR (b*16) = (a XOR b)*16 + 15.
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-            MSt2 = MMod:xor_(MSt1, Reg1, Arg2),
-            MSt3 = MMod:or_(MSt2, Reg1, ?TERM_INTEGER_TAG),
-            MSt4 = MMod:move_to_vm_register(MSt3, Reg1, Dest),
-            MMod:free_native_registers(MSt4, [Reg1, Dest]);
+            MSt2 = MMod:xor_(MSt1, Reg1, Arg2 band (bnot (?TERM_IMMED_TAG_MASK))),
+            MSt3 = MMod:move_to_vm_register(MSt2, Reg1, Dest),
+            MMod:free_native_registers(MSt3, [Reg1, Dest]);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end;
