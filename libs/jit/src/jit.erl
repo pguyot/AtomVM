@@ -626,19 +626,10 @@ first_pass(<<?OP_IS_GE, Rest0/binary>>, MMod, MSt0, State0) ->
 first_pass(<<?OP_IS_EQUAL, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
-    {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
-    {MSt2, Arg2, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt1, Arg1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
     ?TRACE("OP_IS_EQUAL ~p, ~p, ~p\n", [Label, Arg1, Arg2]),
-    {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, Arg1}, {free, Arg2}, ?TERM_COMPARE_NO_OPTS
-    ]),
-    MSt4 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt3),
-    MSt5 = cond_jump_to_label(
-        {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
-        Label,
-        MMod,
-        MSt4
-    ),
+    MSt5 = op_is_equal(MMod, MSt2, Label, Arg1, Arg2),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest3, MMod, MSt5, State0);
 % 42
@@ -4454,6 +4445,22 @@ op_is_lt(MMod, MSt0, Label, Arg1, Arg2) ->
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
     cond_jump_to_label(
         {{free, ResultReg}, '&', ?TERM_GREATER_THAN + ?TERM_EQUALS, '!=', 0}, Label, MMod, MSt2
+    ).
+
+op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
+        ctx,
+        jit_state,
+        {free, unwrap_typed(Arg1)},
+        {free, unwrap_typed(Arg2)},
+        ?TERM_COMPARE_NO_OPTS
+    ]),
+    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
+    cond_jump_to_label(
+        {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
+        Label,
+        MMod,
+        MSt2
     ).
 
 term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
