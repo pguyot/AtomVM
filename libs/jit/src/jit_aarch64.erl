@@ -2436,31 +2436,37 @@ get_module_index(
 
 %% @private
 -spec op_imm(state(), atom(), aarch64_register(), aarch64_register(), integer()) -> state().
-op_imm(#state{stream_module = StreamModule, stream = Stream0} = State, Op, Reg, Reg, Val) ->
-    Stream1 =
+op_imm(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, Reg, Reg, Val) ->
+    Result =
         try
             I = jit_aarch64_asm:Op(Reg, Reg, Val),
-            StreamModule:append(Stream0, I)
+            {ok, StreamModule:append(Stream0, I), Regs0}
         catch
             error:{unencodable_immediate, Val} ->
                 Temp = first_avail(jit_regs:available_regs(State#state.regs)),
                 I1 = jit_aarch64_asm:mov(Temp, Val),
                 I2 = jit_aarch64_asm:Op(Reg, Reg, Temp),
-                StreamModule:append(Stream0, <<I1/binary, I2/binary>>)
+                NewStream = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+                %% Temp was reused as scratch — invalidate any cached contents.
+                {ok, NewStream, jit_regs:invalidate_reg(Regs0, Temp)}
         end,
-    State#state{stream = Stream1};
-op_imm(#state{stream_module = StreamModule, stream = Stream0} = State, Op, RegA, RegB, Val) ->
-    Stream1 =
+    {ok, Stream1, Regs1} = Result,
+    State#state{stream = Stream1, regs = Regs1};
+op_imm(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, RegA, RegB, Val) ->
+    Result =
         try
             I = jit_aarch64_asm:Op(RegA, RegB, Val),
-            StreamModule:append(Stream0, I)
+            {ok, StreamModule:append(Stream0, I), Regs0}
         catch
             error:{unencodable_immediate, Val} ->
                 MoveI = jit_aarch64_asm:mov(RegA, Val),
                 AndI = jit_aarch64_asm:Op(RegA, RegB, RegA),
-                StreamModule:append(Stream0, <<MoveI/binary, AndI/binary>>)
+                NewStream = StreamModule:append(Stream0, <<MoveI/binary, AndI/binary>>),
+                %% RegA was used as scratch for the immediate before the op overwrote it.
+                {ok, NewStream, jit_regs:invalidate_reg(Regs0, RegA)}
         end,
-    State#state{stream = Stream1}.
+    {ok, Stream1, Regs1} = Result,
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Perform bitwise AND of a register with an immediate value.
