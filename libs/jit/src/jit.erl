@@ -705,7 +705,10 @@ first_pass(<<?OP_IS_ATOM, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_IS_ATOM ~p, ~p\n", [Label, Arg1]),
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
     MSt3 = cond_jump_to_label(
-        {{free, Reg}, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM}, Label, MMod, MSt2
+        {{free, Reg}, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM},
+        Label,
+        MMod,
+        MSt2
     ),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
     first_pass(Rest2, MMod, MSt3, State0);
@@ -835,28 +838,15 @@ first_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
 % 59
 first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
+    {MSt1, SrcValue, Rest1} = decode_typed_compact_term(Rest0, MMod, MSt0, State0),
     {DefaultLabel, Rest2} = decode_label(Rest1),
     {ListSize, Rest3} = decode_extended_list_header(Rest2),
     ?TRACE("OP_SELECT_VAL ~p, ~p", [SrcValue, DefaultLabel]),
-    {MSt2, Rest4} = lists:foldl(
-        fun(_Index, {AccMSt0, AccRest0}) ->
-            {AccMSt1, CmpValue, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
-            {JmpLabel, AccRest2} = decode_label(AccRest1),
-            ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
-            {AccMSt2, ResultReg} = MMod:call_primitive(AccMSt1, ?PRIM_TERM_COMPARE, [
-                ctx, jit_state, {free, CmpValue}, SrcValue, ?TERM_COMPARE_EXACT
-            ]),
-            AccMSt3 = handle_error_if(
-                {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, AccMSt2
-            ),
-            AccMSt4 = cond_jump_to_label(
-                {'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, JmpLabel, MMod, AccMSt3
-            ),
-            {AccMSt4, AccRest2}
-        end,
-        {MSt1, Rest3},
-        lists:seq(0, (ListSize div 2) - 1)
+    %% Load SrcValue once into a native register so we can reuse it across
+    %% all comparisons (only valid when we use the inline cmp; the primitive
+    %% path frees its args).
+    {MSt2, Rest4} = op_select_val_loop(
+        MMod, MSt1, SrcValue, Rest3, ListSize div 2, State0
     ),
     ?TRACE("\n", []),
     MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
@@ -4475,6 +4465,8 @@ op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2) ->
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
 
 %% Optimized < comparison for typed integers.
+%% Semantic: jump to Label if Arg1 >= Arg2 (i.e., NOT(Arg1 < Arg2)).
+%%
 %% Both-small-integer case: tagged cmp + if_else_block to invert.
 op_is_lt(
     MMod,
@@ -4532,7 +4524,9 @@ op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
 %%
 %% For typed small-int + typed small-int (both ranges fit small_integer_bounds),
 %% inline as a direct cmp on tagged values: equal iff tagged values equal.
-op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+op_is_eq_exact(
+    MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}
+) ->
     case is_small_integer_range(Range1, Range2, MMod) of
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
@@ -4578,7 +4572,9 @@ op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
     ).
 
 %% Optimized =/= comparison for typed args. Mirror of op_is_eq_exact.
-op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+op_is_not_eq_exact(
+    MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}
+) ->
     case is_small_integer_range(Range1, Range2, MMod) of
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
@@ -4639,6 +4635,69 @@ op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
         MMod,
         MSt2
     ).
+
+%% OP_SELECT_VAL loop: emit a chain of cmp/branch comparisons. When both
+%% sides are statically known to be immediates (atoms/small ints), we can
+%% compare tagged values directly with cmp + b.eq. Otherwise fall back to
+%% PRIM_TERM_COMPARE.
+op_select_val_loop(MMod, MSt0, SrcValue, Rest0, N, State) when N > 0 ->
+    case can_inline_select_val_src(SrcValue) of
+        true ->
+            op_select_val_inline_loop(MMod, MSt0, SrcValue, Rest0, N, State);
+        false ->
+            op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State)
+    end;
+op_select_val_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest}.
+
+op_select_val_inline_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest};
+op_select_val_inline_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
+    {MSt1, CmpValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
+    {JmpLabel, Rest2} = decode_label(Rest1),
+    ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
+    %% Load SrcValue into a register (hits cache after the first iteration).
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, unwrap_typed(SrcValue)),
+    MSt3 =
+        case CmpValue of
+            Imm when is_integer(Imm) ->
+                MSta = cond_jump_to_label({SrcReg, '==', Imm}, JmpLabel, MMod, MSt2),
+                %% SrcReg is still reserved; free it so the next iteration's
+                %% move_to_native_register sees it as available and reuses cache.
+                MMod:free_native_registers(MSta, [SrcReg]);
+            _ ->
+                Cmp = unwrap_typed(CmpValue),
+                {MSt2a, CmpReg} = MMod:move_to_native_register(MSt2, Cmp),
+                %% Compare two registers; both get freed by if_block. The cache
+                %% in #regs.contents preserves the SrcValue → SrcReg mapping so
+                %% the next iteration can recover it without re-loading.
+                cond_jump_to_label({{free, CmpReg}, '==', {free, SrcReg}}, JmpLabel, MMod, MSt2a)
+        end,
+    op_select_val_inline_loop(MMod, MSt3, SrcValue, Rest2, N - 1, State).
+
+op_select_val_default_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
+    {MSt0, Rest};
+op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
+    {MSt1, CmpValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
+    {JmpLabel, Rest2} = decode_label(Rest1),
+    ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
+    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_COMPARE, [
+        ctx, jit_state, {free, unwrap_typed(CmpValue)}, unwrap_typed(SrcValue), ?TERM_COMPARE_EXACT
+    ]),
+    MSt3 = handle_error_if(
+        {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt2
+    ),
+    MSt4 = cond_jump_to_label(
+        {'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, JmpLabel, MMod, MSt3
+    ),
+    op_select_val_default_loop(MMod, MSt4, SrcValue, Rest2, N - 1, State).
+
+%% A SrcValue is select_val-inline-able when it's known to be an immediate
+%% term (atom, pid, or a small integer). Bignums use a boxed representation
+%% so tagged-value comparison is not safe — fall back to PRIM_TERM_COMPARE.
+can_inline_select_val_src({typed, _, t_atom}) -> true;
+can_inline_select_val_src({typed, _, pid}) -> true;
+can_inline_select_val_src(_) -> false.
 
 term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
     {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
@@ -4761,11 +4820,11 @@ try_fuse_tuple_ops(<<?OP_TEST_ARITY, Rest0/binary>>, Arg1, IsTupleLabel, MMod, M
     {TestArityLabel, Rest1} = decode_label(Rest0),
     {MSt1, TestArityArg, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {Arity, Rest3} = decode_literal(Rest2),
-    case TestArityArg =:= Arg1 of
+    case TestArityArg =:= unwrap_typed(Arg1) of
         true ->
             ?TRACE("FUSE: is_tuple + test_arity ~p, ~p\n", [TestArityLabel, Arity]),
             {GetElements, Rest4, MSt2} =
-                collect_get_tuple_elements(Rest3, Arg1, MMod, MSt1, State0),
+                collect_get_tuple_elements(Rest3, TestArityArg, MMod, MSt1, State0),
             MStFused = emit_fused_tuple_ops(
                 IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt2
             ),
@@ -4803,23 +4862,31 @@ collect_get_tuple_elements(Rest, _SrcArg, _MMod, MSt, _State0) ->
     {[], Rest, MSt}.
 
 emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt0) ->
-    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    %% The BEAM Types chunk (versions 2-4, up to OTP 29) does not encode tuple
+    %% arity, so {typed, _, t_tuple} never carries an arity to specialize on.
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     MSt2 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, IsTupleLabel, MMod, MSt1
+        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+        IsTupleLabel,
+        MMod,
+        MSt1
     ),
     {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt4, HeaderReg} = MMod:get_array_element(MSt3, Reg, 0),
-    MSt5 = cond_jump_to_label(
-        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, IsTupleLabel, MMod, MSt4
+    MSt4a = cond_jump_to_label(
+        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+        IsTupleLabel,
+        MMod,
+        MSt4
     ),
-    {MSt6, ArityReg} = MMod:shift_right(MSt5, {free, HeaderReg}, 6),
-    MSt7 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt6),
+    {MSt4b, ArityReg} = MMod:shift_right(MSt4a, {free, HeaderReg}, 6),
+    MSt5 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt4b),
     MSt8 = lists:foldl(
         fun({Element, Dest}, AccMSt0) ->
             AccMSt1 = MMod:move_array_element(AccMSt0, Reg, Element + 1, Dest),
             MMod:free_native_registers(AccMSt1, [Dest])
         end,
-        MSt7,
+        MSt5,
         GetElements
     ),
     MSt9 = MMod:free_native_registers(MSt8, [Reg]),
@@ -5343,31 +5410,27 @@ put_record_generic(Rest1, MMod, MSt0, State0) ->
     first_pass(Rest7, MMod, MSt17, State0).
 
 first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
-    {Label, Rest1} = decode_label(Rest0),
+    %% The Erlang compiler always emits fadd/fsub/fmul/fdiv with fail label 0
+    %% (beam_validator asserts ?EXCEPTION_LABEL = Fail), and the BEAM loader's
+    %% ops.tab rewrites only match the `p` (label-0) form. A non-zero fail
+    %% label is therefore unreachable from any loadable BEAM file.
+    {0, Rest1} = decode_label(Rest0),
     {{fp_reg, FPRegIndex1}, Rest2} = decode_fp_register(Rest1),
     {{fp_reg, FPRegIndex2}, Rest3} = decode_fp_register(Rest2),
     {{fp_reg, FPRegIndex3}, Rest4} = decode_fp_register(Rest3),
-    ?TRACE("OP_F3*~p ~p, ~p, ~p, ~p\n", [
-        Primitive, Label, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}, {fp_reg, FPRegIndex3}
+    ?TRACE("OP_F3*~p ~p, ~p, ~p\n", [
+        Primitive, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}, {fp_reg, FPRegIndex3}
     ]),
     {MSt1, Reg} = MMod:call_primitive(MSt0, Primitive, [
         ctx, FPRegIndex1, FPRegIndex2, FPRegIndex3
     ]),
-    if
-        Label > 0 ->
-            MSt2 = cond_jump_to_label({'(bool)', Reg, '==', false}, Label, MMod, MSt1),
-            MSt3 = MMod:free_native_registers(MSt2, [Reg]),
-            ?ASSERT_ALL_NATIVE_FREE(MSt3),
-            first_pass(Rest4, MMod, MSt3, State0);
-        true ->
-            MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
-                MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARITH_ATOM
-                ])
-            end),
-            ?ASSERT_ALL_NATIVE_FREE(MSt2),
-            first_pass(Rest4, MMod, MSt2, State0)
-    end.
+    MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
+        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
+            ctx, jit_state, offset, ?BADARITH_ATOM
+        ])
+    end),
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    first_pass(Rest4, MMod, MSt2, State0).
 
 bif_faillabel_test(FailLabel, MMod, MSt0, {free, ResultReg}, {free, Dest}) when FailLabel > 0 ->
     MSt1 = cond_jump_to_label({ResultReg, '==', 0}, FailLabel, MMod, MSt0),
@@ -5771,8 +5834,6 @@ decode_allocator_list0(MMod, AccNeed, Remaining, Rest0) ->
 term_from_int(Int) when is_integer(Int) ->
     (Int bsl 4) bor ?TERM_INTEGER_TAG.
 
-term_from_int(Int, _MMod, MSt0) when is_integer(Int) ->
-    {MSt0, term_from_int(Int)};
 term_from_int(Reg, MMod, MSt0) when is_atom(Reg) ->
     MSt1 = MMod:shift_left(MSt0, Reg, 4),
     MSt2 = MMod:or_(MSt1, Reg, ?TERM_INTEGER_TAG),
