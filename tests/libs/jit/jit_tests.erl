@@ -796,3 +796,110 @@ typed_is_not_eq_exact_both_x86_64_test() ->
     ),
     ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
     ok.
+
+% typed_is_lt_both: is_lt with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B) ->
+%     N = length(A), M = length(B),
+%     if N < M -> less; true -> not_less end.
+-define(CODE_TYPED_IS_LT_BOTH,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 21, 3, 55, 21, 19, 153, 32, 124, 5, 32, 0, 87, 3, 16, 3, 124, 5, 32, 0, 87, 19,
+        16, 19, 39, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0,
+        2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3,
+        19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_LT_BOTH,
+    <<255, 255, 255, 248, 8, 16, 116, 121, 112, 101, 100, 95, 105, 115, 95, 108, 116, 95, 98, 111,
+        116, 104, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 64,
+        108, 101, 115, 115, 128, 110, 111, 116, 95, 108, 101, 115, 115, 176, 109, 111, 100, 117,
+        108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95,
+        105, 110, 102, 111>>
+).
+
+% typed_is_ge_typed_lit: is_ge with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B), length(A) >= length(B) -> ge; f(_,_) -> lt.
+-define(CODE_TYPED_IS_GE_TYPED_LIT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 53, 3, 55, 53, 19, 124, 53, 32, 0, 87, 3, 16, 3, 124, 53, 32, 0, 87, 19, 16, 19,
+        40, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18,
+        114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64,
+        18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_GE_TYPED_LIT,
+    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 116, 121,
+        112, 101, 100, 95, 108, 105, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
+        110, 103, 116, 104, 32, 103, 101, 32, 108, 116, 176, 109, 111, 100, 117, 108, 101, 95, 105,
+        110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102,
+        111>>
+).
+-define(TYPE_TYPED_IS_GE_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
+
+% typed_is_ge_lit_typed: is_ge with literal first arg, typed second arg
+% f(List) when is_list(List) -> if length(List) >= 10 -> large; true -> small end.
+-define(CODE_TYPED_IS_GE_LIT_TYPED,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 21, 3, 124, 53, 16, 0, 87, 3, 16, 3, 40, 53, 87, 3, 32, 161, 64, 82, 3, 19, 1,
+        48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153,
+        0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_GE_LIT_TYPED,
+    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 108, 105,
+        116, 95, 116, 121, 112, 101, 100, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
+        110, 103, 116, 104, 80, 108, 97, 114, 103, 101, 80, 115, 109, 97, 108, 108, 176, 109, 111,
+        100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108,
+        101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_GE_LIT_TYPED, ?TYPE_TYPED_IS_LT_BOTH).
+
+typed_is_lt_both_x86_64_test() ->
+    % is_lt with both-typed bounded integers should compile without error.
+    % Fast path: direct register compare, no term_compare call.
+    % Compared with empty type chunk, typed code is shorter (no PRIM_TERM_COMPARE call).
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_LT_BOTH,
+        ?ATU8_TYPED_IS_LT_BOTH,
+        ?TYPE_TYPED_IS_LT_BOTH,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_LT_BOTH,
+        ?ATU8_TYPED_IS_LT_BOTH,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.
+
+typed_is_ge_both_x86_64_test() ->
+    % is_ge with both typed bounded integers: fast inline path.
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_GE_TYPED_LIT,
+        ?ATU8_TYPED_IS_GE_TYPED_LIT,
+        ?TYPE_TYPED_IS_GE_TYPED_LIT,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_GE_TYPED_LIT,
+        ?ATU8_TYPED_IS_GE_TYPED_LIT,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.
+
+typed_is_ge_lit_typed_x86_64_test() ->
+    % is_ge with typed first arg and literal second arg: bignum-aware inline path.
+    % Emits more code than term_compare call but avoids dynamic dispatch.
+    % Just verify compilation succeeds without error.
+    _TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_GE_LIT_TYPED,
+        ?ATU8_TYPED_IS_GE_LIT_TYPED,
+        ?TYPE_TYPED_IS_GE_LIT_TYPED,
+        fun length_import_resolver/1
+    ),
+    ok.
