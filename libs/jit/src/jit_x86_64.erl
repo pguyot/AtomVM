@@ -160,7 +160,7 @@
     {x86_64_register(), '<', integer()}
     | {maybe_free_x86_64_register(), '<', x86_64_register()}
     | {integer(), '<', maybe_free_x86_64_register()}
-    | {maybe_free_x86_64_register(), '==', integer()}
+    | {maybe_free_x86_64_register(), '==', x86_64_register() | integer()}
     | {maybe_free_x86_64_register(), '!=', x86_64_register() | integer()}
     | {'(int)', maybe_free_x86_64_register(), '==', integer()}
     | {'(int)', maybe_free_x86_64_register(), '!=', x86_64_register() | integer()}
