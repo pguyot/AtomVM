@@ -679,6 +679,31 @@ ldp_test_() ->
             <<16#a8c153f3:32/little>>,
             "ldp x19, x20, [sp], #16",
             jit_aarch64_asm:ldp(r19, r20, {sp}, 16)
+        ),
+        %% Signed-offset (base+offset, no writeback) form
+        ?_assertAsmEqual(
+            <<16#a9410308:32/little>>,
+            "ldp x8, x0, [x24, #16]",
+            jit_aarch64_asm:ldp(r8, r0, {r24, 16})
+        ),
+        ?_assertAsmEqual(
+            <<16#a9402108:32/little>>,
+            "ldp x8, x8, [x8]",
+            jit_aarch64_asm:ldp(r8, r8, {r8, 0})
+        )
+    ].
+
+stp_signed_offset_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#a9010308:32/little>>,
+            "stp x8, x0, [x24, #16]",
+            jit_aarch64_asm:stp(r8, r0, {r24, 16})
+        ),
+        ?_assertAsmEqual(
+            <<16#a9002108:32/little>>,
+            "stp x8, x8, [x8]",
+            jit_aarch64_asm:stp(r8, r8, {r8, 0})
         )
     ].
 
