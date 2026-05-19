@@ -722,3 +722,118 @@ if_block_unsigned_less_than_test_() ->
         end}
      || Backend <- Backends
     ].
+
+% Type chunk: version=3, 3 entries: any, {t_integer,{0,2^58-1}}, {t_integer,{0,2^58-1}}
+-define(TYPE_TYPED_IS_LT_BOTH,
+    <<0, 0, 0, 3, 0, 0, 0, 3, 15, 255, 0, 132, 48, 32, 0, 0, 0, 0, 0, 0, 0, 0, 3, 255, 255, 255,
+        255, 255, 255, 255>>
+).
+
+% typed_is_eq_exact_both: is_eq_exact with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B), length(A) =:= length(B) -> equal; f(_,_) -> not_equal.
+-define(CODE_TYPED_IS_EQ_EXACT_BOTH,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 53, 3, 55, 53, 19, 124, 53, 32, 0, 87, 3, 16, 3, 124, 53, 32, 0, 87, 19, 16, 19,
+        43, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18,
+        114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64,
+        18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_EQ_EXACT_BOTH,
+    <<255, 255, 255, 248, 8, 22, 116, 121, 112, 101, 100, 95, 105, 115, 95, 101, 113, 95, 101, 120,
+        97, 99, 116, 95, 98, 111, 116, 104, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
+        110, 103, 116, 104, 80, 101, 113, 117, 97, 108, 144, 110, 111, 116, 95, 101, 113, 117, 97,
+        108, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109,
+        111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_EQ_EXACT_BOTH, ?TYPE_TYPED_IS_LT_BOTH).
+
+% typed_is_eq_exact_typed_lit: is_eq_exact with bounded typed first arg and literal second arg
+% f(A) when is_list(A), length(A) =:= 5 -> five; f(_) -> other.
+-define(CODE_TYPED_IS_EQ_EXACT_TYPED_LIT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 53, 3, 124, 53, 16, 0, 87, 3, 16, 3, 43, 53, 87, 3, 32, 81, 64, 82, 3, 19, 1, 48,
+        64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2,
+        18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_EQ_EXACT_TYPED_LIT,
+    <<255, 255, 255, 248, 8, 27, 116, 121, 112, 101, 100, 95, 105, 115, 95, 101, 113, 95, 101, 120,
+        97, 99, 116, 95, 116, 121, 112, 101, 100, 95, 108, 105, 116, 16, 102, 96, 101, 114, 108, 97,
+        110, 103, 96, 108, 101, 110, 103, 116, 104, 64, 102, 105, 118, 101, 80, 111, 116, 104, 101,
+        114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109,
+        111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_EQ_EXACT_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
+
+% typed_is_not_eq_exact_both: is_ne_exact (OP 44) with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B), length(A) =/= length(B) -> not_equal; f(_,_) -> equal.
+-define(CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 53, 3, 55, 53, 19, 124, 53, 32, 0, 87, 3, 16, 3, 124, 53, 32, 0, 87, 19, 16, 19,
+        44, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18,
+        114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64,
+        18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
+    <<255, 255, 255, 248, 8, 26, 116, 121, 112, 101, 100, 95, 105, 115, 95, 110, 111, 116, 95, 101,
+        113, 95, 101, 120, 97, 99, 116, 95, 98, 111, 116, 104, 16, 102, 96, 101, 114, 108, 97, 110,
+        103, 96, 108, 101, 110, 103, 116, 104, 144, 110, 111, 116, 95, 101, 113, 117, 97, 108, 80,
+        101, 113, 117, 97, 108, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103,
+        101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_NOT_EQ_EXACT_BOTH, ?TYPE_TYPED_IS_LT_BOTH).
+
+% Import resolver for modules using erlang:length/1 as import index 0.
+length_import_resolver(0) -> {erlang, length, 1};
+length_import_resolver(1) -> {erlang, get_module_info, 1};
+length_import_resolver(2) -> {erlang, get_module_info, 2}.
+
+typed_is_eq_exact_both_x86_64_test() ->
+    % is_eq_exact with both bounded typed integers: fast inline path.
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+        ?TYPE_TYPED_IS_EQ_EXACT_BOTH,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.
+
+typed_is_eq_exact_typed_lit_x86_64_test() ->
+    % is_eq_exact with typed first arg and integer literal second: bignum-aware inline path.
+    % Emits more code than term_compare call but avoids dynamic dispatch.
+    % Just verify compilation succeeds without error.
+    _TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        ?ATU8_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        ?TYPE_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        fun length_import_resolver/1
+    ),
+    ok.
+
+typed_is_not_eq_exact_both_x86_64_test() ->
+    % is_ne_exact (OP_IS_NOT_EQ_EXACT) with both bounded typed integers: fast inline path.
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?TYPE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.

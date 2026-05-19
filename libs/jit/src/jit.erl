@@ -646,54 +646,20 @@ first_pass(<<?OP_IS_NOT_EQUAL, Rest0/binary>>, MMod, MSt0, State0) ->
 first_pass(<<?OP_IS_EQ_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
-    {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
-    {MSt2, Arg2, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt1, Arg1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
     ?TRACE("OP_IS_EQ_EXACT ~p, ~p, ~p\n", [Label, Arg1, Arg2]),
-    % If Arg2 is an immediate, we don't need to call term_compare
-    MSt5 =
-        if
-            is_integer(Arg2) ->
-                {MSt3, Arg1Reg} = MMod:move_to_native_register(MSt2, Arg1),
-                cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt3);
-            true ->
-                {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_COMPARE, [
-                    ctx, jit_state, {free, Arg1}, {free, Arg2}, ?TERM_COMPARE_EXACT
-                ]),
-                MSt4 = handle_error_if(
-                    {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt3
-                ),
-                cond_jump_to_label(
-                    {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
-                    Label,
-                    MMod,
-                    MSt4
-                )
-        end,
+    MSt5 = op_is_eq_exact(MMod, MSt2, Label, Arg1, Arg2),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest3, MMod, MSt5, State0);
 % 44
 first_pass(<<?OP_IS_NOT_EQ_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
-    {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
-    {MSt2, Arg2, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt1, Arg1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
     ?TRACE("OP_IS_NOT_EQ_EXACT ~p, ~p, ~p\n", [Label, Arg1, Arg2]),
-    MSt5 =
-        if
-            is_integer(Arg2) ->
-                {MSt3, Arg1Reg} = MMod:move_to_native_register(MSt2, Arg1),
-                cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, MSt3);
-            true ->
-                {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_COMPARE, [
-                    ctx, jit_state, {free, Arg1}, {free, Arg2}, ?TERM_COMPARE_EXACT
-                ]),
-                MSt4 = handle_error_if(
-                    {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt3
-                ),
-                cond_jump_to_label(
-                    {'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt4
-                )
-        end,
+    MSt5 = op_is_not_eq_exact(MMod, MSt2, Label, Arg1, Arg2),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest3, MMod, MSt5, State0);
 % 45
@@ -4484,6 +4450,101 @@ op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
         {free, unwrap_typed(Arg1)},
         {free, unwrap_typed(Arg2)},
         ?TERM_COMPARE_NO_OPTS
+    ]),
+    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
+    cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt2).
+
+%% Optimized =:= comparison for typed args.
+%% is_eq_exact Label, Arg1, Arg2: jump to Label if Arg1 =/= Arg2.
+%%
+%% For typed small-int + typed small-int (both ranges fit small_integer_bounds),
+%% inline as a direct cmp on tagged values: equal iff tagged values equal.
+op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+            cond_jump_to_label(
+                {{free, Arg1Reg}, '!=', Arg2Reg}, Label, MMod, MSt2
+            );
+        false ->
+            op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
+    end;
+op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range1}}, Arg2) when
+    is_integer(Arg2)
+->
+    %% Arg1 typed small or bignum, Arg2 small int literal.
+    %% Same as op_is_equal's typed+literal case: check Arg1 is small int.
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    MSt2 = MMod:if_block(MSt1, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
+        BSt0
+    ) ->
+        MMod:jump_to_label(BSt0, Label)
+    end),
+    cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt2);
+%% No literal-first clause: OTP's beam_ssa_codegen always emits is_eq_exact
+%% with the literal as the second argument.
+op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
+    %% Plain immediate Arg2.
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt1);
+op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
+    op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
+
+op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
+        ctx, jit_state, {free, unwrap_typed(Arg1)}, {free, unwrap_typed(Arg2)}, ?TERM_COMPARE_EXACT
+    ]),
+    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
+    cond_jump_to_label(
+        {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
+        Label,
+        MMod,
+        MSt2
+    ).
+
+%% Optimized =/= comparison for typed args. Mirror of op_is_eq_exact.
+op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+    case is_small_integer_range(Range1, Range2, MMod) of
+        true ->
+            {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, Arg2),
+            cond_jump_to_label(
+                {{free, Arg1Reg}, '==', Arg2Reg}, Label, MMod, MSt2
+            );
+        false ->
+            op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
+    end;
+op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range1}}, Arg2) when
+    is_integer(Arg2)
+->
+    %% Arg1 typed integer, Arg2 small int literal.
+    %% is_not_eq_exact L, A, B: jump to L if A == B.
+    %% If Arg1 is bignum: A != B (different tags) → don't jump.
+    %% If Arg1 is small int: do tagged cmp; jump if equal.
+    %%
+    %% if_else_block: condition TRUE = bignum → block_true (no-op).
+    %%                condition FALSE = small int → block_false (cmp + maybe jump).
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    MMod:if_else_block(
+        MSt1,
+        {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        fun(BSt0) -> MMod:free_native_registers(BSt0, [Arg1Reg]) end,
+        fun(BSt0) ->
+            cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, BSt0)
+        end
+    );
+%% No literal-first clause: OTP's beam_ssa_codegen always emits is_ne_exact
+%% with the literal as the second argument.
+op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, MSt1);
+op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
+    op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
+
+op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
+        ctx, jit_state, {free, unwrap_typed(Arg1)}, {free, unwrap_typed(Arg2)}, ?TERM_COMPARE_EXACT
     ]),
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt2).
