@@ -256,6 +256,7 @@ struct ModuleNativeInterface
     uint32_t (*is_record_accessible)(Context *ctx, JITState *jit_state, term src, term scope);
     term (*get_record_field)(Context *ctx, uint32_t fail_label, term src, term id, term field);
     term (*put_record_resolved)(Context *ctx, JITState *jit_state, uint32_t record_index, term src, uint32_t num_pairs, term *kv);
+    BifImpl0 (*get_imported_gcbif)(Context *ctx, JITState *jit_state, uint32_t live, uint32_t bif);
 };
 
 extern const ModuleNativeInterface module_native_interface;
