@@ -373,23 +373,22 @@ first_pass(<<?OP_BIF1, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest4, MMod, MSt5, State0);
 % 11
-first_pass(<<?OP_BIF2, Rest0/binary>>, MMod, MSt0, State0) ->
+first_pass(
+    <<?OP_BIF2, Rest0/binary>>, MMod, MSt0, #state{import_resolver = ImportResolver} = State0
+) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {FailLabel, Rest1} = decode_label(Rest0),
     {Bif, Rest2} = decode_literal(Rest1),
-    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
+    {BifModule, BifFunName, 2} = ImportResolver(Bif),
+    {MSt1, Arg1, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest4} = decode_compact_term(Rest3, MMod, MSt1, State0),
+    {MSt3, Dest, Rest5} = decode_dest(Rest4, MMod, MSt2),
+    ?TRACE("OP_BIF2 ~p, ~p (~p:~p/2), ~p, ~p, ~p\n", [
+        FailLabel, Bif, BifModule, BifFunName, Arg1, Arg2, Dest
     ]),
-    {MSt2, Arg1, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
-    {MSt3, Arg2, Rest4} = decode_compact_term(Rest3, MMod, MSt2, State0),
-    {MSt4, Dest, Rest5} = decode_dest(Rest4, MMod, MSt3),
-    ?TRACE("OP_BIF2 ~p, ~p, ~p, ~p, ~p\n", [FailLabel, Bif, Arg1, Arg2, Dest]),
-    {MSt5, ResultReg} = MMod:call_func_ptr(MSt4, {free, FuncPtr}, [
-        ctx, FailLabel, {free, Arg1}, {free, Arg2}
-    ]),
-    MSt6 = bif_faillabel_test(FailLabel, MMod, MSt5, {free, ResultReg}, {free, Dest}),
-    ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    first_pass(Rest5, MMod, MSt6, State0);
+    MSt4 = op_bif2(MMod, MSt3, FailLabel, BifModule, BifFunName, Bif, Arg1, Arg2, Dest),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest5, MMod, MSt4, State0);
 % 12
 first_pass(<<?OP_ALLOCATE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -3297,6 +3296,69 @@ first_pass_bs_match_skip(MatchState, BSOffsetReg, J0, Rest0, MMod, MSt0) ->
     MSt1 = MMod:add(MSt0, BSOffsetReg, Stride),
     ?TRACE("{skip,~p},", [Stride]),
     {J0 - 1, Rest1, MatchState, BSOffsetReg, MSt1}.
+
+% OP_BIF2 dispatch (Module, Function known at compile time):
+% inline fast paths for a few hot BIFs, otherwise fall back to a generic
+% indirect call.
+op_bif2(MMod, MSt0, FailLabel, erlang, element, _Bif, Index, Tuple, Dest) ->
+    op_bif2_element(MMod, MSt0, FailLabel, unwrap_typed(Index), unwrap_typed(Tuple), Dest);
+op_bif2(MMod, MSt0, FailLabel, _Module, _Function, Bif, Arg1, Arg2, Dest) ->
+    op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest).
+
+op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest) ->
+    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
+        jit_state, Bif
+    ]),
+    {MSt2, ResultReg} = MMod:call_func_ptr(MSt1, {free, FuncPtr}, [
+        ctx, FailLabel, {free, Arg1}, {free, Arg2}
+    ]),
+    bif_faillabel_test(FailLabel, MMod, MSt2, {free, ResultReg}, {free, Dest}).
+
+%% Inline erlang:element/2: verify Index is a small int and Tuple is a boxed
+%% tuple with arity >= Index >= 1, then read the element directly.  Any check
+%% failure jumps to FailLabel (or raises badarg if FailLabel=0).
+op_bif2_element(MMod, MSt0, FailLabel, Index, Tuple, Dest) ->
+    {MSt1, IndexReg} = MMod:move_to_native_register(MSt0, Index),
+    MSt2 = cond_raise_badarg_or_jump_to_fail_label(
+        {IndexReg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        FailLabel,
+        MMod,
+        MSt1
+    ),
+    {MSt3, TupleReg} = MMod:move_to_native_register(MSt2, Tuple),
+    MSt4 = cond_raise_badarg_or_jump_to_fail_label(
+        {TupleReg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+        FailLabel,
+        MMod,
+        MSt3
+    ),
+    %% Strip primary tag bits to get the heap pointer
+    {MSt5, TupleReg} = MMod:and_(MSt4, {free, TupleReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    %% Allocate a fresh register for the header so we can keep TupleReg
+    %% alive for the final indexed read.
+    {MSt6, HeaderReg} = MMod:copy_to_native_register(MSt5, TupleReg),
+    MSt7 = MMod:move_array_element(MSt6, HeaderReg, 0, HeaderReg),
+    MSt8 = cond_raise_badarg_or_jump_to_fail_label(
+        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+        FailLabel,
+        MMod,
+        MSt7
+    ),
+    %% Convert the term-encoded Index to a raw integer (>> 4)
+    {MSt9, IndexInt} = MMod:shift_right(MSt8, {free, IndexReg}, 4),
+    MSt10 = cond_raise_badarg_or_jump_to_fail_label(
+        {IndexInt, '<', 1}, FailLabel, MMod, MSt9
+    ),
+    %% Arity = header >> 6
+    {MSt11, ArityReg} = MMod:shift_right(MSt10, {free, HeaderReg}, 6),
+    %% IndexInt > Arity means out-of-range; encoded as (Arity < IndexInt)
+    MSt12 = cond_raise_badarg_or_jump_to_fail_label(
+        {{free, ArityReg}, '<', IndexInt}, FailLabel, MMod, MSt11
+    ),
+    %% Read TupleReg[IndexInt] (1-based, so byte offset IndexInt*8)
+    MSt13 = MMod:move_array_element(MSt12, TupleReg, {free, IndexInt}, Dest),
+    MSt14 = MMod:free_native_registers(MSt13, [TupleReg, Dest]),
+    MSt14.
 
 % byte_size on a known binary - inline
 op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, erlang, 'byte_size', Arg, Dest) ->
