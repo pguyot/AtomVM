@@ -466,11 +466,13 @@ move_to_cp_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:move_to_cp(State0, {y_reg, 0}),
     Stream = ?BACKEND:stream(State1),
+    %% BaseReg (x7) keeps y_regs_base reserved for a follow-up increment_sp.
+    %% ValReg (x8) is the temp used to load y[0] and store it to CP.
     Dump =
         <<
             "   0:	f9402807 	ldr	x7, [x0, #80]\n"
-            "   4:	f94000e7 	ldr	x7, [x7]\n"
-            "   8:	f9007007 	str	x7, [x0, #224]"
+            "   4:	f94000e8 	ldr	x8, [x7]\n"
+            "   8:	f9007008 	str	x8, [x0, #224]"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 

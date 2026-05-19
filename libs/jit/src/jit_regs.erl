@@ -88,6 +88,8 @@
     | cp
     %% Register holds the module index
     | module_index
+    %% Register holds the base of the y_regs (ctx->e)
+    | y_regs_base
     %% Unknown / clobbered
     | unknown.
 
