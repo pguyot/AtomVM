@@ -198,7 +198,7 @@
     | {maybe_free_riscv32_register(), '<', riscv32_register()}
     | {maybe_free_riscv32_register(), '<u', riscv32_register()}
     | {integer(), '<', maybe_free_riscv32_register()}
-    | {maybe_free_riscv32_register(), '==', integer()}
+    | {maybe_free_riscv32_register(), '==', riscv32_register() | integer()}
     | {maybe_free_riscv32_register(), '!=', riscv32_register() | integer()}
     | {'(int)', maybe_free_riscv32_register(), '==', integer()}
     | {'(int)', maybe_free_riscv32_register(), '!=', riscv32_register() | integer()}

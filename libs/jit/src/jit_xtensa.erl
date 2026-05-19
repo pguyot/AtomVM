@@ -188,7 +188,7 @@
     | {maybe_free_xtensa_register(), '<', xtensa_register()}
     | {maybe_free_xtensa_register(), '<u', xtensa_register()}
     | {integer(), '<', maybe_free_xtensa_register()}
-    | {maybe_free_xtensa_register(), '==', integer()}
+    | {maybe_free_xtensa_register(), '==', xtensa_register() | integer()}
     | {maybe_free_xtensa_register(), '!=', xtensa_register() | integer()}
     | {'(int)', maybe_free_xtensa_register(), '==', integer()}
     | {'(int)', maybe_free_xtensa_register(), '!=', xtensa_register() | integer()}
