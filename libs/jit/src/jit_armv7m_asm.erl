@@ -33,7 +33,9 @@
 -export([
     b_w/1,
     movw/2,
-    movt/2
+    movt/2,
+    sdiv/3,
+    mls/4
 ]).
 
 -type arm_gpr_register() :: jit_armv6m_asm:arm_gpr_register().
@@ -111,6 +113,45 @@ movt(Rd, Imm16) when is_integer(Imm16), Imm16 >= 0, Imm16 =< 65535 ->
     encode_mov_imm16(2#101100, Rd, Imm16);
 movt(_Rd, Imm) ->
     error({unencodable_immediate, Imm}).
+
+%%-----------------------------------------------------------------------------
+%% Thumb-2 SDIV (Signed Divide) - Rd = Rn / Rm (truncated, signed)
+%%
+%% Encoding T1:
+%%   First halfword:  1111 1011 1001 Rn[3:0]
+%%   Second halfword: 1111 Rd[3:0] 1111 Rm[3:0]
+%%
+%% SDIV is mandatory on ARMv7-M (Cortex-M3 and later) and ARMv8-M Mainline.
+%% Division by zero yields 0 (or a fault if SCB.CCR.DIV_0_TRP is set).
+%%-----------------------------------------------------------------------------
+-spec sdiv(arm_gpr_register(), arm_gpr_register(), arm_gpr_register()) -> binary().
+sdiv(Rd, Rn, Rm) ->
+    RdNum = jit_armv6m_asm:reg_to_num(Rd),
+    RnNum = jit_armv6m_asm:reg_to_num(Rn),
+    RmNum = jit_armv6m_asm:reg_to_num(Rm),
+    HW1 = 16#FB90 bor RnNum,
+    HW2 = 16#F0F0 bor (RdNum bsl 8) bor RmNum,
+    <<HW1:16/little, HW2:16/little>>.
+
+%%-----------------------------------------------------------------------------
+%% Thumb-2 MLS (Multiply-Subtract) - Rd = Ra - (Rn * Rm)
+%%
+%% Encoding T1:
+%%   First halfword:  1111 1011 0000 Rn[3:0]
+%%   Second halfword: Ra[3:0] Rd[3:0] 0001 Rm[3:0]
+%%
+%% MLS is available on ARMv7-M Mainline (Cortex-M3 and later).
+%%-----------------------------------------------------------------------------
+-spec mls(arm_gpr_register(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register()) ->
+    binary().
+mls(Rd, Rn, Rm, Ra) ->
+    RdNum = jit_armv6m_asm:reg_to_num(Rd),
+    RnNum = jit_armv6m_asm:reg_to_num(Rn),
+    RmNum = jit_armv6m_asm:reg_to_num(Rm),
+    RaNum = jit_armv6m_asm:reg_to_num(Ra),
+    HW1 = 16#FB00 bor RnNum,
+    HW2 = (RaNum bsl 12) bor (RdNum bsl 8) bor 16#10 bor RmNum,
+    <<HW1:16/little, HW2:16/little>>.
 
 %%-----------------------------------------------------------------------------
 %% Internal helpers

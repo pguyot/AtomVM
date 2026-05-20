@@ -66,6 +66,7 @@
     mul/3,
     div_/3,
     rem_/3,
+    supports_div/1,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -2532,7 +2533,9 @@ get_module_index(
 
 %% @private
 -spec op_imm(state(), atom(), aarch64_register(), aarch64_register(), integer()) -> state().
-op_imm(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, Reg, Reg, Val) ->
+op_imm(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, Reg, Reg, Val
+) ->
     Result =
         try
             I = jit_aarch64_asm:Op(Reg, Reg, Val),
@@ -2548,7 +2551,13 @@ op_imm(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = St
         end,
     {ok, Stream1, Regs1} = Result,
     State#state{stream = Stream1, regs = Regs1};
-op_imm(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, RegA, RegB, Val) ->
+op_imm(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    Op,
+    RegA,
+    RegB,
+    Val
+) ->
     Result =
         try
             I = jit_aarch64_asm:Op(RegA, RegB, Val),
@@ -2783,6 +2792,10 @@ rem_(
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, TempReg), DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+
+%% aarch64 always supports native sdiv.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it

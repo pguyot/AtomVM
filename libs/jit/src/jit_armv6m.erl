@@ -65,6 +65,9 @@
     add/3,
     sub/3,
     mul/3,
+    div_/3,
+    rem_/3,
+    supports_div/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -3776,6 +3779,49 @@ mul(
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
     State#state{stream = Stream1, regs = Regs1}.
+
+%% Signed divide. Only available on ARMv7-M / ARMv8-M (Thumb-2 variant).
+%% ARMv6-M has no divide instruction; supports_div/1 must gate calls.
+-spec div_(state(), armv6m_register(), armv6m_register()) -> {state(), armv6m_register()}.
+div_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0, thumb2 = true} = State,
+    DividendReg,
+    DivisorReg
+) ->
+    I = jit_armv7m_asm:sdiv(DividendReg, DividendReg, DivisorReg),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
+    {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+
+%% Signed remainder = dividend - (dividend / divisor) * divisor.
+%% Implemented with SDIV + MLS, both ARMv7-M Mainline instructions.
+-spec rem_(state(), armv6m_register(), armv6m_register()) -> {state(), armv6m_register()}.
+rem_(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        available_regs = Avail,
+        regs = Regs0,
+        thumb2 = true
+    } = State,
+    DividendReg,
+    DivisorReg
+) ->
+    TempReg = first_avail(
+        Avail band (bnot reg_bit(DividendReg)) band (bnot reg_bit(DivisorReg))
+    ),
+    I1 = jit_armv7m_asm:sdiv(TempReg, DividendReg, DivisorReg),
+    I2 = jit_armv7m_asm:mls(DividendReg, TempReg, DivisorReg, DividendReg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(Regs0, TempReg), DividendReg
+    ),
+    {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+
+%% ARMv6-M has no divide instruction. ARMv7-M / ARMv8-M Mainline (thumb2
+%% variant) provide SDIV / MLS and let us emit native div/rem.
+-spec supports_div(state()) -> boolean().
+supports_div(#state{thumb2 = Thumb2}) -> Thumb2.
 
 %%
 %% Analysis of AArch64 pattern and ARM Thumb mapping:
