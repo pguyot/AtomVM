@@ -74,7 +74,8 @@
     xor_/3,
     shift_right_arith/3,
     div_/3,
-    rem_/3
+    rem_/3,
+    supports_div/1
 ]).
 
 -ifdef(JIT_DWARF).
@@ -305,6 +306,10 @@ rem_(
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+
+%% riscv32 (with the M extension assumed) always supports native div.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 % ILP32: 64-bit arguments require double-word alignment (even register number)
 parameter_regs0_avm_int64_t(T, [a0, a1 | Rest], Acc) ->

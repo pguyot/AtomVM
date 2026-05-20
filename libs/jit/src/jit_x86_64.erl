@@ -67,6 +67,7 @@
     mul/3,
     div_/3,
     rem_/3,
+    supports_div/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2805,6 +2806,10 @@ rem_(
         },
         RemTemp
     }.
+
+%% x86_64 always supports native idivq.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(

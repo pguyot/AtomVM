@@ -215,13 +215,13 @@ shift_left_test() ->
     >>,
     ?assertStream(wasm32, Dump, Stream).
 
-div_reg_test() ->
+div_test() ->
     State0 = ?BACKEND:new(0, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 1),
     State2 = ?BACKEND:add_label(State1, 0),
     {State3, Reg1} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     {State4, Reg2} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
-    {State5, ResultReg} = ?BACKEND:div_reg(State4, {free, Reg1}, Reg2),
+    {State5, ResultReg} = ?BACKEND:div_(State4, {free, Reg1}, Reg2),
     ?assertEqual(Reg1, ResultReg),
     State6 = ?BACKEND:return_labels_and_lines(State5, []),
     Stream = ?BACKEND:stream(State6),
@@ -246,13 +246,13 @@ div_reg_test() ->
     >>,
     ?assertStream(wasm32, Dump, Stream).
 
-div_reg_non_free_test() ->
+div_non_free_test() ->
     State0 = ?BACKEND:new(0, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 1),
     State2 = ?BACKEND:add_label(State1, 0),
     {State3, Reg1} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     {State4, Reg2} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
-    {State5, ResultReg} = ?BACKEND:div_reg(State4, Reg1, Reg2),
+    {State5, ResultReg} = ?BACKEND:div_(State4, Reg1, Reg2),
     ?assert(ResultReg =/= Reg1),
     State6 = ?BACKEND:return_labels_and_lines(State5, []),
     Stream = ?BACKEND:stream(State6),
@@ -277,13 +277,13 @@ div_reg_non_free_test() ->
     >>,
     ?assertStream(wasm32, Dump, Stream).
 
-rem_reg_test() ->
+rem_test() ->
     State0 = ?BACKEND:new(0, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 1),
     State2 = ?BACKEND:add_label(State1, 0),
     {State3, Reg1} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     {State4, Reg2} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
-    {State5, ResultReg} = ?BACKEND:rem_reg(State4, {free, Reg1}, Reg2),
+    {State5, ResultReg} = ?BACKEND:rem_(State4, {free, Reg1}, Reg2),
     ?assertEqual(Reg1, ResultReg),
     State6 = ?BACKEND:return_labels_and_lines(State5, []),
     Stream = ?BACKEND:stream(State6),
@@ -308,13 +308,13 @@ rem_reg_test() ->
     >>,
     ?assertStream(wasm32, Dump, Stream).
 
-rem_reg_non_free_test() ->
+rem_non_free_test() ->
     State0 = ?BACKEND:new(0, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 1),
     State2 = ?BACKEND:add_label(State1, 0),
     {State3, Reg1} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     {State4, Reg2} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
-    {State5, ResultReg} = ?BACKEND:rem_reg(State4, Reg1, Reg2),
+    {State5, ResultReg} = ?BACKEND:rem_(State4, Reg1, Reg2),
     ?assert(ResultReg =/= Reg1),
     State6 = ?BACKEND:return_labels_and_lines(State5, []),
     Stream = ?BACKEND:stream(State6),
