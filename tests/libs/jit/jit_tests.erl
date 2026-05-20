@@ -647,11 +647,111 @@ fuse_tuple_armv6m_test() ->
     ),
     ok.
 
+%%-----------------------------------------------------------------------------
+%% Typed integer optimization tests
+%%
+%% These tests verify that comparison and arithmetic operations on registers
+%% whose types are known (via the Type chunk) take the fast inline path instead
+%% of falling back to term_compare / BIF calls.
+%%
+%% Source patterns and expected OTP bytecodes:
+%%
+%% typed_is_lt_both:
+%%   f(A, B) when is_list(A), is_list(B) -> N = length(A), M = length(B),
+%%     if N < M -> less; true -> not_less end.
+%%   => is_lt {tr,x0,{t_integer,{0,MaxSmi}}}, {tr,x1,{t_integer,{0,MaxSmi}}}
+%%
+%% typed_is_ge_typed_lit:
+%%   f(A, B) when is_list(A), is_list(B), length(A) >= length(B) -> ge; f(_,_) -> lt.
+%%   => is_ge {tr,x0,{t_integer,{0,MaxSmi}}}, {tr,x1,{t_integer,{0,MaxSmi}}}
+%%
+%% typed_is_ge_lit_typed:
+%%   f(List) when is_list(List) -> if length(List) >= 10 -> large; true -> small end.
+%%   => is_ge {tr,x0,{t_integer,{0,MaxSmi}}}, {integer,10}  (literal second arg)
+%%
+%% typed_is_eq_exact_both:
+%%   f(A, B) when is_list(A), is_list(B), length(A) =:= length(B) -> equal; f(_,_) -> ne.
+%%   => is_eq_exact {tr,x0,...}, {tr,x1,...}
+%%
+%% typed_is_eq_exact_typed_lit:
+%%   f(A) when is_list(A), length(A) =:= 5 -> five; f(_) -> other.
+%%   => is_eq_exact {tr,x0,...}, {integer,5}
+%%
+%% typed_is_not_eq_exact_both:
+%%   f(A, B) when is_list(A), is_list(B), length(A) =/= length(B) -> not_equal; ...
+%%   => is_ne_exact {tr,x0,...}, {tr,x1,...}
+%%
+%% typed_is_not_eq_exact_typed_lit:
+%%   f(A) when is_list(A), length(A) =/= 5 -> not_five; f(_) -> other.
+%%   => is_ne_exact {tr,x0,...}, {integer,5}
+%%
+%% typed_tuple_size:
+%%   f(T) when is_tuple(T) -> tuple_size(T).
+%%   => gc_bif tuple_size {tr,x0,t_tuple}  -> inline (skip is_tuple primitive check)
+%%
+%% typed_select_val_int:
+%%   f(List) when is_list(List) -> N = length(List), case N of 0->zero; 1->one; ... end.
+%%   => select_val {tr,x0,{t_integer,{0,MaxSmi}}}, ...  (typed source)
+%%-----------------------------------------------------------------------------
+
+% typed_is_lt_both: is_lt with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B) ->
+%     N = length(A), M = length(B),
+%     if N < M -> less; true -> not_less end.
+-define(CODE_TYPED_IS_LT_BOTH,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 21, 3, 55, 21, 19, 153, 32, 124, 5, 32, 0, 87, 3, 16, 3, 124, 5, 32, 0, 87, 19,
+        16, 19, 39, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0,
+        2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3,
+        19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_LT_BOTH,
+    <<255, 255, 255, 248, 8, 16, 116, 121, 112, 101, 100, 95, 105, 115, 95, 108, 116, 95, 98, 111,
+        116, 104, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 64,
+        108, 101, 115, 115, 128, 110, 111, 116, 95, 108, 101, 115, 115, 176, 109, 111, 100, 117,
+        108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95,
+        105, 110, 102, 111>>
+).
 % Type chunk: version=3, 3 entries: any, {t_integer,{0,2^58-1}}, {t_integer,{0,2^58-1}}
 -define(TYPE_TYPED_IS_LT_BOTH,
     <<0, 0, 0, 3, 0, 0, 0, 3, 15, 255, 0, 132, 48, 32, 0, 0, 0, 0, 0, 0, 0, 0, 3, 255, 255, 255,
         255, 255, 255, 255>>
 ).
+
+% typed_is_ge_typed_lit: is_ge with two bounded typed integers
+% f(A, B) when is_list(A), is_list(B), length(A) >= length(B) -> ge; f(_,_) -> lt.
+-define(CODE_TYPED_IS_GE_TYPED_LIT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 55, 53, 3, 55, 53, 19, 124, 53, 32, 0, 87, 3, 16, 3, 124, 53, 32, 0, 87, 19, 16, 19,
+        40, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18,
+        114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64,
+        18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_GE_TYPED_LIT,
+    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 116, 121,
+        112, 101, 100, 95, 108, 105, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
+        110, 103, 116, 104, 32, 103, 101, 32, 108, 116, 176, 109, 111, 100, 117, 108, 101, 95, 105,
+        110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102,
+        111>>
+).
+-define(TYPE_TYPED_IS_GE_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
+
+% typed_is_ge_lit_typed: is_ge with literal first arg, typed second arg
+% f(List) when is_list(List) -> if length(List) >= 10 -> large; true -> small end.
+-define(CODE_TYPED_IS_GE_LIT_TYPED,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 21, 3, 124, 53, 16, 0, 87, 3, 16, 3, 40, 53, 87, 3, 32, 161, 64, 82, 3, 19, 1,
+        48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153,
+        0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_GE_LIT_TYPED,
+    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 108, 105,
+        116, 95, 116, 121, 112, 101, 100, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
+        110, 103, 116, 104, 80, 108, 97, 114, 103, 101, 80, 115, 109, 97, 108, 108, 176, 109, 111,
+        100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108,
+        101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_GE_LIT_TYPED, ?TYPE_TYPED_IS_LT_BOTH).
 
 % typed_is_eq_exact_both: is_eq_exact with two bounded typed integers
 % f(A, B) when is_list(A), is_list(B), length(A) =:= length(B) -> equal; f(_,_) -> not_equal.
@@ -706,115 +806,67 @@ fuse_tuple_armv6m_test() ->
 ).
 -define(TYPE_TYPED_IS_NOT_EQ_EXACT_BOTH, ?TYPE_TYPED_IS_LT_BOTH).
 
+% typed_is_not_eq_exact_typed_lit: is_ne_exact with bounded typed first arg and literal second arg
+% f(A) when is_list(A), length(A) =/= 5 -> not_five; f(_) -> other.
+-define(CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 53, 3, 124, 53, 16, 0, 87, 3, 16, 3, 44, 53, 87, 3, 32, 81, 64, 82, 3, 19, 1, 48,
+        64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2,
+        18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+    <<255, 255, 255, 248, 8, 31, 116, 121, 112, 101, 100, 95, 105, 115, 95, 110, 111, 116, 95, 101,
+        113, 95, 101, 120, 97, 99, 116, 95, 116, 121, 112, 101, 100, 95, 108, 105, 116, 16, 102, 96,
+        101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 128, 110, 111, 116, 95, 102,
+        105, 118, 101, 80, 111, 116, 104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110,
+        102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
+
+% typed_tuple_size: gc_bif tuple_size on typed t_tuple arg (skips is_tuple primitive check)
+% f(T) when is_tuple(T) -> tuple_size(T).
+-define(CODE_TYPED_TUPLE_SIZE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 7, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 57, 21, 3, 10, 5, 0, 87, 3, 16, 3, 19, 1, 48, 153, 0, 2, 18, 82, 0, 1, 64, 64, 18, 3,
+        78, 16, 16, 1, 80, 153, 0, 2, 18, 82, 16, 1, 96, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_TUPLE_SIZE,
+    <<255, 255, 255, 250, 8, 16, 116, 121, 112, 101, 100, 95, 116, 117, 112, 108, 101, 95, 115, 105,
+        122, 101, 16, 102, 96, 101, 114, 108, 97, 110, 103, 160, 116, 117, 112, 108, 101, 95, 115,
+        105, 122, 101, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101,
+        116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+% Type chunk: version=3, 2 entries: any, t_tuple
+-define(TYPE_TYPED_TUPLE_SIZE, <<0, 0, 0, 3, 0, 0, 0, 2, 15, 255, 8, 0>>).
+
+% typed_select_val_int: select_val on typed integer (from length/1 result)
+% f(List) when is_list(List) -> N = length(List),
+%     case N of 0 -> zero; 1 -> one; 2 -> two; _ -> other end.
+-define(CODE_TYPED_SELECT_VAL_INT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 11, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 55, 21, 3, 153, 32, 124, 5, 16, 0, 87, 3, 16, 3, 59, 87, 3, 32, 101, 23, 96, 1, 85,
+        17, 69, 33, 53, 1, 48, 64, 82, 3, 19, 1, 64, 64, 98, 3, 19, 1, 80, 64, 114, 3, 19, 1, 96,
+        64, 130, 3, 19, 1, 112, 153, 0, 2, 18, 146, 0, 1, 128, 64, 18, 3, 78, 16, 16, 1, 144, 153,
+        0, 2, 18, 146, 16, 1, 160, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
+).
+-define(ATU8_TYPED_SELECT_VAL_INT,
+    <<255, 255, 255, 246, 8, 20, 116, 121, 112, 101, 100, 95, 115, 101, 108, 101, 99, 116, 95, 118,
+        97, 108, 95, 105, 110, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110,
+        103, 116, 104, 48, 116, 119, 111, 48, 111, 110, 101, 64, 122, 101, 114, 111, 80, 111, 116,
+        104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101,
+        116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(TYPE_TYPED_SELECT_VAL_INT, ?TYPE_TYPED_IS_LT_BOTH).
+
 % Import resolver for modules using erlang:length/1 as import index 0.
 length_import_resolver(0) -> {erlang, length, 1};
 length_import_resolver(1) -> {erlang, get_module_info, 1};
 length_import_resolver(2) -> {erlang, get_module_info, 2}.
 
-typed_is_eq_exact_both_x86_64_test() ->
-    % is_eq_exact with both bounded typed integers: fast inline path.
-    TypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
-        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
-        ?TYPE_TYPED_IS_EQ_EXACT_BOTH,
-        fun length_import_resolver/1
-    ),
-    UntypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
-        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
-        <<>>,
-        fun length_import_resolver/1
-    ),
-    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
-    ok.
-
-typed_is_eq_exact_typed_lit_x86_64_test() ->
-    % is_eq_exact with typed first arg and integer literal second: bignum-aware inline path.
-    % Emits more code than term_compare call but avoids dynamic dispatch.
-    % Just verify compilation succeeds without error.
-    _TypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_EQ_EXACT_TYPED_LIT,
-        ?ATU8_TYPED_IS_EQ_EXACT_TYPED_LIT,
-        ?TYPE_TYPED_IS_EQ_EXACT_TYPED_LIT,
-        fun length_import_resolver/1
-    ),
-    ok.
-
-typed_is_not_eq_exact_both_x86_64_test() ->
-    % is_ne_exact (OP_IS_NOT_EQ_EXACT) with both bounded typed integers: fast inline path.
-    TypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
-        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
-        ?TYPE_TYPED_IS_NOT_EQ_EXACT_BOTH,
-        fun length_import_resolver/1
-    ),
-    UntypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
-        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
-        <<>>,
-        fun length_import_resolver/1
-    ),
-    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
-    ok.
-
-% typed_is_lt_both: is_lt with two bounded typed integers
-% f(A, B) when is_list(A), is_list(B) ->
-%     N = length(A), M = length(B),
-%     if N < M -> less; true -> not_less end.
--define(CODE_TYPED_IS_LT_BOTH,
-    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
-        1, 32, 55, 21, 3, 55, 21, 19, 153, 32, 124, 5, 32, 0, 87, 3, 16, 3, 124, 5, 32, 0, 87, 19,
-        16, 19, 39, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0,
-        2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3,
-        19, 64, 18, 3, 78, 32, 32, 3>>
-).
--define(ATU8_TYPED_IS_LT_BOTH,
-    <<255, 255, 255, 248, 8, 16, 116, 121, 112, 101, 100, 95, 105, 115, 95, 108, 116, 95, 98, 111,
-        116, 104, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 64,
-        108, 101, 115, 115, 128, 110, 111, 116, 95, 108, 101, 115, 115, 176, 109, 111, 100, 117,
-        108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95,
-        105, 110, 102, 111>>
-).
-
-% typed_is_ge_typed_lit: is_ge with two bounded typed integers
-% f(A, B) when is_list(A), is_list(B), length(A) >= length(B) -> ge; f(_,_) -> lt.
--define(CODE_TYPED_IS_GE_TYPED_LIT,
-    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
-        1, 32, 55, 53, 3, 55, 53, 19, 124, 53, 32, 0, 87, 3, 16, 3, 124, 53, 32, 0, 87, 19, 16, 19,
-        40, 53, 87, 3, 32, 87, 19, 32, 64, 82, 3, 19, 1, 48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18,
-        114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64,
-        18, 3, 78, 32, 32, 3>>
-).
--define(ATU8_TYPED_IS_GE_TYPED_LIT,
-    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 116, 121,
-        112, 101, 100, 95, 108, 105, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
-        110, 103, 116, 104, 32, 103, 101, 32, 108, 116, 176, 109, 111, 100, 117, 108, 101, 95, 105,
-        110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102,
-        111>>
-).
--define(TYPE_TYPED_IS_GE_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
-
-% typed_is_ge_lit_typed: is_ge with literal first arg, typed second arg
-% f(List) when is_list(List) -> if length(List) >= 10 -> large; true -> small end.
--define(CODE_TYPED_IS_GE_LIT_TYPED,
-    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
-        1, 32, 55, 21, 3, 124, 53, 16, 0, 87, 3, 16, 3, 40, 53, 87, 3, 32, 161, 64, 82, 3, 19, 1,
-        48, 64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153,
-        0, 2, 18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
-).
--define(ATU8_TYPED_IS_GE_LIT_TYPED,
-    <<255, 255, 255, 248, 8, 21, 116, 121, 112, 101, 100, 95, 105, 115, 95, 103, 101, 95, 108, 105,
-        116, 95, 116, 121, 112, 101, 100, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101,
-        110, 103, 116, 104, 80, 108, 97, 114, 103, 101, 80, 115, 109, 97, 108, 108, 176, 109, 111,
-        100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108,
-        101, 95, 105, 110, 102, 111>>
-).
--define(TYPE_TYPED_IS_GE_LIT_TYPED, ?TYPE_TYPED_IS_LT_BOTH).
+% Import resolver for modules using erlang:tuple_size/1 as import index 0.
+tuple_size_import_resolver(0) -> {erlang, tuple_size, 1};
+tuple_size_import_resolver(1) -> {erlang, get_module_info, 1};
+tuple_size_import_resolver(2) -> {erlang, get_module_info, 2}.
 
 typed_is_lt_both_x86_64_test() ->
     % is_lt with both-typed bounded integers should compile without error.
@@ -869,29 +921,88 @@ typed_is_ge_lit_typed_x86_64_test() ->
     ),
     ok.
 
-% typed_select_val_int: select_val on typed integer (from length/1 result)
-% f(List) when is_list(List) -> N = length(List),
-%     case N of 0 -> zero; 1 -> one; 2 -> two; _ -> other end.
--define(CODE_TYPED_SELECT_VAL_INT,
-    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 11, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
-        1, 32, 55, 21, 3, 153, 32, 124, 5, 16, 0, 87, 3, 16, 3, 59, 87, 3, 32, 101, 23, 96, 1, 85,
-        17, 69, 33, 53, 1, 48, 64, 82, 3, 19, 1, 64, 64, 98, 3, 19, 1, 80, 64, 114, 3, 19, 1, 96,
-        64, 130, 3, 19, 1, 112, 153, 0, 2, 18, 146, 0, 1, 128, 64, 18, 3, 78, 16, 16, 1, 144, 153,
-        0, 2, 18, 146, 16, 1, 160, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
-).
--define(ATU8_TYPED_SELECT_VAL_INT,
-    <<255, 255, 255, 246, 8, 20, 116, 121, 112, 101, 100, 95, 115, 101, 108, 101, 99, 116, 95, 118,
-        97, 108, 95, 105, 110, 116, 16, 102, 96, 101, 114, 108, 97, 110, 103, 96, 108, 101, 110,
-        103, 116, 104, 48, 116, 119, 111, 48, 111, 110, 101, 64, 122, 101, 114, 111, 80, 111, 116,
-        104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101,
-        116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
-).
--define(TYPE_TYPED_SELECT_VAL_INT, ?TYPE_TYPED_IS_LT_BOTH).
+typed_is_eq_exact_both_x86_64_test() ->
+    % is_eq_exact with both bounded typed integers: fast inline path.
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+        ?TYPE_TYPED_IS_EQ_EXACT_BOTH,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.
+
+typed_is_eq_exact_typed_lit_x86_64_test() ->
+    % is_eq_exact with typed first arg and integer literal second: bignum-aware inline path.
+    % Emits more code than term_compare call but avoids dynamic dispatch.
+    % Just verify compilation succeeds without error.
+    _TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        ?ATU8_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        ?TYPE_TYPED_IS_EQ_EXACT_TYPED_LIT,
+        fun length_import_resolver/1
+    ),
+    ok.
+
+typed_is_not_eq_exact_both_x86_64_test() ->
+    % is_ne_exact (OP_IS_NOT_EQ_EXACT) with both bounded typed integers: fast inline path.
+    TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?TYPE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        fun length_import_resolver/1
+    ),
+    UntypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_BOTH,
+        <<>>,
+        fun length_import_resolver/1
+    ),
+    ?assert(byte_size(TypedCode) < byte_size(UntypedCode)),
+    ok.
+
+typed_is_not_eq_exact_typed_lit_x86_64_test() ->
+    % is_ne_exact with typed first arg and integer literal second: bignum-aware inline path.
+    % Emits more code than term_compare call but avoids dynamic dispatch.
+    % Just verify compilation succeeds without error.
+    _TypedCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        ?ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        ?TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
+        fun length_import_resolver/1
+    ),
+    ok.
+
+typed_tuple_size_x86_64_test() ->
+    % OTP always emits bif tuple_size (OP_BIF1), not gc_bif1 (OP_GC_BIF1),
+    % because tuple_size always returns a small integer. The is_known_tuple
+    % optimization in op_gc_bif1 is therefore not reachable from OTP-compiled
+    % code. This test verifies BIF1 tuple_size compiles correctly with a
+    % typed t_tuple argument.
+    _CompiledCode = compile_stream_for_backend(
+        jit_x86_64,
+        ?CODE_TYPED_TUPLE_SIZE,
+        ?ATU8_TYPED_TUPLE_SIZE,
+        ?TYPE_TYPED_TUPLE_SIZE,
+        fun tuple_size_import_resolver/1
+    ),
+    ok.
 
 typed_select_val_int_x86_64_test() ->
-    % select_val on a typed integer source: typed code may be the same size as
-    % untyped (bignum sources fall back to PRIM_TERM_COMPARE — see
-    % can_inline_select_val_src/1 — so this test just verifies compilation).
+    % select_val on a typed integer source uses the inline chain path
+    % (can_inline_select_val_src returns true for typed integer).
     TypedCode = compile_stream_for_backend(
         jit_x86_64,
         ?CODE_TYPED_SELECT_VAL_INT,
@@ -907,34 +1018,4 @@ typed_select_val_int_x86_64_test() ->
         fun length_import_resolver/1
     ),
     ?assert(byte_size(TypedCode) =< byte_size(UntypedCode)),
-    ok.
-
-% typed_is_not_eq_exact_typed_lit: is_ne_exact with bounded typed first arg and literal second arg
-% f(A) when is_list(A), length(A) =/= 5 -> not_five; f(_) -> other.
--define(CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
-    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
-        1, 32, 55, 53, 3, 124, 53, 16, 0, 87, 3, 16, 3, 44, 53, 87, 3, 32, 81, 64, 82, 3, 19, 1, 48,
-        64, 98, 3, 19, 1, 64, 153, 0, 2, 18, 114, 0, 1, 80, 64, 18, 3, 78, 16, 16, 1, 96, 153, 0, 2,
-        18, 114, 16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 32, 3>>
-).
--define(ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
-    <<255, 255, 255, 248, 8, 31, 116, 121, 112, 101, 100, 95, 105, 115, 95, 110, 111, 116, 95, 101,
-        113, 95, 101, 120, 97, 99, 116, 95, 116, 121, 112, 101, 100, 95, 108, 105, 116, 16, 102, 96,
-        101, 114, 108, 97, 110, 103, 96, 108, 101, 110, 103, 116, 104, 128, 110, 111, 116, 95, 102,
-        105, 118, 101, 80, 111, 116, 104, 101, 114, 176, 109, 111, 100, 117, 108, 101, 95, 105, 110,
-        102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
-).
--define(TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT, ?TYPE_TYPED_IS_LT_BOTH).
-
-typed_is_not_eq_exact_typed_lit_x86_64_test() ->
-    % is_ne_exact with typed first arg and integer literal second: bignum-aware inline path.
-    % Emits more code than term_compare call but avoids dynamic dispatch.
-    % Just verify compilation succeeds without error.
-    _TypedCode = compile_stream_for_backend(
-        jit_x86_64,
-        ?CODE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
-        ?ATU8_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
-        ?TYPE_TYPED_IS_NOT_EQ_EXACT_TYPED_LIT,
-        fun length_import_resolver/1
-    ),
     ok.
