@@ -183,6 +183,76 @@ movw_test_() ->
         )
     ].
 
+%% MLS (multiply-subtract) tests
+mls_test_() ->
+    [
+        % mls r0, r1, r2, r3
+        ?_assertAsmEqual(
+            <<16#FB01:16/little, 16#3012:16/little>>,
+            "mls r0, r1, r2, r3",
+            jit_armv7m_asm:mls(r0, r1, r2, r3)
+        ),
+        % mls r3, r4, r5, r6
+        ?_assertAsmEqual(
+            <<16#FB04:16/little, 16#6315:16/little>>,
+            "mls r3, r4, r5, r6",
+            jit_armv7m_asm:mls(r3, r4, r5, r6)
+        ),
+        % mls r0, r0, r1, r0 (overlap of Rd, Rn, Ra)
+        ?_assertAsmEqual(
+            <<16#FB00:16/little, 16#0011:16/little>>,
+            "mls r0, r0, r1, r0",
+            jit_armv7m_asm:mls(r0, r0, r1, r0)
+        ),
+        % mls r7, r7, r7, r7 (all same)
+        ?_assertAsmEqual(
+            <<16#FB07:16/little, 16#7717:16/little>>,
+            "mls r7, r7, r7, r7",
+            jit_armv7m_asm:mls(r7, r7, r7, r7)
+        ),
+        % mls r12, r12, r12, r12 (high regs)
+        ?_assertAsmEqual(
+            <<16#FB0C:16/little, 16#CC1C:16/little>>,
+            "mls r12, r12, r12, r12",
+            jit_armv7m_asm:mls(r12, r12, r12, r12)
+        )
+    ].
+
+%% SDIV (signed divide) tests
+sdiv_test_() ->
+    [
+        % sdiv r0, r1, r2
+        ?_assertAsmEqual(
+            <<16#FB91:16/little, 16#F0F2:16/little>>,
+            "sdiv r0, r1, r2",
+            jit_armv7m_asm:sdiv(r0, r1, r2)
+        ),
+        % sdiv r0, r0, r1
+        ?_assertAsmEqual(
+            <<16#FB90:16/little, 16#F0F1:16/little>>,
+            "sdiv r0, r0, r1",
+            jit_armv7m_asm:sdiv(r0, r0, r1)
+        ),
+        % sdiv r3, r4, r5
+        ?_assertAsmEqual(
+            <<16#FB94:16/little, 16#F3F5:16/little>>,
+            "sdiv r3, r4, r5",
+            jit_armv7m_asm:sdiv(r3, r4, r5)
+        ),
+        % sdiv r7, r7, r7
+        ?_assertAsmEqual(
+            <<16#FB97:16/little, 16#F7F7:16/little>>,
+            "sdiv r7, r7, r7",
+            jit_armv7m_asm:sdiv(r7, r7, r7)
+        ),
+        % sdiv r12, r0, r12 (uses high registers)
+        ?_assertAsmEqual(
+            <<16#FB90:16/little, 16#FCFC:16/little>>,
+            "sdiv r12, r0, r12",
+            jit_armv7m_asm:sdiv(r12, r0, r12)
+        )
+    ].
+
 %% MOVT (move 16-bit immediate to upper half) tests
 movt_test_() ->
     [

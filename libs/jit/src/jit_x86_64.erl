@@ -67,6 +67,7 @@
     mul/3,
     div_/3,
     rem_/3,
+    supports_div/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2731,6 +2732,10 @@ rem_(
     Regs3 = jit_regs:invalidate_reg(Regs2, RemTemp),
     Regs4 = jit_regs:alloc_reg(Regs3, RemBit),
     {State#state{stream = Stream1, regs = Regs4}, RemTemp}.
+
+%% x86_64 always supports native idivq.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
