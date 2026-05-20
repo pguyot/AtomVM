@@ -100,8 +100,9 @@
     get_regs_tracking/1,
     xor_/3,
     shift_right_arith/3,
-    div_reg/3,
-    rem_reg/3,
+    div_/3,
+    rem_/3,
+    supports_div/1,
     set_vm_record_type/3,
     get_vm_record_type/2
 ]).
@@ -671,7 +672,7 @@ mul(State0, Local, ValOrReg) when is_atom(Local) ->
     State1 = emit(State0, Code),
     State1#state{regs = Regs1}.
 
-div_reg(State0, {free, Local}, Divisor) ->
+div_(State0, {free, Local}, Divisor) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (jit_wasm32_asm:local_get(Divisor))/binary,
@@ -681,7 +682,7 @@ div_reg(State0, {free, Local}, Divisor) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-div_reg(State0, Local, Divisor) when is_atom(Local) ->
+div_(State0, Local, Divisor) when is_atom(Local) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -693,7 +694,7 @@ div_reg(State0, Local, Divisor) when is_atom(Local) ->
     State2 = emit(State1, Code),
     {State2#state{regs = Regs1}, ResultLocal}.
 
-rem_reg(State0, {free, Local}, Divisor) ->
+rem_(State0, {free, Local}, Divisor) ->
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
         (jit_wasm32_asm:local_get(Divisor))/binary,
@@ -703,7 +704,7 @@ rem_reg(State0, {free, Local}, Divisor) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     {State1#state{regs = Regs1}, Local};
-rem_reg(State0, Local, Divisor) when is_atom(Local) ->
+rem_(State0, Local, Divisor) when is_atom(Local) ->
     {State1, ResultLocal} = alloc_local(State0),
     Code = <<
         (jit_wasm32_asm:local_get(Local))/binary,
@@ -714,6 +715,10 @@ rem_reg(State0, Local, Divisor) when is_atom(Local) ->
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, ResultLocal),
     State2 = emit(State1, Code),
     {State2#state{regs = Regs1}, ResultLocal}.
+
+%% WebAssembly has native i32.div_s / i32.rem_s.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 %%=============================================================================
 %% Memory access (VM registers, context fields)

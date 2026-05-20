@@ -4220,8 +4220,8 @@ op_gc_bif2_bsr(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
 
-can_inline_div(Range1, Range2, MMod) ->
-    case erlang:function_exported(MMod, div_, 3) of
+can_inline_div(Range1, Range2, MMod, MSt) ->
+    case MMod:supports_div(MSt) of
         false ->
             false;
         true ->
@@ -4300,7 +4300,7 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
             MMod:free_native_registers(MSt5, [Reg1, Dest]);
         false ->
-            case can_inline_div(Range1, Range2, MMod) of
+            case can_inline_div(Range1, Range2, MMod, MSt0) of
                 true ->
                     {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
                     % Shift right by 4 discards the tag bits
@@ -4316,7 +4316,7 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             end
     end;
 op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
-    case can_inline_div(Range1, Range2, MMod) of
+    case can_inline_div(Range1, Range2, MMod, MSt0) of
         true ->
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
@@ -4346,7 +4346,7 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt3 = MMod:move_to_vm_register(MSt2, Reg1, Dest),
             MMod:free_native_registers(MSt3, [Reg1, Dest]);
         false ->
-            case can_inline_div(Range1, Range2, MMod) of
+            case can_inline_div(Range1, Range2, MMod, MSt0) of
                 true ->
                     {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
                     % Shift right by 4 discards the tag bits
@@ -4362,7 +4362,7 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             end
     end;
 op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
-    case can_inline_div(Range1, Range2, MMod) of
+    case can_inline_div(Range1, Range2, MMod, MSt0) of
         true ->
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),

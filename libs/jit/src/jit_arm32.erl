@@ -65,6 +65,7 @@
     add/3,
     sub/3,
     mul/3,
+    supports_div/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -3419,6 +3420,11 @@ mul(
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DestReg),
     State#state{stream = Stream1, regs = Regs1}.
+
+%% ARMv7-A baseline does not always include the divide extension, so we do
+%% not currently emit native sdiv on the arm32 backend.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> false.
 
 %% @doc Decrement reductions and schedule next process if zero.
 %% When reductions != 0, branch past the prolog directly to the function body.

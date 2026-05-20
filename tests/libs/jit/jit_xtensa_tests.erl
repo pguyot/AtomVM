@@ -1953,14 +1953,14 @@ shift_right_arith_new_reg_test() ->
     ?assertStream(xtensa, Dump, Stream).
 
 %%-----------------------------------------------------------------------------
-%% div_reg: quos instruction
+%% div_: quos instruction
 %%-----------------------------------------------------------------------------
 
-div_reg_test() ->
+div_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
     {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
-    {State3, RegA} = ?BACKEND:div_reg(State2, RegA, RegB),
+    {State3, RegA} = ?BACKEND:div_(State2, RegA, RegB),
     Stream = ?BACKEND:stream(State3),
     Dump = <<
         "   0:	0b22f2        	l32i	a15, a2, 44\n"
@@ -1970,14 +1970,14 @@ div_reg_test() ->
     ?assertStream(xtensa, Dump, Stream).
 
 %%-----------------------------------------------------------------------------
-%% rem_reg: rems instruction
+%% rem_: rems instruction
 %%-----------------------------------------------------------------------------
 
-rem_reg_test() ->
+rem_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
     {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
-    {State3, RegA} = ?BACKEND:rem_reg(State2, RegA, RegB),
+    {State3, RegA} = ?BACKEND:rem_(State2, RegA, RegB),
     Stream = ?BACKEND:stream(State3),
     Dump = <<
         "   0:	0b22f2        	l32i	a15, a2, 44\n"
