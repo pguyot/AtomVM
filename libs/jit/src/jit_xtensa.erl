@@ -75,8 +75,9 @@
     get_regs_tracking/1,
     xor_/3,
     shift_right_arith/3,
-    div_reg/3,
-    rem_reg/3
+    div_/3,
+    rem_/3,
+    supports_div/1
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -1705,7 +1706,8 @@ shift_right_arith(
         ResultReg
     }.
 
-div_reg(
+-spec div_(state(), xtensa_register(), xtensa_register()) -> {state(), xtensa_register()}.
+div_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     DividendReg,
     DivisorReg
@@ -1715,7 +1717,8 @@ div_reg(
     Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
 
-rem_reg(
+-spec rem_(state(), xtensa_register(), xtensa_register()) -> {state(), xtensa_register()}.
+rem_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     DividendReg,
     DivisorReg
@@ -1724,6 +1727,11 @@ rem_reg(
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, DividendReg),
     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+
+%% Xtensa ESP32 (LX6) and ESP32-S2/S3 (LX7) include the 32-bit Integer Divide
+%% Option (quos/rems), so we assume native div/rem availability.
+-spec supports_div(state()) -> boolean().
+supports_div(_State) -> true.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a call to a function pointer with arguments. This function converts
