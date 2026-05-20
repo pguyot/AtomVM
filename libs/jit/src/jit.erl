@@ -705,7 +705,10 @@ first_pass(<<?OP_IS_ATOM, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_IS_ATOM ~p, ~p\n", [Label, Arg1]),
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
     MSt3 = cond_jump_to_label(
-        {{free, Reg}, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM}, Label, MMod, MSt2
+        {{free, Reg}, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM},
+        Label,
+        MMod,
+        MSt2
     ),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
     first_pass(Rest2, MMod, MSt3, State0);
@@ -4463,6 +4466,8 @@ op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2) ->
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
 
 %% Optimized < comparison for typed integers.
+%% Semantic: jump to Label if Arg1 >= Arg2 (i.e., NOT(Arg1 < Arg2)).
+%%
 %% Both-small-integer case: tagged cmp + if_else_block to invert.
 op_is_lt(
     MMod,
@@ -4520,7 +4525,9 @@ op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
 %%
 %% For typed small-int + typed small-int (both ranges fit small_integer_bounds),
 %% inline as a direct cmp on tagged values: equal iff tagged values equal.
-op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+op_is_eq_exact(
+    MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}
+) ->
     case is_small_integer_range(Range1, Range2, MMod) of
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
@@ -4566,7 +4573,9 @@ op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
     ).
 
 %% Optimized =/= comparison for typed args. Mirror of op_is_eq_exact.
-op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}) ->
+op_is_not_eq_exact(
+    MMod, MSt0, Label, {typed, Arg1, {t_integer, Range1}}, {typed, Arg2, {t_integer, Range2}}
+) ->
     case is_small_integer_range(Range1, Range2, MMod) of
         true ->
             {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
@@ -4812,11 +4821,11 @@ try_fuse_tuple_ops(<<?OP_TEST_ARITY, Rest0/binary>>, Arg1, IsTupleLabel, MMod, M
     {TestArityLabel, Rest1} = decode_label(Rest0),
     {MSt1, TestArityArg, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {Arity, Rest3} = decode_literal(Rest2),
-    case TestArityArg =:= Arg1 of
+    case TestArityArg =:= unwrap_typed(Arg1) of
         true ->
             ?TRACE("FUSE: is_tuple + test_arity ~p, ~p\n", [TestArityLabel, Arity]),
             {GetElements, Rest4, MSt2} =
-                collect_get_tuple_elements(Rest3, Arg1, MMod, MSt1, State0),
+                collect_get_tuple_elements(Rest3, TestArityArg, MMod, MSt1, State0),
             MStFused = emit_fused_tuple_ops(
                 IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt2
             ),
@@ -4854,23 +4863,31 @@ collect_get_tuple_elements(Rest, _SrcArg, _MMod, MSt, _State0) ->
     {[], Rest, MSt}.
 
 emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt0) ->
-    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    %% The BEAM Types chunk (versions 2-4, up to OTP 29) does not encode tuple
+    %% arity, so {typed, _, t_tuple} never carries an arity to specialize on.
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     MSt2 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, IsTupleLabel, MMod, MSt1
+        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+        IsTupleLabel,
+        MMod,
+        MSt1
     ),
     {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt4, HeaderReg} = MMod:get_array_element(MSt3, Reg, 0),
-    MSt5 = cond_jump_to_label(
-        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, IsTupleLabel, MMod, MSt4
+    MSt4a = cond_jump_to_label(
+        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+        IsTupleLabel,
+        MMod,
+        MSt4
     ),
-    {MSt6, ArityReg} = MMod:shift_right(MSt5, {free, HeaderReg}, 6),
-    MSt7 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt6),
+    {MSt4b, ArityReg} = MMod:shift_right(MSt4a, {free, HeaderReg}, 6),
+    MSt5 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt4b),
     MSt8 = lists:foldl(
         fun({Element, Dest}, AccMSt0) ->
             AccMSt1 = MMod:move_array_element(AccMSt0, Reg, Element + 1, Dest),
             MMod:free_native_registers(AccMSt1, [Dest])
         end,
-        MSt7,
+        MSt5,
         GetElements
     ),
     MSt9 = MMod:free_native_registers(MSt8, [Reg]),
@@ -5394,31 +5411,27 @@ put_record_generic(Rest1, MMod, MSt0, State0) ->
     first_pass(Rest7, MMod, MSt17, State0).
 
 first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
-    {Label, Rest1} = decode_label(Rest0),
+    %% The Erlang compiler always emits fadd/fsub/fmul/fdiv with fail label 0
+    %% (beam_validator asserts ?EXCEPTION_LABEL = Fail), and the BEAM loader's
+    %% ops.tab rewrites only match the `p` (label-0) form. A non-zero fail
+    %% label is therefore unreachable from any loadable BEAM file.
+    {0, Rest1} = decode_label(Rest0),
     {{fp_reg, FPRegIndex1}, Rest2} = decode_fp_register(Rest1),
     {{fp_reg, FPRegIndex2}, Rest3} = decode_fp_register(Rest2),
     {{fp_reg, FPRegIndex3}, Rest4} = decode_fp_register(Rest3),
-    ?TRACE("OP_F3*~p ~p, ~p, ~p, ~p\n", [
-        Primitive, Label, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}, {fp_reg, FPRegIndex3}
+    ?TRACE("OP_F3*~p ~p, ~p, ~p\n", [
+        Primitive, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}, {fp_reg, FPRegIndex3}
     ]),
     {MSt1, Reg} = MMod:call_primitive(MSt0, Primitive, [
         ctx, FPRegIndex1, FPRegIndex2, FPRegIndex3
     ]),
-    if
-        Label > 0 ->
-            MSt2 = cond_jump_to_label({'(bool)', Reg, '==', false}, Label, MMod, MSt1),
-            MSt3 = MMod:free_native_registers(MSt2, [Reg]),
-            ?ASSERT_ALL_NATIVE_FREE(MSt3),
-            first_pass(Rest4, MMod, MSt3, State0);
-        true ->
-            MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
-                MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARITH_ATOM
-                ])
-            end),
-            ?ASSERT_ALL_NATIVE_FREE(MSt2),
-            first_pass(Rest4, MMod, MSt2, State0)
-    end.
+    MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
+        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
+            ctx, jit_state, offset, ?BADARITH_ATOM
+        ])
+    end),
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    first_pass(Rest4, MMod, MSt2, State0).
 
 bif_faillabel_test(FailLabel, MMod, MSt0, {free, ResultReg}, {free, Dest}) when FailLabel > 0 ->
     MSt1 = cond_jump_to_label({ResultReg, '==', 0}, FailLabel, MMod, MSt0),
@@ -5822,8 +5835,6 @@ decode_allocator_list0(MMod, AccNeed, Remaining, Rest0) ->
 term_from_int(Int) when is_integer(Int) ->
     (Int bsl 4) bor ?TERM_INTEGER_TAG.
 
-term_from_int(Int, _MMod, MSt0) when is_integer(Int) ->
-    {MSt0, term_from_int(Int)};
 term_from_int(Reg, MMod, MSt0) when is_atom(Reg) ->
     MSt1 = MMod:shift_left(MSt0, Reg, 4),
     MSt2 = MMod:or_(MSt1, Reg, ?TERM_INTEGER_TAG),
