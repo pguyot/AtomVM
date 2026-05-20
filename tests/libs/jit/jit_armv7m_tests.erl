@@ -117,3 +117,45 @@ if_block_ne0_cbz_thumb2_test() ->
     >>,
     ?assertStream(arm_thumb2, Dump, Stream),
     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State3)).
+
+%% supports_div should be true with thumb2 variant, false otherwise.
+supports_div_thumb2_test() ->
+    StateT2 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    ?assert(?BACKEND:supports_div(StateT2)),
+    StateNoT2 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    ?assertNot(?BACKEND:supports_div(StateNoT2)).
+
+%% div_/3 emits a Thumb-2 SDIV instruction on registers.
+div_thumb2_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    {State3, RegA} = ?BACKEND:div_(State2, RegA, RegB),
+    ?assertEqual(r7, RegA),
+    ?assertEqual(r6, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump = <<
+        "   0:	6ac7      	ldr	r7, [r0, #44]\n"
+        "   2:	6b06      	ldr	r6, [r0, #48]\n"
+        "   4:	fb97 f7f6 	sdiv	r7, r7, r6"
+    >>,
+    ?assertStream(arm_thumb2, Dump, Stream).
+
+%% rem_/3 emits SDIV followed by MLS (multiply-subtract) for remainder.
+rem_thumb2_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    {State3, RegA} = ?BACKEND:rem_(State2, RegA, RegB),
+    ?assertEqual(r7, RegA),
+    ?assertEqual(r6, RegB),
+    Stream = ?BACKEND:stream(State3),
+    %% sdiv tmp, r7, r6  +  mls r7, tmp, r6, r7
+    %% first_avail picks r5 (r7 and r6 are taken; first_avail prefers r7>r6>r5>...).
+    Dump = <<
+        "   0:	6ac7      	ldr	r7, [r0, #44]\n"
+        "   2:	6b06      	ldr	r6, [r0, #48]\n"
+        "   4:	fb97 f5f6 	sdiv	r5, r7, r6\n"
+        "   8:	fb05 7716 	mls	r7, r5, r6, r7"
+    >>,
+    ?assertStream(arm_thumb2, Dump, Stream).
