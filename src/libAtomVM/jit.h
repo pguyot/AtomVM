@@ -249,6 +249,7 @@ struct ModuleNativeInterface
     Context *(*raise_error_mfa)(
         Context *ctx, JITState *jit_state, int offset, int function_atom_index, int arity);
     BifImpl0 (*get_imported_gcbif)(Context *ctx, JITState *jit_state, uint32_t live, uint32_t bif);
+    void (*try_case)(Context *ctx);
 };
 
 extern const ModuleNativeInterface module_native_interface;
