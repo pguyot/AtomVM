@@ -71,6 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed several underallocation issues that could trigger data corruption on `binary:replace`, `zlib:compress` and bsd socket recv code.
 - Fixed a bug where `catch` would raise on regular atom results
 - Fixed ESP32 socket driver holding the global socket-list lock across blocking TCP connects, leaking the port on connect failure, losing concurrent `accept` waiters, leaking `netbuf` on receive error paths, and a recycled-`netconn` race between socket close and the event handler
+- `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now encode and decode terms
+  iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
+  exhausting the C stack
+- `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
