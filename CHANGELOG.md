@@ -121,6 +121,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a bug where bigints were not normalized, yielding equality errors
 - Fixed `put_map_exact` writing the new key into a keys tuple shared with other maps
 - Fixed a process that exited before ever being scheduled staying in the scheduler's process list
+- `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now encode and decode terms
+  iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
+  exhausting the C stack
+- `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
