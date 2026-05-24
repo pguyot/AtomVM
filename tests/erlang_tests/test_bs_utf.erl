@@ -55,6 +55,14 @@ test_put_utf8() ->
     ok = assert_badarg(fun() -> <<XF3/utf8>> end),
     XF4 = ?MODULE:id(16#D800),
     ok = assert_badarg(fun() -> <<XF4/utf8>> end),
+    %% Constant-folded non-integer (boolean) values: the compiler folds these
+    %% to a literal atom in the bs_create_bin segment but cannot reject them at
+    %% compile time. The value must be type-checked as an integer code point at
+    %% run time (regression test for a JIT-only bypass that encoded the atom's
+    %% tag bits instead of raising badarg).
+    ok = assert_badarg(fun() -> <<(false andalso ok)/utf8>> end),
+    ok = assert_badarg(fun() -> <<(true orelse ok)/utf8>> end),
+    ok = assert_badarg(fun() -> <<(1 > 2)/utf8>> end),
     ok.
 
 test_get_utf8() ->
@@ -168,6 +176,9 @@ test_put_utf16() ->
     ok = assert_badarg(fun() -> <<XF3/utf16>> end),
     XF4 = ?MODULE:id(16#D800),
     ok = assert_badarg(fun() -> <<XF4/utf16>> end),
+    ok = assert_badarg(fun() -> <<(false andalso ok)/utf16>> end),
+    ok = assert_badarg(fun() -> <<(true orelse ok)/utf16>> end),
+    ok = assert_badarg(fun() -> <<(1 > 2)/utf16>> end),
     ok.
 
 test_get_utf16() ->
@@ -280,6 +291,9 @@ test_put_utf32() ->
     ok = assert_badarg(fun() -> <<XF3/utf32>> end),
     XF4 = ?MODULE:id(16#D800),
     ok = assert_badarg(fun() -> <<XF4/utf32>> end),
+    ok = assert_badarg(fun() -> <<(false andalso ok)/utf32>> end),
+    ok = assert_badarg(fun() -> <<(true orelse ok)/utf32>> end),
+    ok = assert_badarg(fun() -> <<(1 > 2)/utf32>> end),
     ok.
 
 test_get_utf32() ->
