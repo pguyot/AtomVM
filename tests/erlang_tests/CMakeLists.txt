@@ -639,6 +639,7 @@ compile_erlang(test_erlang_loaded)
 
 compile_erlang(int64_build_binary)
 compile_erlang(bs_create_bin_integer_unit)
+compile_erlang(get_map_elements_bignum_key)
 
 compile_erlang(test_link_port)
 
@@ -1216,6 +1217,7 @@ set(erlang_test_beams
 
     int64_build_binary.beam
     bs_create_bin_integer_unit.beam
+    get_map_elements_bignum_key.beam
 
     test_link_port.beam
 
