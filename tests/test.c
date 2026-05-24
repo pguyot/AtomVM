@@ -619,6 +619,7 @@ struct Test tests[] = {
     TEST_CASE(test_min_max_guard),
     TEST_CASE(int64_build_binary),
     TEST_CASE(bs_create_bin_integer_unit),
+    TEST_CASE(get_map_elements_bignum_key),
     TEST_CASE(test_link_port),
 
 #if defined ATOMVM_HAS_MBEDTLS
