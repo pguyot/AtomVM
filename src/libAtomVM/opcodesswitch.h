@@ -3667,19 +3667,22 @@ schedule_in:
                 if (size != term_nil()) {
                     VERIFY_IS_INTEGER(size, "bs_put_float", fail);
                     signed_size_value = term_to_int(size);
-                    if (UNLIKELY(signed_size_value != 16 && signed_size_value != 32 && signed_size_value != 64)) {
-                        if (fail == 0) {
-                            RAISE_ERROR(BADARG_ATOM);
-                        } else {
-                            JUMP_TO_LABEL(mod, fail);
-                        }
+                }
+                // The field width is Size * Unit bits and must be 16, 32 or 64;
+                // validate and dispatch on the product, not on Size alone.
+                avm_int_t total_size_value = signed_size_value * unit;
+                if (UNLIKELY(total_size_value != 16 && total_size_value != 32 && total_size_value != 64)) {
+                    if (fail == 0) {
+                        RAISE_ERROR(BADARG_ATOM);
+                    } else {
+                        JUMP_TO_LABEL(mod, fail);
                     }
                 }
 
                 bool result;
-                if (signed_size_value == 16) {
+                if (total_size_value == 16) {
                     result = bitstring_insert_f16(ctx->bs, ctx->bs_offset, float_value, flags_value);
-                } else if (signed_size_value == 32) {
+                } else if (total_size_value == 32) {
                     result = bitstring_insert_f32(ctx->bs, ctx->bs_offset, float_value, flags_value);
                 } else {
                     result = bitstring_insert_f64(ctx->bs, ctx->bs_offset, float_value, flags_value);
@@ -3690,7 +3693,7 @@ schedule_in:
                     RAISE_ERROR(BADARG_ATOM);
                 }
 
-                ctx->bs_offset += signed_size_value * unit;
+                ctx->bs_offset += total_size_value;
                 break;
             }
 
@@ -4407,12 +4410,14 @@ schedule_in:
 
                 TRACE("bs_get_float2/7, fail=%u src=%p size=%u unit=%u flags=%x\n", (unsigned) fail, (void *) src, (unsigned) size_val, (unsigned) unit, (int) flags_value);
 
+                // The field width is Size * Unit bits and must be 16, 32 or 64;
+                // dispatch on the product, not on Size alone.
                 avm_int_t increment = size_val * unit;
                 avm_float_t value;
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
                 bool status;
-                switch (size_val) {
+                switch (increment) {
                     case 16:
                         status = bitstring_extract_f16(bs_bin, bs_offset, increment, flags_value, &value);
                         break;
@@ -5616,7 +5621,12 @@ schedule_in:
                             }
                             VERIFY_IS_INTEGER(size, "bs_create_bin/6", fail);
                             avm_int_t signed_size_value = term_to_int(size);
-                            if (UNLIKELY(signed_size_value != 16 && signed_size_value != 32 && signed_size_value != 64)) {
+                            // The field width is Size * Unit bits and must be
+                            // 16, 32 or 64; validate the product, not Size
+                            // alone. segment_size is kept as Size so the
+                            // binary_size += segment_unit * segment_size below
+                            // accounts for the full width.
+                            if (UNLIKELY(signed_size_value * segment_unit != 16 && signed_size_value * segment_unit != 32 && signed_size_value * segment_unit != 64)) {
                                 if (fail == 0) {
                                     RAISE_ERROR(BADARG_ATOM);
                                 } else {
@@ -5624,7 +5634,6 @@ schedule_in:
                                 }
                             }
                             segment_size = signed_size_value;
-                            segment_unit = 1;
                             break;
                         }
                         case STRING_ATOM: {
@@ -5844,10 +5853,22 @@ schedule_in:
                                 }
                             }
 
+                            // The field width is Size * Unit bits and must be
+                            // 16, 32 or 64; validate and dispatch on the
+                            // product, not on Size alone.
+                            size_t total_size_value = size_value * segment_unit;
+                            if (UNLIKELY(total_size_value != 16 && total_size_value != 32 && total_size_value != 64)) {
+                                if (fail == 0) {
+                                    RAISE_ERROR(BADARG_ATOM);
+                                } else {
+                                    JUMP_TO_LABEL(mod, fail);
+                                }
+                            }
+
                             bool result;
-                            if (size_value == 16) {
+                            if (total_size_value == 16) {
                                 result = bitstring_insert_f16(t, offset, float_value, flags_value);
-                            } else if (size_value == 32) {
+                            } else if (total_size_value == 32) {
                                 result = bitstring_insert_f32(t, offset, float_value, flags_value);
                             } else {
                                 result = bitstring_insert_f64(t, offset, float_value, flags_value);
@@ -5860,7 +5881,7 @@ schedule_in:
                                     JUMP_TO_LABEL(mod, fail);
                                 }
                             }
-                            segment_size = size_value;
+                            segment_size = total_size_value;
                             break;
                         }
                         case STRING_ATOM: {

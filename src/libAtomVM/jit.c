@@ -1681,12 +1681,15 @@ static bool jit_bitstring_insert_float(term bin, size_t offset, term value, size
     if (UNLIKELY(!isfinite(float_value))) {
         return false;
     }
+    // n is the full field width (Size * Unit) and must be 16, 32 or 64.
     if (n == 16) {
         return bitstring_insert_f16(bin, offset, float_value, flags);
     } else if (n == 32) {
         return bitstring_insert_f32(bin, offset, float_value, flags);
-    } else {
+    } else if (n == 64) {
         return bitstring_insert_f64(bin, offset, float_value, flags);
+    } else {
+        return false;
     }
 }
 
