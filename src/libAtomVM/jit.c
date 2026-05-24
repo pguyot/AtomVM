@@ -1570,7 +1570,7 @@ static int jit_term_find_map_pos(Context *ctx, term map, term key)
     return term_find_map_pos(map, key, ctx->global);
 }
 
-static int jit_bitstring_utf8_size(int c)
+static int jit_bitstring_utf8_size(int64_t c)
 {
     size_t utf8_size;
     if (UNLIKELY(!bitstring_utf8_size(c, &utf8_size))) {
@@ -1579,7 +1579,7 @@ static int jit_bitstring_utf8_size(int c)
     return utf8_size;
 }
 
-static int jit_bitstring_utf16_size(int c)
+static int jit_bitstring_utf16_size(int64_t c)
 {
     size_t utf16_size;
     if (UNLIKELY(!bitstring_utf16_size(c, &utf16_size))) {
@@ -1627,7 +1627,7 @@ static int jit_decode_flags_list(Context *ctx, JITState *jit_state, term flags)
     return flags_value;
 }
 
-static int jit_bitstring_insert_utf8(term bin, size_t offset, int c)
+static int jit_bitstring_insert_utf8(term bin, size_t offset, int64_t c)
 {
     size_t byte_size;
     bool result = bitstring_insert_utf8(bin, offset, c, &byte_size);
@@ -1637,7 +1637,7 @@ static int jit_bitstring_insert_utf8(term bin, size_t offset, int c)
     return byte_size;
 }
 
-static int jit_bitstring_insert_utf16(term bin, size_t offset, int c, enum BitstringFlags flags)
+static int jit_bitstring_insert_utf16(term bin, size_t offset, int64_t c, enum BitstringFlags flags)
 {
     size_t byte_size;
     bool result = bitstring_insert_utf16(bin, offset, c, flags, &byte_size);
