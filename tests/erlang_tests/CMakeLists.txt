@@ -583,6 +583,7 @@ compile_erlang(test_sub_binaries)
 compile_erlang(test_throw_call_ext_last)
 compile_erlang(bs_append_extra_words)
 compile_erlang(test_bs_create_bin_oversize)
+compile_erlang(test_shift_int_min_amount)
 
 compile_erlang(test_monotonic_time)
 
@@ -1149,6 +1150,7 @@ set(erlang_test_beams
     bs_restore2_start_offset.beam
     bs_append_extra_words.beam
     test_bs_create_bin_oversize.beam
+    test_shift_int_min_amount.beam
 
     test_monotonic_time.beam
 
