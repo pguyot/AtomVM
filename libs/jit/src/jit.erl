@@ -3036,10 +3036,23 @@ first_pass_bs_create_bin_insert_value(
 ) ->
     % term_to_int can raise a badarg and use a temp register for this, start
     % with it.
-    {MSt1, SizeValue} = term_to_int(Size, Fail, MMod, MSt0),
+    {MSt1, SizeValue0} = term_to_int(Size, Fail, MMod, MSt0),
+    % Because we're calling a function without ctx as an arg, we need to move
+    % the value now to a register
     {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
     {MSt3, FlagsValue} = decode_flags_list(Flags, MMod, MSt2),
-    MSt4 = MMod:mul(MSt3, SizeValue, SegmentUnit),
+    {MSt4, SizeValue} =
+        if
+            % Literal size: compute size*unit directly. mul/3 cannot take a
+            % literal in its register slot (it would dispatch to shift_left/3
+            % and crash), and an integer is immutable so the in-place product
+            % below would be lost anyway.
+            is_integer(SizeValue0) ->
+                {MSt3, SizeValue0 * SegmentUnit};
+            true ->
+                % mul mutates the register in place to hold size*unit.
+                {MMod:mul(MSt3, SizeValue0, SegmentUnit), SizeValue0}
+        end,
     {MSt5, BoolResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_INTEGER, [
         CreatedBin, Offset, {free, SrcReg}, SizeValue, {free, FlagsValue}
     ]),
