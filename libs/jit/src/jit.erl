@@ -2955,7 +2955,20 @@ first_pass_bs_create_bin_compute_size(
 ->
     MSt1 = verify_is_binary(Src, Fail, MMod, MSt0),
     {MSt2, SizeValue} = term_to_int(Size, 0, MMod, MSt1),
-    {MSt2, AccLiteralSize0 + (SizeValue * SegmentUnit), AccSizeReg0, State0};
+    RequiredBits = SizeValue * SegmentUnit,
+    % Verify the source binary is large enough to provide RequiredBits bits.
+    % Without this check the insert step would read past the end of the source
+    % (memcpy out of bounds). The emulator performs the same check, and the
+    % register-size clause below does it for non-literal sizes.
+    {MSt3, SrcBitsReg} = MMod:copy_to_native_register(MSt2, Src),
+    {MSt4, SrcBitsReg} = MMod:and_(MSt3, {free, SrcBitsReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    MSt5 = MMod:move_array_element(MSt4, SrcBitsReg, 1, SrcBitsReg),
+    MSt6 = MMod:shift_left(MSt5, SrcBitsReg, 3),
+    MSt7 = cond_raise_badarg_or_jump_to_fail_label(
+        {SrcBitsReg, '<', RequiredBits}, Fail, MMod, MSt6
+    ),
+    MSt8 = MMod:free_native_registers(MSt7, [SrcBitsReg]),
+    {MSt8, AccLiteralSize0 + RequiredBits, AccSizeReg0, State0};
 first_pass_bs_create_bin_compute_size(
     AtomType, Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
 ) when AtomType =:= binary orelse AtomType =:= append orelse AtomType =:= private_append ->
