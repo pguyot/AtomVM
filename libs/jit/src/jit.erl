@@ -1803,11 +1803,11 @@ first_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
 % 155
 first_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    {_Label, Rest1} = decode_label(Rest0),
+    {Label, Rest1} = decode_label(Rest0),
     {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {MSt2, Dest, Rest3} = decode_dest(Rest2, MMod, MSt1),
     {Live, Rest4} = decode_literal(Rest3),
-    ?TRACE("OP_PUT_MAP_EXACT ~p,~p,~p,~p,[", [_Label, Src, Dest, Live]),
+    ?TRACE("OP_PUT_MAP_EXACT ~p,~p,~p,~p,[", [Label, Src, Dest, Live]),
     {ListSize, Rest5} = decode_extended_list_header(Rest4),
     % Make sure every key from list is in src
     NumElements = ListSize div 2,
@@ -1818,11 +1818,11 @@ first_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
             {ASt2, PosReg} = MMod:call_primitive(ASt1, ?PRIM_TERM_FIND_MAP_POS, [
                 ctx, Src, {free, Key}
             ]),
-            ASt3 = MMod:if_block(ASt2, {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, fun(BSt0) ->
-                MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?BADARG_ATOM
-                ])
-            end),
+            % A missing required key (:=) fails the guard when a fail label is
+            % set (label /= 0); only raise badarg in body context (label == 0).
+            ASt3 = cond_raise_badarg_or_jump_to_fail_label(
+                {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, ASt2
+            ),
             ASt4 = MMod:if_block(
                 ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
                     MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
