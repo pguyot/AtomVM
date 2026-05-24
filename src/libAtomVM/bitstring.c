@@ -224,7 +224,7 @@ bool bitstring_extract_bigint_bytes(term src_bin, size_t offset, size_t n,
     return true;
 }
 
-static bool is_invalid_codepoint(int32_t v)
+static bool is_invalid_codepoint(int64_t v)
 {
     return (v < 0) || (v > 0x10FFFF) || (v >= 0xD800 && v <= 0xDFFF);
 }
@@ -245,7 +245,7 @@ static bool is_invalid_codepoint(int32_t v)
 // +----------+----------+----------+----------+----------+
 //
 
-bool bitstring_utf8_encode(uint32_t c, uint8_t *buf, size_t *out_size)
+bool bitstring_utf8_encode(int64_t c, uint8_t *buf, size_t *out_size)
 {
     size_t sz = 0;
     if (is_invalid_codepoint(c)) {
@@ -288,7 +288,7 @@ bool bitstring_utf8_encode(uint32_t c, uint8_t *buf, size_t *out_size)
 //  W1 = 110110yyyyyyyyyy      // 0xD800 + yyyyyyyyyy
 //  W2 = 110111xxxxxxxxxx      // 0xDC00 + xxxxxxxxxx
 
-bool bitstring_utf16_encode(uint32_t c, uint8_t *buf, enum BitstringFlags bs_flags, size_t *out_size)
+bool bitstring_utf16_encode(int64_t c, uint8_t *buf, enum BitstringFlags bs_flags, size_t *out_size)
 {
     size_t sz = 0;
     if (is_invalid_codepoint(c)) {
@@ -383,7 +383,7 @@ bool bitstring_utf16_decode(const uint8_t *buf, size_t len, int32_t *c, size_t *
     return false;
 }
 
-bool bitstring_utf32_encode(uint32_t c, uint8_t *buf, enum BitstringFlags bs_flags)
+bool bitstring_utf32_encode(int64_t c, uint8_t *buf, enum BitstringFlags bs_flags)
 {
     UNUSED(bs_flags);
     if (is_invalid_codepoint(c)) {
@@ -452,7 +452,7 @@ static const uint8_t *bitstring_unit_source(term src_bin, size_t offset, uint8_t
     return buf;
 }
 
-bool bitstring_insert_utf8(term dst_bin, size_t offset, uint32_t c, size_t *out_size)
+bool bitstring_insert_utf8(term dst_bin, size_t offset, int64_t c, size_t *out_size)
 {
     // size was verified by a bs_utf8_size instruction call
     if ((offset & 0x7) == 0) {
@@ -475,7 +475,7 @@ bool bitstring_match_utf8(term src_bin, size_t offset, uint32_t *c, size_t *out_
     return unicode_utf8_decode(src, len, c, out_size) == UnicodeTransformDecodeSuccess;
 }
 
-bool bitstring_insert_utf16(term dst_bin, size_t offset, uint32_t c, enum BitstringFlags bs_flags, size_t *out_size)
+bool bitstring_insert_utf16(term dst_bin, size_t offset, int64_t c, enum BitstringFlags bs_flags, size_t *out_size)
 {
     // size was verified by a bs_utf16_size instruction call
     if ((offset & 0x7) == 0) {
@@ -498,7 +498,7 @@ bool bitstring_match_utf16(term src_bin, size_t offset, int32_t *c, size_t *out_
     return bitstring_utf16_decode(src, len, c, out_size, bs_flags);
 }
 
-bool bitstring_insert_utf32(term dst_bin, size_t offset, uint32_t c, enum BitstringFlags bs_flags)
+bool bitstring_insert_utf32(term dst_bin, size_t offset, int64_t c, enum BitstringFlags bs_flags)
 {
     if ((offset & 0x7) == 0) {
         uint8_t *dst = (uint8_t *) term_binary_data(dst_bin) + (offset >> 3);
