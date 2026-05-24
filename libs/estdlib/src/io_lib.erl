@@ -379,10 +379,16 @@ format_spw(#format{mod = Mod} = Format, T) when is_map(T) ->
 
 -spec write_atom(Atom :: atom()) -> chars().
 write_atom(Atom) ->
-    AtomStr = erlang:atom_to_list(Atom),
-    case lists:member(Atom, ?RESERVED_KEYWORDS) of
-        true -> [$', AtomStr, $'];
-        false -> write_atom_maybe_quote_escape(AtomStr)
+    case erlang:atom_to_list(Atom) of
+        [] ->
+            % The empty atom always needs quoting, otherwise it renders as
+            % nothing (indistinguishable from the empty list).
+            [$', $'];
+        AtomStr ->
+            case lists:member(Atom, ?RESERVED_KEYWORDS) of
+                true -> [$', AtomStr, $'];
+                false -> write_atom_maybe_quote_escape(AtomStr)
+            end
     end.
 
 %% @private
