@@ -1846,7 +1846,7 @@ static int jit_term_find_map_pos(Context *ctx, term map, term key)
     return term_find_map_pos(map, key, ctx->global);
 }
 
-static int jit_bitstring_utf8_size(int c)
+static int jit_bitstring_utf8_size(avm_int_t c)
 {
     size_t utf8_size;
     if (UNLIKELY(!bitstring_utf8_size(c, &utf8_size))) {
@@ -1855,7 +1855,7 @@ static int jit_bitstring_utf8_size(int c)
     return utf8_size;
 }
 
-static int jit_bitstring_utf16_size(int c)
+static int jit_bitstring_utf16_size(avm_int_t c)
 {
     size_t utf16_size;
     if (UNLIKELY(!bitstring_utf16_size(c, &utf16_size))) {
@@ -1903,7 +1903,7 @@ static int jit_decode_flags_list(Context *ctx, JITState *jit_state, term flags)
     return flags_value;
 }
 
-static int jit_bitstring_insert_utf8(term bin, size_t offset, int c)
+static int jit_bitstring_insert_utf8(term bin, size_t offset, avm_int_t c)
 {
     size_t byte_size;
     bool result = bitstring_insert_utf8(bin, offset, c, &byte_size);
@@ -1913,7 +1913,7 @@ static int jit_bitstring_insert_utf8(term bin, size_t offset, int c)
     return byte_size;
 }
 
-static int jit_bitstring_insert_utf16(term bin, size_t offset, int c, enum BitstringFlags flags)
+static int jit_bitstring_insert_utf16(term bin, size_t offset, avm_int_t c, enum BitstringFlags flags)
 {
     size_t byte_size;
     bool result = bitstring_insert_utf16(bin, offset, c, flags, &byte_size);
@@ -1921,6 +1921,14 @@ static int jit_bitstring_insert_utf16(term bin, size_t offset, int c, enum Bitst
         return 0;
     }
     return byte_size;
+}
+
+// Wrapper taking the codepoint as a term-sized avm_int_t (single register) rather
+// than int64_t: the JIT passes the untagged codepoint in one register, which on
+// 32-bit targets does not match an int64_t (register-pair) parameter.
+static bool jit_bitstring_insert_utf32(term bin, size_t offset, avm_int_t c, enum BitstringFlags flags)
+{
+    return bitstring_insert_utf32(bin, offset, c, flags);
 }
 
 static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags)
@@ -2332,7 +2340,7 @@ const ModuleNativeInterface module_native_interface = {
     jit_decode_flags_list,
     jit_bitstring_insert_utf8,
     jit_bitstring_insert_utf16,
-    bitstring_insert_utf32,
+    jit_bitstring_insert_utf32,
     jit_bitstring_insert_integer,
     jit_bitstring_copy_module_str,
     jit_bitstring_copy_binary,
