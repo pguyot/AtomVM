@@ -209,6 +209,16 @@ static Context *scheduler_run0(GlobalContext *global)
                 return NULL;
             }
             if (!is_waiting) {
+                // A non-poller scheduler would normally park on the condition
+                // variable until promoted to poller. But if there is already a
+                // process ready to run, grab it directly instead of bouncing the
+                // work to the single polling scheduler: this keeps a pair of
+                // processes that hand off to each other (e.g. a send/receive
+                // ping-pong) on the scheduler that readied them, avoiding a
+                // cross-thread condvar/poll round trip on every message.
+                if (!list_is_empty(&global->ready_processes)) {
+                    break;
+                }
                 // Before entering the condition variable, signal the poll events
                 // so the thread polling on events can check the ready queue.
                 sys_signal(global);
@@ -253,7 +263,10 @@ static Context *scheduler_run0(GlobalContext *global)
         }
         SMP_SPINLOCK_UNLOCK(&global->processes_spinlock);
 
-        if (result == NULL && !global->scheduler_stop_all) {
+        if (result == NULL && is_waiting && !global->scheduler_stop_all) {
+            // Only the polling scheduler may block waiting for events. A
+            // non-poller that raced for a ready process and lost does a
+            // non-blocking poll and loops back to park.
             sys_poll_events(global, wait_timeout);
         } else {
             sys_poll_events(global, SYS_POLL_EVENTS_DO_NOT_WAIT);
@@ -265,8 +278,13 @@ static Context *scheduler_run0(GlobalContext *global)
     } while (result == NULL);
 
 #ifndef AVM_NO_SMP
-    global->waiting_scheduler = false;
-    smp_condvar_signal(global->schedulers_cv);
+    // Only the polling scheduler relinquishes the poller role (waking a
+    // replacement to take over polling). A non-poller that grabbed a ready
+    // process directly must leave the current poller untouched.
+    if (is_waiting) {
+        global->waiting_scheduler = false;
+        smp_condvar_signal(global->schedulers_cv);
+    }
     SMP_MUTEX_UNLOCK(global->schedulers_mutex);
 #endif
 
