@@ -34,6 +34,7 @@ test() ->
     ok = test_write_string(),
     ok = test_chars_length(),
     ok = test_printable_list(),
+    ok = test_io_format_unicode(),
     ok.
 
 test_format() ->
@@ -319,6 +320,17 @@ test_printable_list() ->
     ?ASSERT_MATCH(io_lib:printable_list([1, 2, 3]), false),
     ?ASSERT_MATCH(io_lib:printable_list([1, 2, -3]), false),
     ?ASSERT_MATCH(io_lib:printable_list(foo), false),
+    ok.
+
+%% Printing a value containing codepoints above 255 (e.g. a non-ASCII atom)
+%% via io:format/~p used to crash with badarg in console:print on the local
+%% standard_io path. It must now succeed (the chars are UTF-8 encoded before
+%% reaching console:print). id/1 keeps the atom out of the literal pool.
+test_io_format_unicode() ->
+    ?ASSERT_MATCH(io:format("~p~n", [id('原子')]), ok),
+    ?ASSERT_MATCH(io:format("~w~n", [id('原子')]), ok),
+    ?ASSERT_MATCH(io:format("~p~n", [id(['原子', "café"])]), ok),
+    ?ASSERT_MATCH(io:put_chars(unicode:characters_to_binary("原子", utf8)), ok),
     ok.
 
 id(X) ->
