@@ -63,6 +63,13 @@ test_put_utf8() ->
     ok = assert_badarg(fun() -> <<(false andalso ok)/utf8>> end),
     ok = assert_badarg(fun() -> <<(true orelse ok)/utf8>> end),
     ok = assert_badarg(fun() -> <<(1 > 2)/utf8>> end),
+    %% Out-of-range negative values whose low 32 bits land in [0, 0x10FFFF]
+    %% must still raise badarg: the codepoint must be validated at full width,
+    %% not after a 32-bit truncation. -2^59 truncates to 0, -2^59+65 to 65.
+    XF5 = ?MODULE:id(-576460752303423488),
+    ok = assert_badarg(fun() -> <<XF5/utf8>> end),
+    XF6 = ?MODULE:id(-576460752303423488 + 65),
+    ok = assert_badarg(fun() -> <<XF6/utf8>> end),
     ok.
 
 test_get_utf8() ->
@@ -179,6 +186,10 @@ test_put_utf16() ->
     ok = assert_badarg(fun() -> <<(false andalso ok)/utf16>> end),
     ok = assert_badarg(fun() -> <<(true orelse ok)/utf16>> end),
     ok = assert_badarg(fun() -> <<(1 > 2)/utf16>> end),
+    XF5 = ?MODULE:id(-576460752303423488),
+    ok = assert_badarg(fun() -> <<XF5/utf16>> end),
+    XF6 = ?MODULE:id(-576460752303423488 + 65),
+    ok = assert_badarg(fun() -> <<XF6/utf16>> end),
     ok.
 
 test_get_utf16() ->
@@ -294,6 +305,10 @@ test_put_utf32() ->
     ok = assert_badarg(fun() -> <<(false andalso ok)/utf32>> end),
     ok = assert_badarg(fun() -> <<(true orelse ok)/utf32>> end),
     ok = assert_badarg(fun() -> <<(1 > 2)/utf32>> end),
+    XF5 = ?MODULE:id(-576460752303423488),
+    ok = assert_badarg(fun() -> <<XF5/utf32>> end),
+    XF6 = ?MODULE:id(-576460752303423488 + 65),
+    ok = assert_badarg(fun() -> <<XF6/utf32>> end),
     ok.
 
 test_get_utf32() ->
