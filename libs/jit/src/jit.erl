@@ -2852,15 +2852,20 @@ first_pass_bs_create_bin_compute_size(
     MSt1 = verify_is_integer(Src, Fail, MMod, MSt0),
     {MSt1, AccLiteralSize0 + 32, AccSizeReg0, State0};
 first_pass_bs_create_bin_compute_size(
-    float, Src, Size, _SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
+    float, Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
 ) ->
     MSt1 = verify_is_number(Src, Fail, MMod, MSt0),
     {MSt2, SizeValue} = term_to_int(Size, Fail, MMod, MSt1),
+    % The field width is Size * Unit bits; account for the product (the insert
+    % primitive validates it is 16/32/64), so a valid unit allocates the right
+    % size and the offset advances correctly.
     if
         is_integer(SizeValue) ->
-            {MSt2, AccLiteralSize0 + SizeValue, AccSizeReg0, State0};
+            {MSt2, AccLiteralSize0 + (SizeValue * SegmentUnit), AccSizeReg0, State0};
         is_atom(SizeValue) ->
-            MSt3 = cond_raise_badarg_or_jump_to_fail_label(
+            % Validate the product Size * Unit, not Size alone.
+            MSt3 = MMod:mul(MSt2, SizeValue, SegmentUnit),
+            MSt4 = cond_raise_badarg_or_jump_to_fail_label(
                 {'and', [
                     {SizeValue, '!=', 16},
                     {SizeValue, '!=', 32},
@@ -2868,15 +2873,15 @@ first_pass_bs_create_bin_compute_size(
                 ]},
                 Fail,
                 MMod,
-                MSt2
+                MSt3
             ),
             case AccSizeReg0 of
                 undefined ->
-                    {MSt3, AccLiteralSize0, SizeValue, State0};
+                    {MSt4, AccLiteralSize0, SizeValue, State0};
                 _ ->
-                    MSt4 = MMod:add(MSt3, AccSizeReg0, SizeValue),
-                    MSt5 = MMod:free_native_registers(MSt4, [SizeValue]),
-                    {MSt5, AccLiteralSize0, AccSizeReg0, State0}
+                    MSt5 = MMod:add(MSt4, AccSizeReg0, SizeValue),
+                    MSt6 = MMod:free_native_registers(MSt5, [SizeValue]),
+                    {MSt6, AccLiteralSize0, AccSizeReg0, State0}
             end
     end;
 first_pass_bs_create_bin_compute_size(
@@ -3070,22 +3075,32 @@ first_pass_bs_create_bin_insert_value(
     ),
     {MSt7, NewOffset, CreatedBin};
 first_pass_bs_create_bin_insert_value(
-    float, Flags, Src, Size, _SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
+    float, Flags, Src, Size, SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
     {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, Src),
     {MSt2, FlagsValue} = decode_flags_list(Flags, MMod, MSt1),
     {MSt3, SizeValue} = term_to_int(Size, Fail, MMod, MSt2),
+    % The field width is Size * Unit bits; pass the product (validated as
+    % 16/32/64 by the primitive), not Size alone, and advance by it.
+    {MSt4, TotalSize} =
+        if
+            is_integer(SizeValue) ->
+                {MSt3, SizeValue * SegmentUnit};
+            true ->
+                MSt3b = MMod:mul(MSt3, SizeValue, SegmentUnit),
+                {MSt3b, SizeValue}
+        end,
     % Call single primitive with size parameter
-    {MSt4, BoolResult} = MMod:call_primitive(MSt3, ?PRIM_BITSTRING_INSERT_FLOAT, [
-        CreatedBin, Offset, {free, SrcReg}, SizeValue, {free, FlagsValue}
+    {MSt5, BoolResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_FLOAT, [
+        CreatedBin, Offset, {free, SrcReg}, TotalSize, {free, FlagsValue}
     ]),
-    MSt5 = cond_raise_badarg_or_jump_to_fail_label(
-        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt4
+    MSt6 = cond_raise_badarg_or_jump_to_fail_label(
+        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt5
     ),
-    {MSt6, NewOffset} = first_pass_bs_create_bin_insert_value_increment_offset(
-        MMod, MSt5, Offset, SizeValue, 1
+    {MSt7, NewOffset} = first_pass_bs_create_bin_insert_value_increment_offset(
+        MMod, MSt6, Offset, TotalSize, 1
     ),
-    {MSt6, NewOffset, CreatedBin};
+    {MSt7, NewOffset, CreatedBin};
 first_pass_bs_create_bin_insert_value(
     string, _Flags, Src, Size, SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
