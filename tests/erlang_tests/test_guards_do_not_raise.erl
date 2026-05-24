@@ -28,6 +28,7 @@ start() ->
     ok = test_gc_bif3(),
     ok = test_bif1(),
     ok = test_bif2(),
+    ok = test_put_map_exact(),
     0.
 
 test_gc_bif1() ->
@@ -69,6 +70,17 @@ test_bif2() ->
     NotAMap = id(not_a_map),
     if
         is_map_key(b, NotAMap) -> fail;
+        true -> ok
+    end.
+
+%% A map update with a required key (:=) on a key the map lacks raises
+%% {badkey, _} in a body, but inside a guard it must fail the guard (clause
+%% does not match), not let the exception escape. put_map_exact must honour
+%% its fail label.
+test_put_map_exact() ->
+    EmptyMap = id(#{}),
+    if
+        is_map(EmptyMap#{missing := value}) -> fail;
         true -> ok
     end.
 
