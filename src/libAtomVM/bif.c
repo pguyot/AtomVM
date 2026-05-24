@@ -857,6 +857,19 @@ static inline term make_maybe_boxed_int64(Context *ctx, uint32_t fail_label, uin
 }
 #endif
 
+// A bsl/bsr with a negative shift amount is the opposite shift by its
+// magnitude. Negating MIN_NOT_BOXED_INT overflows the small-int range; building
+// the magnitude with term_from_int() would corrupt the tag bits and read back
+// as negative, causing unbounded bsl<->bsr recursion (stack overflow / crash).
+// Such a magnitude (>= 2^59) is always a "huge shift" whose outcome is
+// independent of the exact count, so clamp to the largest small int: this keeps
+// the term well-formed and produces the same overflow/sign-collapse result.
+static inline term negated_shift_count(avm_int_t neg_arg2)
+{
+    avm_int_t value = (neg_arg2 == MIN_NOT_BOXED_INT) ? MAX_NOT_BOXED_INT : -neg_arg2;
+    return term_from_int(value);
+}
+
 // this function assumes that bigres_len is always <= bigres buffer capacity
 static term make_bigint(Context *ctx, uint32_t fail_label, uint32_t live,
     const intn_digit_t bigres[], size_t bigres_len, intn_integer_sign_t sign)
@@ -2034,7 +2047,8 @@ term bif_erlang_bsl_2(Context *ctx, uint32_t fail_label, int live, term arg1, te
         return make_bigint(ctx, fail_label, live, bigres, bigres_len, m_sign);
 
     } else if (term_is_neg_int(arg2)) {
-        term abs_arg2 = term_from_int(-term_to_int(arg2));
+        // bsl by a negative amount is bsr by its magnitude.
+        term abs_arg2 = negated_shift_count(term_to_int(arg2));
         return bif_erlang_bsr_2(ctx, fail_label, live, arg1, abs_arg2);
 
     } else if (UNLIKELY(term_is_any_integer(arg1) && term_is_any_integer(arg2))) {
@@ -2090,7 +2104,8 @@ term bif_erlang_bsr_2(Context *ctx, uint32_t fail_label, int live, term arg1, te
         return make_bigint(ctx, fail_label, live, bigres, bigres_len, m_sign);
 
     } else if (term_is_neg_int(arg2)) {
-        term abs_arg2 = term_from_int(-term_to_int(arg2));
+        // bsr by a negative amount is bsl by its magnitude.
+        term abs_arg2 = negated_shift_count(term_to_int(arg2));
         return bif_erlang_bsl_2(ctx, fail_label, live, arg1, abs_arg2);
 
     } else if (UNLIKELY(term_is_any_integer(arg1) && term_is_any_integer(arg2))) {
