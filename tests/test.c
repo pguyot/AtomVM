@@ -562,6 +562,7 @@ struct Test tests[] = {
     TEST_CASE(test_has_map_fields),
     TEST_CASE(test_bs_create_bin_accum),
     TEST_CASE(test_bs_create_bin_oversize),
+    TEST_CASE(test_shift_int_min_amount),
     TEST_CASE_COND(test_no_bs_create_bin, 0, SKIP_NO_BS_CREATE_BIN),
     TEST_CASE_COND(test_no_bs_unaligned, 0, SKIP_NO_BS_CREATE_BIN),
     TEST_CASE_EXPECTED(bs_context_to_binary_with_offset, 42),
