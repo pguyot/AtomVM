@@ -625,6 +625,7 @@ compile_erlang(erlang_module_loaded)
 compile_erlang(test_erlang_loaded)
 
 compile_erlang(int64_build_binary)
+compile_erlang(bs_create_bin_integer_unit)
 
 compile_erlang(test_link_port)
 
@@ -1193,6 +1194,7 @@ set(erlang_test_beams
     test_erlang_loaded.beam
 
     int64_build_binary.beam
+    bs_create_bin_integer_unit.beam
 
     test_link_port.beam
 
