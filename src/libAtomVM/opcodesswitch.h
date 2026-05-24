@@ -5094,7 +5094,13 @@ schedule_in:
 
                     int map_pos = term_find_map_pos(src, key, ctx->global);
                     if (map_pos == TERM_MAP_NOT_FOUND) {
-                        RAISE_ERROR(BADARG_ATOM);
+                        // A missing required key (:=) fails the guard when a
+                        // fail label is set; only raise in body context.
+                        if (label == 0) {
+                            RAISE_ERROR(BADARG_ATOM);
+                        } else {
+                            JUMP_TO_LABEL(mod, label);
+                        }
                     } else if (map_pos == TERM_MAP_MEMORY_ALLOC_FAIL) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
