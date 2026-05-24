@@ -289,6 +289,13 @@ test_write_atom() ->
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(helloWorld)), "helloWorld"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(hello_world)), "hello_world"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom('hello\'world')), "'hello\\'world'"),
+    % The empty atom must render as '', not as nothing (which would be
+    % indistinguishable from the empty list).
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom('')), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [''])), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~w", [''])), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [['']])), "['']"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [[a, '']])), "[a,'']"),
     ok.
 
 test_write_string() ->
