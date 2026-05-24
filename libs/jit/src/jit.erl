@@ -2996,7 +2996,7 @@ first_pass_bs_create_bin_compute_size(
 first_pass_bs_create_bin_insert_value(
     utf8, _Flags, Src, _Size, _SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
-    {MSt1, SrcValue} = term_to_int(Src, Fail, MMod, MSt0),
+    {MSt1, SrcValue} = utf_term_to_int(Src, Fail, MMod, MSt0),
     {MSt2, Size} = MMod:call_primitive(MSt1, ?PRIM_BITSTRING_INSERT_UTF8, [
         CreatedBin, Offset, {free, SrcValue}
     ]),
@@ -3008,7 +3008,7 @@ first_pass_bs_create_bin_insert_value(
     utf16, Flags, Src, _Size, _SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
     {MSt1, FlagsValue} = decode_flags_list(Flags, MMod, MSt0),
-    {MSt2, SrcValue} = term_to_int(Src, Fail, MMod, MSt1),
+    {MSt2, SrcValue} = utf_term_to_int(Src, Fail, MMod, MSt1),
     {MSt3, Size} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_INSERT_UTF16, [
         CreatedBin, Offset, {free, SrcValue}, {free, FlagsValue}
     ]),
@@ -3020,7 +3020,7 @@ first_pass_bs_create_bin_insert_value(
     utf32, Flags, Src, _Size, _SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
     {MSt1, FlagsValue} = decode_flags_list(Flags, MMod, MSt0),
-    {MSt2, SrcValue} = term_to_int(Src, Fail, MMod, MSt1),
+    {MSt2, SrcValue} = utf_term_to_int(Src, Fail, MMod, MSt1),
     {MSt3, BoolResult} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_INSERT_UTF32, [
         CreatedBin, Offset, {free, SrcValue}, {free, FlagsValue}
     ]),
@@ -5050,6 +5050,33 @@ scale_size_by_unit_raising(SizeReg, Unit, Fail, MMod, MSt0) ->
                 )
         end,
     MMod:mul(MSt2, SizeReg, Unit).
+
+% Like term_to_int/4 but for utf segment sources, which must be integer code
+% points. term_to_int's first clause assumes a bare-integer argument is an
+% already-tagged integer term and just shifts it, but decode_compact_term
+% returns the term value of a constant non-integer (e.g. the atom 'false',
+% folded from a boolean expression) as a bare integer too. Shifting that
+% silently turns its tag bits into a bogus code point (the JIT-only bug). Here
+% a constant term that is not integer-tagged is a compile-time type error:
+% raise badarg / jump to the fail label, matching the emulator's
+% VERIFY_IS_INTEGER. All other source shapes (registers, typed registers,
+% literals) reuse term_to_int, whose register path already type-checks.
+utf_term_to_int(Term, _FailLabel, _MMod, MSt0) when
+    is_integer(Term), Term band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG
+->
+    {MSt0, Term bsr 4};
+utf_term_to_int(Term, FailLabel, MMod, MSt0) when is_integer(Term) ->
+    % Constant non-integer term value (e.g. the atom 'false'): materialize it
+    % and run the same tag check as the register path below, which always fails
+    % here and raises badarg / jumps to the fail label.
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
+    MSt2 = cond_raise_badarg_or_jump_to_fail_label(
+        {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, FailLabel, MMod, MSt1
+    ),
+    {MSt3, IntReg} = MMod:shift_right(MSt2, {free, Reg}, 4),
+    {MSt3, IntReg};
+utf_term_to_int(Term, FailLabel, MMod, MSt0) ->
+    term_to_int(Term, FailLabel, MMod, MSt0).
 
 term_to_int(Term, _FailLabel, _MMod, MSt0) when is_integer(Term) ->
     {MSt0, Term bsr 4};
