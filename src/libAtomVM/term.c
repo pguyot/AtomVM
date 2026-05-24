@@ -586,6 +586,20 @@ static enum TermTypeIndex term_type_to_index(term t)
 
 TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
 {
+    // Fast paths for the common scalar cases, avoiding the temp-stack machinery
+    // below. Identical encodings are always equal (same immediate or same boxed
+    // pointer), and two small integers compare numerically. These dominate hot
+    // comparison loops (e.g. comparing cells/keys), so handling them inline is a
+    // measurable win and is backend-agnostic.
+    if (t == other) {
+        return TermEquals;
+    }
+    if (term_is_integer(t) && term_is_integer(other)) {
+        avm_int_t t_int = term_to_int(t);
+        avm_int_t other_int = term_to_int(other);
+        return (t_int > other_int) ? TermGreaterThan : TermLessThan;
+    }
+
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;
