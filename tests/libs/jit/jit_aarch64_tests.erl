@@ -132,6 +132,55 @@ call_primitive_6_args_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+add_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+            "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+            "   8:	ab0800e7 	adds	x7, x7, x8"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
+sub_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:sub_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+            "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+            "   8:	eb0800e7 	subs	x7, x7, x8"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
+if_block_overflow_set_test() ->
+    %% overflow_set executes the block when V is set; the patched branch skips
+    %% it (b.vc) when overflow is clear.
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    State4 = ?BACKEND:if_block(State3, overflow_set, fun(BSt0) ->
+        ?BACKEND:move_to_vm_register(BSt0, RegA, {x_reg, 2})
+    end),
+    Stream = ?BACKEND:stream(State4),
+    Dump =
+        <<
+            "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+            "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+            "   8:	ab0800e7 	adds	x7, x7, x8\n"
+            "   c:	54000047 	b.vc	0x14\n"
+            "  10:	f9003407 	str	x7, [x0, #104]"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 call_primitive_extended_regs_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:call_primitive(State0, ?PRIM_EXTENDED_REGISTER_PTR, [ctx, 19]),
