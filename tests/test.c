@@ -124,6 +124,7 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(booleans_test, 4),
     TEST_CASE_EXPECTED(booleans2_test, 2),
     TEST_CASE_EXPECTED(rem_and_comp_test, 4),
+    TEST_CASE_EXPECTED(test_rem_div_typed, 0),
     TEST_CASE_EXPECTED(lowercase, 15),
     TEST_CASE_EXPECTED(huge, 31),
     TEST_CASE_EXPECTED(patternmatchfunc, 102),

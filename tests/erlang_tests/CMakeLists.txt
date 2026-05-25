@@ -153,6 +153,7 @@ compile_erlang(state_test)
 compile_erlang(booleans_test)
 compile_erlang(booleans2_test)
 compile_erlang(rem_and_comp_test)
+compile_erlang(test_rem_div_typed)
 compile_erlang(lowercase)
 compile_erlang(huge)
 compile_erlang(patternmatchfunc)
@@ -733,6 +734,7 @@ set(erlang_test_beams
     booleans_test.beam
     booleans2_test.beam
     rem_and_comp_test.beam
+    test_rem_div_typed.beam
     lowercase.beam
     huge.beam
     patternmatchfunc.beam

@@ -41,7 +41,8 @@
 
 -export([
     small_integer_bounds/1,
-    is_small_integer_range/3
+    is_small_integer_range/3,
+    can_inline_div_guarded/4
 ]).
 
 -compile([warnings_as_errors]).
@@ -4334,7 +4335,9 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt8 = MMod:move_to_vm_register(MSt7, QuotientReg, Dest),
             MMod:free_native_registers(MSt8, [QuotientReg, Reg1, Reg2, Dest]);
         false ->
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            op_gc_bif2_div_rem_guarded(
+                div_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2
+            )
     end.
 
 op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
@@ -4380,7 +4383,70 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt8 = MMod:move_to_vm_register(MSt7, RemReg, Dest),
             MMod:free_native_registers(MSt8, [RemReg, Reg1, Reg2, Dest]);
         false ->
+            op_gc_bif2_div_rem_guarded(
+                rem_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2
+            )
+    end.
+
+%% @doc Inline div/rem when both operands are proven integers (any range) and
+%% the divisor is proven positive (so it is never 0 and never -1, ruling out
+%% div-by-zero and the MIN div -1 overflow). The operands may still be bignums
+%% at runtime, so guard on both having the small-integer tag: if both are small
+%% the inline native sdiv/rem path runs, otherwise fall back to the BIF (which
+%% handles bignums). This removes the out-of-line call from the common small-int
+%% case (e.g. `X rem I` in a loop where the compiler proves I >= 1 but unbounded
+%% above). Op is rem_ or div_.
+op_gc_bif2_div_rem_guarded(Op, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case can_inline_div_guarded(Range1, Range2, MMod, MSt0) of
+        true ->
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            %% Both small ints iff (Reg1 band Reg2) has all tag bits set, since
+            %% the small-integer tag is all four low bits (?TERM_INTEGER_TAG).
+            {MSt3, TagReg} = MMod:copy_to_native_register(MSt2, Reg1),
+            {MSt4, TagReg} = MMod:and_(MSt3, {free, TagReg}, Reg2),
+            %% The masked-compare condition only supports '!=', so the TRUE
+            %% block is the bignum (slow) path and the FALSE block is the
+            %% both-small (fast) path.
+            MSt5 = MMod:if_else_block(
+                MSt4,
+                {{free, TagReg}, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                fun(BSt0) ->
+                    %% Slow path: at least one bignum. Call the BIF.
+                    op_gc_bif2_default(MMod, BSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+                end,
+                fun(BSt0) ->
+                    %% Fast path: both small ints. Untag, native op, retag.
+                    {BSt1, R1} = MMod:copy_to_native_register(BSt0, Reg1),
+                    {BSt2, R1} = MMod:shift_right_arith(BSt1, {free, R1}, 4),
+                    {BSt3, R2} = MMod:copy_to_native_register(BSt2, Reg2),
+                    {BSt4, R2} = MMod:shift_right_arith(BSt3, {free, R2}, 4),
+                    {BSt5, ResReg} = MMod:Op(BSt4, R1, R2),
+                    BSt6 = MMod:shift_left(BSt5, ResReg, 4),
+                    BSt7 = MMod:or_(BSt6, ResReg, ?TERM_INTEGER_TAG),
+                    BSt8 = MMod:move_to_vm_register(BSt7, ResReg, Dest),
+                    MMod:free_native_registers(BSt8, [ResReg, R1, R2])
+                end
+            ),
+            MMod:free_native_registers(MSt5, [Reg1, Reg2, Dest]);
+        false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+%% @doc Like can_inline_div but for the runtime-guarded path: requires the
+%% backend to support native div, and the divisor range to prove the divisor is
+%% strictly positive (Min2 >= 1). The dividend may be any integer (the small-int
+%% guard at runtime catches bignums); we only need to rule out divide-by-zero
+%% and the MIN/-1 overflow, both of which a positive divisor guarantees.
+can_inline_div_guarded(_Range1, Range2, MMod, MSt) ->
+    case MMod:supports_div(MSt) of
+        false ->
+            false;
+        true ->
+            case Range2 of
+                {Min2, _Max2} when is_integer(Min2), Min2 >= 1 -> true;
+                _ -> false
+            end
     end.
 
 % Helper to unwrap typed arguments
