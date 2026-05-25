@@ -3871,31 +3871,57 @@ op_gc_bif2(
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
     (Op =:= '+' orelse Op =:= '-')
 ->
-    case
-        erlang:function_exported(MMod, add_overflow, 3) andalso
-            addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2)
-    of
+    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
+    case Reloadable andalso erlang:function_exported(MMod, add_overflow, 3) of
         true ->
+            %% Flag-based backends (aarch64/x86_64/arm32/armv6m).
             op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
         false ->
-            op_gc_bif2_default(
-                MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
-            )
+            case Reloadable andalso erlang:function_exported(MMod, add_overflow_check, 3) of
+                true ->
+                    %% Flagless backends (riscv/wasm/xtensa).
+                    op_gc_bif2_addsub_runtime_nf(
+                        MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
+                    );
+                false ->
+                    op_gc_bif2_default(
+                        MMod,
+                        MSt0,
+                        FailLabel,
+                        Live,
+                        Bif,
+                        unwrap_typed(Arg1),
+                        unwrap_typed(Arg2),
+                        Dest
+                    )
+            end
     end;
 % Runtime small-integer fast path for *. Same gating as +/-; the backend
 % mul_overflow op computes the tagged product and flags whether it overflowed
 % the small-integer range.
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, '*', Arg1, Arg2, Dest) ->
-    case
-        erlang:function_exported(MMod, mul_overflow, 3) andalso
-            addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2)
-    of
+    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
+    case Reloadable andalso erlang:function_exported(MMod, mul_overflow, 3) of
         true ->
+            %% Flag-based backends.
             op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
         false ->
-            op_gc_bif2_default(
-                MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
-            )
+            case Reloadable andalso erlang:function_exported(MMod, mul_overflow_check, 3) of
+                true ->
+                    %% Flagless backends with a high-multiply (riscv).
+                    op_gc_bif2_mul_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+                false ->
+                    op_gc_bif2_default(
+                        MMod,
+                        MSt0,
+                        FailLabel,
+                        Live,
+                        Bif,
+                        unwrap_typed(Arg1),
+                        unwrap_typed(Arg2),
+                        Dest
+                    )
+            end
     end;
 % Runtime small-integer fast path for div/rem by a POSITIVE small-int literal,
 % when the dividend's type is not known to be a small integer.
@@ -4013,6 +4039,92 @@ op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
                         fun(NSt0) ->
                             NSt1 = MMod:move_to_vm_register(NSt0, R1, Dest),
                             MMod:free_native_registers(NSt1, [R1, Dest])
+                        end
+                    )
+                end
+            )
+        end
+    ).
+
+%% Flagless variant of op_gc_bif2_addsub_runtime for backends without hardware
+%% condition flags (riscv/wasm/xtensa). add_overflow_check/sub_overflow_check
+%% leave the result shifted into the value field of R1 (untagged) and return a
+%% CheckReg that is nonzero iff the result left the small-integer range; the
+%% overflow is then branched on with the existing {CheckReg, '!=', 0} condition.
+op_gc_bif2_addsub_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    UArg2 = unwrap_typed(Arg2),
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
+        op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(BSt0) ->
+            MMod:if_else_block(
+                BSt0,
+                {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                Fallback,
+                fun(BSt1) ->
+                    %% R1 := (R1 Op R2) shifted into the value field (untagged);
+                    %% CheckReg != 0 iff the result overflows the small range.
+                    {BSt2, CheckReg} =
+                        case Op of
+                            '+' -> MMod:add_overflow_check(BSt1, R1, R2);
+                            '-' -> MMod:sub_overflow_check(BSt1, R1, R2)
+                        end,
+                    MMod:if_else_block(
+                        BSt2,
+                        {{free, CheckReg}, '!=', 0},
+                        %% Overflow: R1 clobbered; fallback re-reads VM operands.
+                        Fallback,
+                        %% In range: add the small-integer tag and store to Dest.
+                        fun(NSt0) ->
+                            NSt1 = MMod:or_(NSt0, R1, ?TERM_INTEGER_TAG),
+                            NSt2 = MMod:move_to_vm_register(NSt1, R1, Dest),
+                            MMod:free_native_registers(NSt2, [R1, R2, Dest])
+                        end
+                    )
+                end
+            )
+        end
+    ).
+
+%% Flagless variant of op_gc_bif2_mul_runtime (riscv: has a high-multiply).
+%% mul_overflow_check leaves the product shifted into the value field of R1
+%% (untagged) and returns CheckReg != 0 iff it overflowed the small range.
+op_gc_bif2_mul_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    UArg2 = unwrap_typed(Arg2),
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
+        op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(BSt0) ->
+            MMod:if_else_block(
+                BSt0,
+                {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                Fallback,
+                fun(BSt1) ->
+                    {BSt2, CheckReg} = MMod:mul_overflow_check(BSt1, R1, R2),
+                    MMod:if_else_block(
+                        BSt2,
+                        {{free, CheckReg}, '!=', 0},
+                        Fallback,
+                        fun(NSt0) ->
+                            NSt1 = MMod:or_(NSt0, R1, ?TERM_INTEGER_TAG),
+                            NSt2 = MMod:move_to_vm_register(NSt1, R1, Dest),
+                            MMod:free_native_registers(NSt2, [R1, R2, Dest])
                         end
                     )
                 end
