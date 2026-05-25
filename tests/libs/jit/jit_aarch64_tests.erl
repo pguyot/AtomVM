@@ -301,6 +301,35 @@ call_primitive_last_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+%% The gc_bif func pointer is resolved inline rather than via the
+%% PRIM_GET_IMPORTED_GCBIF primitive call: an inline extended-register
+%% emptiness check (calling PRIM_TRIM_LIVE_REGS only when non-empty) followed
+%% by module->imported_funcs[Bif]->bif0_ptr loads.
+move_imported_gcbif_to_native_register_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r7} = ?BACKEND:move_imported_gcbif_to_native_register(State0, 2, 5),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	91040007 	add	x7, x0, #0x100\n"
+            "   4:	f94000e8 	ldr	x8, [x7]\n"
+            "   8:	eb07011f 	cmp	x8, x7\n"
+            "   c:	54000120 	b.eq	0x30\n"
+            "  10:	f9401c50 	ldr	x16, [x2, #56]\n"
+            "  14:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
+            "  18:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
+            "  1c:	d2800041 	mov	x1, #0x2\n"
+            "  20:	d63f0200 	blr	x16\n"
+            "  24:	aa0003e7 	mov	x7, x0\n"
+            "  28:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
+            "  2c:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
+            "  30:	f9400027 	ldr	x7, [x1]\n"
+            "  34:	f94048e7 	ldr	x7, [x7, #144]\n"
+            "  38:	f94014e7 	ldr	x7, [x7, #40]\n"
+            "  3c:	f94004e7 	ldr	x7, [x7, #8]"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 unreachable_test_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
 
