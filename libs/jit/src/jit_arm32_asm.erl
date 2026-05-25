@@ -21,11 +21,14 @@
 -export([
     add/3,
     add/4,
+    adds/3,
+    adds/4,
     sub/3,
     sub/4,
     subs/3,
     subs/4,
     mul/4,
+    smull/5,
     and_/3,
     and_/4,
     orr/3,
@@ -191,6 +194,18 @@ add(Cond, Rd, Rn, Imm) when is_integer(Imm) ->
 add(Cond, Rd, RmOrImm) ->
     add(Cond, Rd, Rd, RmOrImm).
 
+%% ADDS Rd, Rn, Rm/Imm (add with flag setting; V set on signed overflow)
+-spec adds(cc(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register() | integer()) ->
+    binary().
+adds(Cond, Rd, Rn, Rm) when is_atom(Rm) ->
+    dp_reg(Cond, 2#0100, 1, Rd, Rn, Rm);
+adds(Cond, Rd, Rn, Imm) when is_integer(Imm) ->
+    dp_imm(Cond, 2#0100, 1, Rd, Rn, Imm).
+
+-spec adds(cc(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
+adds(Cond, Rd, RmOrImm) ->
+    adds(Cond, Rd, Rd, RmOrImm).
+
 %% SUB Rd, Rn, Rm/Imm
 -spec sub(cc(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register() | integer()) -> binary().
 sub(Cond, Rd, Rn, Rm) when is_atom(Rm) ->
@@ -307,6 +322,23 @@ mul(Cond, Rd, Rm, Rs) ->
     Instr =
         (CondNum bsl 28) bor (RdNum bsl 16) bor (RsNum bsl 8) bor
             (2#1001 bsl 4) bor RmNum,
+    <<Instr:32/little>>.
+
+%% SMULL RdLo, RdHi, Rm, Rs: signed 32x32 -> 64 multiply.
+%% {RdHi, RdLo} = Rm * Rs (RdLo = low 32 bits, RdHi = high 32 bits).
+-spec smull(
+    cc(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register(), arm_gpr_register()
+) -> binary().
+smull(Cond, RdLo, RdHi, Rm, Rs) ->
+    CondNum = cond_to_num(Cond),
+    RdLoNum = reg_to_num(RdLo),
+    RdHiNum = reg_to_num(RdHi),
+    RmNum = reg_to_num(Rm),
+    RsNum = reg_to_num(Rs),
+    %% cond 0000 110 0 RdHi RdLo Rs 1001 Rm  (SMULL, S=0)
+    Instr =
+        (CondNum bsl 28) bor (2#0000110 bsl 21) bor (RdHiNum bsl 16) bor (RdLoNum bsl 12) bor
+            (RsNum bsl 8) bor (2#1001 bsl 4) bor RmNum,
     <<Instr:32/little>>.
 
 %%-----------------------------------------------------------------------------

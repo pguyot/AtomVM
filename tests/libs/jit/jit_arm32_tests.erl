@@ -54,6 +54,72 @@ new_test() ->
     ?assert(lists:member(r10, Available)),
     ?assert(lists:member(r11, Available)).
 
+add_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+            "   8:	e09bb00a 	adds	fp, fp, sl"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
+sub_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:sub_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+            "   8:	e05bb00a 	subs	fp, fp, sl"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
+mul_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:mul_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+            "   8:	e3cbb00f 	bic	fp, fp, #15\n"
+            "   c:	e1a0a24a 	asr	sl, sl, #4\n"
+            "  10:	e0c98a9b 	smull	r8, r9, fp, sl\n"
+            "  14:	e1a07fc8 	asr	r7, r8, #31\n"
+            "  18:	e1590007 	cmp	r9, r7\n"
+            "  1c:	e1a0b008 	mov	fp, r8"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
+if_block_overflow_set_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    State4 = ?BACKEND:if_block(State3, overflow_set, fun(BSt0) ->
+        ?BACKEND:move_to_vm_register(BSt0, RegA, {x_reg, 2})
+    end),
+    Stream = ?BACKEND:stream(State4),
+    Dump =
+        <<
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+            "   8:	e09bb00a 	adds	fp, fp, sl\n"
+            "   c:	7a000000 	bvc	0x14\n"
+            "  10:	e580b034 	str	fp, [r0, #52]	@ 0x34"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
 call_primitive_0_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, ResultReg} = ?BACKEND:call_primitive(State0, 0, [ctx, jit_state]),
