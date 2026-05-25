@@ -4328,15 +4328,17 @@ op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
     op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2).
 
 op_is_ge_default(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx,
-        jit_state,
-        {free, unwrap_typed(Arg1)},
-        {free, unwrap_typed(Arg2)},
-        ?TERM_COMPARE_NO_OPTS
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
+    %% is_ge jumps to Label when Arg1 < Arg2 (i.e. NOT >=).
+    emit_smallint_compare_fastpath(
+        MMod,
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_NO_OPTS,
+        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '<', A2}, Label, MMod, BSt0) end,
+        ?TERM_LESS_THAN
+    ).
 
 %% Optimized < comparison for typed integers.
 %% Semantic: jump to Label if Arg1 >= Arg2 (i.e., NOT(Arg1 < Arg2)).
@@ -4370,16 +4372,25 @@ op_is_lt(MMod, MSt0, Label, Arg1, Arg2) ->
     op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2).
 
 op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx,
-        jit_state,
-        {free, unwrap_typed(Arg1)},
-        {free, unwrap_typed(Arg2)},
-        ?TERM_COMPARE_NO_OPTS
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label(
-        {{free, ResultReg}, '&', ?TERM_GREATER_THAN + ?TERM_EQUALS, '!=', 0}, Label, MMod, MSt2
+    %% is_lt jumps to Label when Arg1 >= Arg2 (i.e. NOT <). There is no direct
+    %% ">=" condition, so express it as if_else_block on "<": the false branch
+    %% (Arg1 >= Arg2) jumps.
+    emit_smallint_compare_fastpath(
+        MMod,
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_NO_OPTS,
+        fun(BSt0, A1, A2) ->
+            MMod:if_else_block(
+                BSt0,
+                {A1, '<', A2},
+                fun(B0) -> B0 end,
+                fun(B0) -> MMod:jump_to_label(B0, Label) end
+            )
+        end,
+        ?TERM_GREATER_THAN + ?TERM_EQUALS
     ).
 
 op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
@@ -4434,15 +4445,68 @@ op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
     op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
 
 op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, unwrap_typed(Arg1)}, {free, unwrap_typed(Arg2)}, ?TERM_COMPARE_EXACT
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label(
-        {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
-        Label,
+    %% Runtime fast path: if both operands are small integers, equality is a
+    %% direct tagged compare (equal iff tagged values equal), avoiding the
+    %% term_compare C call. Otherwise fall back to term_compare. is_eq_exact
+    %% jumps to Label when the operands are NOT equal.
+    emit_smallint_compare_fastpath(
         MMod,
-        MSt2
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_EXACT,
+        %% both-small fast path: jump to Label if tagged values differ.
+        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '!=', A2}, Label, MMod, BSt0) end,
+        %% term_compare result mask for "jump": LESS or GREATER (i.e. not equal).
+        ?TERM_LESS_THAN + ?TERM_GREATER_THAN
+    ).
+
+%% Emit a runtime small-integer fast path wrapping a term_compare fallback,
+%% mirroring how BEAM's JIT inlines tagged-small-int comparison before calling
+%% the generic comparator. If BOTH operands carry the small-integer tag at
+%% runtime, FastFn emits the native tagged comparison; otherwise term_compare
+%% is called and the result is masked with JumpMask to decide the jump.
+%%
+%% Correctness: two small integers are encoded as (v << 4) | TERM_INTEGER_TAG
+%% with TERM_INTEGER_TAG == TERM_IMMED_TAG_MASK, so a signed comparison of the
+%% tagged values has the same ordering as the integers, and they are equal iff
+%% the tagged values are equal. For any other type combination we must use the
+%% full comparator. FastFn is called with (State, Arg1Reg, Arg2Reg) and both
+%% registers are free to consume.
+emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask) ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
+    %% Outer test on Arg1's tag; inner test on Arg2's tag. Only when both are
+    %% small integers do we reach FastFn; every other path uses term_compare.
+    Fallback = fun(BSt0) ->
+        {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_COMPARE, [
+            ctx, jit_state, {free, Arg1Reg}, {free, Arg2Reg}, CompareOpts
+        ]),
+        BSt2 = handle_error_if(
+            {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt1
+        ),
+        cond_jump_to_label({{free, ResultReg}, '&', JumpMask, '!=', 0}, Label, MMod, BSt2)
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        %% Arg1 not a small integer: fall back.
+        Fallback,
+        %% Arg1 is a small integer: test Arg2.
+        fun(BSt0) ->
+            MMod:if_else_block(
+                BSt0,
+                {Arg2Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                %% Arg2 not a small integer: fall back.
+                Fallback,
+                %% Both small integers: native tagged comparison.
+                fun(BSt1) ->
+                    BSt2 = FastFn(BSt1, {free, Arg1Reg}, Arg2Reg),
+                    MMod:free_native_registers(BSt2, [Arg2Reg])
+                end
+            )
+        end
     ).
 
 %% Optimized =/= comparison for typed args. Mirror of op_is_eq_exact.
@@ -4488,26 +4552,30 @@ op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
     op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
 
 op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, unwrap_typed(Arg1)}, {free, unwrap_typed(Arg2)}, ?TERM_COMPARE_EXACT
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt2).
+    %% is_ne_exact jumps to Label when the operands ARE equal.
+    emit_smallint_compare_fastpath(
+        MMod,
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_EXACT,
+        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '==', A2}, Label, MMod, BSt0) end,
+        ?TERM_EQUALS
+    ).
 
 op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx,
-        jit_state,
-        {free, unwrap_typed(Arg1)},
-        {free, unwrap_typed(Arg2)},
-        ?TERM_COMPARE_NO_OPTS
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label(
-        {{free, ResultReg}, '&', ?TERM_LESS_THAN + ?TERM_GREATER_THAN, '!=', 0},
-        Label,
+    %% is_equal (==) jumps to Label when the operands are NOT equal. For two
+    %% small integers == agrees with =:=, so the tagged compare is valid.
+    emit_smallint_compare_fastpath(
         MMod,
-        MSt2
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_NO_OPTS,
+        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '!=', A2}, Label, MMod, BSt0) end,
+        ?TERM_LESS_THAN + ?TERM_GREATER_THAN
     ).
 
 %% OP_SELECT_VAL loop: emit a chain of cmp/branch comparisons. When both
