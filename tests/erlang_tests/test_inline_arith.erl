@@ -45,6 +45,9 @@
     rem_by_pow2/1,
     div_by_pow2_large/1,
     rem_by_pow2_large/1,
+    untyped_add/2,
+    untyped_sub/2,
+    untyped_mul/2,
     untyped_div_lit/1,
     untyped_rem_lit/1,
     untyped_divrem_dense/1,
@@ -154,6 +157,13 @@ rem_by_pow2_large(X) when is_integer(X), X >= 0, X < 10000 ->
 % integer, exercising the runtime small-integer div/rem fast path (the typed
 % clauses do not apply).
 id(X) -> X.
+
+% Untyped operands (type hidden by id/1), exercising the runtime small-integer
+% +/-/* fast paths (the typed clauses do not apply). Two untyped operands force
+% the both-small runtime guard; a bignum operand or overflow takes the BIF.
+untyped_add(X, Y) -> id(X) + id(Y).
+untyped_sub(X, Y) -> id(X) - id(Y).
+untyped_mul(X, Y) -> id(X) * id(Y).
 
 untyped_div_lit(X) -> id(X) div 3.
 untyped_rem_lit(X) -> id(X) rem 3.
