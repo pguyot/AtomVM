@@ -725,6 +725,22 @@ subs_test_() ->
         )
     ].
 
+adds_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#B1000021:32/little>>, "adds x1, x1, #0", jit_aarch64_asm:adds(r1, r1, 0)
+        ),
+        ?_assertAsmEqual(
+            <<16#B1000421:32/little>>, "adds x1, x1, #1", jit_aarch64_asm:adds(r1, r1, 1)
+        ),
+        ?_assertAsmEqual(
+            <<16#AB000021:32/little>>, "adds x1, x1, x0", jit_aarch64_asm:adds(r1, r1, r0)
+        ),
+        ?_assertAsmEqual(
+            <<16#AB0a0021:32/little>>, "adds x1, x1, x10", jit_aarch64_asm:adds(r1, r1, r10)
+        )
+    ].
+
 adr_test_() ->
     [
         %% ADR x0, #0

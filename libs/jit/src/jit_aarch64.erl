@@ -63,7 +63,9 @@
     and_/3,
     or_/3,
     add/3,
+    add_overflow/3,
     sub/3,
+    sub_overflow/3,
     mul/3,
     div_/3,
     rem_/3,
@@ -1071,6 +1073,15 @@ if_block_cond(
     State1 = if_block_free_reg(RegOrTuple, State0),
     State2 = State1#state{stream = Stream1},
     {State2, {tbz, Reg, 0}, 0};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    overflow_set
+) ->
+    %% Flags set by a preceding adds/subs. Execute the block when V (signed
+    %% overflow) is set; branch over it (skip) when overflow is clear.
+    I = jit_aarch64_asm:bcc(vc, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, vc, 0};
 if_block_cond(
     #state{
         stream_module = StreamModule,
@@ -2644,6 +2655,34 @@ sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     is_atom(Val)
 ->
     I1 = jit_aarch64_asm:sub(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Add Val to Reg in place, setting condition flags (V on signed
+%% overflow), testable with the `overflow_set' if-condition.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_overflow(state(), aarch64_register(), aarch64_register()) -> state().
+add_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I1 = jit_aarch64_asm:adds(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Subtract Val from Reg in place, setting condition flags. See
+%% add_overflow/3.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec sub_overflow(state(), aarch64_register(), aarch64_register()) -> state().
+sub_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I1 = jit_aarch64_asm:subs(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
