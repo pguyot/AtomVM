@@ -59,6 +59,7 @@
     stp/4,
     ldp/3,
     ldp/4,
+    adds/3,
     subs/3,
     adr/2,
     eor/3,
@@ -1015,6 +1016,22 @@ tst_w(Rn, Imm) when is_atom(Rn), is_integer(Imm) ->
         _ ->
             error({unencodable_immediate, Imm})
     end.
+
+%% Emit an add and set flags (ADDS) instruction (AArch64 encoding)
+%% ADDS Rd, Rn, Rm/imm - adds and sets condition flags (V on signed overflow)
+-spec adds(aarch64_gpr_register(), aarch64_gpr_register(), integer() | aarch64_gpr_register()) ->
+    binary().
+adds(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =< 4095 ->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    %% AArch64 ADDS (immediate): 1011000100iiiiiiiiiiiinnnnndddddd
+    <<(16#B1000000 bor ((Imm band 16#FFF) bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
+adds(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    %% AArch64 ADDS (shifted register): 10101011000mmmmm000000nnnnndddddd
+    <<(16#AB000000 bor (RmNum bsl 16) bor (RnNum bsl 5) bor RdNum):32/little>>.
 
 %% Emit a subtract and set flags (SUBS) instruction (AArch64 encoding)
 %% SUBS Rd, Rn, Rm/imm - subtracts and sets condition flags
