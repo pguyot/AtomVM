@@ -63,7 +63,9 @@
     and_/3,
     or_/3,
     add/3,
+    add_overflow/3,
     sub/3,
+    sub_overflow/3,
     mul/3,
     div_/3,
     rem_/3,
@@ -1170,6 +1172,12 @@ rewrite_cond_branch(CC, Offset) when is_atom(CC) ->
         jit_armv6m_asm:cc() | {tbz | tbnz, atom(), 0..63} | {cbz | cbnz, armv6m_register()},
         non_neg_integer()
     }.
+%% overflow_set: flags set by a preceding adds/subs; run the block when V
+%% (signed overflow) is set, skip it (branch) when overflow is clear.
+if_block_cond(#state{stream_module = StreamModule, stream = Stream0} = State0, overflow_set) ->
+    I = jit_armv6m_asm:bcc(vc, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, vc, 0};
 %% Handle {Val, '<', Reg} which means "Val < Reg" or "Reg > Val"
 %% For immediate value 0-255
 if_block_cond(
@@ -3844,6 +3852,26 @@ sub(#state{stream_module = StreamModule, regs = Regs0} = State0, Reg, Val) ->
         stream = Stream2,
         regs = jit_regs:set_available_regs(Regs1, Avail)
     }.
+
+%% Add register Val to Reg in place, setting flags (V on signed overflow);
+%% testable with the `overflow_set' if-condition. Both registers are low
+%% registers (r0-r7), as required by the Thumb ADDS (register) encoding.
+add_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I = jit_armv6m_asm:adds(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
+sub_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I = jit_armv6m_asm:subs(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 -spec mul(state(), armv6m_register(), integer() | armv6m_register()) -> state().
 mul(State, _Reg, 1) ->
