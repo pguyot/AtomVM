@@ -2790,18 +2790,19 @@ sub_overflow(
     State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
-%% @doc Multiply two tagged small integers Reg and Val, leaving the tagged
-%% product in Reg, and set condition flags so the `mul_overflow_set'
-%% if-condition is true iff the result does NOT fit in a small integer (and the
-%% bignum fallback must run).
+%% @doc Multiply two tagged small integers Reg and Val, leaving the product
+%% shifted into the value field of Reg but WITHOUT the small-integer tag (low
+%% bits zero); the caller re-tags on the no-overflow path. Condition flags are
+%% set so the `mul_overflow_set' if-condition is true iff the result does NOT
+%% fit in a small integer (and the bignum fallback must run).
 %%
 %% Both operands are (v << 4) | TERM_INTEGER_TAG. We untag both (arithmetic
 %% shift right by 4), compute the low 64 bits (mul) and high 64 bits (smulh) of
-%% the signed product, re-tag the low word into Reg, then test that the result
-%% fits: the high word must equal the sign-extension of the low word beyond the
-%% small-integer value range (asr by 59 on a 64-bit build, i.e. SMALL value
-%% bits - 1). The final cmp sets Z=1 when it fits; the retag happens before the
-%% cmp so it does not clobber the flags.
+%% the signed product, shift the low word back into the value field (Reg =
+%% lo << 4), then test that it fits: the high word must equal the sign-extension
+%% of the low word beyond the small-integer value range (asr by 59 on a 64-bit
+%% build, i.e. SMALL value bits - 1). The final cmp sets Z=1 when it fits; the
+%% shift happens before the cmp so it does not clobber the flags.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec mul_overflow(state(), aarch64_register(), aarch64_register()) -> state().
@@ -2828,9 +2829,8 @@ mul_overflow(
         %% hi = smulh(a, b) ; lo = a * b
         (jit_aarch64_asm:smulh(Hi, A, Lo))/binary,
         (jit_aarch64_asm:mul(Lo, A, Lo))/binary,
-        %% retag low word into Reg: Reg = (lo << 4) | TERM_INTEGER_TAG
+        %% shift low word into the value field: Reg = lo << 4 (tag added later)
         (jit_aarch64_asm:lsl(Reg, Lo, 4))/binary,
-        (jit_aarch64_asm:orr(Reg, Reg, 16#F))/binary,
         %% fits-in-small test: sign = asr(lo, 59); cmp hi, sign (Z=1 iff fits)
         (jit_aarch64_asm:asr(Sign, Lo, 59))/binary,
         (jit_aarch64_asm:cmp(Hi, Sign))/binary

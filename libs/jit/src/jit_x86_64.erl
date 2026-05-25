@@ -67,6 +67,7 @@
     sub/3,
     sub_overflow/3,
     mul/3,
+    mul_overflow/3,
     div_/3,
     rem_/3,
     supports_div/1,
@@ -864,10 +865,11 @@ if_block_cond(#state{stream_module = StreamModule} = State0, Cond) ->
     {State2, ReplaceDelta}.
 
 -spec if_block_cond0(state(), condition()) -> {state(), binary(), non_neg_integer()}.
-if_block_cond0(State0, overflow_set) ->
-    %% Flags were set by a preceding flag-setting instruction (addq/subq).
-    %% Execute the block when OF (signed overflow) is set; skip it (jump over)
-    %% when overflow is clear.
+if_block_cond0(State0, Cond) when Cond =:= overflow_set orelse Cond =:= mul_overflow_set ->
+    %% Flags were set by a preceding flag-setting instruction: addq/subq for
+    %% overflow_set, imulq for mul_overflow_set. Both set the OF flag on signed
+    %% overflow, so the block (bignum fallback) runs when OF is set; skip it
+    %% (jump over) when overflow is clear.
     {RelocJNOOffset, I1} = jit_x86_64_asm:jno_rel8(1),
     {State0, I1, RelocJNOOffset};
 if_block_cond0(State0, {RegOrTuple, '<', 0}) ->
@@ -2698,6 +2700,34 @@ sub_overflow(
     I1 = jit_x86_64_asm:subq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Multiply two tagged small integers Reg and Val, leaving the product shifted
+%% into the value field of Reg but WITHOUT the small-integer tag (low bits
+%% zero); the caller re-tags on the no-overflow path. Flags are set so the
+%% `mul_overflow_set' if-condition is true iff the result does NOT fit in a
+%% small integer.
+%%
+%% Both operands are (v << 4) | TERM_INTEGER_TAG. Strip Reg's tag so it holds
+%% a << 4, untag Val to b, then imul: Reg = (a << 4) * b = (a * b) << 4. Because
+%% the kept factor is pre-shifted by the tag size, the 64-bit signed overflow
+%% flag (OF) is set exactly when (a * b) leaves the small-integer value range.
+%% Val (a scratch copy of the second operand) is clobbered; on overflow the
+%% caller re-reads the original operands for the bignum BIF.
+-spec mul_overflow(state(), x86_64_register(), x86_64_register()) -> state().
+mul_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    %% Tag size is 4 and the small-integer tag mask is 0xF (see term.h); the
+    %% x86_64 backend does not include term.hrl, so use the literals directly
+    %% (matching the aarch64 mul_overflow).
+    Code = <<
+        (jit_x86_64_asm:andq(bnot 16#F, Reg))/binary,
+        (jit_x86_64_asm:sarq(4, Val))/binary,
+        (jit_x86_64_asm:imulq(Val, Reg))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val),
     State#state{stream = Stream1, regs = Regs1}.
 
 -spec mul(state(), x86_64_register(), integer() | x86_64_register()) -> state().
