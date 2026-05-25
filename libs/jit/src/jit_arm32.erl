@@ -63,8 +63,11 @@
     and_/3,
     or_/3,
     add/3,
+    add_overflow/3,
     sub/3,
+    sub_overflow/3,
     mul/3,
+    mul_overflow/3,
     supports_div/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -935,6 +938,19 @@ if_else_block(
 
 -spec if_block_cond(state(), condition()) ->
     {state(), jit_arm32_asm:cc(), non_neg_integer()}.
+%% overflow_set: flags set by a preceding adds/subs; run the block when V
+%% (signed overflow) is set, skip it (branch) when overflow is clear.
+if_block_cond(#state{stream_module = StreamModule, stream = Stream0} = State0, overflow_set) ->
+    I = jit_arm32_asm:b(vc, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, vc, 0};
+%% mul_overflow_set: flags set by a preceding mul_overflow (cmp Hi, sign): EQ
+%% iff the product fits. Run the block (bignum fallback) when it does NOT fit;
+%% skip it (branch) when it fits (eq).
+if_block_cond(#state{stream_module = StreamModule, stream = Stream0} = State0, mul_overflow_set) ->
+    I = jit_arm32_asm:b(eq, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, eq, 0};
 %% Handle {Val, '<', Reg} which means "Val < Reg" or "Reg > Val"
 %% For immediate value 0-255
 if_block_cond(
@@ -3330,6 +3346,57 @@ sub(#state{stream_module = StreamModule, regs = Regs0} = State0, Reg, Val) ->
     Stream2 = StreamModule:append(Stream1, I),
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Reg),
     State1#state{stream = Stream2, regs = jit_regs:set_available_regs(Regs1, Avail)}.
+
+%% Add register Val to Reg in place, setting flags (V on signed overflow);
+%% testable with the `overflow_set' if-condition.
+add_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I = jit_arm32_asm:adds(al, Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
+sub_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I = jit_arm32_asm:subs(al, Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Multiply two tagged small integers Reg and Val, leaving the product shifted
+%% into the value field of Reg but WITHOUT the small-integer tag (low bits
+%% zero); the caller re-tags on the no-overflow path. Sets the EQ flag so the
+%% `mul_overflow_set' if-condition is true (NE) iff the result does NOT fit.
+%%
+%% Strip Reg's tag (keep it shifted: a << 4), untag Val to b, then SMULL gives
+%% the 64-bit product {Hi, Reg} = (a << 4) * b = (a * b) << 4. Because the kept
+%% factor is pre-shifted by the tag size, the 32-bit (low word) value overflows
+%% exactly when (a * b) leaves the small-integer range, which is detected by
+%% Hi != (Reg asr 31). cmp leaves EQ iff Hi == sign-extension of the low word.
+mul_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    Reg,
+    Val
+) when is_atom(Val) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Hi = first_avail(Avail),
+    Sign = first_avail(Avail band (bnot reg_bit(Hi))),
+    Code = <<
+        %% strip Reg's tag (a << 4, via bit-clear) and untag Val (b)
+        (jit_arm32_asm:bic(al, Reg, Reg, 16#F))/binary,
+        (jit_arm32_asm:asr(al, Val, Val, 4))/binary,
+        %% {Hi, Reg} = (a << 4) * b
+        (jit_arm32_asm:smull(al, Reg, Hi, Reg, Val))/binary,
+        %% fits iff Hi == (Reg asr 31): cmp sets EQ when they match
+        (jit_arm32_asm:asr(al, Sign, Reg, 31))/binary,
+        (jit_arm32_asm:cmp(al, Hi, Sign))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val),
+    State#state{stream = Stream1, regs = Regs1}.
 
 mul(State, _Reg, 1) ->
     State;
