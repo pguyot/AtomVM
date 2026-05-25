@@ -502,6 +502,25 @@ byte_size_inline_binary_x86_64_test() ->
     ),
     ok.
 
+%% The runtime-guarded div/rem inline path fires when both operands are proven
+%% integers and the divisor is proven strictly positive (Min >= 1), so it is
+%% never 0 and never -1 (ruling out divide-by-zero and the MIN div -1 overflow).
+%% A positive lower bound with an unbounded upper bound ({2, '+inf'}) is the
+%% common loop case the static is_small_integer_range path rejects.
+can_inline_div_guarded_test_() ->
+    [
+        % Divisor proven >= 1, dividend any range: guarded inline allowed.
+        ?_assert(jit:can_inline_div_guarded({'-inf', '+inf'}, {2, '+inf'}, jit_x86_64, undefined)),
+        ?_assert(jit:can_inline_div_guarded({0, 100}, {1, '+inf'}, jit_x86_64, undefined)),
+        % Divisor lower bound 0 (could be zero): not allowed.
+        ?_assertNot(jit:can_inline_div_guarded({2, '+inf'}, {0, '+inf'}, jit_x86_64, undefined)),
+        % Divisor could be negative (could be -1: overflow risk): not allowed.
+        ?_assertNot(jit:can_inline_div_guarded({2, '+inf'}, {-1, '+inf'}, jit_x86_64, undefined)),
+        ?_assertNot(
+            jit:can_inline_div_guarded({2, '+inf'}, {'-inf', '+inf'}, jit_x86_64, undefined)
+        )
+    ].
+
 %%-----------------------------------------------------------------------------
 %% Tuple fusion tests
 %%
