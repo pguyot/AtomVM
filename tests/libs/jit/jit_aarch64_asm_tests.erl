@@ -128,6 +128,16 @@ sub_test_() ->
         )
     ].
 
+smulh_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#9b437c41:32/little>>, "smulh x1, x2, x3", jit_aarch64_asm:smulh(r1, r2, r3)
+        ),
+        ?_assertAsmEqual(
+            <<16#9b487ce7:32/little>>, "smulh x7, x7, x8", jit_aarch64_asm:smulh(r7, r7, r8)
+        )
+    ].
+
 madd_test_() ->
     [
         ?_assertAsmEqual(
