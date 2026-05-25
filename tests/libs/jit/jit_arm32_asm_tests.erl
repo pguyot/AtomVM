@@ -74,6 +74,25 @@ mul_test_() ->
         )
     ].
 
+adds_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#E0900001:32/little>>, "adds r0, r0, r1", jit_arm32_asm:adds(al, r0, r0, r1)
+        ),
+        ?_assertAsmEqual(
+            <<16#E2932001:32/little>>, "adds r2, r3, #1", jit_arm32_asm:adds(al, r2, r3, 1)
+        )
+    ].
+
+smull_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#E0C10392:32/little>>,
+            "smull r0, r1, r2, r3",
+            jit_arm32_asm:smull(al, r0, r1, r2, r3)
+        )
+    ].
+
 and_test_() ->
     [
         %% AND register
