@@ -609,6 +609,16 @@ mul_test_() ->
         )
     ].
 
+mulh_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#02f51533:32/little>>, "mulh a0, a0, a5", jit_riscv32_asm:mulh(a0, a0, a5)
+        ),
+        ?_assertAsmEqual(
+            <<16#026595b3:32/little>>, "mulh a1, a1, t1", jit_riscv32_asm:mulh(a1, a1, t1)
+        )
+    ].
+
 div_test_() ->
     [
         ?_assertAsmEqual(

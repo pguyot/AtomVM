@@ -103,6 +103,7 @@
     call/2,
     % M-extension (delegate to riscv32)
     mul/3,
+    mulh/3,
     div_/3,
     rem_/3,
     % C Extension - Register-register (delegate to riscv32)
@@ -234,6 +235,7 @@ call(Rd, Offset) -> jit_riscv32_asm:call(Rd, Offset).
 
 %% M-extension
 mul(Rd, Rs1, Rs2) -> jit_riscv32_asm:mul(Rd, Rs1, Rs2).
+mulh(Rd, Rs1, Rs2) -> jit_riscv32_asm:mulh(Rd, Rs1, Rs2).
 div_(Rd, Rs1, Rs2) -> jit_riscv32_asm:div_(Rd, Rs1, Rs2).
 rem_(Rd, Rs1, Rs2) -> jit_riscv32_asm:rem_(Rd, Rs1, Rs2).
 

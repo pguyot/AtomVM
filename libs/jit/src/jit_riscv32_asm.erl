@@ -87,6 +87,7 @@
     call/2,
     % M extension (multiply/divide)
     mul/3,
+    mulh/3,
     div_/3,
     rem_/3,
     % C extension (compressed) - arithmetic/logical
@@ -1142,6 +1143,11 @@ call(_Rd, Offset) ->
 mul(Rd, Rs1, Rs2) ->
     % Opcode: 0110011 (0x33), Funct3: 000, Funct7: 0000001
     encode_r_type(16#33, Rd, 16#0, Rs1, Rs2, 16#01).
+
+%% MULH rd, rs1, rs2 - high bits of signed*signed product (funct3=001)
+-spec mulh(riscv_register(), riscv_register(), riscv_register()) -> binary().
+mulh(Rd, Rs1, Rs2) ->
+    encode_r_type(16#33, Rd, 16#1, Rs1, Rs2, 16#01).
 
 %% DIV rd, rs1, rs2 - Signed division
 %% Encoding: R-type with opcode=0x33, funct3=0x4, funct7=0x01
