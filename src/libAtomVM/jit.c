@@ -159,6 +159,12 @@ _Static_assert(offsetof(Context, bs_offset) == 0xF8, "ctx->bs_offset is 0xF8 in 
 _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, continuation) == 0x8, "jit_state->continuation is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x10, "jit_state->remaining_reductions is 0x10 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+
+// Offsets for inlining the imported-BIF resolution at gc_bif call sites.
+_Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(Context, extended_x_regs) == 0x100, "ctx->extended_x_regs is 0x100 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(struct Bif, bif0_ptr) == 0x8, "bif->bif0_ptr is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(struct Bif, base) == 0x0, "bif->base is 0x0 (EXPORTED_FUNCTION_TO_BIF is identity)");
 #elif JIT_ARCH_TARGET == JIT_ARCH_ARMV6M || JIT_ARCH_TARGET == JIT_ARCH_ARM32 || JIT_ARCH_TARGET == JIT_ARCH_RISCV32 || JIT_ARCH_TARGET == JIT_ARCH_WASM32 || JIT_ARCH_TARGET == JIT_ARCH_XTENSA
 _Static_assert(offsetof(Context, e) == 0x28, "ctx->e is 0x28 in 32-bit backends");
 _Static_assert(offsetof(Context, x) == 0x2C, "ctx->x is 0x2C in 32-bit backends");

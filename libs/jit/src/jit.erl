@@ -1693,9 +1693,7 @@ first_pass(<<?OP_GC_BIF3, Rest0/binary>>, MMod, MSt0, State0) ->
             true -> Live
         end,
     {Bif, Rest3} = decode_literal(Rest2),
-    {MSt3, FuncPtr} = MMod:call_primitive(
-        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
-    ),
+    {MSt3, FuncPtr} = resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif),
     {MSt4, Arg1, Rest4} = decode_compact_term(Rest3, MMod, MSt3, State0),
     {MSt5, Arg2, Rest5} = decode_compact_term(Rest4, MMod, MSt4, State0),
     {MSt6, Arg3, Rest6} = decode_compact_term(Rest5, MMod, MSt5, State0),
@@ -3615,9 +3613,7 @@ op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest) ->
             Live > ?MAX_REG -> ?MAX_REG;
             true -> Live
         end,
-    {MSt3, FuncPtr} = MMod:call_primitive(
-        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
-    ),
+    {MSt3, FuncPtr} = resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif),
     {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
         ctx, FailLabel, CappedLive, {free, Arg}
     ]),
@@ -3886,13 +3882,23 @@ op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
             Live > ?MAX_REG -> ?MAX_REG;
             true -> Live
         end,
-    {MSt3, FuncPtr} = MMod:call_primitive(
-        MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif]
-    ),
+    {MSt3, FuncPtr} = resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif),
     {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
         ctx, FailLabel, CappedLive, {free, Arg1}, {free, Arg2}
     ]),
     bif_faillabel_test(FailLabel, MMod, MSt4, {free, ResultReg}, {free, Dest}).
+
+%% Resolve the imported gc_bif function pointer. Backends may inline the
+%% resolution (avoiding the out-of-line PRIM_GET_IMPORTED_GCBIF call) by
+%% exporting move_imported_gcbif_to_native_register/3; otherwise fall back to
+%% the primitive.
+resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif) ->
+    case erlang:function_exported(MMod, move_imported_gcbif_to_native_register, 3) of
+        true ->
+            MMod:move_imported_gcbif_to_native_register(MSt0, Live, Bif);
+        false ->
+            MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif])
+    end.
 
 % Platform-specific bounds for small integers
 small_integer_bounds(MMod) ->
