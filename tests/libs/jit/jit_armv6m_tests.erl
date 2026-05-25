@@ -33,6 +33,53 @@
 % disassembly obtained with:
 %  arm-elf-objdump -D -b binary -marm --disassembler-options=force-thumb -z
 
+add_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+            "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+            "   4:	19bf      	adds	r7, r7, r6"
+        >>,
+    ?assertStream(arm, Dump, Stream).
+
+sub_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:sub_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+            "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+            "   4:	1bbf      	subs	r7, r7, r6"
+        >>,
+    ?assertStream(arm, Dump, Stream).
+
+if_block_overflow_set_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    State4 = ?BACKEND:if_block(State3, overflow_set, fun(BSt0) ->
+        ?BACKEND:move_to_vm_register(BSt0, RegA, {x_reg, 2})
+    end),
+    Stream = ?BACKEND:stream(State4),
+    Dump =
+        <<
+            "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+            "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+            "   4:	19bf      	adds	r7, r7, r6\n"
+            "   6:	d700      	bvc.n	0xa\n"
+            "   8:	6347      	str	r7, [r0, #52]	@ 0x34"
+        >>,
+    ?assertStream(arm, Dump, Stream).
+
 call_primitive_0_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, ResultReg} = ?BACKEND:call_primitive(State0, 0, [ctx, jit_state]),
