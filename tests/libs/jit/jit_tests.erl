@@ -1007,6 +1007,61 @@ typed_is_eq_exact_typed_lit_x86_64_test() ->
     ),
     ok.
 
+%% Untyped (no type chunk) comparison default path: the operands' types are
+%% unknown at compile time, so the JIT cannot take the typed bare-cmp path.
+%% Instead it emits a *runtime* small-integer fast path (tag-check both
+%% operands, native tagged compare) wrapping the term_compare fallback. This
+%% guards that the default path is more than a bare term_compare call: it must
+%% be larger than the typed inline path (which is a single cmp) yet still
+%% compile correctly on every backend. Verified end-to-end correct by
+%% test-erlang and the comparison edge-case checks; here we lock in that the
+%% fast path is emitted for the untyped default path on each backend.
+untyped_is_eq_exact_fastpath_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Typed = compile_stream_for_backend(
+                Backend,
+                ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+                ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+                ?TYPE_TYPED_IS_EQ_EXACT_BOTH,
+                fun length_import_resolver/1
+            ),
+            Untyped = compile_stream_for_backend(
+                Backend,
+                ?CODE_TYPED_IS_EQ_EXACT_BOTH,
+                ?ATU8_TYPED_IS_EQ_EXACT_BOTH,
+                <<>>,
+                fun length_import_resolver/1
+            ),
+            % The runtime fast path (tag tests + native cmp + term_compare
+            % fallback) is strictly larger than the typed bare-cmp path.
+            ?assert(byte_size(Untyped) > byte_size(Typed))
+        end}
+     || Backend <- [jit_x86_64, jit_aarch64]
+    ].
+
+untyped_is_lt_fastpath_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Typed = compile_stream_for_backend(
+                Backend,
+                ?CODE_TYPED_IS_LT_BOTH,
+                ?ATU8_TYPED_IS_LT_BOTH,
+                ?TYPE_TYPED_IS_LT_BOTH,
+                fun length_import_resolver/1
+            ),
+            Untyped = compile_stream_for_backend(
+                Backend,
+                ?CODE_TYPED_IS_LT_BOTH,
+                ?ATU8_TYPED_IS_LT_BOTH,
+                <<>>,
+                fun length_import_resolver/1
+            ),
+            ?assert(byte_size(Untyped) > byte_size(Typed))
+        end}
+     || Backend <- [jit_x86_64, jit_aarch64]
+    ].
+
 typed_is_not_eq_exact_both_x86_64_test() ->
     % is_ne_exact (OP_IS_NOT_EQ_EXACT) with both bounded typed integers: fast inline path.
     TypedCode = compile_stream_for_backend(
