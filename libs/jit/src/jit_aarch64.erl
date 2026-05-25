@@ -59,6 +59,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    move_imported_gcbif_to_native_register/3,
     and_/3,
     or_/3,
     add/3,
@@ -211,6 +212,13 @@
 -define(JITSTATE_REDUCTIONCOUNT, {?JITSTATE_REG, 16#10}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+% Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
+% Kept in sync with src/libAtomVM/jit.c via _Static_assert.
+-define(MODULE_IMPORTED_FUNCS, 16#90).
+-define(CTX_EXTENDED_X_REGS, 16#100).
+% struct Bif { struct ExportedFunction base; union { BifImpl0 bif0_ptr; ... }; }
+% base is at offset 0, so EXPORTED_FUNCTION_TO_BIF(f) == f and bif0_ptr is here.
+-define(BIF_BIF0_PTR, 16#8).
 
 % aarch64 ABI specific
 -define(LR_REG, r30).
@@ -2496,6 +2504,57 @@ set_continuation_to_offset(
 -spec continuation_entry_point(#state{}) -> #state{}.
 continuation_entry_point(State) ->
     State.
+
+%%-----------------------------------------------------------------------------
+%% @doc Resolve the imported BIF function pointer for a gc_bif call site inline,
+%% instead of through the PRIM_GET_IMPORTED_GCBIF primitive call. Equivalent to
+%% jit_get_imported_gcbif in jit.c: first drop dead extended registers (only if
+%% any exist — the common case has none, so the cleanup call is skipped), then
+%% load module->imported_funcs[Bif]->bif0_ptr. Returns the pointer register.
+%% @end
+-spec move_imported_gcbif_to_native_register(state(), integer(), non_neg_integer()) ->
+    {state(), aarch64_register()}.
+move_imported_gcbif_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail} = State0,
+    Live,
+    Bif
+) ->
+    %% Inline extended-register cleanup: skip the call when the list is empty
+    %% (ListHead.next == &list, i.e. equals the list address). list address is
+    %% ctx + ?CTX_EXTENDED_X_REGS.
+    AddrReg = first_avail(Avail),
+    NextReg = first_avail(Avail band (bnot reg_bit(AddrReg))),
+    I1 = jit_aarch64_asm:add(AddrReg, ?CTX_REG, ?CTX_EXTENDED_X_REGS),
+    I2 = jit_aarch64_asm:ldr(NextReg, {AddrReg, 0}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(State0#state.regs, AddrReg), NextReg
+    ),
+    State1 = State0#state{stream = Stream1, regs = Regs1},
+    State2 = if_block(State1, {{free, NextReg}, '!=', AddrReg}, fun(BSt0) ->
+        {BSt1, R} = call_primitive(BSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+        free_native_registers(BSt1, [R])
+    end),
+    %% Now load the BIF pointer: module = [jit_state+0]; funcs = [module+IMP];
+    %% exported = [funcs + Bif*8]; bif0_ptr = [exported + BIF0].
+    #state{stream = Stream2, available_regs = Avail2} = State2,
+    PtrReg = first_avail(Avail2),
+    J1 = jit_aarch64_asm:ldr(PtrReg, ?JITSTATE_MODULE),
+    J2 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, ?MODULE_IMPORTED_FUNCS}),
+    J3 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, Bif * ?WORD_SIZE}),
+    J4 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, ?BIF_BIF0_PTR}),
+    Stream3 = StreamModule:append(Stream2, <<J1/binary, J2/binary, J3/binary, J4/binary>>),
+    Bit = reg_bit(PtrReg),
+    Regs2 = jit_regs:invalidate_reg(State2#state.regs, PtrReg),
+    {
+        State2#state{
+            stream = Stream3,
+            available_regs = Avail2 band (bnot Bit),
+            used_regs = State2#state.used_regs bor Bit,
+            regs = Regs2
+        },
+        PtrReg
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Get the module index from the JIT state and load it into a native
