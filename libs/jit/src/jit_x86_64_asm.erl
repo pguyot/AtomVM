@@ -33,6 +33,8 @@
     jz_rel8/1,
     jnz/1,
     jnz_rel8/1,
+    jno/1,
+    jno_rel8/1,
     jge/1,
     jge_rel8/1,
     jle/1,
@@ -363,6 +365,14 @@ jnz(Offset) when Offset >= -126 andalso Offset =< 129 ->
 
 jnz_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jnz(Offset)}.
+
+jno(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    % Jump if no overflow (OF=0); short jump
+    AdjustedOffset = Offset - 2,
+    <<16#71, AdjustedOffset>>.
+
+jno_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    {1, jno(Offset)}.
 
 jge(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
