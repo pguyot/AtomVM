@@ -43,7 +43,10 @@
     div_by_pow2/1,
     rem_by_pow2/1,
     div_by_pow2_large/1,
-    rem_by_pow2_large/1
+    rem_by_pow2_large/1,
+    untyped_div_lit/1,
+    untyped_rem_lit/1,
+    untyped_divrem_dense/1
 ]).
 
 % Test inline addition with safe ranges - SHOULD BE INLINED
@@ -136,6 +139,27 @@ div_by_pow2_large(X) when is_integer(X), X >= 0, X < 10000 ->
 % Test rem by larger power of 2
 rem_by_pow2_large(X) when is_integer(X), X >= 0, X < 10000 ->
     X rem 256.
+
+% Hide the type of X so the dividend is NOT statically known to be a small
+% integer, exercising the runtime small-integer div/rem fast path (the typed
+% clauses do not apply).
+id(X) -> X.
+
+untyped_div_lit(X) -> id(X) div 3.
+untyped_rem_lit(X) -> id(X) rem 3.
+
+% Dense sequence: a bignum div/rem (taking the runtime fallback) immediately
+% followed by a small div whose result is matched without an intervening call.
+% This is the shape that previously miscompiled due to the result landing in
+% the wrong register; it must produce a correct, matchable result.
+untyped_divrem_dense(X) ->
+    Big = 999999999999999999999,
+    333333333333333333333 = id(Big) div 3,
+    0 = id(Big) rem 3,
+    VD = id(X) div 3,
+    VD = X div 3,
+    true = is_integer(VD),
+    VD.
 
 start() ->
     % Test safe addition - should be inlined
@@ -283,5 +307,24 @@ start() ->
     0 = ?MODULE:rem_by_pow2_large(256),
     232 = ?MODULE:rem_by_pow2_large(1000),
     15 = ?MODULE:rem_by_pow2_large(9999),
+
+    % Runtime small-integer div/rem fast path with an untyped dividend.
+    0 = ?MODULE:untyped_div_lit(2),
+    1 = ?MODULE:untyped_div_lit(3),
+    33 = ?MODULE:untyped_div_lit(99),
+    -1 = ?MODULE:untyped_div_lit(-3),
+    -33 = ?MODULE:untyped_div_lit(-100),
+    % Bignum dividend takes the runtime fallback.
+    333333333333333333333 = ?MODULE:untyped_div_lit(999999999999999999999),
+    0 = ?MODULE:untyped_rem_lit(99),
+    1 = ?MODULE:untyped_rem_lit(10),
+    -1 = ?MODULE:untyped_rem_lit(-10),
+    0 = ?MODULE:untyped_rem_lit(999999999999999999999),
+
+    % Regression: bignum div/rem fallback immediately followed by a small div
+    % whose result is matched without an intervening call.
+    -33 = ?MODULE:untyped_divrem_dense(-100),
+    33 = ?MODULE:untyped_divrem_dense(100),
+    -192153584101141162 = ?MODULE:untyped_divrem_dense(-(1 bsl 59)),
 
     0.
