@@ -88,7 +88,9 @@
     and_/3,
     or_/3,
     add/3,
+    add_overflow_check/3,
     sub/3,
+    sub_overflow_check/3,
     mul/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -650,6 +652,37 @@ sub(State0, Local, ValOrReg) when is_atom(Local) ->
     Regs1 = jit_regs:invalidate_reg(State0#state.regs, Local),
     State1 = emit(State0, Code),
     State1#state{regs = Regs1}.
+
+%% Flagless overflow-checked add/sub of two tagged small integers (both small).
+%% WASM32 is a 32-bit stack machine with no condition flags, so this leaves the
+%% result shifted into the value field of Reg (untagged; the caller ORs the
+%% tag) and returns a CheckReg that is nonzero iff the result left the small
+%% range. Both operands are (v << 4) | TERM_INTEGER_TAG; untag both, compute s,
+%% then s fits iff (s << 4) >> 4 == s, so CheckReg = ((s<<4)>>4) xor s. Composed
+%% from the backend's own stack-machine ops so locals are managed correctly.
+add_overflow_check(State0, Reg, Val) ->
+    addsub_overflow_check(State0, Reg, Val, add).
+sub_overflow_check(State0, Reg, Val) ->
+    addsub_overflow_check(State0, Reg, Val, sub).
+
+addsub_overflow_check(State0, Reg, Val, Op) ->
+    %% untag both operands in place: Reg = a, Val = b
+    {State1, Reg} = shift_right_arith(State0, {free, Reg}, 4),
+    {State2, Val} = shift_right_arith(State1, {free, Val}, 4),
+    %% Reg = a Op b (untagged result s)
+    State3 =
+        case Op of
+            add -> add(State2, Reg, Val);
+            sub -> sub(State2, Reg, Val)
+        end,
+    %% Check = ((s << 4) >> 4) xor s  (0 iff s fits the small range)
+    {State4, Check} = copy_to_native_register(State3, Reg),
+    State5 = shift_left(State4, Check, 4),
+    {State6, Check} = shift_right_arith(State5, {free, Check}, 4),
+    State7 = xor_(State6, Check, Reg),
+    %% Reg = s << 4 (result shifted into the value field, tag added later)
+    State8 = shift_left(State7, Reg, 4),
+    {State8, Check}.
 
 mul(State, _Reg, 1) ->
     State;
