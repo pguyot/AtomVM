@@ -3862,6 +3862,30 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, '*', Arg1, Arg2, Dest) ->
                 MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
             )
     end;
+% Runtime small-integer fast path for div/rem by a POSITIVE small-int literal,
+% when the dividend's type is not known to be a small integer.
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
+    (Op =:= 'div' orelse Op =:= 'rem'),
+    is_integer(Arg2),
+    Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG,
+    (Arg2 bsr 4) >= 1
+->
+    BackendOp =
+        case Op of
+            'div' -> div_;
+            'rem' -> rem_
+        end,
+    case
+        erlang:function_exported(MMod, supports_div, 1) andalso MMod:supports_div(MSt0) andalso
+            addsub_fastpath_reloadable(Arg1)
+    of
+        true ->
+            op_gc_bif2_divrem_lit_runtime(
+                MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2, Dest
+            );
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
+    end;
 % Default case
 op_gc_bif2(
     MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
@@ -4000,6 +4024,38 @@ op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
                     )
                 end
             )
+        end
+    ).
+
+%% Runtime small-integer fast path for `div'/`rem' by a positive small-int
+%% literal Arg2Tagged. If the dividend is a small integer, untag it IN PLACE in
+%% R1, do the native signed div/rem by the (untagged) literal divisor, re-tag in
+%% place, and store to Dest. The result is left in R1 (the register the
+%% non-fast path would use) so downstream code that reads the result register
+%% directly sees the right value. On the not-small path R1 is untouched and the
+%% BIF re-reads the original VM dividend (so the positive literal divisor still
+%% guarantees no divide-by-zero / MIN-by-(-1) overflow on the small path).
+op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2Tagged, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    DivisorValue = Arg2Tagged bsr 4,
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    MMod:if_else_block(
+        MSt1,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        %% Not a small integer: re-read the original dividend for the BIF.
+        fun(BSt0) ->
+            BSt1 = MMod:free_native_registers(BSt0, [R1]),
+            op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest)
+        end,
+        %% Small integer: untag R1 in place, native div/rem, re-tag in place.
+        fun(BSt0) ->
+            {BSt1, R1} = MMod:shift_right_arith(BSt0, {free, R1}, 4),
+            {BSt2, Divisor} = MMod:move_to_native_register(BSt1, DivisorValue),
+            {BSt3, ResReg} = MMod:BackendOp(BSt2, R1, Divisor),
+            BSt4 = MMod:shift_left(BSt3, ResReg, 4),
+            BSt5 = MMod:or_(BSt4, ResReg, ?TERM_INTEGER_TAG),
+            BSt6 = MMod:move_to_vm_register(BSt5, ResReg, Dest),
+            MMod:free_native_registers(BSt6, [ResReg, Divisor, Dest])
         end
     ).
 
