@@ -101,6 +101,22 @@ add_overflow_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+mul_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:mul_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   4c 8b 5f 60             mov    0x60(%rdi),%r11\n"
+            "8:   48 83 e0 f0             and    $0xfffffffffffffff0,%rax\n"
+            "c:   49 c1 fb 04             sar    $0x4,%r11\n"
+            "10:  49 0f af c3             imul   %r11,%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 sub_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
