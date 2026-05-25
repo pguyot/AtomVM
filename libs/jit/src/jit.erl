@@ -3644,6 +3644,21 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
                 MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
             )
     end;
+% Runtime small-integer fast path for *. Same gating as +/-; the backend
+% mul_overflow op computes the tagged product and flags whether it overflowed
+% the small-integer range.
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, '*', Arg1, Arg2, Dest) ->
+    case
+        erlang:function_exported(MMod, mul_overflow, 3) andalso
+            addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2)
+    of
+        true ->
+            op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+        false ->
+            op_gc_bif2_default(
+                MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
+            )
+    end;
 % Default case
 op_gc_bif2(
     MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
@@ -3725,6 +3740,48 @@ op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
                     MMod:if_else_block(
                         BSt5,
                         overflow_set,
+                        %% Overflow: R1 clobbered; fallback re-reads VM operands.
+                        Fallback,
+                        %% In range: R1 holds the tagged result; store to Dest.
+                        fun(NSt0) ->
+                            NSt1 = MMod:move_to_vm_register(NSt0, R1, Dest),
+                            MMod:free_native_registers(NSt1, [R1, R2, Dest])
+                        end
+                    )
+                end
+            )
+        end
+    ).
+
+%% Runtime small-integer fast path for *. Mirrors op_gc_bif2_addsub_runtime:
+%% load both operands, check both small, then mul_overflow computes the tagged
+%% product in place in R1 and flags whether it overflowed the small range. On
+%% overflow R1 is clobbered, so the fallback re-reads the original VM operands.
+op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    UArg2 = unwrap_typed(Arg2),
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
+        op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(BSt0) ->
+            MMod:if_else_block(
+                BSt0,
+                {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                Fallback,
+                fun(BSt1) ->
+                    %% R1 = tagged (R1 * R2); flags set so mul_overflow_set is
+                    %% true iff the product does not fit in a small integer.
+                    BSt2 = MMod:mul_overflow(BSt1, R1, R2),
+                    MMod:if_else_block(
+                        BSt2,
+                        mul_overflow_set,
                         %% Overflow: R1 clobbered; fallback re-reads VM operands.
                         Fallback,
                         %% In range: R1 holds the tagged result; store to Dest.

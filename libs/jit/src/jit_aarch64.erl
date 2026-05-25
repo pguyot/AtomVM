@@ -67,6 +67,7 @@
     sub/3,
     sub_overflow/3,
     mul/3,
+    mul_overflow/3,
     div_/3,
     rem_/3,
     supports_div/1,
@@ -1117,6 +1118,16 @@ if_block_cond(
     I = jit_aarch64_asm:bcc(vc, 0),
     Stream1 = StreamModule:append(Stream0, I),
     {State0#state{stream = Stream1}, vc, 0};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    mul_overflow_set
+) ->
+    %% Flags set by a preceding mul_overflow (cmp hi, sign): Z=1 iff the product
+    %% fits in a small integer. Execute the block (bignum fallback) when it does
+    %% NOT fit; branch over it (skip, eq) when it fits.
+    I = jit_aarch64_asm:bcc(eq, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, eq, 0};
 if_block_cond(
     #state{
         stream_module = StreamModule,
@@ -2775,6 +2786,56 @@ sub_overflow(
 ) when is_atom(Val) ->
     I1 = jit_aarch64_asm:subs(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Multiply two tagged small integers Reg and Val, leaving the tagged
+%% product in Reg, and set condition flags so the `mul_overflow_set'
+%% if-condition is true iff the result does NOT fit in a small integer (and the
+%% bignum fallback must run).
+%%
+%% Both operands are (v << 4) | TERM_INTEGER_TAG. We untag both (arithmetic
+%% shift right by 4), compute the low 64 bits (mul) and high 64 bits (smulh) of
+%% the signed product, re-tag the low word into Reg, then test that the result
+%% fits: the high word must equal the sign-extension of the low word beyond the
+%% small-integer value range (asr by 59 on a 64-bit build, i.e. SMALL value
+%% bits - 1). The final cmp sets Z=1 when it fits; the retag happens before the
+%% cmp so it does not clobber the flags.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec mul_overflow(state(), aarch64_register(), aarch64_register()) -> state().
+mul_overflow(
+    #state{
+        stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0
+    } = State,
+    Reg,
+    Val
+) when is_atom(Val) ->
+    %% Scratch registers for a, b/lo, hi, sign. first_avail does not consume
+    %% Reg/Val (they are marked used), so these are distinct.
+    A = first_avail(Avail),
+    Avail1 = Avail band (bnot reg_bit(A)),
+    Lo = first_avail(Avail1),
+    Avail2 = Avail1 band (bnot reg_bit(Lo)),
+    Hi = first_avail(Avail2),
+    Avail3 = Avail2 band (bnot reg_bit(Hi)),
+    Sign = first_avail(Avail3),
+    Code = <<
+        %% a = Reg >> 4 ; b = Val >> 4 (Lo temporarily holds b)
+        (jit_aarch64_asm:asr(A, Reg, 4))/binary,
+        (jit_aarch64_asm:asr(Lo, Val, 4))/binary,
+        %% hi = smulh(a, b) ; lo = a * b
+        (jit_aarch64_asm:smulh(Hi, A, Lo))/binary,
+        (jit_aarch64_asm:mul(Lo, A, Lo))/binary,
+        %% retag low word into Reg: Reg = (lo << 4) | TERM_INTEGER_TAG
+        (jit_aarch64_asm:lsl(Reg, Lo, 4))/binary,
+        (jit_aarch64_asm:orr(Reg, Reg, 16#F))/binary,
+        %% fits-in-small test: sign = asr(lo, 59); cmp hi, sign (Z=1 iff fits)
+        (jit_aarch64_asm:asr(Sign, Lo, 59))/binary,
+        (jit_aarch64_asm:cmp(Hi, Sign))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
 

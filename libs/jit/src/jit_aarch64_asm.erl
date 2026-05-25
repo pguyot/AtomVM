@@ -24,6 +24,7 @@
     sub/3,
     sub/4,
     mul/3,
+    smulh/3,
     madd/4,
     b/1,
     bcc/2,
@@ -1099,6 +1100,16 @@ madd(Rd, Rn, Rm, Ra) when is_atom(Rd), is_atom(Rn), is_atom(Rm), is_atom(Ra) ->
         (16#9B000000 bor (RmNum bsl 16) bor (RaNum bsl 10) bor (RnNum bsl 5) bor
             RdNum):32/little
     >>.
+
+%% SMULH Rd, Rn, Rm: signed multiply high. Rd = high 64 bits of (Rn * Rm)
+%% treated as signed 64-bit operands (full product is 128-bit).
+-spec smulh(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+smulh(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    %% AArch64 SMULH: 10011011010mmmmm011111nnnnnddddd
+    <<(16#9B407C00 bor (RmNum bsl 16) bor (RnNum bsl 5) bor RdNum):32/little>>.
 
 %% MSUB Rd, Rn, Rm, Ra: Rd = Ra - (Rn * Rm)
 -spec msub(

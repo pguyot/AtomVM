@@ -160,6 +160,27 @@ sub_overflow_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+mul_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:mul_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+            "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+            "   8:	9344fce9 	asr	x9, x7, #4\n"
+            "   c:	9344fd0a 	asr	x10, x8, #4\n"
+            "  10:	9b4a7d2b 	smulh	x11, x9, x10\n"
+            "  14:	9b0a7d2a 	mul	x10, x9, x10\n"
+            "  18:	d37ced47 	lsl	x7, x10, #4\n"
+            "  1c:	b2400ce7 	orr	x7, x7, #0xf\n"
+            "  20:	937bfd4c 	asr	x12, x10, #59\n"
+            "  24:	eb0c017f 	cmp	x11, x12"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 if_block_overflow_set_test() ->
     %% overflow_set executes the block when V is set; the patched branch skips
     %% it (b.vc) when overflow is clear.
