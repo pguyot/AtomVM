@@ -63,7 +63,9 @@
     and_/3,
     or_/3,
     add/3,
+    add_overflow/3,
     sub/3,
+    sub_overflow/3,
     mul/3,
     div_/3,
     rem_/3,
@@ -807,6 +809,12 @@ if_block_cond(#state{stream_module = StreamModule} = State0, Cond) ->
     {State2, ReplaceDelta}.
 
 -spec if_block_cond0(state(), condition()) -> {state(), binary(), non_neg_integer()}.
+if_block_cond0(State0, overflow_set) ->
+    %% Flags were set by a preceding flag-setting instruction (addq/subq).
+    %% Execute the block when OF (signed overflow) is set; skip it (jump over)
+    %% when overflow is clear.
+    {RelocJNOOffset, I1} = jit_x86_64_asm:jno_rel8(1),
+    {State0, I1, RelocJNOOffset};
 if_block_cond0(State0, {RegOrTuple, '<', 0}) ->
     Reg =
         case RegOrTuple of
@@ -2587,6 +2595,27 @@ sub(
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, TempReg), Reg),
     State#state{stream = Stream1, regs = Regs1};
 sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val) ->
+    I1 = jit_x86_64_asm:subq(Val, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Add register Val to Reg in place, setting flags (OF on signed overflow);
+%% testable with the `overflow_set' if-condition.
+-spec add_overflow(state(), x86_64_register(), x86_64_register()) -> state().
+add_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
+    I1 = jit_x86_64_asm:addq(Val, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
+-spec sub_overflow(state(), x86_64_register(), x86_64_register()) -> state().
+sub_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_atom(Val) ->
     I1 = jit_x86_64_asm:subq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
