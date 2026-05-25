@@ -1155,6 +1155,28 @@ static void memory_scan_and_copy_generational(
     }
 }
 
+// Initial size of a freshly allocated old heap, given the amount of mature
+// data being promoted into it this minor GC. Sizing it to exactly mature_size
+// leaves no headroom: the next minor GC would immediately find the old heap
+// full and fall back to a full GC, defeating the generational collector. The
+// headroom follows the process heap growth strategy, mirroring how the young
+// heap target is computed in memory_ensure_free_with_roots:
+//  - MinimumHeapGrowth: no headroom (minimise footprint).
+//  - BoundedFreeHeapGrowth: a bounded amount of free space.
+//  - FibonacciHeapGrowth: round up the fibonacci series (geometric headroom).
+static size_t initial_old_heap_size(enum HeapGrowthStrategy strategy, size_t mature_size)
+{
+    switch (strategy) {
+        case MinimumHeapGrowth:
+            return mature_size;
+        case BoundedFreeHeapGrowth:
+            return mature_size + 2 * MIN_FREE_SPACE_SIZE;
+        case FibonacciHeapGrowth:
+        default:
+            return next_fibonacci_heap_size(mature_size);
+    }
+}
+
 static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots)
 {
     TRACE("Going to perform minor gc on process %i\n", ctx->process_id);
@@ -1177,14 +1199,15 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
 
     if (saved_old_heap_start == NULL) {
         if (mature_size > 0) {
-            HeapFragment *old_fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + mature_size * sizeof(term));
+            size_t old_heap_size = initial_old_heap_size(ctx->heap_growth_strategy, mature_size);
+            HeapFragment *old_fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + old_heap_size * sizeof(term));
             if (IS_NULL_PTR(old_fragment)) {
                 goto fallback_full_gc;
             }
             old_fragment->next = NULL;
             saved_old_heap_start = old_fragment->storage;
             saved_old_heap_ptr = old_fragment->storage;
-            saved_old_heap_end = old_fragment->storage + mature_size;
+            saved_old_heap_end = old_fragment->storage + old_heap_size;
             newly_allocated_old_heap = true;
         }
     } else {
