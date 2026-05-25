@@ -87,6 +87,53 @@ call_primitive_2_args_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+add_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   4c 8b 5f 60             mov    0x60(%rdi),%r11\n"
+            "8:   4c 01 d8                add    %r11,%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+sub_overflow_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:sub_overflow(State2, RegA, RegB),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   4c 8b 5f 60             mov    0x60(%rdi),%r11\n"
+            "8:   4c 29 d8                sub    %r11,%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+if_block_overflow_set_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, RegB} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    State3 = ?BACKEND:add_overflow(State2, RegA, RegB),
+    State4 = ?BACKEND:if_block(State3, overflow_set, fun(BSt0) ->
+        ?BACKEND:move_to_vm_register(BSt0, RegA, {x_reg, 2})
+    end),
+    Stream = ?BACKEND:stream(State4),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   4c 8b 5f 60             mov    0x60(%rdi),%r11\n"
+            "8:   4c 01 d8                add    %r11,%rax\n"
+            "b:   71 04                   jno    0x11\n"
+            "d:   48 89 47 68             mov    %rax,0x68(%rdi)\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 call_primitive_extended_regs_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:call_primitive(
