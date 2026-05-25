@@ -4043,18 +4043,20 @@ op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
                 {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
                 Fallback,
                 fun(BSt1) ->
-                    %% R1 = tagged (R1 * R2); flags set so mul_overflow_set is
-                    %% true iff the product does not fit in a small integer.
+                    %% R1 = (R1 * R2) shifted into the value field (not yet
+                    %% tagged); flags set so mul_overflow_set is true iff the
+                    %% product does not fit in a small integer.
                     BSt2 = MMod:mul_overflow(BSt1, R1, R2),
                     MMod:if_else_block(
                         BSt2,
                         mul_overflow_set,
                         %% Overflow: R1 clobbered; fallback re-reads VM operands.
                         Fallback,
-                        %% In range: R1 holds the tagged result; store to Dest.
+                        %% In range: add the small-integer tag, store to Dest.
                         fun(NSt0) ->
-                            NSt1 = MMod:move_to_vm_register(NSt0, R1, Dest),
-                            MMod:free_native_registers(NSt1, [R1, R2, Dest])
+                            NSt1 = MMod:or_(NSt0, R1, ?TERM_INTEGER_TAG),
+                            NSt2 = MMod:move_to_vm_register(NSt1, R1, Dest),
+                            MMod:free_native_registers(NSt2, [R1, R2, Dest])
                         end
                     )
                 end
