@@ -175,9 +175,8 @@ mul_overflow_test() ->
             "  10:	9b4a7d2b 	smulh	x11, x9, x10\n"
             "  14:	9b0a7d2a 	mul	x10, x9, x10\n"
             "  18:	d37ced47 	lsl	x7, x10, #4\n"
-            "  1c:	b2400ce7 	orr	x7, x7, #0xf\n"
-            "  20:	937bfd4c 	asr	x12, x10, #59\n"
-            "  24:	eb0c017f 	cmp	x11, x12"
+            "  1c:	937bfd4c 	asr	x12, x10, #59\n"
+            "  20:	eb0c017f 	cmp	x11, x12"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 

@@ -33,6 +33,7 @@
     mul_const/1,
     mul_regs/2,
     mul_regs_neg/2,
+    square/1,
     div_by_literal/1,
     div_regs/2,
     rem_by_literal/1,
@@ -46,7 +47,11 @@
     rem_by_pow2_large/1,
     untyped_div_lit/1,
     untyped_rem_lit/1,
-    untyped_divrem_dense/1
+    untyped_divrem_dense/1,
+    bignum_then_band/1,
+    lcg_loop/2,
+    square_untyped/1,
+    square_typed/1
 ]).
 
 % Test inline addition with safe ranges - SHOULD BE INLINED
@@ -89,6 +94,11 @@ mul_const(X) when is_integer(X), X >= 0, X < 100 ->
 % Test register * register multiplication - both args are typed registers
 mul_regs(X, Y) when is_integer(X), X >= 0, X < 100, is_integer(Y), Y >= 0, Y < 100 ->
     X * Y.
+
+% Test squaring (X * X) - both operands are the SAME typed register, which
+% exercises the register-aliasing case of the inlined reg*reg multiply.
+square(X) when is_integer(X), X >= -1000, X =< 1000 ->
+    X * X.
 
 % Test register * register multiplication with negative range
 % Exercises the reg*reg path where Arg2 can be negative
@@ -161,6 +171,36 @@ untyped_divrem_dense(X) ->
     true = is_integer(VD),
     VD.
 
+% Regression: when the first operand of an inline +/-/* is a bignum, the JIT
+% takes the arg1 tag-check fallback. The jump that skips the rest of the
+% operation must be a rel32 jump because the skipped (false) block exceeds 127
+% bytes; a rel8 jump silently wrapped its displacement and landed in the middle
+% of an instruction, corrupting control flow as soon as the result fed a
+% following operation. The minimal shape: a bignum first operand whose result
+% is then used (not a leaf return).
+bignum_then_band(X) ->
+    (id(X) + 7) band 255.
+
+% Same bug, exercised end to end by a PRNG-style accumulator loop: each
+% overflowing multiply yields a bignum that feeds the next addition, in a
+% tail-recursive function with a live continuation.
+lcg_loop(0, Acc) ->
+    Acc;
+lcg_loop(N, Acc) ->
+    Next = (id(Acc) * 1103515245 + 12345) band ((1 bsl 31) - 1),
+    lcg_loop(N - 1, Next).
+
+% Regression: multiplying a value by itself (X * X) makes both operands resolve
+% to the same register. The inline multiply strips one operand's tag in place
+% and untags the other in place; with a single shared register that drops the
+% kept << 4 and yields (v*v) instead of (v*v) << 4 (the result reads back as
+% (v*v) >> 4). square_untyped exercises the runtime fast path (mul_overflow),
+% including the bignum-overflow fallback; square_typed exercises the typed
+% reg*reg inline path.
+square_untyped(X) -> id(X) * id(X).
+
+square_typed(X) when is_integer(X), X >= 0, X < 100 -> X * X.
+
 start() ->
     % Test safe addition - should be inlined
     20 = ?MODULE:add_small(0),
@@ -219,6 +259,14 @@ start() ->
     42 = ?MODULE:mul_regs(6, 7),
     99 = ?MODULE:mul_regs(99, 1),
     9801 = ?MODULE:mul_regs(99, 99),
+
+    % Test squaring (X * X, same register on both sides of the multiply)
+    0 = ?MODULE:square(0),
+    1 = ?MODULE:square(1),
+    176400 = ?MODULE:square(420),
+    900 = ?MODULE:square(-30),
+    176400 = ?MODULE:square(-420),
+    1000000 = ?MODULE:square(1000),
 
     % Test register * register multiplication with negative values
     0 = ?MODULE:mul_regs_neg(0, -5),
@@ -326,5 +374,44 @@ start() ->
     -33 = ?MODULE:untyped_divrem_dense(-100),
     33 = ?MODULE:untyped_divrem_dense(100),
     -192153584101141162 = ?MODULE:untyped_divrem_dense(-(1 bsl 59)),
+
+    % Runtime small-integer +/-/* fast paths with untyped operands. The small
+    % cases take the inline path; a bignum operand takes the BIF fallback.
+    % (1 bsl 60) is a bignum on both 32-bit and 64-bit builds.
+    0 = ?MODULE:untyped_add(0, 0),
+    42 = ?MODULE:untyped_add(20, 22),
+    -5 = ?MODULE:untyped_add(-2, -3),
+    -7 = ?MODULE:untyped_add(-10, 3),
+    7 = ?MODULE:untyped_sub(10, 3),
+    0 = ?MODULE:untyped_sub(5, 5),
+    1 = ?MODULE:untyped_sub(-2, -3),
+    12 = ?MODULE:untyped_mul(3, 4),
+    -12 = ?MODULE:untyped_mul(3, -4),
+    12 = ?MODULE:untyped_mul(-3, -4),
+    0 = ?MODULE:untyped_mul(0, 7),
+    81 = ?MODULE:untyped_mul(9, 9),
+    % Bignum operands take the BIF fallback (correct large result).
+    % (1 bsl 60) is a bignum on both 32-bit and 64-bit builds.
+    1152921504606846977 = ?MODULE:untyped_add(1152921504606846976, 1),
+    1152921504606846975 = ?MODULE:untyped_sub(1152921504606846976, 1),
+    2305843009213693952 = ?MODULE:untyped_mul(1152921504606846976, 2),
+
+    % Regression: a bignum first operand whose inline-arithmetic result feeds a
+    % following operation. Previously miscompiled on x86_64 (a rel8 jump in
+    % if_else_block wrapped over the >127-byte inline-arithmetic false block).
+    7 = ?MODULE:bignum_then_band(1152921504606846976),
+    377401575 = ?MODULE:lcg_loop(2, 1),
+    1627576247 = ?MODULE:lcg_loop(50, 1),
+
+    % Regression: squaring (operand multiplied by itself / same register).
+    49 = ?MODULE:square_untyped(7),
+    2500 = ?MODULE:square_untyped(50),
+    2147488281 = ?MODULE:square_untyped(46341),
+    % Overflowing square takes the bignum fallback with aliased operands.
+    1000000000000000000 = ?MODULE:square_untyped(1000000000),
+    0 = ?MODULE:square_typed(0),
+    1 = ?MODULE:square_typed(1),
+    49 = ?MODULE:square_typed(7),
+    9801 = ?MODULE:square_typed(99),
 
     0.
