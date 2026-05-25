@@ -220,8 +220,7 @@ patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
                         DirectBranch = ?ASM:jal(zero, Rel),
                         case byte_size(DirectBranch) of
                             2 ->
-                                <<DirectBranch/binary, (?ASM:c_nop())/binary,
-                                    (?ASM:nop())/binary>>;
+                                <<DirectBranch/binary, (?ASM:c_nop())/binary, (?ASM:nop())/binary>>;
                             4 ->
                                 <<DirectBranch/binary, (?ASM:nop())/binary>>
                         end;
@@ -2416,7 +2415,9 @@ move_to_native_register(
     Regs1 = jit_regs:invalidate_reg(Regs0, RegDst),
     State#state{stream = Stream1, regs = Regs1};
 move_to_native_register(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, {x_reg, extra}, RegDst
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    {x_reg, extra},
+    RegDst
 ) ->
     {BaseReg, Off} = ?X_REG(?MAX_REG),
     I1 = ?LOAD_WORD(RegDst, BaseReg, Off),
@@ -2444,7 +2445,8 @@ move_to_native_register(
     % ldr_y_reg clobbers first_avail(AT) as a hidden temp for loading Y_REGS pointer
     Regs1 =
         case AT of
-            0 -> jit_regs:set_contents(Regs0, RegDst, {y_reg, Y});
+            0 ->
+                jit_regs:set_contents(Regs0, RegDst, {y_reg, Y});
             _ ->
                 jit_regs:invalidate_reg(
                     jit_regs:set_contents(Regs0, RegDst, {y_reg, Y}), first_avail(AT)
@@ -2852,6 +2854,97 @@ sub(#state{stream_module = StreamModule, available_regs = Avail, regs = Regs0} =
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
     State1#state{available_regs = Avail, stream = Stream2, regs = Regs1}.
 
+%% Flagless overflow-checked add/sub/mul of two tagged small integers Reg and
+%% Val (both small). RISC-V has no condition flags, so instead of setting a
+%% flag these leave the result shifted into the value field of Reg (untagged,
+%% low bits zero; the caller ORs the small-integer tag) and return a CheckReg
+%% that is NONZERO iff the result left the small-integer range. The caller
+%% branches on {CheckReg, '!=', 0}.
+%%
+%% Both operands are (v << 4) | TERM_INTEGER_TAG. Untag both (arithmetic shift
+%% right by 4), compute s, then result = s << 4. s fits in a small integer iff
+%% (s << 4) >> 4 == s (the shift is lossless), so CheckReg = ((s<<4)>>4) xor s
+%% is zero exactly when it fits. This is word-size independent: the tag size
+%% (4) defines the value-field width on both 32- and 64-bit.
+add_overflow_check(State, Reg, Val) ->
+    addsub_overflow_check(State, Reg, Val, add).
+sub_overflow_check(State, Reg, Val) ->
+    addsub_overflow_check(State, Reg, Val, sub).
+
+addsub_overflow_check(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
+    Reg,
+    Val,
+    Op
+) ->
+    Check = first_avail(Avail),
+    OpI =
+        case Op of
+            add -> ?ASM:add(Reg, Reg, Val);
+            sub -> ?ASM:sub(Reg, Reg, Val)
+        end,
+    Code = <<
+        %% untag both operands: Reg = a, Val = b
+        (?ASM:srai(Reg, Reg, 4))/binary,
+        (?ASM:srai(Val, Val, 4))/binary,
+        %% Reg = a Op b (untagged result s)
+        OpI/binary,
+        %% Check = ((s << 4) >> 4) xor s  (0 iff s fits the small range)
+        (?ASM:slli(Check, Reg, 4))/binary,
+        (?ASM:srai(Check, Check, 4))/binary,
+        (?ASM:xor_(Check, Check, Reg))/binary,
+        %% Reg = s << 4 (result shifted into the value field, tag added later)
+        (?ASM:slli(Reg, Reg, 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val), Check
+    ),
+    {State#state{stream = Stream1, regs = Regs1}, Check}.
+
+%% Flagless overflow-checked multiply. Untag both, compute the low and high
+%% words of the signed product (mul / mulh); the product fits in a word iff
+%% hi == (lo >> (word_bits-1)). It additionally fits a small integer iff the
+%% low word fits the value field, i.e. (lo << 4) >> 4 == lo. CheckReg combines
+%% both: nonzero iff either check fails. Result (lo << 4) is left in Reg.
+mul_overflow_check(
+    #state{stream_module = StreamModule, stream = Stream0, available_regs = Avail, regs = Regs0} =
+        State,
+    Reg,
+    Val
+) ->
+    WordBits = word_size() * 8,
+    Hi = first_avail(Avail),
+    Check = first_avail(Avail band (bnot reg_bit(Hi))),
+    Code = <<
+        %% untag both: Reg = a, Val = b
+        (?ASM:srai(Reg, Reg, 4))/binary,
+        (?ASM:srai(Val, Val, 4))/binary,
+        %% Hi = high word, Reg = low word of the signed product a*b
+        (?ASM:mulh(Hi, Reg, Val))/binary,
+        (?ASM:mul(Reg, Reg, Val))/binary,
+        %% product fits a word iff Hi == (lo >> (WordBits-1)) (sign extension):
+        %% Check = Hi xor (lo >> (WordBits-1))
+        (?ASM:srai(Val, Reg, WordBits - 1))/binary,
+        (?ASM:xor_(Check, Hi, Val))/binary,
+        %% small-range fit: ((lo << 4) >> 4) xor lo, OR'd into Check
+        (?ASM:slli(Hi, Reg, 4))/binary,
+        (?ASM:srai(Hi, Hi, 4))/binary,
+        (?ASM:xor_(Hi, Hi, Reg))/binary,
+        (?ASM:or_(Check, Check, Hi))/binary,
+        %% Reg = lo << 4 (result shifted into the value field, tag added later)
+        (?ASM:slli(Reg, Reg, 4))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(
+            jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val), Hi
+        ),
+        Check
+    ),
+    {State#state{stream = Stream1, regs = Regs1}, Check}.
+
 mul(State, _Reg, 1) ->
     State;
 mul(State, Reg, 2) ->
@@ -3129,8 +3222,7 @@ rewrite_cp_offset(
     PaddedInstr =
         case byte_size(NewMoveInstr) of
             2 ->
-                <<NewMoveInstr/binary, (?ASM:nop())/binary,
-                    (?ASM:c_nop())/binary>>;
+                <<NewMoveInstr/binary, (?ASM:nop())/binary, (?ASM:c_nop())/binary>>;
             4 ->
                 <<NewMoveInstr/binary, (?ASM:nop())/binary>>;
             6 ->
@@ -3269,7 +3361,9 @@ str_y_reg(SrcReg, Y, TempReg1, AvailableMask) when AvailableMask =/= 0 ->
     <<I1/binary, I2/binary, I3/binary, I4/binary>>.
 
 %% Helper function to generate ldr instruction with y_reg offset, handling large offsets
-ldr_y_reg(DstReg, Y, AvailableMask) when AvailableMask =/= 0 andalso Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT ->
+ldr_y_reg(DstReg, Y, AvailableMask) when
+    AvailableMask =/= 0 andalso Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT
+->
     % Small offset - use immediate addressing
     TempReg = first_avail(AvailableMask),
     {BaseReg, Off} = ?Y_REGS,
