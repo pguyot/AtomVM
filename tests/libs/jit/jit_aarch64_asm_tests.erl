@@ -885,7 +885,19 @@ fdiv_test_() ->
 fmov_test_() ->
     [
         ?_assertAsmEqual(<<16#9e66000a:32/little>>, "fmov x10, d0", jit_aarch64_asm:fmov(r10, d0)),
-        ?_assertAsmEqual(<<16#9e6603e0:32/little>>, "fmov x0, d31", jit_aarch64_asm:fmov(r0, d31))
+        ?_assertAsmEqual(<<16#9e6603e0:32/little>>, "fmov x0, d31", jit_aarch64_asm:fmov(r0, d31)),
+        % GPR -> double direction
+        ?_assertAsmEqual(<<16#9e670140:32/little>>, "fmov d0, x10", jit_aarch64_asm:fmov(d0, r10)),
+        ?_assertAsmEqual(<<16#9e67001f:32/little>>, "fmov d31, x0", jit_aarch64_asm:fmov(d31, r0))
+    ].
+
+scvtf_test_() ->
+    [
+        ?_assertAsmEqual(<<16#9e620000:32/little>>, "scvtf d0, x0", jit_aarch64_asm:scvtf(d0, r0)),
+        ?_assertAsmEqual(
+            <<16#9e620140:32/little>>, "scvtf d0, x10", jit_aarch64_asm:scvtf(d0, r10)
+        ),
+        ?_assertAsmEqual(<<16#9e62001f:32/little>>, "scvtf d31, x0", jit_aarch64_asm:scvtf(d31, r0))
     ].
 
 cset_test_() ->

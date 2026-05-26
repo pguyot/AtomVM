@@ -73,6 +73,7 @@
     supports_div/1,
     supports_fp/1,
     float_op/5,
+    float_conv_int/3,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -2910,6 +2911,30 @@ float_op(
         State0#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, CheckBit)},
         CheckReg
     }.
+
+%% Convert an untagged signed integer (already in IntReg, i.e. the small-int
+%% term shifted right past its tag) to a double and store it in fr[FPRegIndex].
+%% Used by the inline fconv fast path; integer-to-double can never be
+%% non-finite, so there is nothing to check and no register is returned.
+-spec float_conv_int(state(), aarch64_register(), non_neg_integer()) -> state().
+float_conv_int(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    IntReg,
+    FPRegIndex
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    Temp = first_avail(Avail0),
+    I1 = jit_aarch64_asm:ldr(Temp, ?FP_REGS),
+    I2 = jit_aarch64_asm:scvtf(d0, IntReg),
+    I3 = jit_aarch64_asm:str_d(d0, {Temp, ?FP_REG_OFFSET(State0, FPRegIndex)}),
+    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it

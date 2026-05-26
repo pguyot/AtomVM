@@ -2277,3 +2277,19 @@ float_op_float32_unsupported_test() ->
 float_op_supported_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     ?assertEqual(true, ?BACKEND:supports_fp(State0)).
+
+float_conv_int_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, IntReg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:float_conv_int(State1, IntReg, 1),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        %% move_to_native_register loads x_reg[0] into rax (the untagged int is
+        %% the caller's responsibility; here we just feed the loaded register)
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        %% float_conv_int: load fr base, convert, store to fr[1]
+        "   4:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
+        "   b:	f2 48 0f 2a c0       	cvtsi2sd %rax,%xmm0\n"
+        "  10:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).

@@ -1506,6 +1506,43 @@ movsd_to_gpr_test_() ->
         )
     ].
 
+cvtsi2sd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#48, 16#0F, 16#2A, 16#C0>>,
+            "cvtsi2sd %rax,%xmm0",
+            jit_x86_64_asm:cvtsi2sd(xmm0, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#F2, 16#48, 16#0F, 16#2A, 16#C1>>,
+            "cvtsi2sd %rcx,%xmm0",
+            jit_x86_64_asm:cvtsi2sd(xmm0, rcx)
+        ),
+        ?_assertAsmEqual(
+            <<16#F2, 16#48, 16#0F, 16#2A, 16#CE>>,
+            "cvtsi2sd %rsi,%xmm1",
+            jit_x86_64_asm:cvtsi2sd(xmm1, rsi)
+        ),
+        % REX.B (source r11)
+        ?_assertAsmEqual(
+            <<16#F2, 16#49, 16#0F, 16#2A, 16#C3>>,
+            "cvtsi2sd %r11,%xmm0",
+            jit_x86_64_asm:cvtsi2sd(xmm0, r11)
+        ),
+        % REX.R (dest xmm8)
+        ?_assertAsmEqual(
+            <<16#F2, 16#4C, 16#0F, 16#2A, 16#C0>>,
+            "cvtsi2sd %rax,%xmm8",
+            jit_x86_64_asm:cvtsi2sd(xmm8, rax)
+        ),
+        % REX.R + REX.B (dest xmm15, source r11)
+        ?_assertAsmEqual(
+            <<16#F2, 16#4D, 16#0F, 16#2A, 16#FB>>,
+            "cvtsi2sd %r11,%xmm15",
+            jit_x86_64_asm:cvtsi2sd(xmm15, r11)
+        )
+    ].
+
 setne_test_() ->
     [
         % rax/rcx/rdx need no REX (al/cl/dl)
