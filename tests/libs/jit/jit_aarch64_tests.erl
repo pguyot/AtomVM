@@ -2529,3 +2529,53 @@ cached_move_to_vm_y_reg_reuse_test() ->
         "   8:	f9002c07 	str	x7, [x0, #88]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
+
+float_op_fadd_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:float_op(State0, ?PRIM_FADD, 1, 2, 3),
+    ?assertEqual(r7, Reg),
+    Stream = ?BACKEND:stream(State1),
+    Dump = <<
+        "   0:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   4:	fd400500 	ldr	d0, [x8, #8]\n"
+        "   8:	fd400901 	ldr	d1, [x8, #16]\n"
+        "   c:	1e612800 	fadd	d0, d0, d1\n"
+        "  10:	fd000d00 	str	d0, [x8, #24]\n"
+        "  14:	9e660007 	fmov	x7, d0\n"
+        "  18:	d2effe08 	mov	x8, #0x7ff0000000000000\n"
+        "  1c:	8a0800e7 	and	x7, x7, x8\n"
+        "  20:	eb0800ff 	cmp	x7, x8\n"
+        "  24:	9a9f07e7 	cset	x7, ne"
+    >>,
+    ?assertStream(aarch64, Dump, Stream).
+
+float_op_fmul_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:float_op(State0, ?PRIM_FMUL, 1, 2, 3),
+    ?assertEqual(r7, Reg),
+    Stream = ?BACKEND:stream(State1),
+    Dump = <<
+        "   0:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   4:	fd400500 	ldr	d0, [x8, #8]\n"
+        "   8:	fd400901 	ldr	d1, [x8, #16]\n"
+        "   c:	1e610800 	fmul	d0, d0, d1\n"
+        "  10:	fd000d00 	str	d0, [x8, #24]\n"
+        "  14:	9e660007 	fmov	x7, d0\n"
+        "  18:	d2effe08 	mov	x8, #0x7ff0000000000000\n"
+        "  1c:	8a0800e7 	and	x7, x7, x8\n"
+        "  20:	eb0800ff 	cmp	x7, x8\n"
+        "  24:	9a9f07e7 	cset	x7, ne"
+    >>,
+    ?assertStream(aarch64, Dump, Stream).
+
+%% The single-precision (FLOAT32) variant has no inline support and must fall
+%% back to the C primitive.
+float_op_float32_unsupported_test() ->
+    State0 = ?BACKEND:new(
+        ?JIT_VARIANT_PIC bor ?JIT_VARIANT_FLOAT32, jit_stream_binary, jit_stream_binary:new(0)
+    ),
+    ?assertEqual(false, ?BACKEND:supports_fp(State0)).
+
+float_op_supported_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    ?assertEqual(true, ?BACKEND:supports_fp(State0)).

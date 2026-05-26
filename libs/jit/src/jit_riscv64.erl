@@ -70,6 +70,7 @@
     div_/3,
     rem_/3,
     supports_div/1,
+    supports_fp/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -327,6 +328,11 @@ rem_(
 %% riscv64 (with the M extension assumed) always supports native div.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> true.
+
+%% Whether this backend can emit inline floating-point arithmetic instead of
+%% calling the float primitives. False until the inline fp ops are implemented.
+-spec supports_fp(state()) -> boolean().
+supports_fp(_State) -> false.
 
 % LP64: all arguments (including 64-bit) fit in a single register
 parameter_regs0_avm_int64_t(T, [Reg | Rest], Acc) ->

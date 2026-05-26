@@ -78,7 +78,8 @@
     shift_right_arith/3,
     div_/3,
     rem_/3,
-    supports_div/1
+    supports_div/1,
+    supports_fp/1
 ]).
 
 -ifdef(JIT_DWARF).
@@ -313,6 +314,11 @@ rem_(
 %% riscv32 (with the M extension assumed) always supports native div.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> true.
+
+%% Whether this backend can emit inline floating-point arithmetic instead of
+%% calling the float primitives. False until the inline fp ops are implemented.
+-spec supports_fp(state()) -> boolean().
+supports_fp(_State) -> false.
 
 % ILP32: 64-bit arguments require double-word alignment (even register number)
 parameter_regs0_avm_int64_t(T, [a0, a1 | Rest], Acc) ->

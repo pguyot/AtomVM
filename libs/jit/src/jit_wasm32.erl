@@ -104,7 +104,8 @@
     shift_right_arith/3,
     div_/3,
     rem_/3,
-    supports_div/1
+    supports_div/1,
+    supports_fp/1
 ]).
 
 -compile([warnings_as_errors]).
@@ -750,6 +751,11 @@ rem_(State0, Local, Divisor) when is_atom(Local) ->
 %% WebAssembly has native i32.div_s / i32.rem_s.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> true.
+
+%% Whether this backend can emit inline floating-point arithmetic instead of
+%% calling the float primitives. False until the inline fp ops are implemented.
+-spec supports_fp(state()) -> boolean().
+supports_fp(_State) -> false.
 
 %%=============================================================================
 %% Memory access (VM registers, context fields)
