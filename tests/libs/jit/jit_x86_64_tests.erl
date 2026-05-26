@@ -2293,3 +2293,20 @@ float_conv_int_test() ->
         "  10:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
+
+float_conv_float_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, BoxedReg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:float_conv_float(State1, BoxedReg, 1),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        %% move_to_native_register loads the boxed-float term x_reg[0] into rax
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        %% float_conv_float: untag boxed ptr, load double from boxed_ptr[1],
+        %% load fr base, store to fr[1]
+        "   4:	48 83 e0 fc          	and    $0xfffffffffffffffc,%rax\n"
+        "   8:	f2 0f 10 40 08       	movsd  0x8(%rax),%xmm0\n"
+        "   d:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
+        "  14:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
