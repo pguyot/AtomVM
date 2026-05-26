@@ -1137,10 +1137,10 @@ if_else_block_test() ->
             "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
             "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
             "   8:	48 83 f8 3b          	cmp    $0x3b,%rax\n"
-            "   c:	75 06                	jne    0x14\n"
+            "   c:	75 09                	jne    0x17\n"
             "   e:	49 83 c3 02          	add    $0x2,%r11\n"
-            "  12:	eb 04                	jmp    0x18\n"
-            "  14:	49 83 c3 04          	add    $0x4,%r11"
+            "  12:	e9 04 00 00 00       	jmp    0x1b\n"
+            "  17:	49 83 c3 04          	add    $0x4,%r11"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 

@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed two bugs related to closing fds in `atomvm:subprocess/4`
 - Fixed `erlang:localtime/1` memory leak, use-after-free, and TZ restore bugs on newlib/picolibc
 - Fixed a bug where `catch` would raise on regular atom results
+- Fixed x86_64 JIT `if_else_block` emitting a `rel8` jump to skip the false block, which silently overflowed (and corrupted control flow) when that block exceeded 127 bytes, e.g. inline small-integer arithmetic with a bignum first operand
 
 ## [0.7.0-alpha.1] - 2026-04-06
 

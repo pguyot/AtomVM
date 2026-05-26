@@ -50,7 +50,9 @@
     untyped_mul/2,
     untyped_div_lit/1,
     untyped_rem_lit/1,
-    untyped_divrem_dense/1
+    untyped_divrem_dense/1,
+    bignum_then_band/1,
+    lcg_loop/2
 ]).
 
 % Test inline addition with safe ranges - SHOULD BE INLINED
@@ -176,6 +178,25 @@ untyped_divrem_dense(X) ->
     VD = X div 3,
     true = is_integer(VD),
     VD.
+
+% Regression: when the first operand of an inline +/-/* is a bignum, the JIT
+% takes the arg1 tag-check fallback. The jump that skips the rest of the
+% operation must be a rel32 jump because the skipped (false) block exceeds 127
+% bytes; a rel8 jump silently wrapped its displacement and landed in the middle
+% of an instruction, corrupting control flow as soon as the result fed a
+% following operation. The minimal shape: a bignum first operand whose result
+% is then used (not a leaf return).
+bignum_then_band(X) ->
+    (id(X) + 7) band 255.
+
+% Same bug, exercised end to end by a PRNG-style accumulator loop: each
+% overflowing multiply yields a bignum that feeds the next addition, in a
+% tail-recursive function with a live continuation.
+lcg_loop(0, Acc) ->
+    Acc;
+lcg_loop(N, Acc) ->
+    Next = (id(Acc) * 1103515245 + 12345) band ((1 bsl 31) - 1),
+    lcg_loop(N - 1, Next).
 
 start() ->
     % Test safe addition - should be inlined
@@ -371,5 +392,12 @@ start() ->
     1152921504606846977 = ?MODULE:untyped_add(1152921504606846976, 1),
     1152921504606846975 = ?MODULE:untyped_sub(1152921504606846976, 1),
     2305843009213693952 = ?MODULE:untyped_mul(1152921504606846976, 2),
+
+    % Regression: a bignum first operand whose inline-arithmetic result feeds a
+    % following operation. Previously miscompiled on x86_64 (a rel8 jump in
+    % if_else_block wrapped over the >127-byte inline-arithmetic false block).
+    7 = ?MODULE:bignum_then_band(1152921504606846976),
+    377401575 = ?MODULE:lcg_loop(2, 1),
+    1627576247 = ?MODULE:lcg_loop(50, 1),
 
     0.
