@@ -132,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crash reports and `io_lib:format/2` with `~p`
 - Fixed `put_map_exact` writing the new key into a keys tuple shared with other maps
 - Fixed a process that exited before ever being scheduled staying in the scheduler's process list
+- Fixed x86_64 JIT `if_else_block` emitting a `rel8` jump to skip the false block, which silently overflowed (and corrupted control flow) when that block exceeded 127 bytes, e.g. inline small-integer arithmetic with a bignum first operand
 
 ## [0.7.0-beta.0] - 2026-09-28
 
