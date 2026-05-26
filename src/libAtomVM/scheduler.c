@@ -374,8 +374,20 @@ static void scheduler_make_ready(Context *ctx)
         return;
     }
     list_remove(&ctx->processes_list_head);
+    // Was there already other ready work? `scheduler_make_ready` runs on a
+    // scheduler thread that is itself awake (it is executing the process doing
+    // the send/spawn, or it is the poller processing a timer). That scheduler
+    // returns to `scheduler_run0` when its current process yields and picks up
+    // this freshly-readied process directly (it appended it under the same
+    // spinlock that `scheduler_run0` reads, so it cannot miss it). So a single
+    // handoff needs no other scheduler woken: skipping it avoids a cross-thread
+    // kevent/condvar round trip on every message in send/receive ping-pong
+    // patterns. Only when there is already a backlog (more ready work than the
+    // current scheduler will take) do we wake/start another scheduler, so
+    // genuinely parallel work still spreads across cores.
+    bool ready_backlog = !list_is_empty(&global->ready_processes);
 #ifndef AVM_NO_SMP
-    if (SMP_MUTEX_TRYLOCK(global->schedulers_mutex)) {
+    if (ready_backlog && SMP_MUTEX_TRYLOCK(global->schedulers_mutex)) {
         // Start a new scheduler if none are going to take this process.
         if (!global->waiting_scheduler
             && global->running_schedulers > 0
@@ -394,13 +406,15 @@ static void scheduler_make_ready(Context *ctx)
     list_append(&global->ready_processes, &ctx->processes_list_head);
     SMP_SPINLOCK_UNLOCK(&global->processes_spinlock);
 #ifndef AVM_NO_SMP
-    if (SMP_MUTEX_TRYLOCK(global->schedulers_mutex)) {
-        if (global->waiting_scheduler) {
+    if (ready_backlog) {
+        if (SMP_MUTEX_TRYLOCK(global->schedulers_mutex)) {
+            if (global->waiting_scheduler) {
+                sys_signal(global);
+            }
+            SMP_MUTEX_UNLOCK(global->schedulers_mutex);
+        } else {
             sys_signal(global);
         }
-        SMP_MUTEX_UNLOCK(global->schedulers_mutex);
-    } else {
-        sys_signal(global);
     }
 #elif defined(AVM_TASK_DRIVER_ENABLED)
     sys_signal(global);

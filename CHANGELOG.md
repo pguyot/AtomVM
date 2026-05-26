@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer lines return `{error, {parser, {line_too_long, Prefix}}}` with the first 128 bytes of
   the offending line. Callers whose upstream servers emit unusually large headers must account
   for this limit
+- SMP scheduler no longer wakes another scheduler when readying a single process whose work the
+  readying scheduler will itself pick up (a handoff). This avoids a cross-thread wakeup syscall on
+  every message in send/receive ping-pong patterns; an idle scheduler is still woken when there is
+  a backlog of ready work to parallelize
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
