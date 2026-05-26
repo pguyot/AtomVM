@@ -711,7 +711,13 @@ if_block(
             Offset = StreamModule:offset(AccState#state.stream),
             {NewAccState, ReplaceDelta} = if_block_cond(AccState, Cond),
             OffsetAfterCond = StreamModule:offset(NewAccState#state.stream),
-            {[{Offset + ReplaceDelta, OffsetAfterCond} | AccReplacements], NewAccState}
+            {
+                [
+                    {Offset + ReplaceDelta, OffsetAfterCond, cond_skip_disp_width(Cond)}
+                    | AccReplacements
+                ],
+                NewAccState
+            }
         end,
         {[], State0},
         CondList
@@ -720,11 +726,10 @@ if_block(
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
     Stream3 = lists:foldl(
-        fun({ReplacementOffset, OffsetAfterCond}, AccStream) ->
-            ?ASSERT(OffsetAfter - OffsetAfterCond < 16#80),
-            StreamModule:replace(AccStream, ReplacementOffset, <<
-                (OffsetAfter - OffsetAfterCond)
-            >>)
+        fun({ReplacementOffset, OffsetAfterCond, Width}, AccStream) ->
+            patch_cond_skip(
+                StreamModule, AccStream, ReplacementOffset, OffsetAfter - OffsetAfterCond, Width
+            )
         end,
         Stream2,
         Replacements
@@ -746,10 +751,13 @@ if_block(
     State2 = BlockFn(State1),
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
-    ?ASSERT(OffsetAfter - OffsetAfterCond < 16#80),
-    Stream3 = StreamModule:replace(Stream2, Offset + ReplaceDelta, <<
-        (OffsetAfter - OffsetAfterCond)
-    >>),
+    Stream3 = patch_cond_skip(
+        StreamModule,
+        Stream2,
+        Offset + ReplaceDelta,
+        OffsetAfter - OffsetAfterCond,
+        cond_skip_disp_width(Cond)
+    ),
     MergedRegs = jit_regs:merge(
         State1#state.regs, State2#state.regs, ?AVAILABLE_REGS_MASK
     ),
@@ -779,13 +787,19 @@ if_else_block(
     State2 = BlockTrueFn(State1),
     Stream2 = State2#state.stream,
     ElseJumpOffset = StreamModule:offset(Stream2),
-    {RelocJMPOffset, I} = jit_x86_64_asm:jmp_rel8(1),
+    %% Skip-the-false-block jump: use a rel32 jump because the false block can
+    %% exceed 127 bytes (e.g. nested inline-arithmetic blocks). A rel8 jump here
+    %% silently wraps the displacement and lands in the middle of an instruction.
+    {RelocJMPOffset, I} = jit_x86_64_asm:jmp_rel32(1),
     Stream3 = StreamModule:append(Stream2, I),
     OffsetAfter = StreamModule:offset(Stream3),
-    ?ASSERT(OffsetAfter - OffsetAfterCond < 16#80),
-    Stream4 = StreamModule:replace(Stream3, Offset + ReplaceDelta, <<
-        (OffsetAfter - OffsetAfterCond)
-    >>),
+    Stream4 = patch_cond_skip(
+        StreamModule,
+        Stream3,
+        Offset + ReplaceDelta,
+        OffsetAfter - OffsetAfterCond,
+        cond_skip_disp_width(Cond)
+    ),
     StateElse = State2#state{
         stream = Stream4,
         regs = State1#state.regs
@@ -794,13 +808,33 @@ if_else_block(
     Stream5 = State3#state.stream,
     OffsetFinal = StreamModule:offset(Stream5),
     Stream6 = StreamModule:replace(Stream5, ElseJumpOffset + RelocJMPOffset, <<
-        (OffsetFinal - OffsetAfter)
+        (OffsetFinal - OffsetAfter):32/little
     >>),
     %% Merge register tracking from both branches (true=State2, false=State3)
     MergedRegs = jit_regs:merge(
         State2#state.regs, State3#state.regs, ?AVAILABLE_REGS_MASK
     ),
     State3#state{stream = Stream6, regs = MergedRegs}.
+
+%% Displacement width (bytes) of the conditional skip-the-block jump emitted by
+%% if_block_cond0 for a given condition. The conditions used to guard the bignum
+%% fallback in the inline-arith fast paths — the small-integer tag checks
+%% ({Reg,'&',Mask,'!=',_}) and overflow_set / mul_overflow_set — must skip a
+%% block that routinely exceeds the rel8 +127 range, so if_block_cond0 emits a
+%% rel32 jump (4-byte displacement) for them; all other conditions use rel8.
+-spec cond_skip_disp_width(condition()) -> 1 | 4.
+cond_skip_disp_width(overflow_set) -> 4;
+cond_skip_disp_width(mul_overflow_set) -> 4;
+cond_skip_disp_width({_, '&', _, '!=', _}) -> 4;
+cond_skip_disp_width(_) -> 1.
+
+%% Patch the forward (skip-the-block) displacement of a conditional jump at byte
+%% At, writing Disp in the width matching the emitted jump (rel8 or rel32).
+patch_cond_skip(StreamModule, Stream, At, Disp, 1) ->
+    ?ASSERT(Disp >= 0 andalso Disp < 16#80),
+    StreamModule:replace(Stream, At, <<Disp>>);
+patch_cond_skip(StreamModule, Stream, At, Disp, 4) ->
+    StreamModule:replace(Stream, At, <<Disp:32/little>>).
 
 -spec if_block_cond(state(), condition()) -> {state(), non_neg_integer()}.
 if_block_cond(#state{stream_module = StreamModule} = State0, Cond) ->
@@ -814,8 +848,10 @@ if_block_cond0(State0, Cond) when Cond =:= overflow_set orelse Cond =:= mul_over
     %% Flags were set by a preceding flag-setting instruction: addq/subq for
     %% overflow_set, imulq for mul_overflow_set. Both set the OF flag on signed
     %% overflow, so the block (bignum fallback) runs when OF is set; skip it
-    %% (jump over) when overflow is clear.
-    {RelocJNOOffset, I1} = jit_x86_64_asm:jno_rel8(1),
+    %% (jump over) when overflow is clear. Use a rel32 jno: the skipped block is
+    %% the bignum fallback (gc_bif call) which routinely exceeds the rel8 +127
+    %% range — a rel8 jump there silently wraps and corrupts control flow.
+    {RelocJNOOffset, I1} = jit_x86_64_asm:jno_rel32(1),
     {State0, I1, RelocJNOOffset};
 if_block_cond0(State0, {RegOrTuple, '<', 0}) ->
     Reg =
@@ -1059,7 +1095,9 @@ if_block_cond0(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) 
             RegOrTuple -> RegOrTuple
         end,
     I1 = jit_x86_64_asm:testb(Mask, Reg),
-    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
+    %% rel32: this condition guards the bignum fallback in the inline-arith fast
+    %% paths, whose block exceeds the rel8 +127 range (see cond_skip_disp_width).
+    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel32(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
 if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when
@@ -1067,7 +1105,7 @@ if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask
 ->
     I1 = jit_x86_64_asm:andb(Mask, Reg),
     I2 = jit_x86_64_asm:cmpb(Val, Reg),
-    {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel8(1),
+    {RelocJZOffset, I3} = jit_x86_64_asm:jz_rel32(1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State1 = if_block_free_reg(RegTuple, State0#state{regs = Regs1}),
     {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
@@ -1076,7 +1114,7 @@ if_block_cond0(#state{regs = Regs0} = State0, {Reg, '&', Mask, '!=', Val}) when 
     I1 = jit_x86_64_asm:movq(Reg, Temp),
     I2 = jit_x86_64_asm:andb(Mask, Temp),
     I3 = jit_x86_64_asm:cmpb(Val, Temp),
-    {RelocJZOffset, I4} = jit_x86_64_asm:jz_rel8(1),
+    {RelocJZOffset, I4} = jit_x86_64_asm:jz_rel32(1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     {
         State0#state{regs = Regs1},
