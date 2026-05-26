@@ -2681,3 +2681,20 @@ float_conv_int_test() ->
         "   c:	fd000500 	str	d0, [x8, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
+
+float_conv_float_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, BoxedReg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:float_conv_float(State1, BoxedReg, 1),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        %% move_to_native_register loads the boxed-float term x_reg[0] into x7
+        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+        %% float_conv_float: untag boxed ptr, load double from boxed_ptr[1],
+        %% load fr base, store to fr[1]
+        "   4:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
+        "   8:	fd4004e0 	ldr	d0, [x7, #8]\n"
+        "   c:	f9407408 	ldr	x8, [x0, #232]\n"
+        "  10:	fd000500 	str	d0, [x8, #8]"
+    >>,
+    ?assertStream(aarch64, Dump, Stream).
