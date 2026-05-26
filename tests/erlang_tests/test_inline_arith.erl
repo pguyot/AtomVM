@@ -52,7 +52,9 @@
     untyped_rem_lit/1,
     untyped_divrem_dense/1,
     bignum_then_band/1,
-    lcg_loop/2
+    lcg_loop/2,
+    square_untyped/1,
+    square_typed/1
 ]).
 
 % Test inline addition with safe ranges - SHOULD BE INLINED
@@ -197,6 +199,17 @@ lcg_loop(0, Acc) ->
 lcg_loop(N, Acc) ->
     Next = (id(Acc) * 1103515245 + 12345) band ((1 bsl 31) - 1),
     lcg_loop(N - 1, Next).
+
+% Regression: multiplying a value by itself (X * X) makes both operands resolve
+% to the same register. The inline multiply strips one operand's tag in place
+% and untags the other in place; with a single shared register that drops the
+% kept << 4 and yields (v*v) instead of (v*v) << 4 (the result reads back as
+% (v*v) >> 4). square_untyped exercises the runtime fast path (mul_overflow),
+% including the bignum-overflow fallback; square_typed exercises the typed
+% reg*reg inline path.
+square_untyped(X) -> id(X) * id(X).
+
+square_typed(X) when is_integer(X), X >= 0, X < 100 -> X * X.
 
 start() ->
     % Test safe addition - should be inlined
@@ -399,5 +412,16 @@ start() ->
     7 = ?MODULE:bignum_then_band(1152921504606846976),
     377401575 = ?MODULE:lcg_loop(2, 1),
     1627576247 = ?MODULE:lcg_loop(50, 1),
+
+    % Regression: squaring (operand multiplied by itself / same register).
+    49 = ?MODULE:square_untyped(7),
+    2500 = ?MODULE:square_untyped(50),
+    2147488281 = ?MODULE:square_untyped(46341),
+    % Overflowing square takes the bignum fallback with aliased operands.
+    1000000000000000000 = ?MODULE:square_untyped(1000000000),
+    0 = ?MODULE:square_typed(0),
+    1 = ?MODULE:square_typed(1),
+    49 = ?MODULE:square_typed(7),
+    9801 = ?MODULE:square_typed(99),
 
     0.

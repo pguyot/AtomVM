@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `erlang:localtime/1` memory leak, use-after-free, and TZ restore bugs on newlib/picolibc
 - Fixed a bug where `catch` would raise on regular atom results
 - Fixed x86_64 JIT `if_else_block` emitting a `rel8` jump to skip the false block, which silently overflowed (and corrupted control flow) when that block exceeded 127 bytes, e.g. inline small-integer arithmetic with a bignum first operand
+- Fixed JIT inline integer multiplication of a value by itself (`X * X`), where both operands share a register: the in-place tag handling dropped the small-integer tag shift and produced `(X*X) div 16` instead of `X*X` (affected the typed reg-by-reg path on all backends and the x86_64 runtime multiply fast path)
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
