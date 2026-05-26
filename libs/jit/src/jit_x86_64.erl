@@ -74,6 +74,8 @@
     supports_fp/1,
     float_op/5,
     float_conv_int/3,
+    float_conv_float/3,
+    read_fp_regs_ptr/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2947,6 +2949,55 @@ float_conv_int(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, BaseReg),
     State0#state{stream = Stream1, regs = Regs1}.
+
+%% Unbox a boxed float term (in BoxedReg) and store its double value into
+%% fr[FPRegIndex]. The double lives just past the boxed header word, i.e. at
+%% offset one word from the untagged boxed pointer. BoxedReg is consumed.
+-spec float_conv_float(state(), x86_64_register(), non_neg_integer()) -> state().
+float_conv_float(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    BoxedReg,
+    FPRegIndex
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    BaseReg = first_avail(Avail0 band (bnot reg_bit(BoxedReg))),
+    %% Clear the 2 primary (boxed) tag bits (mask 0x3) to get the boxed pointer
+    %% (term.hrl not included here, so use the literal), load the double from
+    %% boxed_ptr[1], load fr base, and store to fr[FPRegIndex].
+    I1 = jit_x86_64_asm:andq(bnot 16#3, BoxedReg),
+    I2 = jit_x86_64_asm:movsd(xmm0, {8, BoxedReg}),
+    I3 = jit_x86_64_asm:movq(?FP_REGS, BaseReg),
+    I4 = jit_x86_64_asm:movsd({?FP_REG_OFFSET(State0, FPRegIndex), BaseReg}, xmm0),
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(Regs0, BaseReg),
+    State0#state{stream = Stream1, regs = Regs1}.
+
+%% Load the fp register array pointer (ctx->fr) into a freshly allocated
+%% register and return it, so the caller can test it for NULL and only call
+%% context_ensure_fpregs (the malloc) when it has not been allocated yet.
+-spec read_fp_regs_ptr(state()) -> {state(), x86_64_register()}.
+read_fp_regs_ptr(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Bit = reg_bit(Reg),
+    I1 = jit_x86_64_asm:movq(?FP_REGS, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)},
+        Reg
+    }.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(
