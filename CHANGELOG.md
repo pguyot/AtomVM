@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for map comprehensions
 - Added USB CDC port drivers for ESP32, RP2, and STM32 platforms
 - Added support for native records introduced with OTP29
+- Added inline JIT code generation for double-precision floating-point arithmetic
+  (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
+  non-finite-result check, instead of calling the C float primitives
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type

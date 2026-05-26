@@ -71,6 +71,8 @@
     div_/3,
     rem_/3,
     supports_div/1,
+    supports_fp/1,
+    float_op/5,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -2849,6 +2851,65 @@ rem_(
 %% aarch64 always supports native sdiv.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> true.
+
+%% aarch64 has a hardware FPU, so it can inline double-precision fadd/fsub/fmul/
+%% fdiv. The single-precision (FLOAT32) variant stores 4-byte floats in the fp
+%% register array and is not handled inline here, so it falls back to the C
+%% primitive.
+-spec supports_fp(state()) -> boolean().
+supports_fp(#state{variant = Variant}) ->
+    Variant band ?JIT_VARIANT_FLOAT32 =:= 0.
+
+%% Inline a double-precision binary float op fr[F3] = fr[F1] <op> fr[F2], and
+%% return a register that is 0 iff the result is non-finite (so the caller can
+%% raise badarith with the same test used for the C primitive's boolean result).
+-spec float_op(state(), non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
+    {state(), aarch64_register()}.
+float_op(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    Primitive,
+    F1,
+    F2,
+    F3
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    Op =
+        case Primitive of
+            ?PRIM_FADD -> fun jit_aarch64_asm:fadd/3;
+            ?PRIM_FSUB -> fun jit_aarch64_asm:fsub/3;
+            ?PRIM_FMUL -> fun jit_aarch64_asm:fmul/3;
+            ?PRIM_FDIV -> fun jit_aarch64_asm:fdiv/3
+        end,
+    CheckReg = first_avail(Avail0),
+    Temp = first_avail(Avail0 band (bnot reg_bit(CheckReg))),
+    %% Load the fp register array pointer (ctx->fr), compute the operation in
+    %% d0, store it back to fr[F3], then test the result's exponent bits: a
+    %% value is non-finite (inf/nan) iff all exponent bits are set. cset turns
+    %% that into the clean 0/1 boolean the caller's badarith test expects.
+    I1 = jit_aarch64_asm:ldr(Temp, ?FP_REGS),
+    I2 = jit_aarch64_asm:ldr_d(d0, {Temp, ?FP_REG_OFFSET(State0, F1)}),
+    I3 = jit_aarch64_asm:ldr_d(d1, {Temp, ?FP_REG_OFFSET(State0, F2)}),
+    I4 = Op(d0, d0, d1),
+    I5 = jit_aarch64_asm:str_d(d0, {Temp, ?FP_REG_OFFSET(State0, F3)}),
+    I6 = jit_aarch64_asm:fmov(CheckReg, d0),
+    I7 = jit_aarch64_asm:movz(Temp, 16#7FF0, 48),
+    I8 = jit_aarch64_asm:and_(CheckReg, CheckReg, Temp),
+    I9 = jit_aarch64_asm:cmp(CheckReg, Temp),
+    I10 = jit_aarch64_asm:cset(CheckReg, ne),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary,
+            I9/binary, I10/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    CheckBit = reg_bit(CheckReg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), CheckReg),
+    {
+        State0#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, CheckBit)},
+        CheckReg
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it

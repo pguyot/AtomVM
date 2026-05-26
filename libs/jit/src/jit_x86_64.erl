@@ -71,6 +71,8 @@
     div_/3,
     rem_/3,
     supports_div/1,
+    supports_fp/1,
+    float_op/5,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -2826,6 +2828,65 @@ rem_(
 %% x86_64 always supports native idivq.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> true.
+
+%% x86_64 has SSE2, so it can inline double-precision fadd/fsub/fmul/fdiv. The
+%% single-precision (FLOAT32) variant stores 4-byte floats in the fp register
+%% array and is not handled inline here, so it falls back to the C primitive.
+-spec supports_fp(state()) -> boolean().
+supports_fp(#state{variant = Variant}) ->
+    Variant band ?JIT_VARIANT_FLOAT32 =:= 0.
+
+%% Inline a double-precision binary float op fr[F3] = fr[F1] <op> fr[F2], and
+%% return a register that is 0 iff the result is non-finite (so the caller can
+%% raise badarith with the same test used for the C primitive's boolean result).
+-spec float_op(state(), non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
+    {state(), x86_64_register()}.
+float_op(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    Primitive,
+    F1,
+    F2,
+    F3
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    Op =
+        case Primitive of
+            ?PRIM_FADD -> fun jit_x86_64_asm:addsd/2;
+            ?PRIM_FSUB -> fun jit_x86_64_asm:subsd/2;
+            ?PRIM_FMUL -> fun jit_x86_64_asm:mulsd/2;
+            ?PRIM_FDIV -> fun jit_x86_64_asm:divsd/2
+        end,
+    CheckReg = first_avail(Avail0),
+    BaseReg = first_avail(Avail0 band (bnot reg_bit(CheckReg))),
+    %% Load the fp register array pointer (ctx->fr), compute the operation in
+    %% xmm0, store it back to fr[F3], then test the result's exponent bits: a
+    %% value is non-finite (inf/nan) iff all exponent bits are set. The caller's
+    %% badarith test reads CheckReg as a one-byte boolean (testb), so collapse
+    %% the result to a clean 0/1 with setne (1 = finite, 0 = non-finite).
+    I1 = jit_x86_64_asm:movq(?FP_REGS, BaseReg),
+    I2 = jit_x86_64_asm:movsd(xmm0, {?FP_REG_OFFSET(State0, F1), BaseReg}),
+    I3 = jit_x86_64_asm:movsd(xmm1, {?FP_REG_OFFSET(State0, F2), BaseReg}),
+    I4 = Op(xmm0, xmm1),
+    I5 = jit_x86_64_asm:movsd({?FP_REG_OFFSET(State0, F3), BaseReg}, xmm0),
+    I6 = jit_x86_64_asm:movsd_to_gpr(CheckReg, xmm0),
+    I7 = jit_x86_64_asm:movabsq(16#7FF0000000000000, BaseReg),
+    I8 = jit_x86_64_asm:andq(BaseReg, CheckReg),
+    I9 = jit_x86_64_asm:xorq(BaseReg, CheckReg),
+    I10 = jit_x86_64_asm:setne(CheckReg),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary,
+            I9/binary, I10/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    CheckBit = reg_bit(CheckReg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BaseReg), CheckReg),
+    {
+        State0#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, CheckBit)},
+        CheckReg
+    }.
 
 -spec decrement_reductions_and_maybe_schedule_next(state()) -> state().
 decrement_reductions_and_maybe_schedule_next(

@@ -1327,3 +1327,169 @@ sarq_test_() ->
             <<16#49, 16#C1, 16#FB, 16#04>>, "sarq $0x4,%r11", jit_x86_64_asm:sarq(4, r11)
         )
     ].
+
+movsd_load_test_() ->
+    [
+        % disp 0
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#10, 16#00>>,
+            "movsd (%rax),%xmm0",
+            jit_x86_64_asm:movsd(xmm0, {0, rax})
+        ),
+        % disp8
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#10, 16#40, 16#08>>,
+            "movsd 0x8(%rax),%xmm0",
+            jit_x86_64_asm:movsd(xmm0, {8, rax})
+        ),
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#10, 16#48, 16#78>>,
+            "movsd 0x78(%rax),%xmm1",
+            jit_x86_64_asm:movsd(xmm1, {120, rax})
+        ),
+        % disp32
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#10, 16#80, 16#00, 16#10, 16#00, 16#00>>,
+            "movsd 0x1000(%rax),%xmm0",
+            jit_x86_64_asm:movsd(xmm0, {16#1000, rax})
+        ),
+        % offset of ctx->fr field (0xe8) from rdi
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#10, 16#8F, 16#E8, 16#00, 16#00, 16#00>>,
+            "movsd 0xe8(%rdi),%xmm1",
+            jit_x86_64_asm:movsd(xmm1, {16#E8, rdi})
+        ),
+        % REX.R (xmm8-15) + REX.B (r8-r11 base), disp8
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#10, 16#4B, 16#10>>,
+            "movsd 0x10(%r11),%xmm9",
+            jit_x86_64_asm:movsd(xmm9, {16, r11})
+        ),
+        % REX.R + REX.B, disp32
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#10, 16#8B, 16#00, 16#01, 16#00, 16#00>>,
+            "movsd 0x100(%r11),%xmm9",
+            jit_x86_64_asm:movsd(xmm9, {16#100, r11})
+        )
+    ].
+
+movsd_store_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#11, 16#07>>,
+            "movsd %xmm0,(%rdi)",
+            jit_x86_64_asm:movsd({0, rdi}, xmm0)
+        ),
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#11, 16#40, 16#18>>,
+            "movsd %xmm0,0x18(%rax)",
+            jit_x86_64_asm:movsd({24, rax}, xmm0)
+        ),
+        % REX.R (xmm15) + REX.B (r11), disp 0
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#11, 16#3B>>,
+            "movsd %xmm15,(%r11)",
+            jit_x86_64_asm:movsd({0, r11}, xmm15)
+        ),
+        % REX.R (xmm9) + REX.B (r11), disp32
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#11, 16#8B, 16#00, 16#10, 16#00, 16#00>>,
+            "movsd %xmm9,0x1000(%r11)",
+            jit_x86_64_asm:movsd({16#1000, r11}, xmm9)
+        )
+    ].
+
+addsd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#58, 16#C1>>,
+            "addsd %xmm1,%xmm0",
+            jit_x86_64_asm:addsd(xmm0, xmm1)
+        ),
+        % REX.B (source xmm8)
+        ?_assertAsmEqual(
+            <<16#F2, 16#41, 16#0F, 16#58, 16#C0>>,
+            "addsd %xmm8,%xmm0",
+            jit_x86_64_asm:addsd(xmm0, xmm8)
+        )
+    ].
+
+subsd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#5C, 16#C1>>,
+            "subsd %xmm1,%xmm0",
+            jit_x86_64_asm:subsd(xmm0, xmm1)
+        )
+    ].
+
+mulsd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#59, 16#C1>>,
+            "mulsd %xmm1,%xmm0",
+            jit_x86_64_asm:mulsd(xmm0, xmm1)
+        ),
+        % REX.R (dest xmm8) + REX.B (source xmm15)
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#59, 16#C7>>,
+            "mulsd %xmm15,%xmm8",
+            jit_x86_64_asm:mulsd(xmm8, xmm15)
+        )
+    ].
+
+divsd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#F2, 16#0F, 16#5E, 16#C1>>,
+            "divsd %xmm1,%xmm0",
+            jit_x86_64_asm:divsd(xmm0, xmm1)
+        ),
+        % REX.R + REX.B (both xmm15)
+        ?_assertAsmEqual(
+            <<16#F2, 16#45, 16#0F, 16#5E, 16#FF>>,
+            "divsd %xmm15,%xmm15",
+            jit_x86_64_asm:divsd(xmm15, xmm15)
+        )
+    ].
+
+movsd_to_gpr_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#66, 16#48, 16#0F, 16#7E, 16#C0>>,
+            "movq %xmm0,%rax",
+            jit_x86_64_asm:movsd_to_gpr(rax, xmm0)
+        ),
+        ?_assertAsmEqual(
+            <<16#66, 16#48, 16#0F, 16#7E, 16#C1>>,
+            "movq %xmm0,%rcx",
+            jit_x86_64_asm:movsd_to_gpr(rcx, xmm0)
+        ),
+        ?_assertAsmEqual(
+            <<16#66, 16#48, 16#0F, 16#7E, 16#C6>>,
+            "movq %xmm0,%rsi",
+            jit_x86_64_asm:movsd_to_gpr(rsi, xmm0)
+        ),
+        % REX.B (dest r11)
+        ?_assertAsmEqual(
+            <<16#66, 16#49, 16#0F, 16#7E, 16#C3>>,
+            "movq %xmm0,%r11",
+            jit_x86_64_asm:movsd_to_gpr(r11, xmm0)
+        )
+    ].
+
+setne_test_() ->
+    [
+        % rax/rcx/rdx need no REX (al/cl/dl)
+        ?_assertAsmEqual(<<16#0F, 16#95, 16#C0>>, "setne %al", jit_x86_64_asm:setne(rax)),
+        ?_assertAsmEqual(<<16#0F, 16#95, 16#C1>>, "setne %cl", jit_x86_64_asm:setne(rcx)),
+        ?_assertAsmEqual(<<16#0F, 16#95, 16#C2>>, "setne %dl", jit_x86_64_asm:setne(rdx)),
+        % rsi/rdi need a REX prefix to address sil/dil
+        ?_assertAsmEqual(<<16#40, 16#0F, 16#95, 16#C6>>, "setne %sil", jit_x86_64_asm:setne(rsi)),
+        ?_assertAsmEqual(<<16#40, 16#0F, 16#95, 16#C7>>, "setne %dil", jit_x86_64_asm:setne(rdi)),
+        % r8..r11 use REX.B
+        ?_assertAsmEqual(<<16#41, 16#0F, 16#95, 16#C0>>, "setne %r8b", jit_x86_64_asm:setne(r8)),
+        ?_assertAsmEqual(<<16#41, 16#0F, 16#95, 16#C1>>, "setne %r9b", jit_x86_64_asm:setne(r9)),
+        ?_assertAsmEqual(<<16#41, 16#0F, 16#95, 16#C2>>, "setne %r10b", jit_x86_64_asm:setne(r10)),
+        ?_assertAsmEqual(<<16#41, 16#0F, 16#95, 16#C3>>, "setne %r11b", jit_x86_64_asm:setne(r11))
+    ].
