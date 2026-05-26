@@ -2464,7 +2464,7 @@ cached_move_to_vm_y_reg_reuse_test() ->
 %% Each test caches {x_reg, 1} in a14, frees it (so it stays cached but becomes
 %% available), then runs the op on a15: a14 is picked as the hidden Temp and
 %% clobbered with the immediate. Re-requesting {x_reg, 1} must emit a fresh
-%% l32i a14, a2, 28 rather than reuse the now-clobbered a14.
+%% l32i a14, a2, 48 rather than reuse the now-clobbered a14.
 
 add_invalidates_hidden_temp_cache_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -2478,12 +2478,12 @@ add_invalidates_hidden_temp_cache_test() ->
     {State6, a14} = ?BACKEND:move_to_native_register(State5, {x_reg, 1}),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	0622f2        	l32i	a15, a2, 24\n"
-        "   3:	0722e2        	l32i	a14, a2, 28\n"
-        "   6:	0822d2        	l32i	a13, a2, 32\n"
+        "   0:	0b22f2        	l32i	a15, a2, 44\n"
+        "   3:	0c22e2        	l32i	a14, a2, 48\n"
+        "   6:	0d22d2        	l32i	a13, a2, 52\n"
         "   9:	e8a3e2        	movi	a14, 0x3e8\n"
         "   c:	80ffe0        	add	a15, a15, a14\n"
-        "   f:	0722e2        	l32i	a14, a2, 28"
+        "   f:	0c22e2        	l32i	a14, a2, 48"
     >>,
     ?assertStream(xtensa, Dump, Stream).
 
@@ -2499,12 +2499,12 @@ sub_invalidates_hidden_temp_cache_test() ->
     {State6, a14} = ?BACKEND:move_to_native_register(State5, {x_reg, 1}),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	0622f2        	l32i	a15, a2, 24\n"
-        "   3:	0722e2        	l32i	a14, a2, 28\n"
-        "   6:	0822d2        	l32i	a13, a2, 32\n"
+        "   0:	0b22f2        	l32i	a15, a2, 44\n"
+        "   3:	0c22e2        	l32i	a14, a2, 48\n"
+        "   6:	0d22d2        	l32i	a13, a2, 52\n"
         "   9:	e8a3e2        	movi	a14, 0x3e8\n"
         "   c:	c0ffe0        	sub	a15, a15, a14\n"
-        "   f:	0722e2        	l32i	a14, a2, 28"
+        "   f:	0c22e2        	l32i	a14, a2, 48"
     >>,
     ?assertStream(xtensa, Dump, Stream).
 
@@ -2520,12 +2520,12 @@ or_invalidates_hidden_temp_cache_test() ->
     {State6, a14} = ?BACKEND:move_to_native_register(State5, {x_reg, 1}),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	0622f2        	l32i	a15, a2, 24\n"
-        "   3:	0722e2        	l32i	a14, a2, 28\n"
-        "   6:	0822d2        	l32i	a13, a2, 32\n"
+        "   0:	0b22f2        	l32i	a15, a2, 44\n"
+        "   3:	0c22e2        	l32i	a14, a2, 48\n"
+        "   6:	0d22d2        	l32i	a13, a2, 52\n"
         "   9:	e8a3e2        	movi	a14, 0x3e8\n"
         "   c:	20ffe0        	or	a15, a15, a14\n"
-        "   f:	0722e2        	l32i	a14, a2, 28"
+        "   f:	0c22e2        	l32i	a14, a2, 48"
     >>,
     ?assertStream(xtensa, Dump, Stream).
 
@@ -2541,11 +2541,11 @@ xor_invalidates_hidden_temp_cache_test() ->
     {State6, a14} = ?BACKEND:move_to_native_register(State5, {x_reg, 1}),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	0622f2        	l32i	a15, a2, 24\n"
-        "   3:	0722e2        	l32i	a14, a2, 28\n"
-        "   6:	0822d2        	l32i	a13, a2, 32\n"
+        "   0:	0b22f2        	l32i	a15, a2, 44\n"
+        "   3:	0c22e2        	l32i	a14, a2, 48\n"
+        "   6:	0d22d2        	l32i	a13, a2, 52\n"
         "   9:	e8a3e2        	movi	a14, 0x3e8\n"
         "   c:	30ffe0        	xor	a15, a15, a14\n"
-        "   f:	0722e2        	l32i	a14, a2, 28"
+        "   f:	0c22e2        	l32i	a14, a2, 48"
     >>,
     ?assertStream(xtensa, Dump, Stream).
