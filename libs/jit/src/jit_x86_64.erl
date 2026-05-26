@@ -1500,6 +1500,21 @@ set_args0(
                         end,
                     set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, NewLoadedImm, [J | Acc])
             end;
+        true when ArgReg =:= imm ->
+            % The argument is an immediate (or offset): it has no source register
+            % to xchg with. ParamReg is still occupied by a later argument, so
+            % defer this immediate to the end of the queue. Once that later
+            % argument has been moved to its own destination, ParamReg is free
+            % and the immediate is loaded directly. Immediates never participate
+            % in a register cycle, so the queue always drains.
+            set_args0(
+                ArgsT ++ [Arg],
+                ArgsRegs ++ [ArgReg],
+                ParamRegs ++ [ParamReg],
+                AvailGP,
+                LoadedImm,
+                Acc
+            );
         true ->
             % ParamReg is occupied by another argument that will go elsewhere
             % Use xchg to swap ArgReg and ParamReg
