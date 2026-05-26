@@ -31,10 +31,12 @@
     testq/2,
     jz/1,
     jz_rel8/1,
+    jz_rel32/1,
     jnz/1,
     jnz_rel8/1,
     jno/1,
     jno_rel8/1,
+    jno_rel32/1,
     jge/1,
     jge_rel8/1,
     jb/1,
@@ -362,6 +364,12 @@ jz(Offset) when Offset >= -126 andalso Offset =< 129 ->
 jz_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jz(Offset)}.
 
+% Jump if zero/equal (ZF=1) with a 32-bit displacement (0F 84, 6-byte
+% instruction). Used to skip a block that may exceed the rel8 +127 range.
+jz_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#84, AdjustedOffset:32/little>>}.
+
 jnz(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
     AdjustedOffset = Offset - 2,
@@ -377,6 +385,12 @@ jno(Offset) when Offset >= -126 andalso Offset =< 129 ->
 
 jno_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jno(Offset)}.
+
+% Jump if no overflow (OF=0) with a 32-bit displacement (0F 81, 6-byte
+% instruction). Used to skip a block that may exceed the rel8 +127 range.
+jno_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#81, AdjustedOffset:32/little>>}.
 
 jge(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
