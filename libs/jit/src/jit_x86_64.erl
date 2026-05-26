@@ -779,7 +779,10 @@ if_else_block(
     State2 = BlockTrueFn(State1),
     Stream2 = State2#state.stream,
     ElseJumpOffset = StreamModule:offset(Stream2),
-    {RelocJMPOffset, I} = jit_x86_64_asm:jmp_rel8(1),
+    %% Skip-the-false-block jump: use a rel32 jump because the false block can
+    %% exceed 127 bytes (e.g. nested inline-arithmetic blocks). A rel8 jump here
+    %% silently wraps the displacement and lands in the middle of an instruction.
+    {RelocJMPOffset, I} = jit_x86_64_asm:jmp_rel32(1),
     Stream3 = StreamModule:append(Stream2, I),
     OffsetAfter = StreamModule:offset(Stream3),
     ?ASSERT(OffsetAfter - OffsetAfterCond < 16#80),
@@ -794,7 +797,7 @@ if_else_block(
     Stream5 = State3#state.stream,
     OffsetFinal = StreamModule:offset(Stream5),
     Stream6 = StreamModule:replace(Stream5, ElseJumpOffset + RelocJMPOffset, <<
-        (OffsetFinal - OffsetAfter)
+        (OffsetFinal - OffsetAfter):32/little
     >>),
     %% Merge register tracking from both branches (true=State2, false=State3)
     MergedRegs = jit_regs:merge(
