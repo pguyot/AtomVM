@@ -428,6 +428,16 @@ jnz_rel8_test_() ->
         ?_assertEqual({1, <<16#75, 0>>}, jit_x86_64_asm:jnz_rel8(2))
     ].
 
+jno_test_() ->
+    [
+        ?_assertAsmEqual(<<16#71, 0>>, "jno .+2", jit_x86_64_asm:jno(2))
+    ].
+
+jno_rel8_test_() ->
+    [
+        ?_assertEqual({1, <<16#71, 0>>}, jit_x86_64_asm:jno_rel8(2))
+    ].
+
 jno_rel32_test_() ->
     [
         % jno rel32 is 0F 81 + disp32; reloc offset is 2 (disp starts after 0F 81).
