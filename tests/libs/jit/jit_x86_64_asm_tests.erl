@@ -428,6 +428,24 @@ jnz_rel8_test_() ->
         ?_assertEqual({1, <<16#75, 0>>}, jit_x86_64_asm:jnz_rel8(2))
     ].
 
+jno_rel32_test_() ->
+    [
+        % jno rel32 is 0F 81 + disp32; reloc offset is 2 (disp starts after 0F 81).
+        % Placeholder (1): disp = 1 - 6 = -5.
+        ?_assertEqual({2, <<16#0F, 16#81, 251, 255, 255, 255>>}, jit_x86_64_asm:jno_rel32(1)),
+        % Offset 6 = instruction size -> disp 0.
+        ?_assertEqual({2, <<16#0F, 16#81, 0:32/little>>}, jit_x86_64_asm:jno_rel32(6)),
+        % Offset 206 -> disp 200 (0xC8): a forward jump skipping 200 bytes.
+        ?_assertEqual({2, <<16#0F, 16#81, 16#C8, 0, 0, 0>>}, jit_x86_64_asm:jno_rel32(206))
+    ].
+
+jz_rel32_test_() ->
+    [
+        ?_assertEqual({2, <<16#0F, 16#84, 251, 255, 255, 255>>}, jit_x86_64_asm:jz_rel32(1)),
+        ?_assertEqual({2, <<16#0F, 16#84, 0:32/little>>}, jit_x86_64_asm:jz_rel32(6)),
+        ?_assertEqual({2, <<16#0F, 16#84, 16#C8, 0, 0, 0>>}, jit_x86_64_asm:jz_rel32(206))
+    ].
+
 jmp_rel32_test_() ->
     [
         % Test relocation placeholder (should produce -4 for relocation mechanism)
