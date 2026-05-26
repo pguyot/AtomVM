@@ -87,6 +87,32 @@ call_primitive_2_args_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+%% Regression: an immediate argument whose target parameter register is still
+%% occupied by a *later* register argument used to crash set_args0 with
+%% `xchgq(imm, ParamReg)` (function_clause in x86_64_x_reg). Here the immediate
+%% 42 targets rdx (3rd parameter) while the 4th argument still lives in rdx, so
+%% rdx must be moved out (to rcx) before the immediate is loaded into it.
+call_primitive_immediate_param_conflict_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:call_primitive(State0, 0, [r8, r9, 42, rdx]),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:  48 8b 02                mov    (%rdx),%rax\n"
+            "   3:  57                      push   %rdi\n"
+            "   4:  56                      push   %rsi\n"
+            "   5:  52                      push   %rdx\n"
+            "   6:  4c 89 c7                mov    %r8,%rdi\n"
+            "   9:  4c 89 ce                mov    %r9,%rsi\n"
+            "   c:  48 89 d1                mov    %rdx,%rcx\n"
+            "   f:  ba 2a 00 00 00          mov    $0x2a,%edx\n"
+            "  14:  ff d0                   callq  *%rax\n"
+            "  16:  5a                      pop    %rdx\n"
+            "  17:  5e                      pop    %rsi\n"
+            "  18:  5f                      pop    %rdi\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 add_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
