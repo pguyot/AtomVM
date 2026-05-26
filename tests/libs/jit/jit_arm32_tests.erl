@@ -94,9 +94,10 @@ mul_overflow_test() ->
             "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e3cbb00f 	bic	fp, fp, #15\n"
             "   c:	e1a0a24a 	asr	sl, sl, #4\n"
-            "  10:	e0c9ba9b 	smull	fp, r9, fp, sl\n"
-            "  14:	e1a08fcb 	asr	r8, fp, #31\n"
-            "  18:	e1590008 	cmp	r9, r8"
+            "  10:	e0c98a9b 	smull	r8, r9, fp, sl\n"
+            "  14:	e1a07fc8 	asr	r7, r8, #31\n"
+            "  18:	e1590007 	cmp	r9, r7\n"
+            "  1c:	e1a0b008 	mov	fp, r8"
         >>,
     ?assertStream(arm32, Dump, Stream).
 

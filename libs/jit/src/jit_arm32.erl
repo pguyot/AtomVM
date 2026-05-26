@@ -3410,16 +3410,23 @@ mul_overflow(
     Val
 ) when is_atom(Val) ->
     Hi = first_avail(Avail),
-    Sign = first_avail(Avail band (bnot reg_bit(Hi))),
+    %% SMULL requires RdLo, RdHi and the first multiplicand (Rm) to be three
+    %% distinct registers (RdLo == Rm is UNPREDICTABLE on ARMv6/v7). Compute the
+    %% low word into a dedicated scratch Lo (not Reg, which is also a
+    %% multiplicand), then move it back into Reg for the caller.
+    Lo = first_avail(Avail band (bnot reg_bit(Hi))),
+    Sign = first_avail(Avail band (bnot reg_bit(Hi)) band (bnot reg_bit(Lo))),
     Code = <<
         %% strip Reg's tag (a << 4, via bit-clear) and untag Val (b)
         (jit_arm32_asm:bic(al, Reg, Reg, 16#F))/binary,
         (jit_arm32_asm:asr(al, Val, Val, 4))/binary,
-        %% {Hi, Reg} = (a << 4) * b
-        (jit_arm32_asm:smull(al, Reg, Hi, Reg, Val))/binary,
-        %% fits iff Hi == (Reg asr 31): cmp sets EQ when they match
-        (jit_arm32_asm:asr(al, Sign, Reg, 31))/binary,
-        (jit_arm32_asm:cmp(al, Hi, Sign))/binary
+        %% {Hi, Lo} = (a << 4) * b  (Lo distinct from the Reg multiplicand)
+        (jit_arm32_asm:smull(al, Lo, Hi, Reg, Val))/binary,
+        %% fits iff Hi == (Lo asr 31): cmp sets EQ when they match
+        (jit_arm32_asm:asr(al, Sign, Lo, 31))/binary,
+        (jit_arm32_asm:cmp(al, Hi, Sign))/binary,
+        %% move the product low word into Reg for the caller's re-tag/store
+        (jit_arm32_asm:mov(al, Reg, Lo))/binary
     >>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val),
