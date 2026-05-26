@@ -4231,19 +4231,33 @@ op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
 op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
     case can_inline_mul(Range1, Range2, MMod) of
         true ->
-            % Both operands in registers: strip tags, extract value, multiply
+            % Both operands in registers. Untag each operand with an arithmetic
+            % shift (preserving the sign of negative small integers), multiply,
+            % then shift the product back into the value field and add the tag.
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
-            % Strip tag from Reg1: value1 << 4
-            {MSt3, Reg1} = MMod:and_(MSt2, {free, Reg1}, bnot (?TERM_IMMED_TAG_MASK)),
-            % Shift right by 4 to get raw value2 (shift discards the 4 tag bits)
-            {MSt4, Reg2} = MMod:shift_right(MSt3, {free, Reg2}, 4),
-            % Multiply: (value1 << 4) * value2 = (value1 * value2) << 4
-            MSt5 = MMod:mul(MSt4, Reg1, Reg2),
-            % Add tag back
-            MSt6 = MMod:or_(MSt5, Reg1, ?TERM_INTEGER_TAG),
-            MSt7 = MMod:move_to_vm_register(MSt6, Reg1, Dest),
-            MMod:free_native_registers(MSt7, [Reg1, Reg2, Dest]);
+            {MSt5, ResReg, FreeRegs} =
+                case Reg1 =:= Reg2 of
+                    true ->
+                        % Same VM register on both sides (e.g. X * X): untag the
+                        % single register ONCE, then square it. Untagging twice
+                        % (or untagging one side and shifting the other) would
+                        % shift the same register repeatedly and corrupt it.
+                        {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+                        MSt4 = MMod:mul(MSt3, Reg1, Reg1),
+                        {MSt4, Reg1, [Reg1, Dest]};
+                    false ->
+                        % Distinct registers: untag both, then multiply.
+                        {MSt3, Reg1} = MMod:shift_right_arith(MSt2, {free, Reg1}, 4),
+                        {MSt4, Reg2} = MMod:shift_right_arith(MSt3, {free, Reg2}, 4),
+                        {MMod:mul(MSt4, Reg1, Reg2), Reg1, [Reg1, Reg2, Dest]}
+                end,
+            % Shift the product into the value field and add the tag:
+            % ResReg = (value1 * value2) << 4 | TERM_INTEGER_TAG
+            MSt6 = MMod:shift_left(MSt5, ResReg, 4),
+            MSt7 = MMod:or_(MSt6, ResReg, ?TERM_INTEGER_TAG),
+            MSt8 = MMod:move_to_vm_register(MSt7, ResReg, Dest),
+            MMod:free_native_registers(MSt8, FreeRegs);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
