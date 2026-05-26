@@ -501,6 +501,7 @@ compile_erlang(float_is_float)
 compile_erlang(float_is_number)
 compile_erlang(fconv_fail_invalid)
 compile_erlang(fconv_negative_int)
+compile_erlang(fconv_float_unbox)
 
 compile_erlang(float2list)
 compile_erlang(float2bin)
@@ -1082,6 +1083,7 @@ set(erlang_test_beams
     float_is_number.beam
     fconv_fail_invalid.beam
     fconv_negative_int.beam
+    fconv_float_unbox.beam
 
     float2list.beam
     float2bin.beam

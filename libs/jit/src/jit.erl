@@ -5947,41 +5947,30 @@ put_record_generic(Rest1, MMod, MSt0, State0) ->
 %% (untag + int->double), only calling the C term_conv_to_float for boxed
 %% integers / bignums.
 op_fconv(MMod, MSt0, {typed, Term, {t_integer, _Range}}, FPRegIndex) ->
+    %% Provably an integer (small immediate or bignum). On FPU backends inline
+    %% the common immediate-integer case; otherwise use the C conversion.
+    case MMod:supports_fp(MSt0) of
+        true -> op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex);
+        false -> op_fconv_number(MMod, MSt0, Term, FPRegIndex)
+    end;
+op_fconv(MMod, MSt0, {typed, Term, {t_number, _Range}}, FPRegIndex) ->
+    %% Provably a number (integer or float). On FPU backends inline the
+    %% immediate-integer case; a boxed float or bignum goes through the C
+    %% conversion (which handles both), avoiding a boxed-header tag test here.
+    case MMod:supports_fp(MSt0) of
+        true -> op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex);
+        false -> op_fconv_number(MMod, MSt0, Term, FPRegIndex)
+    end;
+op_fconv(MMod, MSt0, {typed, Term, {t_float, _Range}}, FPRegIndex) ->
+    %% Provably a float, hence always a boxed float: unbox inline on FPU backends.
     case MMod:supports_fp(MSt0) of
         true ->
             {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
             MSt2 = ensure_fpregs(MMod, MSt1),
-            %% Test the immediate tag with '!=' (the only '&'-mask form the
-            %% backends support), so the boxed/bignum fallback is the "then"
-            %% branch and the inline immediate-int conversion is the "else".
-            MSt3 = MMod:if_else_block(
-                MSt2,
-                {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
-                %% Boxed integer / bignum: fall back to the C conversion.
-                fun(BSt0) ->
-                    {BSt1, ConvReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_CONV_TO_FLOAT, [
-                        ctx, Reg, FPRegIndex
-                    ]),
-                    MMod:free_native_registers(BSt1, [ConvReg])
-                end,
-                %% Immediate small integer: untag (arithmetic shift to preserve
-                %% the sign of negative values) and convert inline.
-                fun(BSt0) ->
-                    {BSt1, IntReg} = MMod:shift_right_arith(BSt0, Reg, 4),
-                    BSt2 = MMod:float_conv_int(BSt1, IntReg, FPRegIndex),
-                    MMod:free_native_registers(BSt2, [IntReg])
-                end
-            ),
-            MMod:free_native_registers(MSt3, [Reg]);
+            MMod:float_conv_float(MSt2, {free, Reg}, FPRegIndex);
         false ->
             op_fconv_number(MMod, MSt0, Term, FPRegIndex)
     end;
-op_fconv(MMod, MSt0, {typed, Term, {t_number, _Range}}, FPRegIndex) ->
-    %% Provably a number, so skip the term_is_number guard; the C conversion
-    %% handles integer/float/bignum.
-    op_fconv_number(MMod, MSt0, Term, FPRegIndex);
-op_fconv(MMod, MSt0, {typed, Term, {t_float, _Range}}, FPRegIndex) ->
-    op_fconv_number(MMod, MSt0, Term, FPRegIndex);
 op_fconv(MMod, MSt0, {typed, Term, _OtherType}, FPRegIndex) ->
     %% A non-number static type would be a badarith at runtime; keep the guarded
     %% generic path rather than assuming.
@@ -5989,10 +5978,53 @@ op_fconv(MMod, MSt0, {typed, Term, _OtherType}, FPRegIndex) ->
 op_fconv(MMod, MSt0, SrcValue, FPRegIndex) ->
     op_fconv_guarded(MMod, MSt0, SrcValue, FPRegIndex).
 
-%% Ensure the fp register array is allocated (its result is unused here).
+%% Inline conversion of an integer-typed source: immediate small integer is
+%% untagged and converted in registers; a boxed integer / bignum falls back to
+%% the C term_conv_to_float.
+op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex) ->
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
+    MSt2 = ensure_fpregs(MMod, MSt1),
+    %% Test the immediate tag with '!=' (the only '&'-mask form the backends
+    %% support), so the boxed/bignum fallback is the "then" branch and the
+    %% inline immediate-int conversion is the "else".
+    MSt3 = MMod:if_else_block(
+        MSt2,
+        {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        %% Boxed integer / bignum: fall back to the C conversion.
+        fun(BSt0) ->
+            {BSt1, ConvReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_CONV_TO_FLOAT, [
+                ctx, Reg, FPRegIndex
+            ]),
+            MMod:free_native_registers(BSt1, [ConvReg])
+        end,
+        %% Immediate small integer: untag (arithmetic shift to preserve the sign
+        %% of negative values) and convert inline.
+        fun(BSt0) ->
+            {BSt1, IntReg} = MMod:shift_right_arith(BSt0, Reg, 4),
+            BSt2 = MMod:float_conv_int(BSt1, IntReg, FPRegIndex),
+            MMod:free_native_registers(BSt2, [IntReg])
+        end
+    ),
+    MMod:free_native_registers(MSt3, [Reg]).
+
+%% Ensure the fp register array is allocated. context_ensure_fpregs only does
+%% a lazy malloc on the first call, so on FPU backends test ctx->fr inline and
+%% make the C call (with its register spill) only when the array has not been
+%% allocated yet; in the steady state (the array already exists) this is just a
+%% load + branch. Backends without inline FP support call the primitive
+%% directly.
 ensure_fpregs(MMod, MSt0) ->
-    {MSt1, EnsureReg} = MMod:call_primitive(MSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
-    MMod:free_native_registers(MSt1, [EnsureReg]).
+    case MMod:supports_fp(MSt0) of
+        true ->
+            {MSt1, FpRegsPtr} = MMod:read_fp_regs_ptr(MSt0),
+            MMod:if_block(MSt1, {{free, FpRegsPtr}, '==', 0}, fun(BSt0) ->
+                {BSt1, EnsureReg} = MMod:call_primitive(BSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+                MMod:free_native_registers(BSt1, [EnsureReg])
+            end);
+        false ->
+            {MSt1, EnsureReg} = MMod:call_primitive(MSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+            MMod:free_native_registers(MSt1, [EnsureReg])
+    end.
 
 %% Convert a value already known to be a number (no term_is_number guard) using
 %% the C term_conv_to_float, which handles small int, boxed int/bignum and float.

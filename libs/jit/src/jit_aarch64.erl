@@ -74,6 +74,8 @@
     supports_fp/1,
     float_op/5,
     float_conv_int/3,
+    float_conv_float/3,
+    read_fp_regs_ptr/1,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -2935,6 +2937,54 @@ float_conv_int(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     State0#state{stream = Stream1, regs = Regs1}.
+
+%% Unbox a boxed float term (in BoxedReg) and store its double value into
+%% fr[FPRegIndex]. The double lives just past the boxed header word, i.e. at
+%% offset one word from the untagged boxed pointer. BoxedReg is consumed.
+-spec float_conv_float(state(), aarch64_register(), non_neg_integer()) -> state().
+float_conv_float(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    BoxedReg,
+    FPRegIndex
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    Temp = first_avail(Avail0 band (bnot reg_bit(BoxedReg))),
+    %% Clear the 2 primary (boxed) tag bits (mask 0x3) to get the boxed pointer,
+    %% load the double from boxed_ptr[1], load fr base, store to fr[FPRegIndex].
+    I1 = jit_aarch64_asm:and_(BoxedReg, BoxedReg, bnot 16#3),
+    I2 = jit_aarch64_asm:ldr_d(d0, {BoxedReg, ?WORD_SIZE}),
+    I3 = jit_aarch64_asm:ldr(Temp, ?FP_REGS),
+    I4 = jit_aarch64_asm:str_d(d0, {Temp, ?FP_REG_OFFSET(State0, FPRegIndex)}),
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
+
+%% Load the fp register array pointer (ctx->fr) into a freshly allocated
+%% register and return it, so the caller can test it for NULL and only call
+%% context_ensure_fpregs (the malloc) when it has not been allocated yet.
+-spec read_fp_regs_ptr(state()) -> {state(), aarch64_register()}.
+read_fp_regs_ptr(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Bit = reg_bit(Reg),
+    I1 = jit_aarch64_asm:ldr(Reg, ?FP_REGS),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)},
+        Reg
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it
