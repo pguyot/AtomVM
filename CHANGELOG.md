@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep on every collection), inspect with `process_info/2`
 - Added support for non-byte-aligned bitstrings
 - Added support for native records introduced with OTP29
+- Added inline JIT code generation for double-precision floating-point arithmetic
+  (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
+  non-finite-result check, instead of calling the C float primitives
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:

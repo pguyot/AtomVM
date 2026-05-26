@@ -70,6 +70,7 @@
     div_/3,
     rem_/3,
     supports_div/1,
+    supports_fp/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -4000,6 +4001,11 @@ rem_(
 %% variant) provide SDIV / MLS and let us emit native div/rem.
 -spec supports_div(state()) -> boolean().
 supports_div(#state{thumb2 = Thumb2}) -> Thumb2.
+
+%% ARMv6-M (Cortex-M0/M0+/M1) has no hardware FPU, so floating-point arithmetic
+%% is always done through the float primitives, never inline. (The +float32
+%% variant only selects 32-bit float storage; it does not imply an FPU.)
+supports_fp(_State) -> false.
 
 %%
 %% Analysis of AArch64 pattern and ARM Thumb mapping:
