@@ -74,6 +74,7 @@
     fmul/3,
     fdiv/3,
     fmov/2,
+    scvtf/2,
     cset/2
 ]).
 
@@ -819,14 +820,36 @@ fp_data2(Base, Dd, Dn, Dm) when is_atom(Dd), is_atom(Dn), is_atom(Dm) ->
     DmNum = fpreg_to_num(Dm),
     <<(Base bor (DmNum bsl 16) bor (DnNum bsl 5) bor DdNum):32/little>>.
 
-%% FMOV Xd, Dn: move the raw 64-bit pattern of a double into a general-purpose
-%% register (FMOV general, double to 64-bit), used to inspect the result bits.
--spec fmov(aarch64_gpr_register(), aarch64_fp_register()) -> binary().
-fmov(Xd, Dn) when is_atom(Xd), is_atom(Dn) ->
-    XdNum = reg_to_num(Xd),
-    DnNum = fpreg_to_num(Dn),
-    %% FMOV (general) 64-bit, double to GPR: 0x9e660000 | Dn << 5 | Xd
-    <<(16#9E660000 bor (DnNum bsl 5) bor XdNum):32/little>>.
+%% FMOV: move the raw 64-bit pattern between a double and a general-purpose
+%% register without conversion. Two directions, disambiguated by the
+%% destination register name (d* = FP, r* = GPR):
+%%   fmov Dd, Xn  (GPR -> double, FMOV general): 0x9e670000 | Xn << 5 | Dd
+%%   fmov Xd, Dn  (double -> GPR, FMOV general): 0x9e660000 | Dn << 5 | Xd
+-spec fmov(
+    aarch64_fp_register() | aarch64_gpr_register(), aarch64_gpr_register() | aarch64_fp_register()
+) ->
+    binary().
+fmov(Dst, Src) when is_atom(Dst), is_atom(Src) ->
+    case atom_to_list(Dst) of
+        [$d | _] ->
+            %% GPR -> double
+            DdNum = fpreg_to_num(Dst),
+            XnNum = reg_to_num(Src),
+            <<(16#9E670000 bor (XnNum bsl 5) bor DdNum):32/little>>;
+        _ ->
+            %% double -> GPR
+            XdNum = reg_to_num(Dst),
+            DnNum = fpreg_to_num(Src),
+            <<(16#9E660000 bor (DnNum bsl 5) bor XdNum):32/little>>
+    end.
+
+%% SCVTF Dd, Xn: convert a signed 64-bit integer in a GPR to a double in a
+%% SIMD&FP register: 0x9e620000 | Xn << 5 | Dd
+-spec scvtf(aarch64_fp_register(), aarch64_gpr_register()) -> binary().
+scvtf(Dd, Xn) when is_atom(Dd), is_atom(Xn) ->
+    DdNum = fpreg_to_num(Dd),
+    XnNum = reg_to_num(Xn),
+    <<(16#9E620000 bor (XnNum bsl 5) bor DdNum):32/little>>.
 
 %% CSET Xd, cond: set Xd to 1 if cond holds, else 0 (alias of CSINC Xd, xzr,
 %% xzr, invert(cond)).
