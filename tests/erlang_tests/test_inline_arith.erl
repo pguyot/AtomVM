@@ -33,6 +33,7 @@
     mul_const/1,
     mul_regs/2,
     mul_regs_neg/2,
+    square/1,
     div_by_literal/1,
     div_regs/2,
     rem_by_literal/1,
@@ -92,6 +93,11 @@ mul_const(X) when is_integer(X), X >= 0, X < 100 ->
 % Test register * register multiplication - both args are typed registers
 mul_regs(X, Y) when is_integer(X), X >= 0, X < 100, is_integer(Y), Y >= 0, Y < 100 ->
     X * Y.
+
+% Test squaring (X * X) - both operands are the SAME typed register, which
+% exercises the register-aliasing case of the inlined reg*reg multiply.
+square(X) when is_integer(X), X >= -1000, X =< 1000 ->
+    X * X.
 
 % Test register * register multiplication with negative range
 % Exercises the reg*reg path where Arg2 can be negative
@@ -229,6 +235,14 @@ start() ->
     42 = ?MODULE:mul_regs(6, 7),
     99 = ?MODULE:mul_regs(99, 1),
     9801 = ?MODULE:mul_regs(99, 99),
+
+    % Test squaring (X * X, same register on both sides of the multiply)
+    0 = ?MODULE:square(0),
+    1 = ?MODULE:square(1),
+    176400 = ?MODULE:square(420),
+    900 = ?MODULE:square(-30),
+    176400 = ?MODULE:square(-420),
+    1000000 = ?MODULE:square(1000),
 
     % Test register * register multiplication with negative values
     0 = ?MODULE:mul_regs_neg(0, -5),
