@@ -72,7 +72,14 @@
     xorq/2,
     cqo/0,
     idivq/1,
-    sarq/2
+    sarq/2,
+    movsd/2,
+    addsd/2,
+    subsd/2,
+    mulsd/2,
+    divsd/2,
+    movsd_to_gpr/2,
+    setne/1
 ]).
 
 -define(IS_SINT8_T(X), is_integer(X) andalso X >= -128 andalso X =< 127).
@@ -96,6 +103,84 @@ x86_64_x_reg(r10) -> {1, 2};
 x86_64_x_reg(r11) -> {1, 3}.
 
 -define(X86_64_REX(W, R, X, B), <<4:4, W:1, R:1, X:1, B:1>> / binary).
+
+% Encode an SSE register on 4 bits (high bit goes to REX.R/REX.B)
+-spec x86_64_xmm_reg(atom()) -> {0..1, 0..7}.
+x86_64_xmm_reg(xmm0) -> {0, 0};
+x86_64_xmm_reg(xmm1) -> {0, 1};
+x86_64_xmm_reg(xmm2) -> {0, 2};
+x86_64_xmm_reg(xmm3) -> {0, 3};
+x86_64_xmm_reg(xmm4) -> {0, 4};
+x86_64_xmm_reg(xmm5) -> {0, 5};
+x86_64_xmm_reg(xmm6) -> {0, 6};
+x86_64_xmm_reg(xmm7) -> {0, 7};
+x86_64_xmm_reg(xmm8) -> {1, 0};
+x86_64_xmm_reg(xmm9) -> {1, 1};
+x86_64_xmm_reg(xmm10) -> {1, 2};
+x86_64_xmm_reg(xmm11) -> {1, 3};
+x86_64_xmm_reg(xmm12) -> {1, 4};
+x86_64_xmm_reg(xmm13) -> {1, 5};
+x86_64_xmm_reg(xmm14) -> {1, 6};
+x86_64_xmm_reg(xmm15) -> {1, 7}.
+
+% REX prefix, emitted only when one of its bits is set (an all-zero REX would be
+% a harmless but non-canonical 0x40 byte).
+rex_opt(0, 0, 0, 0) -> <<>>;
+rex_opt(W, R, X, B) -> <<4:4, W:1, R:1, X:1, B:1>>.
+
+% ModRM + displacement for the memory operand [Base + Disp]. The x86_64 backend
+% only ever uses rax/rcx/rdx/rsi/rdi/r8..r11 as a base, none of which is rsp/r12
+% (SIB) or rbp/r13 (rm 5 / RIP-relative), so the simple form is always valid.
+sse_modrm_mem(RegField, BaseRm, 0) ->
+    <<0:2, RegField:3, BaseRm:3>>;
+sse_modrm_mem(RegField, BaseRm, Disp) when ?IS_SINT8_T(Disp) ->
+    <<1:2, RegField:3, BaseRm:3, Disp>>;
+sse_modrm_mem(RegField, BaseRm, Disp) when ?IS_SINT32_T(Disp) ->
+    <<2:2, RegField:3, BaseRm:3, Disp:32/little>>.
+
+% movsd xmm, [Base+Disp]  (F2 0F 10 /r): load a double into an xmm register.
+movsd(XmmDst, {Disp, Base}) when is_atom(XmmDst), is_atom(Base) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmDst),
+    {REX_B, MODRM_RM} = x86_64_x_reg(Base),
+    <<16#F2, (rex_opt(0, REX_R, 0, REX_B))/binary, 16#0F, 16#10,
+        (sse_modrm_mem(MODRM_REG, MODRM_RM, Disp))/binary>>;
+% movsd [Base+Disp], xmm  (F2 0F 11 /r): store an xmm register to a double.
+movsd({Disp, Base}, XmmSrc) when is_atom(Base), is_atom(XmmSrc) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmSrc),
+    {REX_B, MODRM_RM} = x86_64_x_reg(Base),
+    <<16#F2, (rex_opt(0, REX_R, 0, REX_B))/binary, 16#0F, 16#11,
+        (sse_modrm_mem(MODRM_REG, MODRM_RM, Disp))/binary>>.
+
+% Scalar double arithmetic, xmm-to-xmm: XmmDst = XmmDst <op> XmmSrc.
+addsd(XmmDst, XmmSrc) -> sse_arith(16#58, XmmDst, XmmSrc).
+mulsd(XmmDst, XmmSrc) -> sse_arith(16#59, XmmDst, XmmSrc).
+subsd(XmmDst, XmmSrc) -> sse_arith(16#5C, XmmDst, XmmSrc).
+divsd(XmmDst, XmmSrc) -> sse_arith(16#5E, XmmDst, XmmSrc).
+
+sse_arith(Opcode, XmmDst, XmmSrc) when is_atom(XmmDst), is_atom(XmmSrc) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmDst),
+    {REX_B, MODRM_RM} = x86_64_xmm_reg(XmmSrc),
+    <<16#F2, (rex_opt(0, REX_R, 0, REX_B))/binary, 16#0F, Opcode, 3:2, MODRM_REG:3, MODRM_RM:3>>.
+
+% movq GprDst, XmmSrc  (66 REX.W 0F 7E /r): move the raw bits of a double into a
+% general-purpose register, e.g. to inspect the result for finiteness.
+movsd_to_gpr(GprDst, XmmSrc) when is_atom(GprDst), is_atom(XmmSrc) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmSrc),
+    {REX_B, MODRM_RM} = x86_64_x_reg(GprDst),
+    <<16#66, (rex_opt(1, REX_R, 0, REX_B))/binary, 16#0F, 16#7E, 3:2, MODRM_REG:3, MODRM_RM:3>>.
+
+% setne r/m8  (0F 95 /0): set the low byte of Reg to 1 if ZF is clear (last
+% result was non-zero), else 0.
+setne(Reg) when is_atom(Reg) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    %% rsi/rdi (low3 >= 4) and r8..r11 (REX.B) need a REX prefix to address the
+    %% low byte (sil/dil/r8b...) rather than the legacy ah/ch/dh/bh.
+    RexPrefix =
+        case REX_B =:= 1 orelse MODRM_RM >= 4 of
+            true -> <<4:4, 0:1, 0:1, 0:1, REX_B:1>>;
+            false -> <<>>
+        end,
+    <<RexPrefix/binary, 16#0F, 16#95, 3:2, 0:3, MODRM_RM:3>>.
 
 movq({0, SrcReg}, DestReg) when is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),

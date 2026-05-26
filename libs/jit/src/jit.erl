@@ -5965,9 +5965,18 @@ first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
     ?TRACE("OP_F3*~p ~p, ~p, ~p\n", [
         Primitive, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}, {fp_reg, FPRegIndex3}
     ]),
-    {MSt1, Reg} = MMod:call_primitive(MSt0, Primitive, [
-        ctx, FPRegIndex1, FPRegIndex2, FPRegIndex3
-    ]),
+    %% Backends with a hardware FPU inline the operation and a finiteness check;
+    %% the others fall back to the C primitive. Both yield a register that is
+    %% false (0) iff the result is non-finite, so badarith handling is shared.
+    {MSt1, Reg} =
+        case MMod:supports_fp(MSt0) of
+            true ->
+                MMod:float_op(MSt0, Primitive, FPRegIndex1, FPRegIndex2, FPRegIndex3);
+            false ->
+                MMod:call_primitive(MSt0, Primitive, [
+                    ctx, FPRegIndex1, FPRegIndex2, FPRegIndex3
+                ])
+        end,
     MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->
         MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
             ctx, jit_state, offset, ?BADARITH_ATOM
