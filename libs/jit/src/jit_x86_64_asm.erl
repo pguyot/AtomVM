@@ -79,6 +79,7 @@
     mulsd/2,
     divsd/2,
     movsd_to_gpr/2,
+    cvtsi2sd/2,
     setne/1
 ]).
 
@@ -168,6 +169,13 @@ movsd_to_gpr(GprDst, XmmSrc) when is_atom(GprDst), is_atom(XmmSrc) ->
     {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmSrc),
     {REX_B, MODRM_RM} = x86_64_x_reg(GprDst),
     <<16#66, (rex_opt(1, REX_R, 0, REX_B))/binary, 16#0F, 16#7E, 3:2, MODRM_REG:3, MODRM_RM:3>>.
+
+% cvtsi2sd xmm, r64  (F2 REX.W 0F 2A /r): convert a signed 64-bit integer in a
+% general-purpose register to a double in an xmm register.
+cvtsi2sd(XmmDst, GprSrc) when is_atom(XmmDst), is_atom(GprSrc) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmDst),
+    {REX_B, MODRM_RM} = x86_64_x_reg(GprSrc),
+    <<16#F2, (rex_opt(1, REX_R, 0, REX_B))/binary, 16#0F, 16#2A, 3:2, MODRM_REG:3, MODRM_RM:3>>.
 
 % setne r/m8  (0F 95 /0): set the low byte of Reg to 1 if ZF is clear (last
 % result was non-zero), else 0.

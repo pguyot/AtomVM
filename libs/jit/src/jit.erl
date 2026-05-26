@@ -1087,24 +1087,12 @@ first_pass(<<?OP_FMOVE, Rest0/binary>>, MMod, MSt0, State0) ->
 % 97
 first_pass(<<?OP_FCONV, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, SrcValue),
-    {MSt3, IsNumber} = MMod:call_primitive(MSt2, ?PRIM_TERM_IS_NUMBER, [Reg]),
-    MSt4 = MMod:if_block(MSt3, {'(bool)', {free, IsNumber}, '==', false}, fun(BlockSt) ->
-        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?BADARITH_ATOM
-        ])
-    end),
+    {MSt1, SrcValue, Rest1} = decode_typed_compact_term(Rest0, MMod, MSt0, State0),
     {{fp_reg, FPRegIndex}, Rest2} = decode_fp_register(Rest1),
-    {MSt5, ResultReg} = MMod:call_primitive(MSt4, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
-    MSt6 = MMod:free_native_registers(MSt5, [ResultReg]),
-    ?TRACE("OP_FCONF ~p, ~p\n", [SrcValue, {fp_reg, FPRegIndex}]),
-    {MSt7, ConvToFloatResReg} = MMod:call_primitive(MSt6, ?PRIM_TERM_CONV_TO_FLOAT, [
-        ctx, {free, Reg}, FPRegIndex
-    ]),
-    MSt8 = MMod:free_native_registers(MSt7, [ConvToFloatResReg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt8),
-    first_pass(Rest2, MMod, MSt8, State0);
+    ?TRACE("OP_FCONV ~p, ~p\n", [SrcValue, {fp_reg, FPRegIndex}]),
+    MSt2 = op_fconv(MMod, MSt1, SrcValue, FPRegIndex),
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    first_pass(Rest2, MMod, MSt2, State0);
 % 98
 first_pass(<<?OP_FADD, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -5952,6 +5940,89 @@ put_record_generic(Rest1, MMod, MSt0, State0) ->
     MSt17 = MMod:free_native_registers(MSt16, [ResultReg, Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt17),
     first_pass(Rest7, MMod, MSt17, State0).
+
+%% OP_FCONV: convert a term to a double in fr[FPRegIndex], raising badarith if
+%% the term is not a number.
+%%
+%% Type information from the compiler lets us specialise: an integer- or
+%% number-typed source is provably a number, so the runtime term_is_number
+%% guard is unnecessary. On FPU backends an integer-typed source additionally
+%% gets an inline fast path for the common small-immediate-integer case
+%% (untag + int->double), only calling the C term_conv_to_float for boxed
+%% integers / bignums.
+op_fconv(MMod, MSt0, {typed, Term, {t_integer, _Range}}, FPRegIndex) ->
+    case MMod:supports_fp(MSt0) of
+        true ->
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
+            MSt2 = ensure_fpregs(MMod, MSt1),
+            %% Test the immediate tag with '!=' (the only '&'-mask form the
+            %% backends support), so the boxed/bignum fallback is the "then"
+            %% branch and the inline immediate-int conversion is the "else".
+            MSt3 = MMod:if_else_block(
+                MSt2,
+                {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                %% Boxed integer / bignum: fall back to the C conversion.
+                fun(BSt0) ->
+                    {BSt1, ConvReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_CONV_TO_FLOAT, [
+                        ctx, Reg, FPRegIndex
+                    ]),
+                    MMod:free_native_registers(BSt1, [ConvReg])
+                end,
+                %% Immediate small integer: untag (arithmetic shift to preserve
+                %% the sign of negative values) and convert inline.
+                fun(BSt0) ->
+                    {BSt1, IntReg} = MMod:shift_right_arith(BSt0, Reg, 4),
+                    BSt2 = MMod:float_conv_int(BSt1, IntReg, FPRegIndex),
+                    MMod:free_native_registers(BSt2, [IntReg])
+                end
+            ),
+            MMod:free_native_registers(MSt3, [Reg]);
+        false ->
+            op_fconv_number(MMod, MSt0, Term, FPRegIndex)
+    end;
+op_fconv(MMod, MSt0, {typed, Term, {t_number, _Range}}, FPRegIndex) ->
+    %% Provably a number, so skip the term_is_number guard; the C conversion
+    %% handles integer/float/bignum.
+    op_fconv_number(MMod, MSt0, Term, FPRegIndex);
+op_fconv(MMod, MSt0, {typed, Term, {t_float, _Range}}, FPRegIndex) ->
+    op_fconv_number(MMod, MSt0, Term, FPRegIndex);
+op_fconv(MMod, MSt0, {typed, Term, _OtherType}, FPRegIndex) ->
+    %% A non-number static type would be a badarith at runtime; keep the guarded
+    %% generic path rather than assuming.
+    op_fconv_guarded(MMod, MSt0, Term, FPRegIndex);
+op_fconv(MMod, MSt0, SrcValue, FPRegIndex) ->
+    op_fconv_guarded(MMod, MSt0, SrcValue, FPRegIndex).
+
+%% Ensure the fp register array is allocated (its result is unused here).
+ensure_fpregs(MMod, MSt0) ->
+    {MSt1, EnsureReg} = MMod:call_primitive(MSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+    MMod:free_native_registers(MSt1, [EnsureReg]).
+
+%% Convert a value already known to be a number (no term_is_number guard) using
+%% the C term_conv_to_float, which handles small int, boxed int/bignum and float.
+op_fconv_number(MMod, MSt0, Term, FPRegIndex) ->
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
+    MSt2 = ensure_fpregs(MMod, MSt1),
+    {MSt3, ConvReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_CONV_TO_FLOAT, [
+        ctx, {free, Reg}, FPRegIndex
+    ]),
+    MMod:free_native_registers(MSt3, [ConvReg]).
+
+%% Generic path with the runtime term_is_number check (raises badarith on a
+%% non-number), used when no type information proves the source is a number.
+op_fconv_guarded(MMod, MSt0, SrcValue, FPRegIndex) ->
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, SrcValue),
+    {MSt2, IsNumber} = MMod:call_primitive(MSt1, ?PRIM_TERM_IS_NUMBER, [Reg]),
+    MSt3 = MMod:if_block(MSt2, {'(bool)', {free, IsNumber}, '==', false}, fun(BlockSt) ->
+        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
+            ctx, jit_state, offset, ?BADARITH_ATOM
+        ])
+    end),
+    MSt4 = ensure_fpregs(MMod, MSt3),
+    {MSt5, ConvReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_CONV_TO_FLOAT, [
+        ctx, {free, Reg}, FPRegIndex
+    ]),
+    MMod:free_native_registers(MSt5, [ConvReg]).
 
 first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
     %% The Erlang compiler always emits fadd/fsub/fmul/fdiv with fail label 0
