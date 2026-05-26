@@ -66,7 +66,15 @@
     eor/3,
     asr/3,
     sdiv/3,
-    msub/4
+    msub/4,
+    ldr_d/2,
+    str_d/2,
+    fadd/3,
+    fsub/3,
+    fmul/3,
+    fdiv/3,
+    fmov/2,
+    cset/2
 ]).
 
 -export_type([
@@ -107,6 +115,40 @@
     | r30
     | sp
     | xzr.
+
+-type aarch64_fp_register() ::
+    d0
+    | d1
+    | d2
+    | d3
+    | d4
+    | d5
+    | d6
+    | d7
+    | d8
+    | d9
+    | d10
+    | d11
+    | d12
+    | d13
+    | d14
+    | d15
+    | d16
+    | d17
+    | d18
+    | d19
+    | d20
+    | d21
+    | d22
+    | d23
+    | d24
+    | d25
+    | d26
+    | d27
+    | d28
+    | d29
+    | d30
+    | d31.
 
 -type cc() :: eq | ne | cs | cc | mi | pl | vs | vc | hi | ls | ge | lt | gt | le | al | nv.
 
@@ -726,6 +768,74 @@ ldp(Rn, Rm, {Base, Imm}) when
             RnNum):32/little
     >>.
 
+%% Emit a 64-bit floating-point load (LDR Dt, [Xn, #imm]) into a SIMD&FP
+%% register, used for reading a double from the fp register array.
+-spec ldr_d(aarch64_fp_register(), {aarch64_gpr_register(), integer()}) -> binary().
+ldr_d(Dst, {BaseReg, Offset}) when
+    is_atom(Dst),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 32760,
+    (Offset rem 8) =:= 0
+->
+    DstNum = fpreg_to_num(Dst),
+    BaseRegNum = reg_to_num(BaseReg),
+    %% LDR (immediate, SIMD&FP) 64-bit: 0xfd400000 | (Offset/8) << 10 | Xn << 5 | Dt
+    <<(16#FD400000 bor ((Offset div 8) bsl 10) bor (BaseRegNum bsl 5) bor DstNum):32/little>>.
+
+%% Emit a 64-bit floating-point store (STR Dt, [Xn, #imm]) from a SIMD&FP
+%% register, used for writing a double back to the fp register array.
+-spec str_d(aarch64_fp_register(), {aarch64_gpr_register(), integer()}) -> binary().
+str_d(SrcReg, {BaseReg, Offset}) when
+    is_atom(SrcReg),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 32760,
+    (Offset rem 8) =:= 0
+->
+    SrcNum = fpreg_to_num(SrcReg),
+    BaseRegNum = reg_to_num(BaseReg),
+    %% STR (immediate, SIMD&FP) 64-bit: 0xfd000000 | (Offset/8) << 10 | Xn << 5 | Dt
+    <<(16#FD000000 bor ((Offset div 8) bsl 10) bor (BaseRegNum bsl 5) bor SrcNum):32/little>>.
+
+%% Scalar double-precision arithmetic: Dd = Dn <op> Dm.
+-spec fadd(aarch64_fp_register(), aarch64_fp_register(), aarch64_fp_register()) -> binary().
+fadd(Dd, Dn, Dm) -> fp_data2(16#1E602800, Dd, Dn, Dm).
+
+-spec fsub(aarch64_fp_register(), aarch64_fp_register(), aarch64_fp_register()) -> binary().
+fsub(Dd, Dn, Dm) -> fp_data2(16#1E603800, Dd, Dn, Dm).
+
+-spec fmul(aarch64_fp_register(), aarch64_fp_register(), aarch64_fp_register()) -> binary().
+fmul(Dd, Dn, Dm) -> fp_data2(16#1E600800, Dd, Dn, Dm).
+
+-spec fdiv(aarch64_fp_register(), aarch64_fp_register(), aarch64_fp_register()) -> binary().
+fdiv(Dd, Dn, Dm) -> fp_data2(16#1E601800, Dd, Dn, Dm).
+
+fp_data2(Base, Dd, Dn, Dm) when is_atom(Dd), is_atom(Dn), is_atom(Dm) ->
+    DdNum = fpreg_to_num(Dd),
+    DnNum = fpreg_to_num(Dn),
+    DmNum = fpreg_to_num(Dm),
+    <<(Base bor (DmNum bsl 16) bor (DnNum bsl 5) bor DdNum):32/little>>.
+
+%% FMOV Xd, Dn: move the raw 64-bit pattern of a double into a general-purpose
+%% register (FMOV general, double to 64-bit), used to inspect the result bits.
+-spec fmov(aarch64_gpr_register(), aarch64_fp_register()) -> binary().
+fmov(Xd, Dn) when is_atom(Xd), is_atom(Dn) ->
+    XdNum = reg_to_num(Xd),
+    DnNum = fpreg_to_num(Dn),
+    %% FMOV (general) 64-bit, double to GPR: 0x9e660000 | Dn << 5 | Xd
+    <<(16#9E660000 bor (DnNum bsl 5) bor XdNum):32/little>>.
+
+%% CSET Xd, cond: set Xd to 1 if cond holds, else 0 (alias of CSINC Xd, xzr,
+%% xzr, invert(cond)).
+-spec cset(aarch64_gpr_register(), cc()) -> binary().
+cset(Xd, ne) when is_atom(Xd) ->
+    XdNum = reg_to_num(Xd),
+    %% CSET Xd, ne == CSINC Xd, xzr, xzr, eq: 0x9a9f07e0 | Xd
+    <<(16#9A9F07E0 bor XdNum):32/little>>.
+
 %%-----------------------------------------------------------------------------
 %% Helper functions
 %%-----------------------------------------------------------------------------
@@ -767,6 +877,14 @@ reg_to_num(r30) -> 30;
 reg_to_num(sp) -> 31;
 %% Zero register (XZR) is also r31
 reg_to_num(xzr) -> 31.
+
+%% Convert SIMD&FP register atoms (d0..d31) to register numbers.
+-spec fpreg_to_num(aarch64_fp_register()) -> 0..31.
+fpreg_to_num(Reg) when is_atom(Reg) ->
+    "d" ++ NumStr = atom_to_list(Reg),
+    Num = list_to_integer(NumStr),
+    true = Num >= 0 andalso Num =< 31,
+    Num.
 
 %% Emit a conditional branch instruction
 -spec bcc(cc(), integer()) -> binary().

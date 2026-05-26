@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
   sweep on every collection), inspect with `process_info/2`
 - Added support for native records introduced with OTP29
+- Added inline JIT code generation for double-precision floating-point arithmetic
+  (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
+  non-finite-result check, instead of calling the C float primitives
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type

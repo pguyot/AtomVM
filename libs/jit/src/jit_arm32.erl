@@ -69,6 +69,7 @@
     mul/3,
     mul_overflow/3,
     supports_div/1,
+    supports_fp/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -3508,6 +3509,11 @@ mul(
 %% not currently emit native sdiv on the arm32 backend.
 -spec supports_div(state()) -> boolean().
 supports_div(_State) -> false.
+
+%% Whether this backend can emit inline floating-point arithmetic instead of
+%% calling the float primitives. False until the inline fp ops are implemented.
+-spec supports_fp(state()) -> boolean().
+supports_fp(_State) -> false.
 
 %% @doc Decrement reductions and schedule next process if zero.
 %% When reductions != 0, branch past the prolog directly to the function body.
