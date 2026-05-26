@@ -48,6 +48,22 @@ encode_uleb128_test_() ->
         ?_assertEqual(<<128, 128, 4>>, jit_wasm32_asm:encode_uleb128(65536))
     ].
 
+decode_uleb128_test_() ->
+    [
+        ?_assertEqual({0, <<>>}, jit_wasm32_asm:decode_uleb128(<<0>>)),
+        ?_assertEqual({1, <<>>}, jit_wasm32_asm:decode_uleb128(<<1>>)),
+        ?_assertEqual({127, <<>>}, jit_wasm32_asm:decode_uleb128(<<127>>)),
+        ?_assertEqual({128, <<>>}, jit_wasm32_asm:decode_uleb128(<<128, 1>>)),
+        ?_assertEqual({255, <<>>}, jit_wasm32_asm:decode_uleb128(<<255, 1>>)),
+        ?_assertEqual({256, <<>>}, jit_wasm32_asm:decode_uleb128(<<128, 2>>)),
+        ?_assertEqual({1000, <<>>}, jit_wasm32_asm:decode_uleb128(<<232, 7>>)),
+        ?_assertEqual({65536, <<>>}, jit_wasm32_asm:decode_uleb128(<<128, 128, 4>>)),
+        % trailing bytes after the terminating group are returned unconsumed
+        ?_assertEqual(
+            {300, <<16#AA, 16#BB>>}, jit_wasm32_asm:decode_uleb128(<<172, 2, 16#AA, 16#BB>>)
+        )
+    ].
+
 encode_sleb128_test_() ->
     [
         ?_assertEqual(<<0>>, jit_wasm32_asm:encode_sleb128(0)),
