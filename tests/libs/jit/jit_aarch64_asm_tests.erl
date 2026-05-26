@@ -808,3 +808,88 @@ msub_test_() ->
             <<16#9b039041:32/little>>, "msub x1, x2, x3, x4", jit_aarch64_asm:msub(r1, r2, r3, r4)
         )
     ].
+
+ldr_d_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#fd400120:32/little>>, "ldr d0, [x9]", jit_aarch64_asm:ldr_d(d0, {r9, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#fd400520:32/little>>, "ldr d0, [x9, #8]", jit_aarch64_asm:ldr_d(d0, {r9, 8})
+        ),
+        ?_assertAsmEqual(
+            <<16#fd403d21:32/little>>, "ldr d1, [x9, #120]", jit_aarch64_asm:ldr_d(d1, {r9, 120})
+        ),
+        % offset of ctx->fr field (0xe8 = 232)
+        ?_assertAsmEqual(
+            <<16#fd407521:32/little>>, "ldr d1, [x9, #232]", jit_aarch64_asm:ldr_d(d1, {r9, 16#e8})
+        ),
+        % max unsigned offset, high fp register
+        ?_assertAsmEqual(
+            <<16#fd47fc1f:32/little>>,
+            "ldr d31, [x0, #4088]",
+            jit_aarch64_asm:ldr_d(d31, {r0, 16#ff8})
+        )
+    ].
+
+str_d_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#fd000120:32/little>>, "str d0, [x9]", jit_aarch64_asm:str_d(d0, {r9, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#fd000d20:32/little>>, "str d0, [x9, #24]", jit_aarch64_asm:str_d(d0, {r9, 24})
+        ),
+        ?_assertAsmEqual(
+            <<16#fd000b9f:32/little>>, "str d31, [x28, #16]", jit_aarch64_asm:str_d(d31, {r28, 16})
+        )
+    ].
+
+fadd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#1e612800:32/little>>, "fadd d0, d0, d1", jit_aarch64_asm:fadd(d0, d0, d1)
+        ),
+        ?_assertAsmEqual(
+            <<16#1e642862:32/little>>, "fadd d2, d3, d4", jit_aarch64_asm:fadd(d2, d3, d4)
+        )
+    ].
+
+fsub_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#1e613800:32/little>>, "fsub d0, d0, d1", jit_aarch64_asm:fsub(d0, d0, d1)
+        )
+    ].
+
+fmul_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#1e610800:32/little>>, "fmul d0, d0, d1", jit_aarch64_asm:fmul(d0, d0, d1)
+        ),
+        ?_assertAsmEqual(
+            <<16#1e6708c5:32/little>>, "fmul d5, d6, d7", jit_aarch64_asm:fmul(d5, d6, d7)
+        )
+    ].
+
+fdiv_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#1e611800:32/little>>, "fdiv d0, d0, d1", jit_aarch64_asm:fdiv(d0, d0, d1)
+        ),
+        ?_assertAsmEqual(
+            <<16#1e7f1bff:32/little>>, "fdiv d31, d31, d31", jit_aarch64_asm:fdiv(d31, d31, d31)
+        )
+    ].
+
+fmov_test_() ->
+    [
+        ?_assertAsmEqual(<<16#9e66000a:32/little>>, "fmov x10, d0", jit_aarch64_asm:fmov(r10, d0)),
+        ?_assertAsmEqual(<<16#9e6603e0:32/little>>, "fmov x0, d31", jit_aarch64_asm:fmov(r0, d31))
+    ].
+
+cset_test_() ->
+    [
+        ?_assertAsmEqual(<<16#9a9f07ea:32/little>>, "cset x10, ne", jit_aarch64_asm:cset(r10, ne)),
+        ?_assertAsmEqual(<<16#9a9f07e0:32/little>>, "cset x0, ne", jit_aarch64_asm:cset(r0, ne))
+    ].
