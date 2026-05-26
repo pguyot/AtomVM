@@ -62,8 +62,8 @@ add_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e09bb00a 	adds	fp, fp, sl"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -76,8 +76,8 @@ sub_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e05bb00a 	subs	fp, fp, sl"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -90,8 +90,8 @@ mul_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e3cbb00f 	bic	fp, fp, #15\n"
             "   c:	e1a0a24a 	asr	sl, sl, #4\n"
             "  10:	e0c9ba9b 	smull	fp, r9, fp, sl\n"
@@ -111,11 +111,11 @@ if_block_overflow_set_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e09bb00a 	adds	fp, fp, sl\n"
             "   c:	7a000000 	bvc	0x14\n"
-            "  10:	e580b020 	str	fp, [r0, #32]"
+            "  10:	e580b034 	str	fp, [r0, #52]	@ 0x34"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -181,10 +181,10 @@ call_primitive_6_args_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e3a0a003 	mov	sl, #3\n"
             "   8:	e1cbb00a 	bic	fp, fp, sl\n"
-            "   c:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   c:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "  10:	e59290b8 	ldr	r9, [r2, #184]	@ 0xb8\n"
             "  14:	e92d0005 	push	{r0, r2}\n"
             "  18:	e24dd008 	sub	sp, sp, #8\n"
@@ -210,8 +210,8 @@ move_to_vm_register_x_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e580b01c 	str	fp, [r0, #28]"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e580b030 	str	fp, [r0, #48]	@ 0x30"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -224,8 +224,8 @@ move_to_vm_register_y_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a014 	ldr	sl, [r0, #20]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
             "   8:	e58ab000 	str	fp, [sl]"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -251,7 +251,7 @@ and_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e3a0a0fc 	mov	sl, #252	@ 0xfc\n"
             "   8:	e00bb00a 	and	fp, fp, sl"
         >>,
@@ -264,7 +264,7 @@ or_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e3a0a00f 	mov	sl, #15\n"
             "   8:	e18bb00a 	orr	fp, fp, sl"
         >>,
@@ -277,7 +277,7 @@ shift_left_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e1a0b10b 	lsl	fp, fp, #2"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -291,7 +291,7 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+                    "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
                     "   4:	e1a0b22b 	lsr	fp, fp, #4"
                 >>,
             ?assertStream(arm32, Dump, Stream)
@@ -304,7 +304,7 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+                    "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
                     "   4:	e1a0a22b 	lsr	sl, fp, #4"
                 >>,
             ?assertStream(arm32, Dump, Stream)
@@ -318,7 +318,7 @@ add_immediate_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e28bb02a 	add	fp, fp, #42	@ 0x2a"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -330,7 +330,7 @@ sub_immediate_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e24bb02a 	sub	fp, fp, #42	@ 0x2a"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -385,7 +385,7 @@ xor_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e3a0a0ff 	mov	sl, #255	@ 0xff\n"
             "   8:	e02bb00a 	eor	fp, fp, sl"
         >>,
@@ -398,7 +398,7 @@ mul_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
             "   4:	e1a0b10b 	lsl	fp, fp, #2"
         >>,
     ?assertStream(arm32, Dump, Stream).
@@ -463,9 +463,9 @@ move_to_cp_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	e590a014 	ldr	sl, [r0, #20]\n"
+            "   0:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
             "   4:	e59ab000 	ldr	fp, [sl]\n"
-            "   8:	e580b05c 	str	fp, [r0, #92]	@ 0x5c"
+            "   8:	e580b070 	str	fp, [r0, #112]	@ 0x70"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -475,9 +475,9 @@ increment_sp_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	e590b014 	ldr	fp, [r0, #20]\n"
+            "   0:	e590b028 	ldr	fp, [r0, #40]	@ 0x28\n"
             "   4:	e28bb01c 	add	fp, fp, #28\n"
-            "   8:	e580b014 	str	fp, [r0, #20]"
+            "   8:	e580b028 	str	fp, [r0, #40]	@ 0x28"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -500,8 +500,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b0000 	cmp	fp, #0\n"
                             "   c:	5a000000 	bpl	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -518,8 +518,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e15b000a 	cmp	fp, sl\n"
                             "   c:	aa000000 	bge	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -536,8 +536,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b002a 	cmp	fp, #42	@ 0x2a\n"
                             "   c:	aa000000 	bge	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -554,8 +554,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e3a09b01 	mov	r9, #1024	@ 0x400\n"
                             "   c:	e15b0009 	cmp	fp, r9\n"
                             "  10:	aa000000 	bge	0x18\n"
@@ -573,8 +573,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b0000 	cmp	fp, #0\n"
                             "   c:	1a000000 	bne	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -591,8 +591,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b0000 	cmp	fp, #0\n"
                             "   c:	1a000000 	bne	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -609,8 +609,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b0000 	cmp	fp, #0\n"
                             "   c:	1a000000 	bne	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -627,8 +627,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b003b 	cmp	fp, #59	@ 0x3b\n"
                             "   c:	0a000000 	beq	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -645,8 +645,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e31b0001 	tst	fp, #1\n"
                             "   c:	1a000000 	bne	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -663,8 +663,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e31b0001 	tst	fp, #1\n"
                             "   c:	0a000000 	beq	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -681,8 +681,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e31b000f 	tst	fp, #15\n"
                             "   c:	0a000000 	beq	0x14\n"
                             "  10:	e28aa002 	add	sl, sl, #2"
@@ -699,8 +699,8 @@ if_block_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     Dump =
                         <<
-                            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-                            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+                            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+                            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
                             "   8:	e35b0000 	cmp	fp, #0\n"
                             "   c:	5a000002 	bpl	0x1c\n"
                             "  10:	e35a0000 	cmp	sl, #0\n"
@@ -725,8 +725,8 @@ if_else_block_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
             "   8:	e35b003b 	cmp	fp, #59	@ 0x3b\n"
             "   c:	1a000001 	bne	0x18\n"
             "  10:	e28aa002 	add	sl, sl, #2\n"
@@ -778,7 +778,7 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
         "   4:	e59da000 	ldr	sl, [sp]\n"
         "   8:	e59ab008 	ldr	fp, [sl, #8]\n"
         "   c:	e25bb001 	subs	fp, fp, #1\n"
@@ -792,7 +792,7 @@ decrement_reductions_invalidates_cache_test() ->
         "  2c:	e1a0e007 	mov	lr, r7\n"
         "  30:	e8bd8ff2 	pop	{r1, r4, r5, r6, r7, r8, r9, sl, fp, pc}\n"
         "  34:	e92d4ff2 	push	{r1, r4, r5, r6, r7, r8, r9, sl, fp, lr}\n"
-        "  38:	e590b018 	ldr	fp, [r0, #24]"
+        "  38:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -938,10 +938,10 @@ set_bs_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-            "   4:	e580b064 	str	fp, [r0, #100]	@ 0x64\n"
+            "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+            "   4:	e580b078 	str	fp, [r0, #120]	@ 0x78\n"
             "   8:	e3a0a000 	mov	sl, #0\n"
-            "   c:	e580a068 	str	sl, [r0, #104]	@ 0x68"
+            "   c:	e580a07c 	str	sl, [r0, #124]	@ 0x7c"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -974,7 +974,7 @@ call_or_schedule_next_test() ->
             "  2c:	e1a0bc0b 	lsl	fp, fp, #24\n"
             "  30:	e3a0ae1e 	mov	sl, #480	@ 0x1e0\n"
             "  34:	e18bb00a 	orr	fp, fp, sl\n"
-            "  38:	e580b05c 	str	fp, [r0, #92]	@ 0x5c\n"
+            "  38:	e580b070 	str	fp, [r0, #112]	@ 0x70\n"
             "  3c:	e59da000 	ldr	sl, [sp]\n"
             "  40:	e59ab008 	ldr	fp, [sl, #8]\n"
             "  44:	e25bb001 	subs	fp, fp, #1\n"
@@ -1025,7 +1025,7 @@ move_array_element_test_() ->
                 ?_test(begin
                     move_array_element_test0(State0, r3, 2, {x_reg, 0}, <<
                         "   0:	e593b008 	ldr	fp, [r3, #8]\n"
-                        "   4:	e580b018 	str	fp, [r0, #24]"
+                        "   4:	e580b02c 	str	fp, [r0, #44]	@ 0x2c"
                     >>)
                 end),
                 %% move_array_element: reg[3] to ptr
@@ -1039,7 +1039,7 @@ move_array_element_test_() ->
                 ?_test(begin
                     move_array_element_test0(State0, r3, 1, {y_reg, 2}, <<
                         "   0:	e593a004 	ldr	sl, [r3, #4]\n"
-                        "   4:	e590b014 	ldr	fp, [r0, #20]\n"
+                        "   4:	e590b028 	ldr	fp, [r0, #40]	@ 0x28\n"
                         "   8:	e58ba008 	str	sl, [fp, #8]"
                     >>)
                 end),
@@ -1056,7 +1056,7 @@ move_array_element_test_() ->
                         "   0:	e593b010 	ldr	fp, [r3, #16]\n"
                         "   4:	e1a0b10b 	lsl	fp, fp, #2\n"
                         "   8:	e793b00b 	ldr	fp, [r3, fp]\n"
-                        "   c:	e580b020 	str	fp, [r0, #32]"
+                        "   c:	e580b034 	str	fp, [r0, #52]	@ 0x34"
                     >>)
                 end),
                 %% move_array_element: reg_x[reg_y] to ptr
@@ -1076,7 +1076,7 @@ move_array_element_test_() ->
                         "   0:	e593b010 	ldr	fp, [r3, #16]\n"
                         "   4:	e1a0b10b 	lsl	fp, fp, #2\n"
                         "   8:	e793b00b 	ldr	fp, [r3, fp]\n"
-                        "   c:	e590a014 	ldr	sl, [r0, #20]\n"
+                        "   c:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
                         "  10:	e58ab008 	str	fp, [sl, #8]"
                     >>)
                 end)
@@ -1125,7 +1125,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, 2),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+                        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
                         "   4:	e583b008 	str	fp, [r3, #8]"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
@@ -1135,7 +1135,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, r4),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+                        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
                         "   4:	e1a0a004 	mov	sl, r4\n"
                         "   8:	e1a0a10a 	lsl	sl, sl, #2\n"
                         "   c:	e783b00a 	str	fp, [r3, sl]"
@@ -1147,7 +1147,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, 2, 1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+                        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
                         "   4:	e583b00c 	str	fp, [r3, #12]"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
@@ -1198,7 +1198,7 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     ?assertEqual(r11, Reg),
                     Dump = <<
-                        "   0:	e590b024 	ldr	fp, [r0, #36]	@ 0x24"
+                        "   0:	e590b038 	ldr	fp, [r0, #56]	@ 0x38"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
                 end),
@@ -1208,7 +1208,7 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     ?assertEqual(r11, Reg),
                     Dump = <<
-                        "   0:	e590a014 	ldr	sl, [r0, #20]\n"
+                        "   0:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
                         "   4:	e59ab00c 	ldr	fp, [sl, #12]"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
@@ -1245,7 +1245,7 @@ move_to_native_register_test_() ->
                     State1 = ?BACKEND:move_to_native_register(State0, {x_reg, 2}, r3),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	e5903020 	ldr	r3, [r0, #32]"
+                        "   0:	e5903034 	ldr	r3, [r0, #52]	@ 0x34"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
                 end),
@@ -1254,7 +1254,7 @@ move_to_native_register_test_() ->
                     State1 = ?BACKEND:move_to_native_register(State0, {y_reg, 2}, r1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	e590b014 	ldr	fp, [r0, #20]\n"
+                        "   0:	e590b028 	ldr	fp, [r0, #40]	@ 0x28\n"
                         "   4:	e59b1008 	ldr	r1, [fp, #8]"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
@@ -1270,7 +1270,7 @@ large_y_reg_read_test() ->
     Stream = ?BACKEND:stream(State1),
     ?assertEqual(r11, Reg),
     Dump = <<
-        "   0:	e590a014 	ldr	sl, [r0, #20]\n"
+        "   0:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
         "   4:	e28aaeff 	add	sl, sl, #4080	@ 0xff0\n"
         "   8:	e59ab010 	ldr	fp, [sl, #16]"
     >>,
@@ -1283,8 +1283,8 @@ large_y_reg_write_test() ->
     State2 = ?BACKEND:move_to_vm_register(State1, SrcReg, {y_reg, 1024}),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-        "   4:	e590a014 	ldr	sl, [r0, #20]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+        "   4:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
         "   8:	e28aaeff 	add	sl, sl, #4080	@ 0xff0\n"
         "   c:	e58ab010 	str	fp, [sl, #16]"
     >>,
@@ -1297,7 +1297,7 @@ y_reg_boundary_direct_test() ->
     Stream = ?BACKEND:stream(State1),
     ?assertEqual(r11, Reg),
     Dump = <<
-        "   0:	e590a014 	ldr	sl, [r0, #20]\n"
+        "   0:	e590a028 	ldr	sl, [r0, #40]	@ 0x28\n"
         "   4:	e59abffc 	ldr	fp, [sl, #4092]	@ 0xffc"
     >>,
     ?assertStream(arm32, Dump, Stream).
@@ -1318,16 +1318,16 @@ y_reg_load_last_available_register_test() ->
     {State10, r1} = ?BACKEND:move_to_native_register(State9, {y_reg, 0}),
     Stream = ?BACKEND:stream(State10),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-        "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
-        "   8:	e5909020 	ldr	r9, [r0, #32]\n"
-        "   c:	e5908024 	ldr	r8, [r0, #36]	@ 0x24\n"
-        "  10:	e5907028 	ldr	r7, [r0, #40]	@ 0x28\n"
-        "  14:	e590602c 	ldr	r6, [r0, #44]	@ 0x2c\n"
-        "  18:	e5905030 	ldr	r5, [r0, #48]	@ 0x30\n"
-        "  1c:	e5904034 	ldr	r4, [r0, #52]	@ 0x34\n"
-        "  20:	e5903038 	ldr	r3, [r0, #56]	@ 0x38\n"
-        "  24:	e5901014 	ldr	r1, [r0, #20]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+        "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+        "   8:	e5909034 	ldr	r9, [r0, #52]	@ 0x34\n"
+        "   c:	e5908038 	ldr	r8, [r0, #56]	@ 0x38\n"
+        "  10:	e590703c 	ldr	r7, [r0, #60]	@ 0x3c\n"
+        "  14:	e5906040 	ldr	r6, [r0, #64]	@ 0x40\n"
+        "  18:	e5905044 	ldr	r5, [r0, #68]	@ 0x44\n"
+        "  1c:	e5904048 	ldr	r4, [r0, #72]	@ 0x48\n"
+        "  20:	e590304c 	ldr	r3, [r0, #76]	@ 0x4c\n"
+        "  24:	e5901028 	ldr	r1, [r0, #40]	@ 0x28\n"
         "  28:	e5911000 	ldr	r1, [r1]"
     >>,
     ?assertStream(arm32, Dump, Stream).
@@ -1340,7 +1340,7 @@ cached_load_after_free_test() ->
     {State3, r11} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     Stream = ?BACKEND:stream(State3),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1353,7 +1353,7 @@ fixed_dst_x_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	e5903020 	ldr	r3, [r0, #32]"
+        "   0:	e5903034 	ldr	r3, [r0, #52]	@ 0x34"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1366,7 +1366,7 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	e590b014 	ldr	fp, [r0, #20]\n"
+        "   0:	e590b028 	ldr	fp, [r0, #40]	@ 0x28\n"
         "   4:	e59b1008 	ldr	r1, [fp, #8]"
     >>,
     ?assertStream(arm32, Dump, Stream).
@@ -1381,11 +1381,11 @@ and_negative_imm_invalidates_temp_cache_test() ->
     {State5, r10} = ?BACKEND:move_to_native_register(State4, {x_reg, 1}),
     Stream = ?BACKEND:stream(State5),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-        "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+        "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
         "   8:	e3a0a003 	mov	sl, #3\n"
         "   c:	e1cbb00a 	bic	fp, fp, sl\n"
-        "  10:	e590a01c 	ldr	sl, [r0, #28]"
+        "  10:	e590a030 	ldr	sl, [r0, #48]	@ 0x30"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1399,11 +1399,11 @@ and_positive_imm_invalidates_temp_cache_test() ->
     {State5, r10} = ?BACKEND:move_to_native_register(State4, {x_reg, 1}),
     Stream = ?BACKEND:stream(State5),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-        "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+        "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
         "   8:	e3a0a03f 	mov	sl, #63	@ 0x3f\n"
         "   c:	e00bb00a 	and	fp, fp, sl\n"
-        "  10:	e590a01c 	ldr	sl, [r0, #28]"
+        "  10:	e590a030 	ldr	sl, [r0, #48]	@ 0x30"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1416,9 +1416,9 @@ jump_to_label_invalidates_cache_test() ->
     {State4, r11} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
         "   4:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
-        "   8:	e590b018 	ldr	fp, [r0, #24]"
+        "   8:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1449,7 +1449,7 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	e3a0b001 	mov	fp, #1\n"
-        "   4:	e590a018 	ldr	sl, [r0, #24]\n"
+        "   4:	e590a02c 	ldr	sl, [r0, #44]	@ 0x2c\n"
         "   8:	e35b0000 	cmp	fp, #0\n"
         "   c:	1a000004 	bne	0x24\n"
         "  10:	e592b000 	ldr	fp, [r2]\n"
@@ -1467,7 +1467,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	e3a0b001 	mov	fp, #1\n"
-        "   4:	e590a018 	ldr	sl, [r0, #24]\n"
+        "   4:	e590a02c 	ldr	sl, [r0, #44]	@ 0x2c\n"
         "   8:	e35b0000 	cmp	fp, #0\n"
         "   c:	1a000000 	bne	0x14\n"
         "  10:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff"
@@ -1481,7 +1481,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	e3a0b001 	mov	fp, #1\n"
-        "   4:	e590a018 	ldr	sl, [r0, #24]\n"
+        "   4:	e590a02c 	ldr	sl, [r0, #44]	@ 0x2c\n"
         "   8:	e35b0000 	cmp	fp, #0\n"
         "   c:	1a000000 	bne	0x14\n"
         "  10:	ea00003a 	b	0x100"
@@ -1503,7 +1503,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	e3a0bc01 	mov	fp, #256	@ 0x100\n"
         "   4:	e3a0a001 	mov	sl, #1\n"
-        "   8:	e5909018 	ldr	r9, [r0, #24]\n"
+        "   8:	e590902c 	ldr	r9, [r0, #44]	@ 0x2c\n"
         "   c:	e35a0000 	cmp	sl, #0\n"
         "  10:	1a000007 	bne	0x34\n"
         "  14:	e1a0a00f 	mov	sl, pc\n"
@@ -1526,11 +1526,11 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {S4, _Reg} = ?BACKEND:move_to_native_register(S3, {x_reg, 5}),
     Stream = ?BACKEND:stream(S4),
     Dump = <<
-        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
-        "   4:	e590a018 	ldr	sl, [r0, #24]\n"
+        "   0:	e590b040 	ldr	fp, [r0, #64]	@ 0x40\n"
+        "   4:	e590a02c 	ldr	sl, [r0, #44]	@ 0x2c\n"
         "   8:	e59a9000 	ldr	r9, [sl]\n"
-        "   c:	e580902c 	str	r9, [r0, #44]	@ 0x2c\n"
-        "  10:	e590902c 	ldr	r9, [r0, #44]	@ 0x2c"
+        "   c:	e5809040 	str	r9, [r0, #64]	@ 0x40\n"
+        "  10:	e5909040 	ldr	r9, [r0, #64]	@ 0x40"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1546,12 +1546,12 @@ ldr_y_reg_invalidates_hidden_temp_cache_test() ->
     {State6, r9} = ?BACKEND:move_to_native_register(State5, {x_reg, 2}),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
-        "   4:	e590a01c 	ldr	sl, [r0, #28]\n"
-        "   8:	e5909020 	ldr	r9, [r0, #32]\n"
-        "   c:	e5909014 	ldr	r9, [r0, #20]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
+        "   4:	e590a030 	ldr	sl, [r0, #48]	@ 0x30\n"
+        "   8:	e5909034 	ldr	r9, [r0, #52]	@ 0x34\n"
+        "   c:	e5909028 	ldr	r9, [r0, #40]	@ 0x28\n"
         "  10:	e599a000 	ldr	sl, [r9]\n"
-        "  14:	e5909020 	ldr	r9, [r0, #32]"
+        "  14:	e5909034 	ldr	r9, [r0, #52]	@ 0x34"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1562,7 +1562,7 @@ shift_right_arith_test() ->
     {State2, Reg} = ?BACKEND:shift_right_arith(State1, {free, Reg}, 4),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	e590b018 	ldr	fp, [r0, #24]\n"
+        "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
         "   4:	e1a0b24b 	asr	fp, fp, #4"
     >>,
     ?assertStream(arm32, Dump, Stream).
