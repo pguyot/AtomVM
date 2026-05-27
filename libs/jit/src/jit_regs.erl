@@ -54,7 +54,6 @@
     unreachable/1,
     invalidate_reg/2,
     invalidate_all/1,
-    invalidate_volatile/2,
     invalidate_vm_loc/2,
     find_reg_with_contents/2,
     merge/2,
@@ -183,25 +182,6 @@ invalidate_reg(#regs{contents = C} = Regs, Reg) ->
 -spec invalidate_all(regs()) -> regs().
 invalidate_all(Regs) ->
     Regs#regs{contents = #{}, stack = [], unreachable = false, vm_types = #{}}.
-
-%% @doc Invalidate registers that are volatile across a C function call.
-%% On x86-64 System V ABI, all our scratch registers (rax, rcx, rdx, rsi, rdi,
-%% r8, r9, r10, r11) are caller-saved, so after a C call they're all clobbered.
-%% However, the special registers (rdi=ctx, rsi=jit_state, rdx=native_interface)
-%% are restored by the JIT after the call via push/pop, so we keep their tracking.
-%% Type info for VM x regs is also cleared: a called primitive may modify
-%% `ctx->x[*]'. Y regs live on the VM stack and are preserved.
--spec invalidate_volatile(regs(), [atom()]) -> regs().
-invalidate_volatile(#regs{contents = C0, vm_types = T0} = Regs, PreservedRegs) ->
-    C1 = maps:filter(fun(Reg, _) -> lists:member(Reg, PreservedRegs) end, C0),
-    T1 = maps:filter(
-        fun
-            ({x_reg, _}, _) -> false;
-            (_, _) -> true
-        end,
-        T0
-    ),
-    Regs#regs{contents = C1, vm_types = T1}.
 
 %% @doc Invalidate all CPU registers that reference a given VM location.
 %% Call this when a VM register is written to, so that any CPU register

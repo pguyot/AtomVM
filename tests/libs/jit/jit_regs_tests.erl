@@ -119,17 +119,6 @@ stack_test() ->
     Regs5 = jit_regs:stack_clear(Regs2),
     ?assertEqual([], jit_regs:stack_contents(Regs5)).
 
-invalidate_volatile_test() ->
-    Regs0 = jit_regs:new(),
-    Regs1 = jit_regs:set_contents(Regs0, rax, {x_reg, 0}),
-    Regs2 = jit_regs:set_contents(Regs1, rdi, cp),
-    Regs3 = jit_regs:set_contents(Regs2, r11, {imm, 42}),
-    %% Only rdi is preserved
-    Regs4 = jit_regs:invalidate_volatile(Regs3, [rdi]),
-    ?assertEqual(unknown, jit_regs:get_contents(Regs4, rax)),
-    ?assertEqual(cp, jit_regs:get_contents(Regs4, rdi)),
-    ?assertEqual(unknown, jit_regs:get_contents(Regs4, r11)).
-
 value_to_contents_test() ->
     MaxReg = 16,
     ?assertEqual(cp, jit_regs:value_to_contents(cp, MaxReg)),
