@@ -63,11 +63,8 @@
     and_/3,
     or_/3,
     add/3,
-    add_overflow/3,
     sub/3,
-    sub_overflow/3,
     mul/3,
-    mul_overflow/3,
     div_/3,
     rem_/3,
     supports_div/1,
@@ -2736,78 +2733,14 @@ sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
 
-%% Add register Val to Reg in place, setting flags (OF on signed overflow);
-%% testable with the `overflow_set' if-condition.
--spec add_overflow(state(), x86_64_register(), x86_64_register()) -> state().
-add_overflow(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
-) when is_atom(Val) ->
-    I1 = jit_x86_64_asm:addq(Val, Reg),
-    Stream1 = StreamModule:append(Stream0, I1),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
-
-%% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
--spec sub_overflow(state(), x86_64_register(), x86_64_register()) -> state().
-sub_overflow(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
-) when is_atom(Val) ->
-    I1 = jit_x86_64_asm:subq(Val, Reg),
-    Stream1 = StreamModule:append(Stream0, I1),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
-
-%% Multiply two tagged small integers Reg and Val, leaving the product shifted
-%% into the value field of Reg but WITHOUT the small-integer tag (low bits
-%% zero); the caller re-tags on the no-overflow path. Flags are set so the
-%% `mul_overflow_set' if-condition is true iff the result does NOT fit in a
-%% small integer.
-%%
-%% Both operands are (v << 4) | TERM_INTEGER_TAG. Strip Reg's tag so it holds
-%% a << 4, untag Val to b, then imul: Reg = (a << 4) * b = (a * b) << 4. Because
-%% the kept factor is pre-shifted by the tag size, the 64-bit signed overflow
-%% flag (OF) is set exactly when (a * b) leaves the small-integer value range.
-%% Val (a scratch copy of the second operand) is clobbered; on overflow the
-%% caller re-reads the original operands for the bignum BIF.
--spec mul_overflow(state(), x86_64_register(), x86_64_register()) -> state().
-mul_overflow(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0, available_regs = Avail} =
-        State,
-    Reg,
-    Val
-) when is_atom(Val) ->
-    %% Tag size is 4 and the small-integer tag mask is 0xF (see term.h); the
-    %% x86_64 backend does not include term.hrl, so use the literals directly
-    %% (matching the aarch64 mul_overflow).
-    {Code, Regs1} =
-        case Reg =:= Val of
-            false ->
-                {
-                    <<
-                        (jit_x86_64_asm:andq(bnot 16#F, Reg))/binary,
-                        (jit_x86_64_asm:sarq(4, Val))/binary,
-                        (jit_x86_64_asm:imulq(Val, Reg))/binary
-                    >>,
-                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Val)
-                };
-            true ->
-                %% Squaring (Reg * Reg): the in-place sequence would `sarq' the
-                %% very register it then multiplies, dropping the kept factor's
-                %% << 4 and yielding (a*a) instead of (a*a) << 4. Copy the
-                %% untagged factor into a scratch register first.
-                Tmp = first_avail(Avail),
-                {
-                    <<
-                        (jit_x86_64_asm:movq(Reg, Tmp))/binary,
-                        (jit_x86_64_asm:andq(bnot 16#F, Reg))/binary,
-                        (jit_x86_64_asm:sarq(4, Tmp))/binary,
-                        (jit_x86_64_asm:imulq(Tmp, Reg))/binary
-                    >>,
-                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp)
-                }
-        end,
-    Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1, regs = Regs1}.
+%% NOTE: add_overflow/3, sub_overflow/3 and mul_overflow/3 were removed (and
+%% unexported) to disable the runtime small-integer +/-/* inline fast path on
+%% x86_64. See the fixup commit message: the path (enabled by 8a4e4c85a, "JIT
+%% x86_64: inline runtime small-integer +/- with overflow check") miscompiles —
+%% jit_x86_64 compiling its own jump_to_continuation gets a subtraction whose
+%% operand VALUES are swapped (harmless for the commutative +, fatal for -),
+%% so every intra-module return jumps past the module's code and segfaults.
+%% Dropping the exports makes jit.erl fall back to the (correct) gc_bif call.
 
 -spec mul(state(), x86_64_register(), integer() | x86_64_register()) -> state().
 mul(State, _Reg, 1) ->
