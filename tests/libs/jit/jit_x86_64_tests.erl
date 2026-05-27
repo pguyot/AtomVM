@@ -26,6 +26,7 @@
 -include("jit/src/term.hrl").
 -include("jit/src/default_atoms.hrl").
 -include("jit/src/primitives.hrl").
+-include("jit/src/opcodes.hrl").
 -include("jit_tests_common.hrl").
 
 -define(BACKEND, jit_x86_64).
@@ -2310,3 +2311,23 @@ float_conv_float_test() ->
         "  14:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
+
+%% jit.erl-driven test: compile a minimal BEAM code chunk through the real
+%% jit:compile/8 and assert on the emitted body. This exercises jit.erl's
+%% opcode dispatch and register orchestration around the backend emit calls,
+%% as opposed to the per-op emission tests above which call ?BACKEND directly.
+%%
+%% Chunk: OP_LABEL 1 ; OP_MOVE x0 x1 ; OP_INT_CALL_END.
+%% Compact-term encodings: literal 1 = 16#10, {x_reg,0} = 16#03, {x_reg,1} = 16#13.
+jit_move_x0_x1_test() ->
+    Chunk =
+        <<16:32, 0:32, ?OP_MOVE:32, 1:32, 1:32, ?OP_LABEL, 16#10, ?OP_MOVE, 16#03, 16#13,
+            ?OP_INT_CALL_END>>,
+    Code = jit_tests_common:compile_chunk(?BACKEND, Chunk),
+    %% OP_MOVE x0,x1 emits: mov 0x58(%rdi),%rax ; mov %rax,0x60(%rdi)
+    %%   48 8b 47 58   mov 0x58(%rdi),%rax   (load x[0])
+    %%   48 89 47 60   mov %rax,0x60(%rdi)   (store x[1])
+    ?assertMatch(
+        {_, _},
+        binary:match(Code, <<16#48, 16#8B, 16#47, 16#58, 16#48, 16#89, 16#47, 16#60>>)
+    ).
