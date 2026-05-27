@@ -20,9 +20,18 @@
 
 -module(jit_tests_common).
 
--export([asm/3, assert_stream/3, assert_stream/5]).
+-export([
+    asm/3,
+    assert_stream/3,
+    assert_stream/5,
+    backend_to_arch/1,
+    compile_chunk/2,
+    compile_chunk/3,
+    compile_chunk/7
+]).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("jit/include/jit.hrl").
 
 %% Architecture-specific assembler validation
 -spec asm(atom(), binary(), string()) -> binary().
@@ -770,3 +779,91 @@ format_bin_literal(DumpRaw) ->
     ),
     Joined = lists:join("\\n", RawLines),
     [$" | lists:flatten(Joined) ++ [$"]].
+
+%%-----------------------------------------------------------------------------
+%% jit.erl-driven compilation helpers
+%%
+%% These run a raw BEAM "Code" chunk through the real jit:compile/8 for a given
+%% backend and return the finalized emitted binary. This exercises jit.erl's
+%% opcode dispatch and register orchestration (allocation/invalidation around
+%% the backend emit calls), as opposed to the per-op emission tests which call
+%% the backend functions directly.
+%%
+%% Build a minimal chunk with build_code_chunk/2 (a list of already-encoded
+%% opcode binaries, automatically terminated by OP_INT_CALL_END) and assert on
+%% the result with binary:match/2 for the expected instruction sub-sequence,
+%% which is robust to the backend-specific jump-table and labels/lines tables
+%% that wrap the body.
+%%-----------------------------------------------------------------------------
+
+%% Map a backend module to its JIT_ARCH_* constant.
+-spec backend_to_arch(module()) -> non_neg_integer().
+backend_to_arch(jit_x86_64) -> ?JIT_ARCH_X86_64;
+backend_to_arch(jit_aarch64) -> ?JIT_ARCH_AARCH64;
+backend_to_arch(jit_armv6m) -> ?JIT_ARCH_ARMV6M;
+backend_to_arch(jit_riscv32) -> ?JIT_ARCH_RISCV32;
+backend_to_arch(jit_riscv64) -> ?JIT_ARCH_RISCV64;
+backend_to_arch(jit_arm32) -> ?JIT_ARCH_ARM32;
+backend_to_arch(jit_wasm32) -> ?JIT_ARCH_WASM32;
+backend_to_arch(jit_xtensa) -> ?JIT_ARCH_XTENSA.
+
+%% Compile a raw BEAM Code chunk through jit:compile/8 for Backend, using
+%% default (permissive) resolvers, and return the finalized emitted binary.
+-spec compile_chunk(module(), binary()) -> binary().
+compile_chunk(Backend, CodeChunk) ->
+    compile_chunk(
+        Backend,
+        CodeChunk,
+        %% AtomResolver
+        fun(_) -> undefined end,
+        %% LiteralResolver
+        fun(_) -> undefined end,
+        %% TypeResolver
+        fun(_) -> any end,
+        %% ImportResolver
+        fun(_) -> undefined end,
+        %% DebugInfoResolver
+        fun(_) -> false end
+    ).
+
+%% Compile with a custom TypeResolver (the most common override), defaults for
+%% the rest.
+-spec compile_chunk(module(), binary(), fun((non_neg_integer()) -> term())) -> binary().
+compile_chunk(Backend, CodeChunk, TypeResolver) ->
+    compile_chunk(
+        Backend,
+        CodeChunk,
+        fun(_) -> undefined end,
+        fun(_) -> undefined end,
+        TypeResolver,
+        fun(_) -> undefined end,
+        fun(_) -> false end
+    ).
+
+%% Compile with all resolvers specified.
+-spec compile_chunk(
+    module(), binary(), fun(), fun(), fun(), fun(), fun()
+) -> binary().
+compile_chunk(
+    Backend, CodeChunk, AtomResolver, LiteralResolver, TypeResolver, ImportResolver, DebugResolver
+) ->
+    Arch = backend_to_arch(Backend),
+    <<16:32, 0:32, _OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>> = CodeChunk,
+    Stream0 = jit_stream_binary:new(0),
+    Stream1 = jit_stream_binary:append(
+        Stream0, jit:beam_chunk_header(LabelsCount, Arch, ?JIT_VARIANT_PIC)
+    ),
+    Stream2 = Backend:new(?JIT_VARIANT_PIC, jit_stream_binary, Stream1),
+    {LabelsCount, Stream3} = jit:compile(
+        CodeChunk,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        DebugResolver,
+        %% RecordResolver: the harness compiles record-free chunks
+        fun(_) -> undefined end,
+        Backend,
+        Stream2
+    ),
+    Backend:stream(Stream3).
