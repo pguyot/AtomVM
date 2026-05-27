@@ -162,6 +162,7 @@ toolchain_prefixes(Arch) ->
         "-esp-elf",
         "-unknown-elf",
         "-elf",
+        "-none-elf",
         "-none-eabi",
         "-linux",
         "-linux-gnu",
