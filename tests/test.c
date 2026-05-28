@@ -644,6 +644,7 @@ struct Test tests[] = {
     TEST_CASE(test_raw_raise),
 
     TEST_CASE(test_ets),
+    TEST_CASE(test_persistent_term),
     TEST_CASE(test_node),
 
     TEST_CASE(bigint),
