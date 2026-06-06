@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep on every collection), inspect with `process_info/2`
 - Added support for non-byte-aligned bitstrings
 
+### Changed
+- Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
+  stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
+  scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
+
 ### Fixed
 - Fixed maps decoded by `binary_to_term/1,2` and received over distribution keeping the
   encoder's key order, which broke `==` and made `=>` updates on an existing key produce
