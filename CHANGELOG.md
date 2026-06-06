@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for this limit
 - Replaced the `exavmlib` `Protocol` module with a small runtime shim (only `Protocol.__concat__/2`),
   saving ~31 KB of flash. ExAtomVM uses precompiled, unconsolidated protocols and continue to function normally at runtime.
+- Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
+  stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
+  scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
