@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from ref ticks, `TERM_BOXED_REFERENCE_PROCESS_SIZE` for process references (aliases), or
   `TERM_BOXED_REFERENCE_MAX_SIZE` to fit any reference. `REF_SIZE` still expands to the short
   reference size, but now emits a compiler warning
+- Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
+  stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
+  scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
