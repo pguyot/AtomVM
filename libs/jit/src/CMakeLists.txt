@@ -50,6 +50,13 @@ set(ERLANG_MODULES
 
 include(../../../version.cmake)
 
+# All jit headers; every compiled beam depends on these (see the foreach over
+# ERLANG_MODULES below).
+file(GLOB JIT_HRL_HEADERS CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/*.hrl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/*.hrl
+)
+
 set(JIT_PRECOMPILED_MODULES
     jit
     jit_regs
@@ -76,7 +83,7 @@ else()
                 -I ${CMAKE_SOURCE_DIR}/libs
                 -I ${CMAKE_CURRENT_SOURCE_DIR}/../include
                 ${CMAKE_CURRENT_SOURCE_DIR}/jit_dwarf.erl
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/jit_dwarf.erl
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/jit_dwarf.erl ${JIT_HRL_HEADERS}
         COMMENT "Compiling jit_dwarf.erl (BEAM tests only, not packed in .avm)"
         VERBATIM
     )
@@ -112,22 +119,17 @@ if (NOT AVM_DISABLE_JIT_DWARF)
     )
 endif()
 
-# jit_riscv32.erl and jit_riscv64.erl include the shared implementation in
-# jit_riscv_impl.hrl, so changes to that header must force recompilation.
-foreach(riscv_module jit_riscv32 jit_riscv64)
+# The modules share headers (primitives.hrl, term.hrl, opcodes.hrl,
+# jit_riscv_impl.hrl, jit_backend_regs_impl.hrl, ...), so a header change must
+# force recompilation of every module that may include it: a beam compiled
+# against a stale primitives.hrl calls renumbered primitives with the wrong
+# signature and crashes at runtime. Rather than tracking per-module include
+# lists by hand, make every beam depend on all jit headers — over-rebuilding
+# is cheap, a stale beam is a segfault.
+foreach(erlang_module ${ERLANG_MODULES})
     add_custom_command(
-        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${riscv_module}.beam
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/jit_riscv_impl.hrl
-        APPEND
-    )
-endforeach()
-
-# The register-based backends include the shared native-register bookkeeping in
-# jit_backend_regs_impl.hrl, so changes to that header must force recompilation.
-foreach(regs_module jit_x86_64 jit_aarch64 jit_arm32 jit_armv6m jit_xtensa jit_riscv32 jit_riscv64)
-    add_custom_command(
-        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${regs_module}.beam
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/jit_backend_regs_impl.hrl
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${erlang_module}.beam
+        DEPENDS ${JIT_HRL_HEADERS}
         APPEND
     )
 endforeach()

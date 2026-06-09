@@ -69,6 +69,25 @@ else()
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/beams/jit_dwarf_tests.beam
     )
 endif()
+# The test modules include the jit headers (primitives.hrl, term.hrl,
+# jit_tests_common.hrl, ...), so a header change must force recompilation —
+# a test beam compiled against a stale primitives.hrl asserts stale primitive
+# indexes. Same rationale as in libs/jit/src/CMakeLists.txt. (APPEND requires
+# the pack_archive/add_custom_command calls above to have created the
+# commands first.)
+file(GLOB JIT_TEST_HRL_HEADERS CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/libs/jit/src/*.hrl
+    ${CMAKE_SOURCE_DIR}/libs/jit/include/*.hrl
+    ${CMAKE_CURRENT_SOURCE_DIR}/*.hrl
+)
+foreach(erlang_module ${ERLANG_MODULES} jit_dwarf_tests)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/beams/${erlang_module}.beam
+        DEPENDS ${JIT_TEST_HRL_HEADERS}
+        APPEND
+    )
+endforeach()
+
 pack_eunit(test_jit estdlib eavmlib etest jit)
 if (AVM_DISABLE_JIT_DWARF)
     add_dependencies(test_jit jit_dwarf_tests_for_beam_tests jit_dwarf_for_beam_tests)
