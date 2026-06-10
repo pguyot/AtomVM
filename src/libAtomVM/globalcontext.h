@@ -129,7 +129,14 @@ struct GlobalContext
 #ifndef AVM_NO_SMP
     RWLock *modules_lock;
 #endif
-    Module **modules_by_index;
+    // modules_by_index is read locklessly on every cross-module call and
+    // return: entries are written once (under modules_lock) and the array is
+    // grown by publishing a fresh copy, so readers only need atomic loads.
+    // Retired (pre-growth) arrays stay allocated until globalcontext_destroy
+    // as concurrent readers may still hold them.
+    Module *ATOMIC *ATOMIC modules_by_index;
+    int modules_by_index_capacity;
+    struct ListHead modules_by_index_retired;
     int ATOMIC loaded_modules_count;
 
     struct SyncList avmpack_data;
