@@ -30,6 +30,7 @@
 -endif.
 
 test() ->
+    ok = test_without_take_update_groups(),
     ok = test_get(),
     ok = test_is_key(),
     ok = test_put(),
@@ -435,3 +436,14 @@ check_bad_key(F, _Key) ->
         error:{badkey, _} ->
             ok
     end.
+
+test_without_take_update_groups() ->
+    #{b := 2} = M1 = maps:without([a, c], #{a => 1, b => 2, c => 3}),
+    1 = maps:size(M1),
+    {2, #{a := 1}} = maps:take(b, #{a => 1, b => 2}),
+    error = maps:take(z, #{a => 1}),
+    #{a := 2} = maps:update_with(a, fun(V) -> V + 1 end, #{a => 1}),
+    #{a := 99} = maps:update_with(a, fun(V) -> V + 1 end, 99, #{}),
+    #{a := 2} = maps:update_with(a, fun(V) -> V + 1 end, 99, #{a => 1}),
+    #{0 := [2, 4], 1 := [1, 3]} = maps:groups_from_list(fun(X) -> X rem 2 end, [1, 2, 3, 4]),
+    ok.
