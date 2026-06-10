@@ -24,6 +24,7 @@
 
 test() ->
     ok = test_md5(),
+    ok = test_standard_error(),
     ok.
 
 test_md5() ->
@@ -33,4 +34,9 @@ test_md5() ->
     Digest = erlang:md5([<<"he">>, [<<"l">>, $l], <<"o">>]),
     Empty = erlang:md5(<<>>),
     Empty = erlang:md5([]),
+    ok.
+
+test_standard_error() ->
+    ok = io:put_chars(standard_error, "(stderr smoke) "),
+    ok = io:format(standard_error, "~p ", [stderr_format_smoke]),
     ok.
