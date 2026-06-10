@@ -63,6 +63,11 @@ add_test_() ->
             jit_aarch64_asm:add(r1, r2, r3, {lsl, 4})
         ),
         ?_assertAsmEqual(
+            <<16#914800e7:32/little>>,
+            "add x7, x7, #0x200, lsl #12",
+            jit_aarch64_asm:add(r7, r7, 16#200, {lsl, 12})
+        ),
+        ?_assertAsmEqual(
             <<16#8b030041:32/little>>, "add x1, x2, x3", jit_aarch64_asm:add(r1, r2, r3)
         ),
         %% Wide immediates (4096..16#FFFFFF) use an lsl #12 instruction,
@@ -135,6 +140,11 @@ sub_test_() ->
             <<16#cb031041:32/little>>,
             "sub x1, x2, x3, lsl #4",
             jit_aarch64_asm:sub(r1, r2, r3, {lsl, 4})
+        ),
+        ?_assertAsmEqual(
+            <<16#d14680e7:32/little>>,
+            "sub x7, x7, #0x1a0, lsl #12",
+            jit_aarch64_asm:sub(r7, r7, 16#1A0, {lsl, 12})
         ),
         ?_assertAsmEqual(
             <<16#cb030041:32/little>>, "sub x1, x2, x3", jit_aarch64_asm:sub(r1, r2, r3)
