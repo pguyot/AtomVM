@@ -422,7 +422,9 @@ system_flag(_Key, _Value) ->
 %%-----------------------------------------------------------------------------
 -spec md5(Data :: binary()) -> binary().
 md5(Data) when erlang:is_binary(Data) ->
-    crypto:hash(md5, Data).
+    crypto:hash(md5, Data);
+md5(Data) when erlang:is_list(Data) ->
+    crypto:hash(md5, erlang:iolist_to_binary(Data)).
 
 %%-----------------------------------------------------------------------------
 %% @param   Module Name of module
