@@ -32,6 +32,7 @@ test() ->
     ok = test_basename(),
     ok = test_extension(),
     ok = test_rootname(),
+    ok = test_pathtype_absname(),
     ok.
 
 test_join2() ->
@@ -196,4 +197,14 @@ test_split() ->
     ?ASSERT_MATCH(filename:split("foo/./bar"), ["foo", ".", "bar"]),
     ?ASSERT_MATCH(filename:split("foo/../bar"), ["foo", "..", "bar"]),
 
+    ok.
+
+test_pathtype_absname() ->
+    absolute = filename:pathtype("/usr/local"),
+    relative = filename:pathtype("foo/bar"),
+    relative = filename:pathtype(""),
+    "/a/b" = filename:absname("/a/b"),
+    {ok, Cwd} = file:get_cwd(),
+    Expected = filename:join(Cwd, "x"),
+    Expected = filename:absname("x"),
     ok.
