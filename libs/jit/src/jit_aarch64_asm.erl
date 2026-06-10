@@ -79,7 +79,8 @@
 ]).
 
 -export_type([
-    cc/0
+    cc/0,
+    aarch64_gpr_register/0
 ]).
 
 -type aarch64_gpr_register() ::
@@ -179,8 +180,20 @@ add(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
 
 %% ADD (shifted register)
 %% ADD Rd, Rn, Rm, {lsl, #amount}
--spec add(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register(), {lsl, 0..63}) ->
+%% or ADD (immediate, shifted) ADD Rd, Rn, #imm12, lsl #12
+-spec add(
+    aarch64_gpr_register(),
+    aarch64_gpr_register(),
+    aarch64_gpr_register() | 0..4095,
+    {lsl, 0..63}
+) ->
     binary().
+add(Rd, Rn, Imm, {lsl, 12}) when
+    is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =< 4095
+->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    <<(16#91400000 bor (Imm bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
 add(Rd, Rn, Rm, {lsl, Amount}) when
     is_atom(Rd), is_atom(Rn), is_atom(Rm), is_integer(Amount), Amount >= 0, Amount =< 63
 ->
@@ -1228,8 +1241,20 @@ sub(_Rd, _Rn, Imm) when is_integer(Imm) ->
 sub(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
     sub(Rd, Rn, Rm, {lsl, 0}).
 
--spec sub(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register(), {lsl, 0..63}) ->
+-spec sub(
+    aarch64_gpr_register(),
+    aarch64_gpr_register(),
+    aarch64_gpr_register() | 0..4095,
+    {lsl, 0..63}
+) ->
     binary().
+sub(Rd, Rn, Imm, {lsl, 12}) when
+    is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =< 4095
+->
+    %% SUB (immediate, shifted) SUB Rd, Rn, #imm12, lsl #12
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    <<(16#D1400000 bor (Imm bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
 sub(Rd, Rn, Rm, {lsl, Amount}) when
     is_atom(Rd), is_atom(Rn), is_atom(Rm), is_integer(Amount), Amount >= 0, Amount =< 63
 ->

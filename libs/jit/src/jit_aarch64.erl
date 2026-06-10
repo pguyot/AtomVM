@@ -410,10 +410,26 @@ patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
     NewInstr =
         case Type of
             {bcc, CC} -> jit_aarch64_asm:bcc(CC, Rel);
-            {adr, Reg} -> jit_aarch64_asm:adr(Reg, Rel);
+            {adr, Reg} -> adr_far(Reg, Rel);
             b -> jit_aarch64_asm:b(Rel)
         end,
     StreamModule:replace(Stream, Offset, NewInstr).
+
+%% @private
+%% @doc Materialize PC + Rel into Reg with a fixed-size two-instruction
+%% sequence (adr + add/sub lsl #12), covering ±16MB. Placeholder sites that
+%% are patched later must always emit this form so the patch fits in place.
+-spec adr_far(jit_aarch64_asm:aarch64_gpr_register(), integer()) -> binary().
+adr_far(Reg, Rel) ->
+    AdrImm = Rel rem 4096,
+    Hi = Rel div 4096,
+    Adr = jit_aarch64_asm:adr(Reg, AdrImm),
+    Adj =
+        if
+            Hi >= 0 -> jit_aarch64_asm:add(Reg, Reg, Hi, {lsl, 12});
+            true -> jit_aarch64_asm:sub(Reg, Reg, -Hi, {lsl, 12})
+        end,
+    <<Adr/binary, Adj/binary>>.
 
 %%-----------------------------------------------------------------------------
 %% @doc Patch all branches targeting a specific label and return remaining branches
@@ -2388,13 +2404,20 @@ set_continuation_to_label(
     case Labels of
         #{Label := LabelOffset} ->
             Rel = LabelOffset - Offset,
-            I1 = jit_aarch64_asm:adr(Temp, Rel),
+            I1 =
+                if
+                    Rel >= -1048576 andalso Rel =< 1048572 ->
+                        jit_aarch64_asm:adr(Temp, Rel);
+                    true ->
+                        adr_far(Temp, Rel)
+                end,
             I2 = jit_aarch64_asm:str(Temp, ?JITSTATE_CONTINUATION),
             Code = <<I1/binary, I2/binary>>,
             Stream1 = StreamModule:append(Stream0, Code),
             State#state{stream = Stream1, regs = Regs1};
         _ ->
-            I1 = jit_aarch64_asm:adr(Temp, 0),
+            % Placeholder must have the same size as any later patch
+            I1 = adr_far(Temp, 0),
             BrEntry = {Offset, {adr, Temp}},
             I2 = jit_aarch64_asm:str(Temp, ?JITSTATE_CONTINUATION),
             Code = <<I1/binary, I2/binary>>,
@@ -2428,7 +2451,8 @@ set_continuation_to_offset(
     Temp = first_avail(Avail),
     OffsetRef = make_ref(),
     Offset = StreamModule:offset(Stream0),
-    I1 = jit_aarch64_asm:adr(Temp, 0),
+    % Placeholder must have the same size as any later patch
+    I1 = adr_far(Temp, 0),
     BrEntry = {Offset, {adr, Temp}},
     I2 = jit_aarch64_asm:str(Temp, ?JITSTATE_CONTINUATION),
     Code = <<I1/binary, I2/binary>>,
