@@ -33,6 +33,7 @@
     fwrite/2,
     latin1_char_list/1,
     write_atom/1,
+    write_atom_as_latin1/1,
     write_binary/3,
     printable_list/1,
     write_string/1,
@@ -390,6 +391,18 @@ write_atom(Atom) ->
                 false -> write_atom_maybe_quote_escape(AtomStr)
             end
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Atom atom to write
+%% @returns the atom as a quoted-if-needed latin1 string
+%% @doc     Same as `write_atom/1', but non-latin1 codepoints are escaped.
+%%          AtomVM atoms used by the compiler are latin1, so this is
+%%          equivalent to `write_atom/1' for them.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec write_atom_as_latin1(Atom :: atom()) -> chars().
+write_atom_as_latin1(Atom) ->
+    write_atom(Atom).
 
 %% @private
 write_atom_maybe_quote_escape([C | _T] = AtomStr) when C < $a orelse C > $z ->
