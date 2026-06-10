@@ -112,7 +112,9 @@ getopts(standard_io) ->
         {stdout, true},
         {stderr, true},
         {stdin, true}
-    ].
+    ];
+getopts(IODevice) when is_pid(IODevice) ->
+    execute_request(IODevice, getopts).
 
 %%-----------------------------------------------------------------------------
 %% @equiv setopts(standard_io, Opts)
@@ -130,8 +132,10 @@ setopts(Opts) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec setopts(IODevice :: device(), Opts :: [getopt()]) -> ok | {error, Reason :: any()}.
+setopts(IODevice, Opts) when is_pid(IODevice) ->
+    execute_request(IODevice, {setopts, Opts});
 setopts(_IODevice, _Opts) ->
-    %% TODO: Actually implement option setting when needed
+    %% TODO: Actually implement option setting for the console when needed
     ok.
 
 %%-----------------------------------------------------------------------------
