@@ -36,6 +36,7 @@ test() ->
     ok = test_keysort(),
     ok = test_keystore(),
     ok = test_keytake(),
+    ok = test_partition(),
     ok = test_foldl(),
     ok = test_foldr(),
     ok = test_all(),
@@ -550,3 +551,10 @@ test_zipwith() ->
 
 id(X) ->
     X.
+
+test_partition() ->
+    {[1, 3], [2, 4]} = lists:partition(fun(X) -> X rem 2 =:= 1 end, [1, 2, 3, 4]),
+    {[], []} = lists:partition(fun(_) -> true end, []),
+    {[a, b], []} = lists:partition(fun(_) -> true end, [a, b]),
+    {[], [a, b]} = lists:partition(fun(_) -> false end, [a, b]),
+    ok.

@@ -56,6 +56,7 @@
     flatmap/2,
     search/2,
     filter/2,
+    partition/2,
     filtermap/2,
     join/2,
     seq/2, seq/3,
@@ -554,6 +555,29 @@ filtermap_1(F, [Hd | Tail]) ->
     end;
 filtermap_1(_F, []) ->
     [].
+
+%%-----------------------------------------------------------------------------
+%% @param   Pred the predicate to apply to elements in List
+%% @param   List list
+%% @returns {Satisfying, NotSatisfying} where Satisfying contains the elements
+%%          for which Pred returned true and NotSatisfying the others, both in
+%%          the order they appeared in List
+%% @doc     Partition a list by a predicate.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec partition(Pred :: fun((Elem :: term()) -> boolean()), List :: [term()]) ->
+    {[term()], [term()]}.
+partition(Pred, L) when is_function(Pred, 1) ->
+    partition0(Pred, L, [], []).
+
+%% @private
+partition0(_Pred, [], Satisfying, NotSatisfying) ->
+    {lists:reverse(Satisfying), lists:reverse(NotSatisfying)};
+partition0(Pred, [H | T], Satisfying, NotSatisfying) ->
+    case Pred(H) of
+        true -> partition0(Pred, T, [H | Satisfying], NotSatisfying);
+        false -> partition0(Pred, T, Satisfying, [H | NotSatisfying])
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   Sep the separator
