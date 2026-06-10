@@ -880,7 +880,9 @@ if_block_cond(
     State1 = if_block_free_reg(RegOrTuple, State0),
     State2 = State1#state{stream = Stream1},
     {State2, {beq, Reg, Val}, 0};
-if_block_cond(State, {'(int)', RegOrTuple, '!=', Val}) when is_integer(Val) ->
+if_block_cond(State, {'(int)', RegOrTuple, '!=', Val}) when
+    is_integer(Val) orelse ?IS_GPR(Val)
+->
     if_block_cond(State, {RegOrTuple, '!=', Val});
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,

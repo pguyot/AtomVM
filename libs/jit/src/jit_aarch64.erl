@@ -1001,7 +1001,7 @@ if_block_cond(
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {'(int)', RegOrTuple, '!=', Val}
-) when is_integer(Val) ->
+) when is_integer(Val) orelse ?IS_GPR(Val) ->
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
