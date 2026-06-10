@@ -37,6 +37,15 @@ test() ->
     ok = test_keystore(),
     ok = test_keytake(),
     ok = test_partition(),
+    ok = test_splitwith(),
+    ok = test_takewhile(),
+    ok = test_unzip(),
+    ok = test_enumerate(),
+    ok = test_sum(),
+    ok = test_uniq(),
+    ok = test_umerge(),
+    ok = test_concat(),
+    ok = test_prefix_suffix(),
     ok = test_foldl(),
     ok = test_foldr(),
     ok = test_all(),
@@ -557,4 +566,58 @@ test_partition() ->
     {[], []} = lists:partition(fun(_) -> true end, []),
     {[a, b], []} = lists:partition(fun(_) -> true end, [a, b]),
     {[], [a, b]} = lists:partition(fun(_) -> false end, [a, b]),
+    ok.
+
+test_splitwith() ->
+    {[1, 2], [3, 4, 1]} = lists:splitwith(fun(X) -> X < 3 end, [1, 2, 3, 4, 1]),
+    {[], [1]} = lists:splitwith(fun(X) -> X > 5 end, [1]),
+    {[1], []} = lists:splitwith(fun(_) -> true end, [1]),
+    ok.
+
+test_takewhile() ->
+    [1, 2] = lists:takewhile(fun(X) -> X < 3 end, [1, 2, 3, 1]),
+    [] = lists:takewhile(fun(_) -> false end, [1, 2]),
+    ok.
+
+test_unzip() ->
+    {[a, c], [b, d]} = lists:unzip([{a, b}, {c, d}]),
+    {[], []} = lists:unzip([]),
+    ok.
+
+test_enumerate() ->
+    [{1, a}, {2, b}] = lists:enumerate([a, b]),
+    [{5, a}, {6, b}] = lists:enumerate(5, [a, b]),
+    [] = lists:enumerate([]),
+    ok.
+
+test_sum() ->
+    10 = lists:sum([1, 2, 3, 4]),
+    0 = lists:sum([]),
+    ok.
+
+test_uniq() ->
+    [1, 2, 3] = lists:uniq([1, 2, 1, 3, 2]),
+    [a] = lists:uniq([a, a, a]),
+    [] = lists:uniq([]),
+    [{1, a}, {2, b}] = lists:uniq(fun({K, _}) -> K end, [{1, a}, {1, c}, {2, b}]),
+    ok.
+
+test_umerge() ->
+    [1, 2, 3, 4, 5] = lists:umerge([[1, 3, 5], [2, 3, 4]]),
+    [1, 2, 3] = lists:umerge([1, 2], [2, 3]),
+    [] = lists:umerge([]),
+    ok.
+
+test_concat() ->
+    "ab1" = lists:concat([a, "b", 1]),
+    "" = lists:concat([]),
+    ok.
+
+test_prefix_suffix() ->
+    true = lists:prefix([1, 2], [1, 2, 3]),
+    false = lists:prefix([2], [1, 2]),
+    true = lists:prefix([], [1]),
+    true = lists:suffix([2, 3], [1, 2, 3]),
+    false = lists:suffix([1], [1, 2]),
+    true = lists:suffix([], [1]),
     ok.
