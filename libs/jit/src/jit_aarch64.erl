@@ -662,7 +662,21 @@ jump_to_continuation(
     NetOffset = BaseOffset - CurrentStreamOffset,
 
     % Get native code base address into temporary register
-    I1 = jit_aarch64_asm:adr(TempReg, NetOffset),
+    I1 =
+        if
+            NetOffset >= -1048576 andalso NetOffset =< 1048572 ->
+                jit_aarch64_asm:adr(TempReg, NetOffset);
+            NetOffset < 0 ->
+                % Beyond ADR's ±1MB range: take the current PC, then apply
+                % the displacement (sub/add immediates cover up to 16MB)
+                Adr = jit_aarch64_asm:adr(TempReg, 0),
+                Sub = jit_aarch64_asm:sub(TempReg, TempReg, -NetOffset),
+                <<Adr/binary, Sub/binary>>;
+            true ->
+                Adr = jit_aarch64_asm:adr(TempReg, 0),
+                Add = jit_aarch64_asm:add(TempReg, TempReg, NetOffset),
+                <<Adr/binary, Add/binary>>
+        end,
     % Add target offset to get final absolute address
     I2 = jit_aarch64_asm:add(TempReg, TempReg, OffsetReg),
     % Indirect branch to the calculated absolute address
