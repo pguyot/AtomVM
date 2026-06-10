@@ -2331,3 +2331,74 @@ jit_move_x0_x1_test() ->
         {_, _},
         binary:match(Code, <<16#48, 16#8B, 16#47, 16#58, 16#48, 16#89, 16#47, 16#60>>)
     ).
+
+%% A compile-time float constant is stored into fr[1] as its raw IEEE-754
+%% bits: load the bits, load the fr array base (ctx->fr), store.
+move_float_to_fp_reg_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:move_float_to_fp_reg(State0, 4.0, 1),
+    Stream = ?BACKEND:stream(State1),
+    Dump = <<
+        "   0:	48 b8 00 00 00 00 00 	movabs $0x4010000000000000,%rax\n"
+        "   7:	00 10 40\n"
+        "   a:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
+        "  11:	49 89 43 08          	mov    %rax,0x8(%r11)"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+%% The gc_bif func pointer is resolved inline rather than via the
+%% PRIM_GET_IMPORTED_GCBIF primitive call: an inline extended-register
+%% emptiness check (calling PRIM_TRIM_LIVE_REGS only when non-empty) followed
+%% by module->imported_funcs[Bif]->bif0_ptr loads.
+move_imported_gcbif_to_native_register_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:move_imported_gcbif_to_native_register(State0, 2, 5),
+    Stream = ?BACKEND:stream(State1),
+    Dump = <<
+        "   0:	48 8d 87 00 01 00 00 	lea    0x100(%rdi),%rax\n"
+        "   7:	4c 8b 18             	mov    (%rax),%r11\n"
+        "   a:	49 39 c3             	cmp    %rax,%r11\n"
+        "   d:	74 11                	je     0x20\n"
+        "   f:	48 8b 42 38          	mov    0x38(%rdx),%rax\n"
+        "  13:	57                   	push   %rdi\n"
+        "  14:	56                   	push   %rsi\n"
+        "  15:	52                   	push   %rdx\n"
+        "  16:	be 02 00 00 00       	mov    $0x2,%esi\n"
+        "  1b:	ff d0                	call   *%rax\n"
+        "  1d:	5a                   	pop    %rdx\n"
+        "  1e:	5e                   	pop    %rsi\n"
+        "  1f:	5f                   	pop    %rdi\n"
+        "  20:	48 8b 06             	mov    (%rsi),%rax\n"
+        "  23:	48 8b 80 90 00 00 00 	mov    0x90(%rax),%rax\n"
+        "  2a:	48 8b 40 28          	mov    0x28(%rax),%rax\n"
+        "  2e:	48 8b 40 08          	mov    0x8(%rax),%rax"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+%% jit.erl-driven test: OP_FMOVE of a float literal into fr[0] resolves the
+%% literal at compile time and embeds its IEEE-754 bits as an immediate (no
+%% PRIM_MODULE_LOAD_LITERAL call).
+%%
+%% Chunk: OP_LABEL 1 ; OP_FMOVE literal[1] fr[0] ; OP_INT_CALL_END.
+%% fmove encoding: extended-literal tag 16#47, literal 1 = 16#10,
+%% extended-fp-register tag 16#27, fr 0 = 16#00.
+jit_fmove_literal_test() ->
+    Chunk =
+        <<16:32, 0:32, ?OP_FMOVE:32, 1:32, 1:32, ?OP_LABEL, 16#10, ?OP_FMOVE, 16#47, 16#10, 16#27,
+            16#00, ?OP_INT_CALL_END>>,
+    Code = jit_tests_common:compile_chunk(
+        ?BACKEND,
+        Chunk,
+        fun(_) -> undefined end,
+        %% LiteralResolver
+        fun(1) -> 4.0 end,
+        fun(_) -> any end,
+        fun(_) -> undefined end,
+        fun(_) -> false end
+    ),
+    %% movabs $0x4010000000000000 (the bits of 4.0) must appear; its 8-byte
+    %% little-endian immediate is distinctive.
+    ?assertMatch(
+        {_, _},
+        binary:match(Code, <<0, 0, 0, 0, 0, 0, 16#10, 16#40>>)
+    ).

@@ -59,6 +59,7 @@
     set_continuation_to_label/2,
     set_continuation_to_offset/1,
     continuation_entry_point/1,
+    move_imported_gcbif_to_native_register/3,
     get_module_index/1,
     and_/3,
     or_/3,
@@ -75,6 +76,7 @@
     float_op/5,
     float_conv_int/3,
     float_conv_float/3,
+    move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -211,6 +213,13 @@
 -define(JITSTATE_REMAINING_REDUCTIONS, {16#10, ?JITSTATE_REG}).
 -define(PRIMITIVE(N), {N * ?WORD_SIZE, ?NATIVE_INTERFACE_REG}).
 -define(MODULE_INDEX(ModuleReg), {0, ModuleReg}).
+% Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
+% Kept in sync with src/libAtomVM/jit.c via _Static_assert.
+-define(MODULE_IMPORTED_FUNCS, 16#90).
+-define(CTX_EXTENDED_X_REGS, 16#100).
+% struct Bif { struct ExportedFunction base; union { BifImpl0 bif0_ptr; ... }; }
+% base is at offset 0, so EXPORTED_FUNCTION_TO_BIF(f) == f and bif0_ptr is here.
+-define(BIF_BIF0_PTR, 16#8).
 
 -define(IS_SINT8_T(X), is_integer(X) andalso X >= -128 andalso X =< 127).
 -define(IS_SINT32_T(X), is_integer(X) andalso X >= -16#80000000 andalso X < 16#80000000).
@@ -2468,6 +2477,54 @@ set_continuation_to_offset(
 continuation_entry_point(State) ->
     State.
 
+%%-----------------------------------------------------------------------------
+%% @doc Resolve the imported BIF function pointer for a gc_bif call site inline,
+%% instead of through the PRIM_GET_IMPORTED_GCBIF primitive call. Equivalent to
+%% jit_get_imported_gcbif in jit.c: first drop dead extended registers (only if
+%% any exist — the common case has none, so the cleanup call is skipped), then
+%% load module->imported_funcs[Bif]->bif0_ptr. Returns the pointer register.
+%% @end
+-spec move_imported_gcbif_to_native_register(state(), integer(), non_neg_integer()) ->
+    {state(), x86_64_register()}.
+move_imported_gcbif_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    Live,
+    Bif
+) ->
+    %% Inline extended-register cleanup: skip the call when the list is empty
+    %% (ListHead.next == &list, i.e. equals the list address). list address is
+    %% ctx + ?CTX_EXTENDED_X_REGS.
+    Avail = jit_regs:available_regs(Regs0),
+    AddrReg = first_avail(Avail),
+    NextReg = first_avail(Avail band (bnot reg_bit(AddrReg))),
+    I1 = jit_x86_64_asm:leaq({?CTX_EXTENDED_X_REGS, ?CTX_REG}, AddrReg),
+    I2 = jit_x86_64_asm:movq({0, AddrReg}, NextReg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(Regs0, AddrReg), NextReg
+    ),
+    State1 = State0#state{stream = Stream1, regs = Regs1},
+    State2 = if_block(State1, {{free, NextReg}, '!=', AddrReg}, fun(BSt0) ->
+        {BSt1, R} = call_primitive(BSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+        free_native_registers(BSt1, [R])
+    end),
+    %% Now load the BIF pointer: module = [jit_state+0]; funcs = [module+IMP];
+    %% exported = [funcs + Bif*8]; bif0_ptr = [exported + BIF0].
+    Stream2 = State2#state.stream,
+    Avail2 = jit_regs:available_regs(State2#state.regs),
+    PtrReg = first_avail(Avail2),
+    J1 = jit_x86_64_asm:movq(?JITSTATE_MODULE, PtrReg),
+    J2 = jit_x86_64_asm:movq({?MODULE_IMPORTED_FUNCS, PtrReg}, PtrReg),
+    J3 = jit_x86_64_asm:movq({Bif * ?WORD_SIZE, PtrReg}, PtrReg),
+    J4 = jit_x86_64_asm:movq({?BIF_BIF0_PTR, PtrReg}, PtrReg),
+    Stream3 = StreamModule:append(Stream2, <<J1/binary, J2/binary, J3/binary, J4/binary>>),
+    Bit = reg_bit(PtrReg),
+    Regs2 = jit_regs:alloc_reg(jit_regs:invalidate_reg(State2#state.regs, PtrReg), Bit),
+    {
+        State2#state{stream = Stream3, regs = Regs2},
+        PtrReg
+    }.
+
 get_module_index(
     #state{
         stream_module = StreamModule,
@@ -2986,6 +3043,31 @@ float_conv_float(
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, BaseReg),
+    State0#state{stream = Stream1, regs = Regs1}.
+
+%% Store a compile-time float constant directly into fr[FPRegIndex] as its
+%% IEEE-754 double bits, avoiding any literal-table access at runtime. Only
+%% called when supports_fp/1 returns true, i.e. the double-precision variant.
+-spec move_float_to_fp_reg(state(), float(), non_neg_integer()) -> state().
+move_float_to_fp_reg(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    Float,
+    FPRegIndex
+) ->
+    <<Bits:64/unsigned-little>> = <<Float:64/float-little>>,
+    Avail0 = jit_regs:available_regs(Regs0),
+    BitsReg = first_avail(Avail0),
+    BaseReg = first_avail(Avail0 band (bnot reg_bit(BitsReg))),
+    I1 = jit_x86_64_asm:movabsq(Bits, BitsReg),
+    I2 = jit_x86_64_asm:movq(?FP_REGS, BaseReg),
+    I3 = jit_x86_64_asm:movq(BitsReg, {?FP_REG_OFFSET(State0, FPRegIndex), BaseReg}),
+    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BitsReg), BaseReg),
     State0#state{stream = Stream1, regs = Regs1}.
 
 %% Load the fp register array pointer (ctx->fr) into a freshly allocated
