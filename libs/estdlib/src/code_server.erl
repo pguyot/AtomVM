@@ -182,7 +182,7 @@ load(Module) ->
             {Pid, Ref} = spawn_opt(
                 fun() ->
                     try
-                        io:format("Compilation of ~s...", [Module]),
+                        io:format(standard_error, "Compilation of ~s...", [Module]),
                         Start = erlang:system_time(millisecond),
                         Code = code_server:code_chunk(Module),
                         AtomResolver = fun(Index) -> code_server:atom_resolver(Module, Index) end,
@@ -214,12 +214,19 @@ load(Module) ->
                         Stream2 = StreamModule:flush(Stream1),
                         code_server:set_native_code(Module, LabelsCount, Stream2),
                         End = erlang:system_time(millisecond),
-                        io:format("~B ms (bytecode: ~B bytes, native code: ~B bytes)\n", [
-                            End - Start, byte_size(Code), BackendModule:offset(BackendState1)
-                        ])
+                        io:format(
+                            standard_error,
+                            "~B ms (bytecode: ~B bytes, native code: ~B bytes)\n",
+                            [
+                                End - Start,
+                                byte_size(Code),
+                                BackendModule:offset(BackendState1)
+                            ]
+                        )
                     catch
                         T:V:S ->
                             io:format(
+                                standard_error,
                                 "===========================================================\nJust in time compilation of module ~p failed.\n~p:~p\n~p\n===========================================================\n",
                                 [Module, T, V, S]
                             ),
