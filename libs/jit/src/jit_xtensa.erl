@@ -1215,7 +1215,9 @@ if_block_cond(
     State1 = if_block_free_reg(RegOrTuple, State0),
     State2 = State1#state{stream = Stream1},
     {State2, byte_size(I1)};
-if_block_cond(State, {'(int)', RegOrTuple, '!=', Val}) when is_integer(Val) ->
+if_block_cond(State, {'(int)', RegOrTuple, '!=', Val}) when
+    is_integer(Val) orelse ?IS_GPR(Val)
+->
     if_block_cond(State, {RegOrTuple, '!=', Val});
 %% b4const fast paths for ==, !=, < using beqi/bnei/bgei
 if_block_cond(

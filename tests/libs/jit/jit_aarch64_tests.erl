@@ -866,6 +866,46 @@ if_block_test_() ->
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
+                %% register right-hand side: emitted by OP_IS_FUNCTION2 when the
+                %% arity is a typed integer register (e.g. is_function(F, N))
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {'(int)', RegA, '!=', RegB},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+                        "   8:	6b0800ff 	cmp	w7, w8\n"
+                        "   c:	54000040 	b.eq	0x14  // b.none\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    ?assertStream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {'(int)', {free, RegA}, '!=', RegB},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
+                        "   4:	f9403008 	ldr	x8, [x0, #96]\n"
+                        "   8:	6b0800ff 	cmp	w7, w8\n"
+                        "   c:	54000040 	b.eq	0x14  // b.none\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    ?assertStream(aarch64, Dump, Stream),
+                    ?assertEqual([RegB], ?BACKEND:used_regs(State1))
+                end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
                         State0,
