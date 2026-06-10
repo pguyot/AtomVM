@@ -162,6 +162,16 @@ add(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =
     %% AArch64 ADD (immediate) encoding: 1001000100iiiiiiiiiiiinnnnndddddd
     %% 0x91000000 | Imm << 10 | Rn << 5 | Rd
     <<(16#91000000 bor ((Imm band 16#FFF) bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
+add(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm > 4095, Imm =< 16#FFFFFF ->
+    %% Wide immediate: ADD with lsl #12 for the high 12 bits, then a plain
+    %% ADD for the low 12 bits when they are non-zero
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    Hi = <<(16#91400000 bor ((Imm bsr 12) bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>,
+    case Imm band 16#FFF of
+        0 -> Hi;
+        Lo -> <<Hi/binary, (add(Rd, Rd, Lo))/binary>>
+    end;
 add(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm) ->
     error({unencodable_immediate, Imm});
 add(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
@@ -1203,6 +1213,16 @@ sub(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =
     RdNum = reg_to_num(Rd),
     RnNum = reg_to_num(Rn),
     <<(16#D1000000 bor ((Imm band 16#FFF) bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
+sub(Rd, Rn, Imm) when is_atom(Rd), is_atom(Rn), is_integer(Imm), Imm > 4095, Imm =< 16#FFFFFF ->
+    %% Wide immediate: SUB with lsl #12 for the high 12 bits, then a plain
+    %% SUB for the low 12 bits when they are non-zero
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    Hi = <<(16#D1400000 bor ((Imm bsr 12) bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>,
+    case Imm band 16#FFF of
+        0 -> Hi;
+        Lo -> <<Hi/binary, (sub(Rd, Rd, Lo))/binary>>
+    end;
 sub(_Rd, _Rn, Imm) when is_integer(Imm) ->
     error({unencodable_immediate, Imm});
 sub(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
