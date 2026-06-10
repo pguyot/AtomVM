@@ -3142,19 +3142,29 @@ call_only_or_schedule_next(
     BNEOffset = StreamModule:offset(Stream1),
 
     case Labels of
-        #{Label := LabelOffset} ->
-            % Label is already known, emit direct branch with calculated offset
-            % Calculate relative offset (must be 4-byte aligned)
+        #{Label := LabelOffset} when
+            LabelOffset - BNEOffset >= -1048576 andalso LabelOffset - BNEOffset < 1048576
+        ->
+            % Label is already known and in bcc range, emit direct branch
             Rel = LabelOffset - BNEOffset,
             I4 = jit_aarch64_asm:bcc(ne, Rel),
             Stream2 = StreamModule:append(Stream1, I4),
             State1 = State0#state{stream = Stream2};
+        #{Label := LabelOffset} ->
+            % Label is beyond bcc's ±1MB range: skip over an unconditional
+            % branch (±128MB) with the inverted condition
+            I4 = jit_aarch64_asm:bcc(eq, 8),
+            I5 = jit_aarch64_asm:b(LabelOffset - (BNEOffset + 4)),
+            Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary>>),
+            State1 = State0#state{stream = Stream2};
         _ ->
-            % Label not yet known, emit placeholder and add relocation
-            I4 = jit_aarch64_asm:bcc(ne, 0),
-            BrEntry = {BNEOffset, {bcc, ne}},
+            % Label not yet known: emit the far-capable pair so the patch
+            % fits whatever the final distance is
+            I4 = jit_aarch64_asm:bcc(eq, 8),
+            I5 = jit_aarch64_asm:b(0),
+            BrEntry = {BNEOffset + 4, b},
             ExistingBrs = maps:get(Label, Branches, []),
-            Stream2 = StreamModule:append(Stream1, I4),
+            Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary>>),
             State1 = State0#state{
                 stream = Stream2,
                 branches = Branches#{Label => [BrEntry | ExistingBrs]}
