@@ -4234,7 +4234,9 @@ rewrite_cp_offset(
     Stream2 = StreamModule:replace(Stream1, RewriteOffset, NewMoveInstr),
     Prolog = jit_armv6m_asm:push([r1, r4, r5, r6, r7, lr]),
     Stream3 = StreamModule:append(Stream2, Prolog),
-    State0#state{stream = Stream3}.
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
+    State0#state{stream = Stream3, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
