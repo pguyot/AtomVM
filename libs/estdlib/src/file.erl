@@ -74,7 +74,13 @@ open(Filename, Modes) ->
         {ok, Fd} ->
             Binary = lists:member(binary, Modes),
             Pid = spawn_link(fun() ->
-                file_server(#{fd => Fd, buffer => [], binary => Binary, pending_bytes => <<>>})
+                file_server(#{
+                    fd => Fd,
+                    buffer => [],
+                    binary => Binary,
+                    pending_bytes => <<>>,
+                    encoding => unicode
+                })
             end),
             {ok, Pid};
         {error, _} = Error ->
@@ -257,13 +263,32 @@ io_request({put_chars, _Encoding, Chars}, State) ->
     {reply, device_write(Chars, State), State};
 io_request({put_chars, _Encoding, M, F, A}, State) ->
     {reply, device_write(apply(M, F, A), State), State};
-io_request({setopts, _Opts}, State) ->
-    %% encoding selection is accepted and ignored: content is read as utf8
-    {reply, ok, State};
+io_request({setopts, Opts}, State) ->
+    {reply, ok, apply_opts(Opts, State)};
 io_request(getopts, State) ->
-    {reply, [{binary, maps:get(binary, State)}], State};
+    Encoding =
+        case maps:get(encoding, State, unicode) of
+            latin1 -> latin1;
+            _ -> unicode
+        end,
+    {reply, [{binary, maps:get(binary, State)}, {encoding, Encoding}], State};
 io_request(_Other, State) ->
     {reply, {error, request}, State}.
+
+%% @private
+%% Apply setopts options: binary mode and encoding selection.
+apply_opts([], State) ->
+    State;
+apply_opts([binary | T], State) ->
+    apply_opts(T, State#{binary := true});
+apply_opts([{binary, Bool} | T], State) when is_boolean(Bool) ->
+    apply_opts(T, State#{binary := Bool});
+apply_opts([list | T], State) ->
+    apply_opts(T, State#{binary := false});
+apply_opts([{encoding, Enc} | T], State) ->
+    apply_opts(T, State#{encoding => Enc});
+apply_opts([_Other | T], State) ->
+    apply_opts(T, State).
 
 %% @private
 %% Drive an io-protocol get_until continuation: feed buffered or freshly-read
@@ -297,6 +322,10 @@ get_until(M, F, As, Cont, State) ->
 read_chars(State) ->
     #{fd := Fd, pending_bytes := Pending} = State,
     case atomvm:posix_read(Fd, ?READ_CHUNK) of
+        {ok, Bin0} when map_get(encoding, State) =:= latin1 ->
+            %% latin1: characters are bytes, no decoding
+            Bin = <<Pending/binary, Bin0/binary>>,
+            {erlang:binary_to_list(Bin), State#{pending_bytes := <<>>}};
         {ok, Bin0} ->
             Bin = <<Pending/binary, Bin0/binary>>,
             case unicode:characters_to_list(Bin, utf8) of
@@ -347,8 +376,13 @@ take_chars0(N, Acc, State) ->
 %% @private
 maybe_binary(Chars, State) ->
     case maps:get(binary, State) of
-        true -> erlang:list_to_binary(Chars);
-        false -> Chars
+        true ->
+            case maps:get(encoding, State, unicode) of
+                latin1 -> erlang:list_to_binary(Chars);
+                _ -> unicode:characters_to_binary(Chars, utf8)
+            end;
+        false ->
+            Chars
     end.
 
 %% @private
