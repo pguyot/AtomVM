@@ -75,6 +75,7 @@
     float_op/5,
     float_conv_int/3,
     float_conv_float/3,
+    move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
@@ -2962,6 +2963,31 @@ float_conv_float(
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
+
+%% Store a compile-time float constant directly into fr[FPRegIndex] as its
+%% IEEE-754 double bits, avoiding any literal-table access at runtime. Only
+%% called when supports_fp/1 returns true, i.e. the double-precision variant.
+-spec move_float_to_fp_reg(state(), float(), non_neg_integer()) -> state().
+move_float_to_fp_reg(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    Float,
+    FPRegIndex
+) ->
+    <<Bits:64/unsigned-little>> = <<Float:64/float-little>>,
+    Avail0 = jit_regs:available_regs(Regs0),
+    BitsReg = first_avail(Avail0),
+    BaseReg = first_avail(Avail0 band (bnot reg_bit(BitsReg))),
+    I1 = jit_aarch64_asm:mov(BitsReg, Bits),
+    I2 = jit_aarch64_asm:ldr(BaseReg, ?FP_REGS),
+    I3 = jit_aarch64_asm:str(BitsReg, {BaseReg, ?FP_REG_OFFSET(State0, FPRegIndex)}),
+    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BitsReg), BaseReg),
     State0#state{stream = Stream1, regs = Regs1}.
 
 %% Load the fp register array pointer (ctx->fr) into a freshly allocated
