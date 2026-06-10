@@ -1313,22 +1313,23 @@ call_only_or_schedule_next_and_label_relocation_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:	1400000e 	b	0x38\n"
+            "   0:	1400000f 	b	0x3c\n"
             "   4:	14000002 	b	0xc\n"
-            "   8:	1400000a 	b	0x30\n"
+            "   8:	1400000b 	b	0x34\n"
             "   c:	b9401027 	ldr	w7, [x1, #16]\n"
             "  10:	f10004e7 	subs	x7, x7, #0x1\n"
             "  14:	b9001027 	str	w7, [x1, #16]\n"
-            "  18:	540000c1 	b.ne	0x30  // b.any\n"
-            "  1c:	100000a7 	adr	x7, 0x30\n"
-            "  20:	914000e7 	add	x7, x7, #0x0, lsl #12\n"
-            "  24:	f9000427 	str	x7, [x1, #8]\n"
-            "  28:	f9400847 	ldr	x7, [x2, #16]\n"
-            "  2c:	d61f00e0 	br	x7\n"
-            "  30:	f9400047 	ldr	x7, [x2]\n"
-            "  34:	d61f00e0 	br	x7\n"
-            "  38:	f9400447 	ldr	x7, [x2, #8]\n"
-            "  3c:	d61f00e0 	br	x7"
+            "  18:	54000040 	b.eq	0x20  // b.none\n"
+            "  1c:	14000006 	b	0x34\n"
+            "  20:	100000a7 	adr	x7, 0x34\n"
+            "  24:	914000e7 	add	x7, x7, #0x0, lsl #12\n"
+            "  28:	f9000427 	str	x7, [x1, #8]\n"
+            "  2c:	f9400847 	ldr	x7, [x2, #16]\n"
+            "  30:	d61f00e0 	br	x7\n"
+            "  34:	f9400047 	ldr	x7, [x2]\n"
+            "  38:	d61f00e0 	br	x7\n"
+            "  3c:	f9400447 	ldr	x7, [x2, #8]\n"
+            "  40:	d61f00e0 	br	x7"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2882,3 +2883,25 @@ float_conv_float_test() ->
         "  10:	fd000500 	str	d0, [x8, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
+
+%% call_only_or_schedule_next to a label beyond bcc's ±1MB range must use
+%% an inverted-condition + unconditional branch pair
+call_only_or_schedule_next_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 2),
+    State2 = ?BACKEND:add_label(State1, 1),
+    State3 = ?BACKEND:add_label(State2, 2, 16#200000),
+    State4 = ?BACKEND:call_only_or_schedule_next(State3, 2),
+    State5 = ?BACKEND:update_branches(State4),
+    Stream = ?BACKEND:stream(State5),
+    % After the jump table (3 * 4 bytes) and the reduction decrement
+    % (3 instructions), at 16#18: b.eq +8; b 0x200000
+    <<_:16#18/binary, Code:8/binary, _/binary>> = Stream,
+    % b.eq 0x28 (skip over the b); b 0x200000 (Rel = 16#200000 - 16#1c)
+    ?assertEqual(
+        <<
+            16#54000040:32/little,
+            (16#14000000 bor ((16#200000 - 16#1c) div 4)):32/little
+        >>,
+        Code
+    ).
