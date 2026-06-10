@@ -61,6 +61,14 @@ struct RegisteredProcess
     term local_pid_or_port;
 };
 
+// A modules_by_index array replaced by a growth, kept allocated until
+// globalcontext_destroy as lockless readers may still hold a pointer to it.
+struct ModulesByIndexRetiredArray
+{
+    struct ListHead head;
+    Module *ATOMIC *array;
+};
+
 GlobalContext *globalcontext_new(void)
 {
     GlobalContext *glb = malloc(sizeof(GlobalContext));
@@ -98,6 +106,8 @@ GlobalContext *globalcontext_new(void)
     defaultatoms_init(glb);
 
     glb->modules_by_index = NULL;
+    glb->modules_by_index_capacity = 0;
+    list_init(&glb->modules_by_index_retired);
     glb->loaded_modules_count = 0;
     glb->modules_table = valueshashtable_new();
     if (IS_NULL_PTR(glb->modules_table)) {
@@ -260,6 +270,13 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
     int module_index = glb->loaded_modules_count;
     for (int i = 0; i < module_index; i++) {
         module_destroy(glb->modules_by_index[i]);
+    }
+    free((void *) glb->modules_by_index);
+    MUTABLE_LIST_FOR_EACH (item, tmp, &glb->modules_by_index_retired) {
+        struct ModulesByIndexRetiredArray *retired_entry
+            = GET_LIST_ENTRY(item, struct ModulesByIndexRetiredArray, head);
+        free((void *) retired_entry->array);
+        free(retired_entry);
     }
 
     struct ListHead *open_avm_packs = synclist_nolock(&glb->avmpack_data);
@@ -680,22 +697,36 @@ int globalcontext_insert_module(GlobalContext *global, Module *module)
 
     int module_index = global->loaded_modules_count;
 
-    Module **new_modules_by_index = calloc(module_index + 1, sizeof(Module *));
-    if (IS_NULL_PTR(new_modules_by_index)) {
-        fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
-        SMP_RWLOCK_UNLOCK(global->modules_lock);
-        AVM_ABORT();
-    }
-    if (global->modules_by_index) {
-        for (int i = 0; i < module_index; i++) {
-            new_modules_by_index[i] = global->modules_by_index[i];
+    // modules_by_index is read locklessly (see globalcontext.h): grow it by
+    // publishing a fully-populated copy, and only then write the new entry.
+    // The replaced array is retired, not freed, as concurrent readers may
+    // still be using it.
+    if (module_index >= global->modules_by_index_capacity) {
+        int new_capacity = global->modules_by_index_capacity ? 2 * global->modules_by_index_capacity : 16;
+        Module *ATOMIC *new_modules_by_index = calloc(new_capacity, sizeof(Module * ATOMIC));
+        struct ModulesByIndexRetiredArray *retired_entry = NULL;
+        Module *ATOMIC *old_modules_by_index = global->modules_by_index;
+        if (old_modules_by_index) {
+            retired_entry = malloc(sizeof(struct ModulesByIndexRetiredArray));
         }
-        free(global->modules_by_index);
+        if (IS_NULL_PTR(new_modules_by_index) || (old_modules_by_index && IS_NULL_PTR(retired_entry))) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            SMP_RWLOCK_UNLOCK(global->modules_lock);
+            AVM_ABORT();
+        }
+        for (int i = 0; i < module_index; i++) {
+            new_modules_by_index[i] = old_modules_by_index[i];
+        }
+        global->modules_by_index = new_modules_by_index;
+        global->modules_by_index_capacity = new_capacity;
+        if (old_modules_by_index) {
+            retired_entry->array = old_modules_by_index;
+            list_append(&global->modules_by_index_retired, &retired_entry->head);
+        }
     }
 
     module->module_index = module_index;
 
-    global->modules_by_index = new_modules_by_index;
     global->modules_by_index[module_index] = module;
     global->loaded_modules_count++;
     SMP_RWLOCK_UNLOCK(global->modules_lock);
@@ -764,10 +795,11 @@ Module *globalcontext_get_module(GlobalContext *global, atom_index_t module_name
 
 Module *globalcontext_get_module_by_index(GlobalContext *global, int index)
 {
-    SMP_RWLOCK_RDLOCK(global->modules_lock);
-    Module *result = global->modules_by_index[index];
-    SMP_RWLOCK_UNLOCK(global->modules_lock);
-    return result;
+    // Lockless read: see the modules_by_index comment in globalcontext.h.
+    // Callers only pass indices of modules they already know about, and both
+    // the array pointer and its entries are atomic.
+    Module *ATOMIC *modules = global->modules_by_index;
+    return modules[index];
 }
 
 run_result_t globalcontext_run(GlobalContext *glb, Module *startup_module, FILE *out_f, int argc, char **argv)
