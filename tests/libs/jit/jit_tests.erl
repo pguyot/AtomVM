@@ -1179,3 +1179,53 @@ gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
         fun(_) -> false end
     ),
     ?assertEqual(UntypedCode, TypedCode).
+
+is_function2_typed_register_arity_test_() ->
+    %% OP_IS_FUNCTION2 with the arity in a typed integer register (e.g.
+    %% `f(F, N) when is_integer(N), N >= 0, is_function(F, N)`) makes jit.erl
+    %% emit an '(int)' '!=' condition with a *register* right-hand side
+    %% (the fun arity loaded from the boxed fun vs the arity register).
+    %% Every backend must accept that condition form; this is a regression
+    %% test for jit_aarch64 crashing with function_clause on it (hit by
+    %% beam_ssa_type.beam from the OTP compiler application).
+    case erlang:system_info(machine) of
+        "ATOM" ->
+            %% Compiling the reproducer needs the host toolchain
+            %% (compile:file, os:cmd); covered on BEAM only.
+            [];
+        "BEAM" ->
+            is_function2_typed_register_arity_tests()
+    end.
+
+is_function2_typed_register_arity_tests() ->
+    {setup,
+        fun() ->
+            Dir = string:trim(os:cmd("mktemp -d")),
+            Source =
+                "-module(isfun2_typed).\n"
+                "-export([check/2]).\n"
+                "check(F, N) when is_integer(N), N >= 0, is_function(F, N) -> yes;\n"
+                "check(_, _) -> no.\n",
+            SrcPath = filename:join(Dir, "isfun2_typed.erl"),
+            ok = file:write_file(SrcPath, Source),
+            {ok, isfun2_typed, BeamBin} = compile:file(SrcPath, [binary, return_errors]),
+            BeamPath = filename:join(Dir, "isfun2_typed.beam"),
+            ok = file:write_file(BeamPath, BeamBin),
+            {Dir, BeamPath}
+        end,
+        fun({Dir, _}) ->
+            os:cmd("rm -rf " ++ Dir)
+        end,
+        fun({Dir, BeamPath}) ->
+            [
+                {Target,
+                    ?_test(begin
+                        OutDir = filename:join(Dir, Target) ++ "/",
+                        ok = filelib:ensure_path(OutDir),
+                        ok = jit_precompile:compile(Target, OutDir, false, BeamPath)
+                    end)}
+             || Target <- [
+                    "x86_64", "aarch64", "armv6m", "arm32", "riscv32", "riscv64", "xtensa"
+                ]
+            ]
+        end}.
