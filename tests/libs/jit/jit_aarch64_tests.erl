@@ -1877,6 +1877,20 @@ memory_ensure_free_with_roots_test() ->
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
+%% After a call that returns (call_primitive_with_cp), code is reachable
+%% again: a later if_else_block merge must intersect both arms' register
+%% caches instead of taking one arm verbatim because the other is flagged
+%% unreachable. Regression test: gc_bif to a y_reg followed by a compare
+%% read back a stale cached register on the inline fast path.
+call_primitive_with_cp_resumes_reachable_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:call_primitive_with_cp(State0, 4, [ctx, jit_state]),
+    % element 9 of #state{} is the regs cache
+    RegsAfter = element(9, State1),
+    Other = jit_regs:set_contents(jit_regs:new(0, 0), r7, {y_reg, 0}),
+    Merged = jit_regs:merge(Other, RegsAfter, 16#FFFF),
+    ?assertEqual(#{}, jit_regs:get_all_contents(Merged)).
+
 call_ext_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:decrement_reductions_and_maybe_schedule_next(State0),
