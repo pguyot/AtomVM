@@ -1170,3 +1170,54 @@ typed_select_val_int_x86_64_test() ->
     ),
     ?assert(byte_size(TypedCode) =< byte_size(UntypedCode)),
     ok.
+
+%%-----------------------------------------------------------------------------
+%% Runtime small-integer fast path on unprovable ranges
+%%
+%% A gc_bif + whose typed argument has an UNBOUNDED t_integer range cannot be
+%% inlined by the compile-time range check, but must still use the runtime
+%% overflow-checked small-integer fast path — i.e. compile to exactly the same
+%% code as the untyped case — rather than falling back to the BIF call.
+%%
+%% Chunk: label 1 ; gc_bif2 fail=0 live=2 bif=0 <arg1> <int 2> x[1] ;
+%% int_call_end. <arg1> is x[0]: typed (16#57 16#03 16#10, type index 1) or
+%% untyped (16#03).
+%%-----------------------------------------------------------------------------
+gc_bif_add_unbounded_range_runtime_fastpath_test_() ->
+    [
+        ?_test(gc_bif_add_unbounded_range_runtime_fastpath(Backend))
+     || Backend <- [jit_x86_64, jit_aarch64]
+    ].
+
+gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
+    TypedChunk =
+        <<16:32, 0:32, 125:32, 1:32, 1:32,
+            %% label 1
+            1, 16#10,
+            %% gc_bif2 fail=0 live=2 bif=0, typed x[0] (type 1), int 2, x[1]
+            125, 16#05, 16#20, 16#00, 16#57, 16#03, 16#10, 16#21, 16#13,
+            %% int_call_end
+            3>>,
+    UntypedChunk =
+        <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, 125, 16#05, 16#20, 16#00, 16#03, 16#21, 16#13,
+            3>>,
+    ImportResolver = fun(0) -> {erlang, '+', 2} end,
+    TypedCode = jit_tests_common:compile_chunk(
+        Backend,
+        TypedChunk,
+        fun(_) -> undefined end,
+        fun(_) -> undefined end,
+        fun(1) -> {t_integer, {0, '+inf'}} end,
+        ImportResolver,
+        fun(_) -> false end
+    ),
+    UntypedCode = jit_tests_common:compile_chunk(
+        Backend,
+        UntypedChunk,
+        fun(_) -> undefined end,
+        fun(_) -> undefined end,
+        fun(_) -> any end,
+        ImportResolver,
+        fun(_) -> false end
+    ),
+    ?assertEqual(UntypedCode, TypedCode).

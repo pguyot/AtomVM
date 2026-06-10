@@ -399,6 +399,19 @@ move_imported_gcbif_to_native_register_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+%% A compile-time float constant is stored into fr[1] as its raw IEEE-754
+%% bits: load the bits, load the fr array base (ctx->fr), store.
+move_float_to_fp_reg_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:move_float_to_fp_reg(State0, 4.0, 1),
+    Stream = ?BACKEND:stream(State1),
+    Dump = <<
+        "   0:	d2e80207 	mov	x7, #0x4010000000000000\n"
+        "   4:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   8:	f9000507 	str	x7, [x8, #8]"
+    >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 unreachable_test_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
 
