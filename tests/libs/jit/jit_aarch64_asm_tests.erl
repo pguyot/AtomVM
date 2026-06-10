@@ -65,8 +65,21 @@ add_test_() ->
         ?_assertAsmEqual(
             <<16#8b030041:32/little>>, "add x1, x2, x3", jit_aarch64_asm:add(r1, r2, r3)
         ),
+        %% Wide immediates (4096..16#FFFFFF) use an lsl #12 instruction,
+        %% plus a low-12-bits instruction when needed
+        ?_assertAsmEqual(
+            <<16#914500e7:32/little>>,
+            "add x7, x7, #0x140, lsl #12",
+            jit_aarch64_asm:add(r7, r7, 16#140000)
+        ),
+        ?_assertAsmEqual(
+            <<16#91403c00:32/little, 16#913ffc00:32/little>>,
+            "add x0, x0, #0xf, lsl #12\n"
+            "add x0, x0, #0xfff",
+            jit_aarch64_asm:add(r0, r0, 16#FFFF)
+        ),
         %% Test add with invalid immediate
-        ?_assertError({unencodable_immediate, 16#FFFF}, jit_aarch64_asm:add(r0, r0, 16#FFFF)),
+        ?_assertError({unencodable_immediate, 16#1000000}, jit_aarch64_asm:add(r0, r0, 16#1000000)),
 
         %% Test cases for additional registers (r11, r12, r14, r22-r30)
         ?_assertAsmEqual(
@@ -125,7 +138,21 @@ sub_test_() ->
         ),
         ?_assertAsmEqual(
             <<16#cb030041:32/little>>, "sub x1, x2, x3", jit_aarch64_asm:sub(r1, r2, r3)
-        )
+        ),
+        %% Wide immediates (4096..16#FFFFFF) use an lsl #12 instruction,
+        %% plus a low-12-bits instruction when needed
+        ?_assertAsmEqual(
+            <<16#d14500e7:32/little>>,
+            "sub x7, x7, #0x140, lsl #12",
+            jit_aarch64_asm:sub(r7, r7, 16#140000)
+        ),
+        ?_assertAsmEqual(
+            <<16#d1455508:32/little, 16#d12f5108:32/little>>,
+            "sub x8, x8, #0x155, lsl #12\n"
+            "sub x8, x8, #0xbd4",
+            jit_aarch64_asm:sub(r8, r8, 16#155BD4)
+        ),
+        ?_assertError({unencodable_immediate, 16#1000000}, jit_aarch64_asm:sub(r0, r0, 16#1000000))
     ].
 
 smulh_test_() ->
