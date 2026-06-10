@@ -328,7 +328,7 @@ find(Key, Map) ->
 filter(Pred, Map) when is_function(Pred, 2) andalso is_map(Map) ->
     iterate_filter(Pred, maps:next(maps:iterator(Map)), ?MODULE:new());
 filter(Pred, [Pos | Map] = Iterator) when
-    is_function(Pred, 2) andalso is_integer(Pos) andalso is_map(Map)
+    is_function(Pred, 2) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
     iterate_filter(Pred, maps:next(Iterator), ?MODULE:new());
 filter(_Pred, Map) when not is_map(Map) ->
@@ -359,7 +359,7 @@ filter(_Pred, _Map) ->
 fold(Fun, Init, Map) when is_function(Fun, 3) andalso is_map(Map) ->
     iterate_fold(Fun, maps:next(maps:iterator(Map)), Init);
 fold(Fun, Init, [Pos | Map] = Iterator) when
-    is_function(Fun, 3) andalso is_integer(Pos) andalso is_map(Map)
+    is_function(Fun, 3) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
     iterate_fold(Fun, maps:next(Iterator), Init);
 fold(_Fun, _Init, Map) when not is_map(Map) ->
@@ -386,7 +386,7 @@ fold(_Fun, _Init, _Map) ->
 foreach(Fun, Map) when is_function(Fun, 2) andalso is_map(Map) ->
     iterate_foreach(Fun, maps:next(maps:iterator(Map)));
 foreach(Fun, [Pos | Map] = Iterator) when
-    is_function(Fun, 2) andalso is_integer(Pos) andalso is_map(Map)
+    is_function(Fun, 2) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
     iterate_foreach(Fun, maps:next(Iterator));
 foreach(_Fun, Map) when not is_map(Map) ->
@@ -420,7 +420,7 @@ from_keys(List, _Value) when is_list(List) ->
 map(Fun, Map) when is_function(Fun, 2) andalso is_map(Map) ->
     iterate_map(Fun, maps:next(maps:iterator(Map)), ?MODULE:new());
 map(Fun, [Pos | Map] = Iterator) when
-    is_function(Fun, 2) andalso is_integer(Pos) andalso is_map(Map)
+    is_function(Fun, 2) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
     iterate_map(Fun, maps:next(Iterator), ?MODULE:new());
 map(_Fun, Map) when not is_map(Map) ->
@@ -492,7 +492,9 @@ remove(Key, Map) when is_map(Map) ->
         _ ->
             Map
     end;
-remove(Key, [Pos | Map] = Iterator) when is_integer(Pos) andalso is_map(Map) ->
+remove(Key, [Pos | Map] = Iterator) when
+    (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
+->
     iterate_remove(Key, maps:next(Iterator), ?MODULE:new());
 remove(_Key, Map) when not is_map(Map) ->
     error({badmap, Map}).
