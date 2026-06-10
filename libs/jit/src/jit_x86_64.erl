@@ -3193,7 +3193,9 @@ rewrite_cp_offset(
     NewOffset = StreamModule:offset(Stream0) - CodeOffset,
     % Encode ReturnAddrOffset << 2
     Stream1 = StreamModule:replace(Stream0, RewriteOffset, <<(NewOffset bsl 2):32/little>>),
-    State0#state{stream = Stream1}.
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
 set_bs(#state{stream_module = StreamModule, stream = Stream0} = State0, TermReg) ->
     I1 = jit_x86_64_asm:movq(TermReg, ?BS),

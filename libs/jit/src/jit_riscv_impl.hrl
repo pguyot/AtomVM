@@ -3268,7 +3268,9 @@ rewrite_cp_offset(
                 NewMoveInstr
         end,
     Stream1 = StreamModule:replace(Stream0, RewriteOffset, PaddedInstr),
-    State0#state{stream = Stream1}.
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =

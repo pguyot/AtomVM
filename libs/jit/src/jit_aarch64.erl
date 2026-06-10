@@ -3219,7 +3219,9 @@ rewrite_cp_offset(
     NewMoveInstr = jit_aarch64_asm:mov(?IP0_REG, NewOffset bsl 2),
     ?ASSERT(byte_size(NewMoveInstr) =< _RewriteSize),
     Stream1 = StreamModule:replace(Stream0, RewriteOffset, NewMoveInstr),
-    State0#state{stream = Stream1}.
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Set the binary state (BS) register to point to a term and reset the
