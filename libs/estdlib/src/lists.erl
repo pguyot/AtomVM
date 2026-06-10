@@ -58,6 +58,19 @@
     search/2,
     filter/2,
     partition/2,
+    splitwith/2,
+    takewhile/2,
+    unzip/1,
+    enumerate/1,
+    enumerate/2,
+    sum/1,
+    uniq/1,
+    uniq/2,
+    umerge/1,
+    umerge/2,
+    concat/1,
+    prefix/2,
+    suffix/2,
     filtermap/2,
     join/2,
     seq/2, seq/3,
@@ -1034,3 +1047,204 @@ max_r([_ | T], Acc) ->
     max_r(T, Acc);
 max_r([], Acc) ->
     Acc.
+
+%%-----------------------------------------------------------------------------
+%% @param   Pred the predicate to apply to elements in List
+%% @param   List list
+%% @returns {Prefix, Rest} where Prefix is the longest prefix of List whose
+%%          elements all satisfy Pred and Rest is the remainder
+%% @doc     Split a list at the first element not satisfying a predicate.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec splitwith(Pred :: fun((Elem :: term()) -> boolean()), List :: [term()]) ->
+    {[term()], [term()]}.
+splitwith(Pred, List) when is_function(Pred, 1) ->
+    splitwith0(Pred, List, []).
+
+%% @private
+splitwith0(_Pred, [], Acc) ->
+    {lists:reverse(Acc), []};
+splitwith0(Pred, [H | T] = Rest, Acc) ->
+    case Pred(H) of
+        true -> splitwith0(Pred, T, [H | Acc]);
+        false -> {lists:reverse(Acc), Rest}
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Pred the predicate to apply to elements in List
+%% @param   List list
+%% @returns the longest prefix of List whose elements all satisfy Pred
+%% @doc     Take elements from a list while a predicate holds.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec takewhile(Pred :: fun((Elem :: term()) -> boolean()), List :: [term()]) -> [term()].
+takewhile(_Pred, []) ->
+    [];
+takewhile(Pred, [H | T]) ->
+    case Pred(H) of
+        true -> [H | takewhile(Pred, T)];
+        false -> []
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   List list of 2-tuples
+%% @returns {FirstElements, SecondElements}
+%% @doc     Unzip a list of 2-tuples into two lists.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec unzip(List :: [{term(), term()}]) -> {[term()], [term()]}.
+unzip(List) ->
+    unzip0(List, [], []).
+
+%% @private
+unzip0([], AccA, AccB) ->
+    {lists:reverse(AccA), lists:reverse(AccB)};
+unzip0([{A, B} | T], AccA, AccB) ->
+    unzip0(T, [A | AccA], [B | AccB]).
+
+%%-----------------------------------------------------------------------------
+%% @param   List list
+%% @returns the elements of List paired with their 1-based index
+%% @doc     Equivalent to `enumerate(1, List)'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec enumerate(List :: [term()]) -> [{integer(), term()}].
+enumerate(List) ->
+    enumerate(1, List).
+
+%%-----------------------------------------------------------------------------
+%% @param   Index index of the first element
+%% @param   List list
+%% @returns the elements of List paired with consecutive indices starting at
+%%          Index
+%% @doc     Pair every element of a list with its index.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec enumerate(Index :: integer(), List :: [term()]) -> [{integer(), term()}].
+enumerate(_Index, []) ->
+    [];
+enumerate(Index, [H | T]) ->
+    [{Index, H} | enumerate(Index + 1, T)].
+
+%%-----------------------------------------------------------------------------
+%% @param   List list of numbers
+%% @returns the sum of the elements of List
+%% @doc     Sum a list of numbers.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec sum(List :: [number()]) -> number().
+sum(List) ->
+    sum0(List, 0).
+
+%% @private
+sum0([], Acc) -> Acc;
+sum0([H | T], Acc) -> sum0(T, Acc + H).
+
+%%-----------------------------------------------------------------------------
+%% @param   List list
+%% @returns List with consecutive duplicates of previously seen elements
+%%          removed, keeping the first occurrence of each element
+%% @doc     Remove duplicates from a list, preserving order.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec uniq(List :: [term()]) -> [term()].
+uniq(List) ->
+    uniq(fun(X) -> X end, List).
+
+%%-----------------------------------------------------------------------------
+%% @param   F a function computing the key to compare elements by
+%% @param   List list
+%% @returns List with elements having a previously seen key removed, keeping
+%%          the first occurrence for each key
+%% @doc     Remove duplicates from a list by a key function, preserving order.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec uniq(F :: fun((Elem :: term()) -> term()), List :: [term()]) -> [term()].
+uniq(F, List) when is_function(F, 1) ->
+    uniq0(F, List, #{}).
+
+%% @private
+uniq0(_F, [], _Seen) ->
+    [];
+uniq0(F, [H | T], Seen) ->
+    Key = F(H),
+    case Seen of
+        #{Key := _} -> uniq0(F, T, Seen);
+        _ -> [H | uniq0(F, T, Seen#{Key => true})]
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Lists a list of sorted lists
+%% @returns the sorted union of the lists, without duplicates
+%% @doc     Merge sorted lists, removing duplicates.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec umerge(Lists :: [[term()]]) -> [term()].
+umerge([]) ->
+    [];
+umerge([L]) ->
+    L;
+umerge([A, B | Rest]) ->
+    umerge([umerge(A, B) | Rest]).
+
+%%-----------------------------------------------------------------------------
+%% @param   A a sorted list
+%% @param   B a sorted list
+%% @returns the sorted union of A and B, without duplicates
+%% @doc     Merge two sorted lists, removing duplicates.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec umerge(A :: [term()], B :: [term()]) -> [term()].
+umerge([], B) ->
+    B;
+umerge(A, []) ->
+    A;
+umerge([HA | TA] = A, [HB | TB] = B) ->
+    if
+        HA < HB -> [HA | umerge(TA, B)];
+        HA > HB -> [HB | umerge(A, TB)];
+        true -> [HA | umerge(TA, TB)]
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Things a list of atoms, numbers and strings
+%% @returns the concatenation of the textual representation of the elements
+%% @doc     Concatenate the textual representations of the elements.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec concat(Things :: [term()]) -> string().
+concat(Things) ->
+    lists:flatten([thing_to_list(T) || T <- Things]).
+
+%% @private
+thing_to_list(X) when is_list(X) -> X;
+thing_to_list(X) when is_atom(X) -> atom_to_list(X);
+thing_to_list(X) when is_integer(X) -> integer_to_list(X);
+thing_to_list(X) when is_float(X) -> float_to_list(X).
+
+%%-----------------------------------------------------------------------------
+%% @param   Prefix a list
+%% @param   List a list
+%% @returns true if Prefix is a prefix of List
+%% @doc     Check whether a list is a prefix of another.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec prefix(Prefix :: [term()], List :: [term()]) -> boolean().
+prefix([], _List) ->
+    true;
+prefix([H | TP], [H | TL]) ->
+    prefix(TP, TL);
+prefix(_, _) ->
+    false.
+
+%%-----------------------------------------------------------------------------
+%% @param   Suffix a list
+%% @param   List a list
+%% @returns true if Suffix is a suffix of List
+%% @doc     Check whether a list is a suffix of another.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec suffix(Suffix :: [term()], List :: [term()]) -> boolean().
+suffix(Suffix, List) ->
+    Delta = length(List) - length(Suffix),
+    Delta >= 0 andalso lists:nthtail(Delta, List) =:= Suffix.
