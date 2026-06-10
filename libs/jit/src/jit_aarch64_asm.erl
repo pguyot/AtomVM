@@ -1029,7 +1029,13 @@ cmp_w(Rn, Imm) when is_atom(Rn), is_integer(Imm), Imm < 0, Imm >= -4095 ->
     %% For negative immediates, use ADD form: CMP Wn, #(-imm) becomes ADDS WZR, Wn, #(-imm)
     %% AArch64 ADDS (32-bit immediate) encoding: 0011000100iiiiiiiiiiiinnnnn11111
     PosImm = -Imm,
-    <<(16#3100001F bor ((PosImm band 16#FFF) bsl 10) bor (RnNum bsl 5)):32/little>>.
+    <<(16#3100001F bor ((PosImm band 16#FFF) bsl 10) bor (RnNum bsl 5)):32/little>>;
+cmp_w(Rn, Rm) when is_atom(Rn), is_atom(Rm) ->
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    %% AArch64 CMP (32-bit shifted register) encoding: CMP Wn, Wm
+    %% This is SUBS WZR, Wn, Wm: 01101011000mmmmm000000nnnnn11111
+    <<(16#6B00001F bor (RmNum bsl 16) bor (RnNum bsl 5)):32/little>>.
 
 %% Emit an AND instruction (bitwise AND)
 -spec and_(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register() | integer()) ->
