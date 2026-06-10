@@ -1313,21 +1313,22 @@ call_only_or_schedule_next_and_label_relocation_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:	1400000d 	b	0x34\n"
+            "   0:	1400000e 	b	0x38\n"
             "   4:	14000002 	b	0xc\n"
-            "   8:	14000009 	b	0x2c\n"
+            "   8:	1400000a 	b	0x30\n"
             "   c:	b9401027 	ldr	w7, [x1, #16]\n"
             "  10:	f10004e7 	subs	x7, x7, #0x1\n"
             "  14:	b9001027 	str	w7, [x1, #16]\n"
-            "  18:	540000a1 	b.ne	0x2c  // b.any\n"
-            "  1c:	10000087 	adr	x7, 0x2c\n"
-            "  20:	f9000427 	str	x7, [x1, #8]\n"
-            "  24:	f9400847 	ldr	x7, [x2, #16]\n"
-            "  28:	d61f00e0 	br	x7\n"
-            "  2c:	f9400047 	ldr	x7, [x2]\n"
-            "  30:	d61f00e0 	br	x7\n"
-            "  34:	f9400447 	ldr	x7, [x2, #8]\n"
-            "  38:	d61f00e0 	br	x7"
+            "  18:	540000c1 	b.ne	0x30  // b.any\n"
+            "  1c:	100000a7 	adr	x7, 0x30\n"
+            "  20:	914000e7 	add	x7, x7, #0x0, lsl #12\n"
+            "  24:	f9000427 	str	x7, [x1, #8]\n"
+            "  28:	f9400847 	ldr	x7, [x2, #16]\n"
+            "  2c:	d61f00e0 	br	x7\n"
+            "  30:	f9400047 	ldr	x7, [x2]\n"
+            "  34:	d61f00e0 	br	x7\n"
+            "  38:	f9400447 	ldr	x7, [x2, #8]\n"
+            "  3c:	d61f00e0 	br	x7"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1611,36 +1612,37 @@ wait_timeout_test() ->
 
     Stream = ?BACKEND:stream(State10),
     Dump = <<
-        "   0:	100000e7 	adr	x7, 0x1c\n"
-        "   4:	f9000427 	str	x7, [x1, #8]\n"
-        "   8:	d2827107 	mov	x7, #0x1388                	// #5000\n"
-        "   c:	f9407848 	ldr	x8, [x2, #240]\n"
-        "  10:	aa0703e2 	mov	x2, x7\n"
-        "  14:	d2800543 	mov	x3, #0x2a                  	// #42\n"
-        "  18:	d61f0100 	br	x8\n"
-        "  1c:	f9405450 	ldr	x16, [x2, #168]\n"
-        "  20:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
-        "  24:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
-        "  28:	d63f0200 	blr	x16\n"
-        "  2c:	aa0003e7 	mov	x7, x0\n"
-        "  30:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
-        "  34:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
-        "  38:	eb0000ff 	cmp	x7, x0\n"
-        "  3c:	54000060 	b.eq	0x48  // b.none\n"
-        "  40:	aa0703e0 	mov	x0, x7\n"
-        "  44:	d65f03c0 	ret\n"
-        "  48:	f9408450 	ldr	x16, [x2, #264]\n"
-        "  4c:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
-        "  50:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
-        "  54:	d2800041 	mov	x1, #0x2                   	// #2\n"
-        "  58:	d63f0200 	blr	x16\n"
-        "  5c:	aa0003e7 	mov	x7, x0\n"
-        "  60:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
-        "  64:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
-        "  68:	b5000087 	cbnz	x7, 0x78\n"
-        "  6c:	f9407c47 	ldr	x7, [x2, #248]\n"
-        "  70:	d2800542 	mov	x2, #0x2a                  	// #42\n"
-        "  74:	d61f00e0 	br	x7"
+        "   0:	10000107 	adr	x7, 0x20\n"
+        "   4:	914000e7 	add	x7, x7, #0x0, lsl #12\n"
+        "   8:	f9000427 	str	x7, [x1, #8]\n"
+        "   c:	d2827107 	mov	x7, #0x1388                	// #5000\n"
+        "  10:	f9407848 	ldr	x8, [x2, #240]\n"
+        "  14:	aa0703e2 	mov	x2, x7\n"
+        "  18:	d2800543 	mov	x3, #0x2a                  	// #42\n"
+        "  1c:	d61f0100 	br	x8\n"
+        "  20:	f9405450 	ldr	x16, [x2, #168]\n"
+        "  24:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
+        "  28:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
+        "  2c:	d63f0200 	blr	x16\n"
+        "  30:	aa0003e7 	mov	x7, x0\n"
+        "  34:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
+        "  38:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
+        "  3c:	eb0000ff 	cmp	x7, x0\n"
+        "  40:	54000060 	b.eq	0x4c  // b.none\n"
+        "  44:	aa0703e0 	mov	x0, x7\n"
+        "  48:	d65f03c0 	ret\n"
+        "  4c:	f9408450 	ldr	x16, [x2, #264]\n"
+        "  50:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
+        "  54:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
+        "  58:	d2800041 	mov	x1, #0x2                   	// #2\n"
+        "  5c:	d63f0200 	blr	x16\n"
+        "  60:	aa0003e7 	mov	x7, x0\n"
+        "  64:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
+        "  68:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
+        "  6c:	b5000087 	cbnz	x7, 0x7c\n"
+        "  70:	f9407c47 	ldr	x7, [x2, #248]\n"
+        "  74:	d2800542 	mov	x2, #0x2a                  	// #42\n"
+        "  78:	d61f00e0 	br	x7"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1665,9 +1667,10 @@ wait_test() ->
         "  10:	14000001 	b	0x14\n"
         "  14:	14000001 	b	0x18\n"
         "  18:	10000747 	adr	x7, 0x100\n"
-        "  1c:	f9000427 	str	x7, [x1, #8]\n"
-        "  20:	f9407447 	ldr	x7, [x2, #232]\n"
-        "  24:	d61f00e0 	br	x7"
+        "  1c:	914000e7 	add	x7, x7, #0x0, lsl #12\n"
+        "  20:	f9000427 	str	x7, [x1, #8]\n"
+        "  24:	f9407447 	ldr	x7, [x2, #232]\n"
+        "  28:	d61f00e0 	br	x7"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1697,6 +1700,94 @@ wait_known_test() ->
         "  24:	d61f00e0 	br	x7"
     >>,
     ?assertStream(aarch64, Dump, Stream).
+
+%% set_continuation_to_label with a known label beyond ADR's ±1MB range
+wait_known_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 5),
+    State2 = ?BACKEND:add_label(State1, 1),
+    Label = 2,
+    State3 = ?BACKEND:add_label(State2, Label, 16#200000),
+    State4 = ?BACKEND:set_continuation_to_label(State3, Label),
+    Stream = ?BACKEND:stream(State4),
+    % Rel = 16#200000 - 16#18 = 16#1FFFE8:
+    % adr x7, 0xfe8; add x7, x7, #0x1ff, lsl #12; str x7, [x1, #8]
+    ?assertEqual(
+        <<
+            16#10007f47:32/little,
+            16#9147fce7:32/little,
+            16#f9000427:32/little
+        >>,
+        binary:part(Stream, 16#18, 12)
+    ).
+
+%% set_continuation_to_label placeholder patched to a label beyond ADR range
+wait_forward_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 5),
+    State2 = ?BACKEND:add_label(State1, 1),
+    Label = 2,
+    State3 = ?BACKEND:set_continuation_to_label(State2, Label),
+    State4 = ?BACKEND:add_label(State3, Label, 16#200000),
+    State5 = ?BACKEND:update_branches(State4),
+    Stream = ?BACKEND:stream(State5),
+    % Same code as wait_known_far_test, but patched in place
+    ?assertEqual(
+        <<
+            16#10007f47:32/little,
+            16#9147fce7:32/little,
+            16#f9000427:32/little
+        >>,
+        binary:part(Stream, 16#18, 12)
+    ).
+
+%% set_continuation_to_offset resolved beyond ADR range (the unicode_util case)
+set_continuation_to_offset_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, OffsetRef} = ?BACKEND:set_continuation_to_offset(State0),
+    % Grow the stream past ADR's ±1MB range before resolving the continuation
+    FillerSize = 16#1A0000,
+    Filler = binary:copy(<<0, 0, 0, 0>>, FillerSize div 4),
+    Stream1 = jit_stream_binary:append(?BACKEND:stream(State1), Filler),
+    % element 3 of #state{} is the stream
+    State2 = setelement(3, State1, Stream1),
+    State3 = ?BACKEND:add_label(State2, OffsetRef),
+    State4 = ?BACKEND:update_branches(State3),
+    Stream = ?BACKEND:stream(State4),
+    % Continuation is at 12 + 16#1A0000 = 16#1A000C:
+    % adr x7, 0xc; add x7, x7, #0x1a0, lsl #12; str x7, [x1, #8]
+    ?assertEqual(
+        <<
+            16#10000067:32/little,
+            16#914680e7:32/little,
+            16#f9000427:32/little
+        >>,
+        binary:part(Stream, 0, 12)
+    ).
+
+%% set_continuation_to_label with a known label far backwards
+wait_known_far_backwards_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 5),
+    Label = 2,
+    State2 = ?BACKEND:add_label(State1, Label, 4),
+    FillerSize = 16#200000,
+    Filler = binary:copy(<<0, 0, 0, 0>>, FillerSize div 4),
+    Stream1 = jit_stream_binary:append(?BACKEND:stream(State2), Filler),
+    % element 3 of #state{} is the stream
+    State3 = setelement(3, State2, Stream1),
+    State4 = ?BACKEND:set_continuation_to_label(State3, Label),
+    Stream = ?BACKEND:stream(State4),
+    % Rel = 4 - 16#200018 = -16#200014 = -16#200 * 4096 - 16#14:
+    % adr x7, -0x14; sub x7, x7, #0x200, lsl #12; str x7, [x1, #8]
+    ?assertEqual(
+        <<
+            16#10ffff67:32/little,
+            16#d14800e7:32/little,
+            16#f9000427:32/little
+        >>,
+        binary:part(Stream, 16#18 + FillerSize, 12)
+    ).
 
 return_labels_and_lines_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
