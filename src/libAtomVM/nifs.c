@@ -264,6 +264,7 @@ static term nif_atomvm_get_start_beam(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_read_priv(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_get_creation(Context *ctx, int argc, term argv[]);
 static term nif_console_print(Context *ctx, int argc, term argv[]);
+static term nif_console_print_err(Context *ctx, int argc, term argv[]);
 static term nif_base64_encode(Context *ctx, int argc, term argv[]);
 static term nif_base64_decode(Context *ctx, int argc, term argv[]);
 static term nif_base64_encode_to_string(Context *ctx, int argc, term argv[]);
@@ -863,6 +864,10 @@ static const struct Nif atomvm_get_creation_nif = {
 static const struct Nif console_print_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_console_print
+};
+static const struct Nif console_print_err_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_console_print_err
 };
 static const struct Nif base64_encode_nif = {
     .base.type = NIFFunctionType,
@@ -5892,16 +5897,14 @@ static term nif_atomvm_get_creation(Context *ctx, int argc, term argv[])
     return term_make_maybe_boxed_int64(ctx->global->creation, &ctx->heap);
 }
 
-static term nif_console_print(Context *ctx, int argc, term argv[])
+static term console_print_to(FILE *stream, Context *ctx, term argv[])
 {
-    UNUSED(argc);
-
     term t = argv[0];
     if (term_is_binary(t)) {
         const char *data = term_binary_data(t);
         unsigned long n = term_binary_size(t);
-        fprintf(stdout, "%.*s", (int) n, data);
-        fflush(stdout);
+        fprintf(stream, "%.*s", (int) n, data);
+        fflush(stream);
     } else {
         size_t size;
         switch (interop_iolist_size(t, &size)) {
@@ -5926,11 +5929,23 @@ static term nif_console_print(Context *ctx, int argc, term argv[])
                 free(buf);
                 RAISE_ERROR(BADARG_ATOM);
         }
-        fprintf(stdout, "%.*s", (int) size, buf);
-        fflush(stdout);
+        fprintf(stream, "%.*s", (int) size, buf);
+        fflush(stream);
         free(buf);
     }
     return OK_ATOM;
+}
+
+static term nif_console_print(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return console_print_to(stdout, ctx, argv);
+}
+
+static term nif_console_print_err(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return console_print_to(stderr, ctx, argv);
 }
 
 // clang-format off

@@ -282,7 +282,7 @@ put_chars(standard_io, Chars) ->
             execute_request(Leader, {put_chars, unicode, Chars})
     end;
 put_chars(standard_error, Chars) ->
-    put_chars(standard_io, Chars).
+    console:print_err(encode_unicode(Chars)).
 
 %% @private
 %% console:print/1 takes iodata, so a list containing codepoints above 255
