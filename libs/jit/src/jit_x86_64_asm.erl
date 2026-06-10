@@ -611,7 +611,18 @@ cmpl(Imm, Reg) when ?IS_SINT8_T(Imm), is_atom(Reg) ->
         0 -> <<16#83, 3:2, 7:3, MODRM_RM:3, Imm>>;
         % REX.B needed for r8..r11
         1 -> <<16#41, 16#83, 3:2, 7:3, MODRM_RM:3, Imm>>
-    end.
+    end;
+cmpl(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+    % CMP r/m32, r32: 0x39 /r (32-bit form of cmpq/2: a REX prefix without
+    % REX.W, emitted only when r8..r15 are involved)
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
+    Prefix =
+        case {REX_R, REX_B} of
+            {0, 0} -> <<>>;
+            _ -> <<?X86_64_REX(0, REX_R, 0, REX_B)>>
+        end,
+    <<Prefix/binary, 16#39, 3:2, MODRM_REG:3, MODRM_RM:3>>.
 
 cmpq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
