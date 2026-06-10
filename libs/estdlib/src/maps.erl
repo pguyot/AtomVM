@@ -37,6 +37,11 @@
 
 -export([
     get/2, get/3,
+    without/2,
+    take/2,
+    update_with/3,
+    update_with/4,
+    groups_from_list/2,
     is_key/2,
     put/3,
     iterator/1,
@@ -602,3 +607,82 @@ iterate_from_list([{Key, Value} | T], Accum) ->
     iterate_from_list(T, Accum#{Key => Value});
 iterate_from_list(_List, _Accum) ->
     error(badarg).
+
+%%-----------------------------------------------------------------------------
+%% @param   Keys keys to remove
+%% @param   Map the map
+%% @returns Map without the entries whose keys are in Keys
+%% @doc     Remove a list of keys from a map.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec without(Keys :: [term()], Map :: map()) -> map().
+without(Keys, Map) when is_list(Keys), is_map(Map) ->
+    lists:foldl(fun maps:remove/2, Map, Keys).
+
+%%-----------------------------------------------------------------------------
+%% @param   Key the key to take
+%% @param   Map the map
+%% @returns `{Value, NewMap}' where NewMap is Map without Key, or `error'
+%% @doc     Remove a key from a map, returning its value.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec take(Key :: term(), Map :: map()) -> {term(), map()} | error.
+take(Key, Map) when is_map(Map) ->
+    case Map of
+        #{Key := Value} -> {Value, maps:remove(Key, Map)};
+        _ -> error
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Key the key to update
+%% @param   Fun the function to apply to the current value
+%% @returns the updated map
+%% @doc     Update a value in a map by applying a function to it. Fails with
+%%          `{badkey, Key}' if the key is not present.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec update_with(Key :: term(), Fun :: fun((term()) -> term()), Map :: map()) -> map().
+update_with(Key, Fun, Map) when is_function(Fun, 1), is_map(Map) ->
+    case Map of
+        #{Key := Value} -> Map#{Key := Fun(Value)};
+        _ -> error({badkey, Key})
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Key the key to update
+%% @param   Fun the function to apply to the current value
+%% @param   Init initial value if the key is not present
+%% @returns the updated map
+%% @doc     Update a value in a map by applying a function to it, inserting
+%%          Init if the key is not present.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec update_with(Key :: term(), Fun :: fun((term()) -> term()), Init :: term(), Map :: map()) ->
+    map().
+update_with(Key, Fun, Init, Map) when is_function(Fun, 1), is_map(Map) ->
+    case Map of
+        #{Key := Value} -> Map#{Key := Fun(Value)};
+        _ -> Map#{Key => Init}
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Fun the function computing the group of an element
+%% @param   List the list to group
+%% @returns a map from group key to the list of elements in that group, in
+%%          their original order
+%% @doc     Partition a list into groups.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec groups_from_list(Fun :: fun((term()) -> term()), List :: [term()]) -> map().
+groups_from_list(Fun, List) when is_function(Fun, 1), is_list(List) ->
+    lists:foldr(
+        fun(Elem, Acc) ->
+            Group = Fun(Elem),
+            case Acc of
+                #{Group := Elems} -> Acc#{Group := [Elem | Elems]};
+                _ -> Acc#{Group => [Elem]}
+            end
+        end,
+        #{},
+        List
+    ).
