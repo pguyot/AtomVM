@@ -31,6 +31,7 @@ test() ->
     ok = test_latin1_char_list(),
     ok = test_write(),
     ok = test_write_atom(),
+    ok = test_write_atom_as_latin1(),
     ok = test_write_string(),
     ok = test_chars_length(),
     ok = test_printable_list(),
@@ -297,6 +298,13 @@ test_write_atom() ->
     ?ASSERT_MATCH(?FLT(io_lib:format("~w", [''])), "''"),
     ?ASSERT_MATCH(?FLT(io_lib:format("~p", [['']])), "['']"),
     ?ASSERT_MATCH(?FLT(io_lib:format("~p", [[a, '']])), "[a,'']"),
+    ok.
+
+test_write_atom_as_latin1() ->
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(foo)), "foo"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1('Has Space')), "'Has Space'"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1('if')), "'if'"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(undefined)), "undefined"),
     ok.
 
 test_write_string() ->
