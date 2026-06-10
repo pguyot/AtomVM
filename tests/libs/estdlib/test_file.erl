@@ -74,6 +74,15 @@ test_open_read_close() ->
     ok = file:write_file(Path, <<"0123456789">>),
     {ok, Fd} = file:open(Path, [read]),
     true = is_pid(Fd),
+    Opts = io:getopts(Fd),
+    {binary, false} = lists:keyfind(binary, 1, Opts),
+    {encoding, _} = lists:keyfind(encoding, 1, Opts),
+    %% temporarily switch to binary mode and back, as epp's encoding
+    %% detection does
+    ok = io:setopts(Fd, [binary, {encoding, latin1}]),
+    {ok, <<"01">>} = file:read(Fd, 2),
+    {ok, 0} = file:position(Fd, 0),
+    ok = io:setopts(Fd, [{binary, false}, {encoding, unicode}]),
     {ok, "0123"} = file:read(Fd, 4),
     {ok, "456789"} = file:read(Fd, 100),
     eof = file:read(Fd, 1),
