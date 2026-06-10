@@ -35,6 +35,7 @@
     join/1,
     join/2,
     absname/1,
+    absname/2,
     pathtype/1,
     rootname/1,
     rootname/2,
@@ -334,4 +335,20 @@ absname(Name) ->
         relative ->
             {ok, Cwd} = file:get_cwd(),
             join(Cwd, Name)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Name a file name
+%% @param   Dir the directory to resolve relative names against
+%% @returns an absolute path for Name, relative to Dir
+%% @doc     Make a path absolute, relative to a given directory.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec absname(Name :: string(), Dir :: string()) -> string().
+absname(Name, Dir) ->
+    case pathtype(Name) of
+        absolute ->
+            Name;
+        relative ->
+            join(Dir, Name)
     end.
