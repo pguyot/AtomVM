@@ -39,6 +39,7 @@
     put_chars/1,
     put_chars/2,
     scan_erl_exprs/4,
+    scan_erl_form/4,
     columns/0,
     columns/1,
     getopts/0,
@@ -205,6 +206,26 @@ fwrite(IODevice, Format, Args) when
     | eof
     | {error, any()}.
 scan_erl_exprs(IODevice, Prompt, StartLocation, Options) when is_pid(IODevice) ->
+    execute_request(
+        IODevice, {get_until, unicode, Prompt, erl_scan, tokens, [StartLocation, Options]}
+    ).
+
+%%-----------------------------------------------------------------------------
+%% @param   IODevice device to read from
+%% @param   Prompt prompt to print
+%% @param   StartLocation start location for reading
+%% @param   Options options for tokenizing
+%% @returns the tokens of a single form, or an eof or error tuple
+%% @doc     Reads a single Erlang form (a dot-terminated sequence of tokens)
+%%          from IODevice. Used by epp to read source files.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec scan_erl_form(IODevice :: device(), Prompt :: atom() | unicode:chardata(), any(), any()) ->
+    {ok, Tokens :: any(), EndLocation :: any()}
+    | {eof, EndLocation :: any()}
+    | eof
+    | {error, any()}.
+scan_erl_form(IODevice, Prompt, StartLocation, Options) when is_pid(IODevice) ->
     execute_request(
         IODevice, {get_until, unicode, Prompt, erl_scan, tokens, [StartLocation, Options]}
     ).
