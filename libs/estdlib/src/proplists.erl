@@ -31,6 +31,10 @@
 -export([
     property/1, property/2,
     compact/1,
+    substitute_aliases/2,
+    substitute_negations/2,
+    expand/2,
+    normalize/2,
     unfold/1,
     delete/2,
     get_bool/2,
@@ -384,3 +388,190 @@ unfold([]) ->
 
 compact(ListIn) ->
     [property(P) || P <- ListIn].
+
+%%-----------------------------------------------------------------------------
+%% @param   Aliases a list of `{Key, Key1}' renames
+%% @param   ListIn the list to transform
+%% @returns the list with keys substituted
+%% @doc     Substitutes keys of properties. For each entry whose key is `Key',
+%%          the key is replaced with `Key1'. The resulting property is
+%%          minimized (see `property/1').
+%%          See also `normalize/2', `substitute_negations/2'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec substitute_aliases(Aliases, ListIn) -> ListOut when
+    Aliases :: [{Key :: term(), Key1 :: term()}],
+    ListIn :: [term()],
+    ListOut :: [term()].
+
+substitute_aliases(As, Props) ->
+    [substitute_aliases_1(As, P) || P <- Props].
+
+substitute_aliases_1([{Key, Key1} | As], P) ->
+    if
+        is_atom(P), P =:= Key ->
+            property(Key1, true);
+        tuple_size(P) >= 1, element(1, P) =:= Key ->
+            property(setelement(1, P, Key1));
+        true ->
+            substitute_aliases_1(As, P)
+    end;
+substitute_aliases_1([], P) ->
+    P.
+
+%%-----------------------------------------------------------------------------
+%% @param   Negations a list of `{Key, Key1}' negations
+%% @param   ListIn the list to transform
+%% @returns the list with boolean-valued properties negated and renamed
+%% @doc     Substitutes keys of boolean-valued properties and simultaneously
+%%          negates their values. Non-boolean tuple values are interpreted as
+%%          `false', as done in `get_bool/2'.
+%%          See also `normalize/2', `substitute_aliases/2'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec substitute_negations(Negations, ListIn) -> ListOut when
+    Negations :: [{Key :: term(), Key1 :: term()}],
+    ListIn :: [term()],
+    ListOut :: [term()].
+
+substitute_negations(As, Props) ->
+    [substitute_negations_1(As, P) || P <- Props].
+
+substitute_negations_1([{Key, Key1} | As], P) ->
+    if
+        is_atom(P), P =:= Key ->
+            property(Key1, false);
+        tuple_size(P) >= 1, element(1, P) =:= Key ->
+            case P of
+                {_, true} ->
+                    property(Key1, false);
+                {_, false} ->
+                    property(Key1, true);
+                _ ->
+                    %% The property is supposed to be a boolean, so any
+                    %% other tuple is interpreted as `false', as done in
+                    %% get_bool/2
+                    property(Key1, true)
+            end;
+        true ->
+            substitute_negations_1(As, P)
+    end;
+substitute_negations_1([], P) ->
+    P.
+
+%%-----------------------------------------------------------------------------
+%% @param   Expansions a list of `{Property, Expansion}' pairs
+%% @param   ListIn the list to transform
+%% @returns the expanded list
+%% @doc     Expands particular properties to corresponding sets of properties.
+%%          The first occurrence of a property whose minimal representation
+%%          matches `Property' is replaced by `Expansion' and any following
+%%          entries with the same key are deleted.
+%%          See also `normalize/2'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec expand(Expansions, ListIn) -> ListOut when
+    Expansions :: [{Property :: property(), Expansion :: [term()]}],
+    ListIn :: [term()],
+    ListOut :: [term()].
+
+expand(Es, Ps) when is_list(Ps) ->
+    Es1 = [{property(P), V} || {P, V} <- Es],
+    expand_flatten(expand_0(expand_key_uniq(Es1), Ps)).
+
+expand_0([{P, L} | Es], Ps) ->
+    expand_0(Es, expand_1(P, L, Ps));
+expand_0([], Ps) ->
+    Ps.
+
+expand_1(P, L, Ps) ->
+    %% P has a minimal representation here.
+    if
+        is_atom(P) ->
+            expand_2(P, P, L, Ps);
+        tuple_size(P) >= 1 ->
+            expand_2(element(1, P), P, L, Ps);
+        % refuse to expand non-property
+        true ->
+            Ps
+    end.
+
+expand_2(Key, P1, L, [P | Ps]) ->
+    if
+        is_atom(P), P =:= Key ->
+            expand_3(Key, P1, P, L, Ps);
+        tuple_size(P) >= 1, element(1, P) =:= Key ->
+            expand_3(Key, P1, property(P), L, Ps);
+        true ->
+            %% Non-property entries and already inserted expansions
+            %% (lists) are ignored.
+            [P | expand_2(Key, P1, L, Ps)]
+    end;
+expand_2(_, _, _, []) ->
+    [].
+
+expand_3(Key, P1, P, L, Ps) ->
+    %% Both P and P1 have minimal representations here. The inserted
+    %% list is flattened afterwards. If the expansion is done, the found
+    %% entry is dropped along with any later entries with the same key.
+    if
+        P1 =:= P ->
+            [L | delete(Key, Ps)];
+        true ->
+            %% The existing entry does not match - keep it.
+            [P | Ps]
+    end.
+
+expand_key_uniq([{K, V} | Ps]) ->
+    [{K, V} | expand_key_uniq_1(K, Ps)];
+expand_key_uniq([]) ->
+    [].
+
+expand_key_uniq_1(K, [{K1, V} | Ps]) ->
+    if
+        K =:= K1 ->
+            expand_key_uniq_1(K, Ps);
+        true ->
+            [{K1, V} | expand_key_uniq_1(K1, Ps)]
+    end;
+expand_key_uniq_1(_, []) ->
+    [].
+
+expand_flatten([E | Es]) when is_list(E) ->
+    E ++ expand_flatten(Es);
+expand_flatten([E | Es]) ->
+    [E | expand_flatten(Es)];
+expand_flatten([]) ->
+    [].
+
+%%-----------------------------------------------------------------------------
+%% @param   ListIn the list to normalize
+%% @param   Stages a list of `{aliases, As}', `{negations, Ns}' and
+%%          `{expand, Es}' operations
+%% @returns the normalized list
+%% @doc     Passes `ListIn' through a sequence of substitution/expansion
+%%          stages, then compacts the result (see `compact/1').
+%%          See also `substitute_aliases/2', `substitute_negations/2',
+%%          `expand/2'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec normalize(ListIn, Stages) -> ListOut when
+    ListIn :: [term()],
+    Stages :: [Operation],
+    Operation ::
+        {aliases, [{Key :: term(), Key1 :: term()}]}
+        | {negations, [{Key :: term(), Key1 :: term()}]}
+        | {expand, [{Property :: property(), Expansion :: [term()]}]},
+    ListOut :: [term()].
+
+normalize(L, Stages) ->
+    compact(apply_stages(L, Stages)).
+
+apply_stages(L, [{aliases, As} | Xs]) ->
+    apply_stages(substitute_aliases(As, L), Xs);
+apply_stages(L, [{expand, Es} | Xs]) ->
+    apply_stages(expand(Es, L), Xs);
+apply_stages(L, [{negations, Ns} | Xs]) ->
+    apply_stages(substitute_negations(Ns, L), Xs);
+apply_stages(L, []) ->
+    L.
