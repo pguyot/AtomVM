@@ -207,4 +207,6 @@ test_pathtype_absname() ->
     {ok, Cwd} = file:get_cwd(),
     Expected = filename:join(Cwd, "x"),
     Expected = filename:absname("x"),
+    "/baz/foo/bar" = filename:absname("foo/bar", "/baz"),
+    "/abs/path" = filename:absname("/abs/path", "/baz"),
     ok.
