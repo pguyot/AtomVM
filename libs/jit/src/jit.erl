@@ -1060,6 +1060,43 @@ first_pass(<<?OP_FMOVE, ?COMPACT_EXTENDED_FP_REGISTER, Rest0/binary>>, MMod, MSt
     MSt4 = MMod:free_native_registers(MSt3, [ResultReg, Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
     first_pass(Rest2, MMod, MSt4, State0);
+first_pass(
+    <<?OP_FMOVE, ?COMPACT_EXTENDED_LITERAL, Rest0/binary>>,
+    MMod,
+    MSt0,
+    #state{literal_resolver = LiteralResolver} = State0
+) ->
+    %% fmove of a float literal into an fp register. The float value is known
+    %% at compile time, so on FPU backends store its IEEE-754 bits directly
+    %% into fr[N] instead of loading the boxed literal term through
+    %% PRIM_MODULE_LOAD_LITERAL, which re-parses the literal's external term
+    %% format and allocates a heap fragment on every execution (and the
+    %% fragment forces a GC at the next heap allocation).
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {LiteralIndex, Rest1} = decode_literal(Rest0),
+    {{fp_reg, FPRegIndex} = FPReg, Rest2} = decode_fp_register(Rest1),
+    ?TRACE("OP_FMOVE {literal, ~p}, ~p\n", [LiteralIndex, FPReg]),
+    Float = LiteralResolver(LiteralIndex),
+    MSt4 =
+        case
+            is_float(Float) andalso MMod:supports_fp(MSt0) andalso
+                erlang:function_exported(MMod, move_float_to_fp_reg, 3)
+        of
+            true ->
+                MSt1 = ensure_fpregs(MMod, MSt0),
+                MMod:move_float_to_fp_reg(MSt1, Float, FPRegIndex);
+            false ->
+                {MSt1, SrcValue, Rest2} = decode_compact_term_module_literal(
+                    LiteralIndex, MMod, MSt0, Rest2
+                ),
+                {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+                MSt3 = MMod:free_native_registers(MSt2, [ResultReg]),
+                {MSt3b, Reg} = MMod:move_to_native_register(MSt3, SrcValue),
+                {MSt3c, Reg} = MMod:and_(MSt3b, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+                MMod:move_to_vm_register(MSt3c, {free, {ptr, Reg, 1}}, FPReg)
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest2, MMod, MSt4, State0);
 first_pass(<<?OP_FMOVE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
@@ -3859,58 +3896,12 @@ op_gc_bif2(
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
     (Op =:= '+' orelse Op =:= '-')
 ->
-    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
-    case Reloadable andalso erlang:function_exported(MMod, add_overflow, 3) of
-        true ->
-            %% Flag-based backends (aarch64/x86_64/arm32/armv6m).
-            op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
-        false ->
-            case Reloadable andalso erlang:function_exported(MMod, add_overflow_check, 3) of
-                true ->
-                    %% Flagless backends (riscv/wasm/xtensa).
-                    op_gc_bif2_addsub_runtime_nf(
-                        MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
-                    );
-                false ->
-                    op_gc_bif2_default(
-                        MMod,
-                        MSt0,
-                        FailLabel,
-                        Live,
-                        Bif,
-                        unwrap_typed(Arg1),
-                        unwrap_typed(Arg2),
-                        Dest
-                    )
-            end
-    end;
+    op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
 % Runtime small-integer fast path for *. Same gating as +/-; the backend
 % mul_overflow op computes the tagged product and flags whether it overflowed
 % the small-integer range.
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, '*', Arg1, Arg2, Dest) ->
-    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
-    case Reloadable andalso erlang:function_exported(MMod, mul_overflow, 3) of
-        true ->
-            %% Flag-based backends.
-            op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
-        false ->
-            case Reloadable andalso erlang:function_exported(MMod, mul_overflow_check, 3) of
-                true ->
-                    %% Flagless backends with a high-multiply (riscv).
-                    op_gc_bif2_mul_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
-                false ->
-                    op_gc_bif2_default(
-                        MMod,
-                        MSt0,
-                        FailLabel,
-                        Live,
-                        Bif,
-                        unwrap_typed(Arg1),
-                        unwrap_typed(Arg2),
-                        Dest
-                    )
-            end
-    end;
+    op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
 % Runtime small-integer fast path for div/rem by a POSITIVE small-int literal,
 % when the dividend's type is not known to be a small integer.
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
@@ -3946,6 +3937,63 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, {typed, A
     op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
 op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, Arg2, Dest) ->
     op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest).
+
+%% Runtime small-integer fast-path dispatch for + and -, used both when no
+%% compile-time type information is available and when the range-based
+%% inlining could not prove the absence of overflow (e.g. an unbounded
+%% t_integer range). Backends with flag-based overflow detection
+%% (aarch64/x86_64/arm32/armv6m) implement add_overflow/3; flagless backends
+%% (riscv/wasm/xtensa) implement add_overflow_check/3. Without either, or with
+%% non-reloadable operands, fall back to the plain BIF call.
+op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
+    case Reloadable andalso erlang:function_exported(MMod, add_overflow, 3) of
+        true ->
+            op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
+        false ->
+            case Reloadable andalso erlang:function_exported(MMod, add_overflow_check, 3) of
+                true ->
+                    op_gc_bif2_addsub_runtime_nf(
+                        MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
+                    );
+                false ->
+                    op_gc_bif2_default(
+                        MMod,
+                        MSt0,
+                        FailLabel,
+                        Live,
+                        Bif,
+                        unwrap_typed(Arg1),
+                        unwrap_typed(Arg2),
+                        Dest
+                    )
+            end
+    end.
+
+%% Same dispatch for *: runtime fast path if the backend supports it,
+%% plain BIF call otherwise.
+op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
+    Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
+    case Reloadable andalso erlang:function_exported(MMod, mul_overflow, 3) of
+        true ->
+            op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+        false ->
+            case Reloadable andalso erlang:function_exported(MMod, mul_overflow_check, 3) of
+                true ->
+                    op_gc_bif2_mul_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+                false ->
+                    op_gc_bif2_default(
+                        MMod,
+                        MSt0,
+                        FailLabel,
+                        Live,
+                        Bif,
+                        unwrap_typed(Arg1),
+                        unwrap_typed(Arg2),
+                        Dest
+                    )
+            end
+    end.
 
 op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
     CappedLive =
@@ -4248,8 +4296,9 @@ op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt3 = MMod:move_to_vm_register(MSt2, Reg, Dest),
             MMod:free_native_registers(MSt3, [Reg, Dest]);
         false ->
-            % Cannot prove safety, use default BIF call
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '+', Arg1, Arg2, Dest)
     end;
 op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
     case can_inline_add(Range1, Range2, MMod) of
@@ -4263,8 +4312,9 @@ op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
             MMod:free_native_registers(MSt5, [Reg1, Reg2Stripped, Dest]);
         false ->
-            % Cannot prove safety, use default BIF call
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '+', Arg1, Arg2, Dest)
     end.
 
 % Check if subtraction can overflow based on type ranges
@@ -4298,8 +4348,9 @@ op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt3 = MMod:move_to_vm_register(MSt2, Reg, Dest),
             MMod:free_native_registers(MSt3, [Reg, Dest]);
         false ->
-            % Cannot prove safety, use default BIF call
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '-', Arg1, Arg2, Dest)
     end;
 op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
     case can_inline_sub(Range1, Range2, MMod) of
@@ -4313,8 +4364,9 @@ op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
             MMod:free_native_registers(MSt5, [Reg1, Reg2Stripped, Dest]);
         false ->
-            % Cannot prove safety, use default BIF call
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '-', Arg1, Arg2, Dest)
     end.
 
 % Check if both ranges are guaranteed to be small integers
@@ -4454,10 +4506,12 @@ op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
                     % tag, 1 is identity), and negative constants require
                     % sign-aware logic. The compiler typically folds these,
                     % but fall back defensively.
-                    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+                    op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
             end;
         false ->
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end;
 op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
     case can_inline_mul(Range1, Range2, MMod) of
@@ -4490,7 +4544,9 @@ op_gc_bif2_mul(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt8 = MMod:move_to_vm_register(MSt7, ResReg, Dest),
             MMod:free_native_registers(MSt8, FreeRegs);
         false ->
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            % Cannot prove the result stays small: try the runtime
+            % overflow-checked fast path before the BIF call.
+            op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
 
 % Check if left shift can be inlined based on type range and shift amount
