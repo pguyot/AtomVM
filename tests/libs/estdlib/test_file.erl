@@ -57,6 +57,12 @@ test_write_read_delete() ->
     ok = file:delete(Path),
     {error, enoent} = file:read_file(Path),
     {error, enoent} = file:delete(Path),
+    % write_file/3 with default modes, as used by the compiler's write_binary
+    ok = file:write_file(Path, <<"opts">>, []),
+    {ok, <<"opts">>} = file:read_file(Path),
+    ok = file:write_file(Path, <<"raw">>, [raw, binary]),
+    {ok, <<"raw">>} = file:read_file(Path),
+    ok = file:delete(Path),
     ok.
 
 test_rename() ->

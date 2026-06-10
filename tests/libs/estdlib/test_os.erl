@@ -26,6 +26,13 @@
 
 test() ->
     ok = test_os_getenv(),
+    ok = test_os_type(),
+    ok.
+
+test_os_type() ->
+    {Family, Name} = os:type(),
+    true = is_atom(Family),
+    true = is_atom(Name),
     ok.
 
 test_os_getenv() ->

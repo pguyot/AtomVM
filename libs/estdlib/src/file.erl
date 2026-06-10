@@ -36,6 +36,7 @@
     position/2,
     read_file/1,
     write_file/2,
+    write_file/3,
     write/2,
     read_file_info/1,
     list_dir/1,
@@ -149,6 +150,28 @@ read_file(Filename) ->
 %%-----------------------------------------------------------------------------
 -spec write_file(Filename :: iodata(), Data :: iodata()) -> ok | {error, any()}.
 write_file(Filename, Data) ->
+    write_file(Filename, Data, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to write
+%% @param   Data data to write
+%% @param   Modes open modes; `raw', `binary' and `write' are accepted (and
+%%          implied), other modes are not supported
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Write (create or truncate) a whole file.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec write_file(Filename :: iodata(), Data :: iodata(), Modes :: [atom()]) ->
+    ok | {error, any()}.
+write_file(Filename, Data, Modes) when is_list(Modes) ->
+    case [M || M <- Modes, M =/= raw, M =/= binary, M =/= write] of
+        [] ->
+            do_write_file(Filename, Data);
+        _Unsupported ->
+            {error, badarg}
+    end.
+
+do_write_file(Filename, Data) ->
     case atomvm:posix_open(Filename, [o_wronly, o_creat, o_trunc], 8#644) of
         {ok, Fd} ->
             Result = write_all(Fd, erlang:iolist_to_binary(Data)),

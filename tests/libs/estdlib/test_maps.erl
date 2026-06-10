@@ -30,6 +30,7 @@
 -endif.
 
 test() ->
+    ok = test_intersect_with(),
     ok = test_without_take_update_groups(),
     ok = test_get(),
     ok = test_is_key(),
@@ -446,4 +447,14 @@ test_without_take_update_groups() ->
     #{a := 99} = maps:update_with(a, fun(V) -> V + 1 end, 99, #{}),
     #{a := 2} = maps:update_with(a, fun(V) -> V + 1 end, 99, #{a => 1}),
     #{0 := [2, 4], 1 := [1, 3]} = maps:groups_from_list(fun(X) -> X rem 2 end, [1, 2, 3, 4]),
+    ok.
+
+test_intersect_with() ->
+    #{b := 20} = M1 = maps:intersect(#{a => 1, b => 2}, #{b => 20, c => 30}),
+    1 = maps:size(M1),
+    M2 = maps:with([a, c, x], #{a => 1, b => 2, c => 3}),
+    #{a := 1, c := 3} = M2,
+    2 = maps:size(M2),
+    #{} = maps:intersect(#{a => 1}, #{b => 2}),
+    #{} = maps:with([], #{a => 1}),
     ok.
