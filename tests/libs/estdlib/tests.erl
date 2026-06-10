@@ -72,6 +72,7 @@ get_non_networking_tests(_OTPVersion) ->
         test_maps,
         test_proc_lib,
         test_proplists,
+        test_erlang,
         test_queue,
         test_timer,
         test_spawn,
