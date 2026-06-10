@@ -34,6 +34,8 @@
     extension/1,
     join/1,
     join/2,
+    absname/1,
+    pathtype/1,
     rootname/1,
     rootname/2,
     split/1
@@ -306,3 +308,30 @@ extension_length([$., $/ | _], _Consumed) ->
     0;
 extension_length([_ | Rest], Consumed) ->
     extension_length(Rest, Consumed + 1).
+
+%%-----------------------------------------------------------------------------
+%% @param   Name a file name
+%% @returns `absolute' if Name is an absolute path, `relative' otherwise
+%% @doc     Return the type of a path.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec pathtype(Name :: string()) -> absolute | relative.
+pathtype([$/ | _]) -> absolute;
+pathtype(_) -> relative.
+
+%%-----------------------------------------------------------------------------
+%% @param   Name a file name
+%% @returns Name converted to an absolute path against the current working
+%%          directory
+%% @doc     Make a path absolute.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec absname(Name :: string()) -> string().
+absname(Name) ->
+    case pathtype(Name) of
+        absolute ->
+            Name;
+        relative ->
+            {ok, Cwd} = file:get_cwd(),
+            join(Cwd, Name)
+    end.

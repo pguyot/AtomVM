@@ -36,6 +36,11 @@
     position/2,
     read_file/1,
     write_file/2,
+    write/2,
+    read_file_info/1,
+    list_dir/1,
+    make_dir/1,
+    path_open/3,
     delete/1,
     rename/2,
     format_error/1
@@ -248,6 +253,10 @@ io_request({get_until, _Encoding, _Prompt, M, F, As}, State) ->
 io_request({get_chars, _Encoding, _Prompt, N}, State) ->
     {Data, NewState} = take_chars(N, State),
     {reply, Data, NewState};
+io_request({put_chars, _Encoding, Chars}, State) ->
+    {reply, device_write(Chars, State), State};
+io_request({put_chars, _Encoding, M, F, A}, State) ->
+    {reply, device_write(apply(M, F, A), State), State};
 io_request({setopts, _Opts}, State) ->
     %% encoding selection is accepted and ignored: content is read as utf8
     {reply, ok, State};
@@ -343,6 +352,12 @@ maybe_binary(Chars, State) ->
     end.
 
 %% @private
+device_write(Data, State) ->
+    write_all(maps:get(fd, State), erlang:iolist_to_binary(Data)).
+
+%% @private
+file_request_impl({write, Data}, State) ->
+    {reply, device_write(Data, State), State};
 file_request_impl({read, Count}, State) ->
     {Data, NewState} = take_chars(Count, State),
     {reply, Data, NewState};
@@ -387,3 +402,135 @@ file_request_impl({position, Location}, State) ->
     end;
 file_request_impl(_Other, State) ->
     {reply, {error, request}, State}.
+
+%%-----------------------------------------------------------------------------
+%% @param   IoDevice device returned by `open/2' with the `write' mode
+%% @param   Data data to write
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Write data to an io device.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec write(IoDevice :: pid(), Data :: iodata()) -> ok | {error, any()}.
+write(IoDevice, Data) when is_pid(IoDevice) ->
+    file_request(IoDevice, {write, Data}).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to stat
+%% @returns `{ok, FileInfo}' or `{error, Reason}', where FileInfo is a
+%%          `#file_info{}' record as defined in kernel's `file.hrl'
+%% @doc     Get information about a file. Unlike Erlang/OTP, times are
+%%          universal rather than local.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_file_info(Filename :: iodata()) -> {ok, tuple()} | {error, any()}.
+read_file_info(Filename) ->
+    case atomvm:posix_stat(Filename) of
+        {ok, Stat} ->
+            #{
+                st_dev := Dev,
+                st_ino := Ino,
+                st_mode := Mode,
+                st_nlink := NLink,
+                st_uid := Uid,
+                st_gid := Gid,
+                st_size := Size,
+                st_atime_s := ATime,
+                st_mtime_s := MTime,
+                st_ctime_s := CTime
+            } = Stat,
+            Type =
+                case Mode band 16#F000 of
+                    16#4000 -> directory;
+                    16#8000 -> regular;
+                    16#A000 -> symlink;
+                    _ -> other
+                end,
+            %% #file_info{size, type, access, atime, mtime, ctime, mode,
+            %%            links, major_device, minor_device, inode, uid, gid}
+            Info =
+                {file_info, Size, Type, read_write, to_datetime(ATime), to_datetime(MTime),
+                    to_datetime(CTime), Mode, NLink, Dev, 0, Ino, Uid, Gid},
+            {ok, Info};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @private
+to_datetime(PosixSeconds) ->
+    calendar:system_time_to_universal_time(PosixSeconds, second).
+
+%%-----------------------------------------------------------------------------
+%% @param   Dirname name of the directory to list
+%% @returns `{ok, Filenames}' or `{error, Reason}'
+%% @doc     List the files of a directory ("." and ".." excluded).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec list_dir(Dirname :: iodata()) -> {ok, [string()]} | {error, any()}.
+list_dir(Dirname) ->
+    case atomvm:posix_opendir(Dirname) of
+        {ok, Dir} ->
+            Result = list_dir0(Dir, []),
+            _ = atomvm:posix_closedir(Dir),
+            Result;
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @private
+list_dir0(Dir, Acc) ->
+    case atomvm:posix_readdir(Dir) of
+        {ok, {dirent, _Ino, NameBin}} ->
+            case NameBin of
+                <<".">> -> list_dir0(Dir, Acc);
+                <<"..">> -> list_dir0(Dir, Acc);
+                _ -> list_dir0(Dir, [erlang:binary_to_list(NameBin) | Acc])
+            end;
+        eof ->
+            {ok, lists:reverse(Acc)};
+        {error, _} = Error ->
+            Error
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Dirname name of the directory to create
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Create a directory.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec make_dir(Dirname :: iodata()) -> ok | {error, any()}.
+make_dir(Dirname) ->
+    atomvm:posix_mkdir(Dirname, 8#755).
+
+%%-----------------------------------------------------------------------------
+%% @param   Path list of directories to search
+%% @param   Filename name of the file to open
+%% @param   Modes open modes, see `open/2'
+%% @returns `{ok, IoDevice, FullName}' or `{error, Reason}'
+%% @doc     Search a list of directories for a file and open it. The name is
+%%          also tried as-is (equivalent to a "." path entry coming first
+%%          when the name is relative, per Erlang/OTP semantics for absolute
+%%          names).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec path_open(Path :: [iodata()], Filename :: iodata(), Modes :: [atom()]) ->
+    {ok, pid(), string()} | {error, any()}.
+path_open(Path, Filename, Modes) ->
+    case filename:pathtype(Filename) of
+        absolute ->
+            case open(Filename, Modes) of
+                {ok, Fd} -> {ok, Fd, Filename};
+                {error, _} = Error -> Error
+            end;
+        _ ->
+            path_open0(Path, Filename, Modes)
+    end.
+
+%% @private
+path_open0([], _Filename, _Modes) ->
+    {error, enoent};
+path_open0([Dir | Rest], Filename, Modes) ->
+    FullName = filename:join(Dir, Filename),
+    case open(FullName, Modes) of
+        {ok, Fd} -> {ok, Fd, FullName};
+        {error, _} -> path_open0(Rest, Filename, Modes)
+    end.
