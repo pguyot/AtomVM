@@ -3691,6 +3691,8 @@ rewrite_cp_offset(
     OffsetImm0 = Delta0 bsl 2,
 
     % Check if offset fits in ARM32 rotated immediate
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
     case jit_arm32_asm:encode_imm(OffsetImm0 band 16#FFFFFFFF) of
         false ->
             % Need to emit literal pool (4 bytes for the literal)
@@ -3706,13 +3708,13 @@ rewrite_cp_offset(
             Stream1 = StreamModule:replace(StreamWithLiteral, RewriteOffset, LdrInstr),
             Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
             Stream2 = StreamModule:append(Stream1, Prolog),
-            State0#state{stream = Stream2};
+            State0#state{stream = Stream2, regs = jit_regs:invalidate_all(State0#state.regs)};
         _ ->
             MovInstr = jit_arm32_asm:mov(al, TempReg, OffsetImm0),
             Stream1 = StreamModule:replace(Stream0, RewriteOffset, MovInstr),
             Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
             Stream2 = StreamModule:append(Stream1, Prolog),
-            State0#state{stream = Stream2}
+            State0#state{stream = Stream2, regs = jit_regs:invalidate_all(State0#state.regs)}
     end.
 
 set_bs(
