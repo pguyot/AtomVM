@@ -35,7 +35,11 @@ test() ->
             ok = test_rename(),
             ok = test_open_read_close(),
             ok = test_position(),
-            ok = test_get_until();
+            ok = test_get_until(),
+            ok = test_read_file_info(),
+            ok = test_list_dir_make_dir(),
+            ok = test_path_open(),
+            ok = test_device_write();
         true ->
             ok
     end,
@@ -148,3 +152,52 @@ test_get_cwd() ->
     end.
 
 validate_path("/" ++ _Rest) -> ok.
+
+test_read_file_info() ->
+    Path = tmp_path("info"),
+    ok = file:write_file(Path, <<"12345">>),
+    {ok, Info} = file:read_file_info(Path),
+    %% #file_info{} as defined in kernel/include/file.hrl
+    file_info = element(1, Info),
+    5 = element(2, Info),
+    regular = element(3, Info),
+    {{_, _, _}, {_, _, _}} = element(6, Info),
+    {error, enoent} = file:read_file_info(tmp_path("missing")),
+    ok = file:delete(Path),
+    ok.
+
+test_list_dir_make_dir() ->
+    Dir = tmp_path("dir"),
+    ok = file:make_dir(Dir),
+    {ok, []} = file:list_dir(Dir),
+    ok = file:write_file(Dir ++ "/a.txt", <<"a">>),
+    ok = file:write_file(Dir ++ "/b.txt", <<"b">>),
+    {ok, Names} = file:list_dir(Dir),
+    ["a.txt", "b.txt"] = lists:sort(Names),
+    {error, enoent} = file:list_dir(tmp_path("missingdir")),
+    ok = file:delete(Dir ++ "/a.txt"),
+    ok = file:delete(Dir ++ "/b.txt"),
+    ok.
+
+test_path_open() ->
+    Dir = tmp_path("po"),
+    ok = file:make_dir(Dir),
+    ok = file:write_file(Dir ++ "/inc.hrl", <<"x.">>),
+    {ok, Fd, FullName} = file:path_open([Dir, "/nonexistent"], "inc.hrl", [read]),
+    true = is_pid(Fd),
+    true = lists:suffix("inc.hrl", FullName),
+    {ok, "x."} = file:read(Fd, 10),
+    ok = file:close(Fd),
+    {error, enoent} = file:path_open([Dir], "missing.hrl", [read]),
+    ok = file:delete(Dir ++ "/inc.hrl"),
+    ok.
+
+test_device_write() ->
+    Path = tmp_path("devw"),
+    {ok, Fd} = file:open(Path, [write]),
+    ok = file:write(Fd, <<"hello ">>),
+    ok = file:write(Fd, "world"),
+    ok = file:close(Fd),
+    {ok, <<"hello world">>} = file:read_file(Path),
+    ok = file:delete(Path),
+    ok.
