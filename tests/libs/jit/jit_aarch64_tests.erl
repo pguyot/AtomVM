@@ -2598,6 +2598,32 @@ jump_to_continuation_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+%% Continuation jump emitted beyond ADR's ±1MB range needs a longer sequence
+jump_to_continuation_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    % Simulate a module whose native code grew past ADR's ±1MB range
+    FillerSize = 1400000,
+    Filler = binary:copy(<<0, 0, 0, 0>>, FillerSize div 4),
+    Stream0 = jit_stream_binary:append(?BACKEND:stream(State0), Filler),
+    % element 3 of #state{} is the stream
+    State1 = setelement(3, State0, Stream0),
+    State2 = ?BACKEND:jump_to_continuation(State1, {free, r0}),
+    Stream = ?BACKEND:stream(State2),
+    Code = binary:part(Stream, FillerSize, byte_size(Stream) - FillerSize),
+    % NetOffset = -1400000 = -16#155CC0:
+    % adr x7, 0; sub x7, x7, #0x155, lsl #12; sub x7, x7, #0xcc0;
+    % add x7, x7, x0; br x7
+    ?assertEqual(
+        <<
+            16#10000007:32/little,
+            16#d14554e7:32/little,
+            16#d13300e7:32/little,
+            16#8b0000e7:32/little,
+            16#d61f00e0:32/little
+        >>,
+        Code
+    ).
+
 %% After freeing a register, cache is preserved so reload is elided
 cached_load_after_free_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
