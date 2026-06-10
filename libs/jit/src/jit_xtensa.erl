@@ -4084,7 +4084,9 @@ rewrite_cp_offset(
     %% jit_state.continuation).
     EntryInstr = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
     Stream2 = StreamModule:append(Stream1, EntryInstr),
-    State0#state{stream = Stream2}.
+    %% Execution resumes here when the callee returns: registers are
+    %% clobbered and, crucially, code is reachable again.
+    State0#state{stream = Stream2, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
