@@ -210,11 +210,15 @@ add(Rd, Rn, Rm, {lsl, Amount}) when
 %% Emit an unconditional branch (B) to a 32-bit relative offset (AArch64 encoding)
 %% offset is in bytes, relative to the next instruction
 -spec b(integer()) -> binary().
-b(Offset) when is_integer(Offset) ->
+b(Offset) when
+    is_integer(Offset), Offset >= -16#8000000, Offset < 16#8000000
+->
     %% AArch64 B encoding: 0b000101 | imm26 | 00000
     %% imm26 is (Offset / 4) signed, fits in 26 bits
     Offset26 = Offset div 4,
-    <<(16#14000000 bor (Offset26 band 16#3FFFFFF)):32/little>>.
+    <<(16#14000000 bor (Offset26 band 16#3FFFFFF)):32/little>>;
+b(Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
 
 %% Emit a breakpoint (BRK) instruction with immediate (AArch64 encoding)
 %% imm is a 16-bit immediate value (usually 0 for debuggers)
@@ -934,6 +938,10 @@ fpreg_to_num(Reg) when is_atom(Reg) ->
 
 %% Emit a conditional branch instruction
 -spec bcc(cc(), integer()) -> binary().
+bcc(Cond, Offset) when
+    is_atom(Cond), is_integer(Offset), (Offset < -16#100000 orelse Offset >= 16#100000)
+->
+    error({unencodable_offset, Offset});
 bcc(Cond, Offset) when is_atom(Cond), is_integer(Offset) ->
     CondNum =
         case Cond of
@@ -975,29 +983,45 @@ bcc(Cond, Offset) when is_atom(Cond), is_integer(Offset) ->
 
 %% Emit a compare and branch on zero
 -spec cbz(aarch64_gpr_register(), integer()) -> binary().
-cbz(Rt, Offset) when is_integer(Offset) ->
+cbz(Rt, Offset) when
+    is_integer(Offset), Offset >= -16#100000, Offset < 16#100000
+->
     RtNum = reg_to_num(Rt),
     Offset19 = Offset div 4,
-    <<(16#B4000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>.
+    <<(16#B4000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>;
+cbz(_Rt, Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
 
 -spec cbz_w(aarch64_gpr_register(), integer()) -> binary().
-cbz_w(Rt, Offset) when is_integer(Offset) ->
+cbz_w(Rt, Offset) when
+    is_integer(Offset), Offset >= -16#100000, Offset < 16#100000
+->
     RtNum = reg_to_num(Rt),
     Offset19 = Offset div 4,
-    <<(16#34000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>.
+    <<(16#34000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>;
+cbz_w(_Rt, Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
 
 %% Emit a compare and branch on non-zero
 -spec cbnz(aarch64_gpr_register(), integer()) -> binary().
-cbnz(Rt, Offset) when is_integer(Offset) ->
+cbnz(Rt, Offset) when
+    is_integer(Offset), Offset >= -16#100000, Offset < 16#100000
+->
     RtNum = reg_to_num(Rt),
     Offset19 = Offset div 4,
-    <<(16#B5000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>.
+    <<(16#B5000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>;
+cbnz(_Rt, Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
 
 -spec cbnz_w(aarch64_gpr_register(), integer()) -> binary().
-cbnz_w(Rt, Offset) when is_integer(Offset) ->
+cbnz_w(Rt, Offset) when
+    is_integer(Offset), Offset >= -16#100000, Offset < 16#100000
+->
     RtNum = reg_to_num(Rt),
     Offset19 = Offset div 4,
-    <<(16#35000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>.
+    <<(16#35000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor RtNum):32/little>>;
+cbnz_w(_Rt, Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
 
 %% Emit a test bit and branch if zero
 -spec tbz(aarch64_gpr_register(), 0..63, integer()) -> binary().
