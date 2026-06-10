@@ -31,6 +31,7 @@
 
 test() ->
     ok = test_intersect_with(),
+    ok = test_ordered_iterator_fold(),
     ok = test_without_take_update_groups(),
     ok = test_get(),
     ok = test_is_key(),
@@ -457,4 +458,15 @@ test_intersect_with() ->
     2 = maps:size(M2),
     #{} = maps:intersect(#{a => 1}, #{b => 2}),
     #{} = maps:with([], #{a => 1}),
+    ok.
+
+test_ordered_iterator_fold() ->
+    M = #{b => 2, a => 1, c => 3},
+    I = maps:iterator(M, ordered),
+    % fold/map/filter/foreach accept iterators, including ordered ones
+    % (beam_ssa_recv folds over an ordered iterator)
+    [{c, 3}, {b, 2}, {a, 1}] = maps:fold(fun(K, V, A) -> [{K, V} | A] end, [], I),
+    #{a := 2, b := 4, c := 6} = maps:map(fun(_K, V) -> V * 2 end, maps:iterator(M, ordered)),
+    #{b := 2, c := 3} = maps:filter(fun(_K, V) -> V > 1 end, maps:iterator(M, ordered)),
+    ok = maps:foreach(fun(_K, _V) -> ok end, maps:iterator(M, ordered)),
     ok.
