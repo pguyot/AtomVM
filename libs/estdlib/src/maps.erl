@@ -42,6 +42,8 @@
     update_with/3,
     update_with/4,
     groups_from_list/2,
+    intersect/2,
+    with/2,
     is_key/2,
     put/3,
     iterator/1,
@@ -686,3 +688,25 @@ groups_from_list(Fun, List) when is_function(Fun, 1), is_list(List) ->
         #{},
         List
     ).
+
+%%-----------------------------------------------------------------------------
+%% @param   Map1 a map
+%% @param   Map2 a map
+%% @returns a map with the pairs of `Map2' whose keys are also in `Map1'
+%% @doc     Intersects two maps, keeping `Map2''s values.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec intersect(Map1 :: map(), Map2 :: map()) -> map().
+intersect(Map1, Map2) when is_map(Map1), is_map(Map2) ->
+    maps:filter(fun(K, _V) -> is_map_key(K, Map1) end, Map2).
+
+%%-----------------------------------------------------------------------------
+%% @param   Ks a list of keys
+%% @param   Map a map
+%% @returns a map with the pairs of `Map' whose keys are in `Ks'
+%% @doc     Restricts a map to a set of keys.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec with(Ks :: [term()], Map :: map()) -> map().
+with(Ks, Map) when is_list(Ks), is_map(Map) ->
+    maps:from_list([{K, map_get(K, Map)} || K <- Ks, is_map_key(K, Map)]).

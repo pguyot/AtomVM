@@ -19,7 +19,7 @@
 %
 -module(os).
 
--export([getenv/1, system_time/0, system_time/1]).
+-export([getenv/1, system_time/0, system_time/1, type/0]).
 
 %%-----------------------------------------------------------------------------
 %% @param   Name name of the environment variable
@@ -48,3 +48,13 @@ system_time() ->
 -spec system_time(TimeUnit :: erlang:time_unit()) -> integer().
 system_time(_TimeUnit) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns `{Family, Name}' describing the operating system
+%% @doc     Return the OS family and name. On AtomVM the family is `unix'
+%%          and the name is the AtomVM platform name.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec type() -> {unix, atom()}.
+type() ->
+    {unix, atomvm:platform()}.
