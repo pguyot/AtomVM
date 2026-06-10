@@ -942,3 +942,21 @@ cset_test_() ->
         ?_assertAsmEqual(<<16#9a9f07ea:32/little>>, "cset x10, ne", jit_aarch64_asm:cset(r10, ne)),
         ?_assertAsmEqual(<<16#9a9f07e0:32/little>>, "cset x0, ne", jit_aarch64_asm:cset(r0, ne))
     ].
+
+branch_offset_range_test_() ->
+    [
+        %% conditional/compare branches have a 19-bit (±1MB) range and must
+        %% refuse out-of-range offsets instead of silently truncating
+        ?_assertError({unencodable_offset, 16#100000}, jit_aarch64_asm:bcc(ne, 16#100000)),
+        ?_assertError({unencodable_offset, -16#100004}, jit_aarch64_asm:bcc(eq, -16#100004)),
+        ?_assertError({unencodable_offset, 16#100000}, jit_aarch64_asm:cbz(r0, 16#100000)),
+        ?_assertError({unencodable_offset, 16#100000}, jit_aarch64_asm:cbz_w(r0, 16#100000)),
+        ?_assertError({unencodable_offset, 16#100000}, jit_aarch64_asm:cbnz(r0, 16#100000)),
+        ?_assertError({unencodable_offset, 16#100000}, jit_aarch64_asm:cbnz_w(r0, 16#100000)),
+        %% b has a 26-bit (±128MB) range
+        ?_assertError({unencodable_offset, 16#8000000}, jit_aarch64_asm:b(16#8000000)),
+        %% in-range values still encode
+        ?_assertAsmEqual(
+            <<16#54ffffe1:32/little>>, "b.ne .-4", jit_aarch64_asm:bcc(ne, -4)
+        )
+    ].
