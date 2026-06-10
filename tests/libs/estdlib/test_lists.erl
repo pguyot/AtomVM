@@ -41,6 +41,9 @@ test() ->
     ok = test_takewhile(),
     ok = test_unzip(),
     ok = test_enumerate(),
+    ok = test_merge1(),
+    ok = test_flatlength(),
+    ok = test_keysearch(),
     ok = test_sum(),
     ok = test_uniq(),
     ok = test_umerge(),
@@ -587,6 +590,7 @@ test_unzip() ->
 test_enumerate() ->
     [{1, a}, {2, b}] = lists:enumerate([a, b]),
     [{5, a}, {6, b}] = lists:enumerate(5, [a, b]),
+    [{0, a}, {2, b}, {4, c}] = lists:enumerate(0, 2, [a, b, c]),
     [] = lists:enumerate([]),
     ok.
 
@@ -620,4 +624,20 @@ test_prefix_suffix() ->
     true = lists:suffix([2, 3], [1, 2, 3]),
     false = lists:suffix([1], [1, 2]),
     true = lists:suffix([], [1]),
+    ok.
+
+test_merge1() ->
+    [1, 2, 3, 4, 5] = lists:merge([[1, 4], [2, 5], [3]]),
+    [] = lists:merge([]),
+    [1, 2] = lists:merge([[], [1, 2], []]),
+    ok.
+
+test_flatlength() ->
+    4 = lists:flatlength([[a, [b, c]], d, []]),
+    0 = lists:flatlength([]),
+    ok.
+
+test_keysearch() ->
+    {value, {b, 2}} = lists:keysearch(b, 1, [{a, 1}, {b, 2}]),
+    false = lists:keysearch(c, 1, [{a, 1}, {b, 2}]),
     ok.

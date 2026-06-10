@@ -29,6 +29,7 @@
     at/2,
     copy/1, copy/2,
     decode_hex/1,
+    encode_unsigned/1, encode_unsigned/2,
     encode_hex/1, encode_hex/2,
     list_to_bin/1,
     longest_common_prefix/1,
@@ -231,3 +232,37 @@ replace(_Binary, _Pattern, _Replacement) ->
 ) -> binary().
 replace(_Binary, _Pattern, _Replacement, _Options) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Unsigned a non-negative integer
+%% @returns the smallest big-endian binary encoding of `Unsigned'
+%% @doc     Encode an unsigned integer into a binary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec encode_unsigned(Unsigned :: non_neg_integer()) -> binary().
+encode_unsigned(Unsigned) ->
+    encode_unsigned(Unsigned, big).
+
+%%-----------------------------------------------------------------------------
+%% @param   Unsigned a non-negative integer
+%% @param   Endianness `big' or `little'
+%% @returns the smallest binary encoding of `Unsigned' in the given endianness
+%% @doc     Encode an unsigned integer into a binary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec encode_unsigned(Unsigned :: non_neg_integer(), Endianness :: big | little) -> binary().
+encode_unsigned(Unsigned, Endianness) when
+    is_integer(Unsigned), Unsigned >= 0, (Endianness =:= big orelse Endianness =:= little)
+->
+    Big = encode_unsigned_0(Unsigned, <<>>),
+    case Endianness of
+        big -> Big;
+        little -> list_to_binary(lists:reverse(binary_to_list(Big)))
+    end;
+encode_unsigned(_Unsigned, _Endianness) ->
+    error(badarg).
+
+encode_unsigned_0(N, Acc) when N > 255 ->
+    encode_unsigned_0(N bsr 8, <<(N band 255), Acc/binary>>);
+encode_unsigned_0(N, Acc) ->
+    <<N, Acc/binary>>.

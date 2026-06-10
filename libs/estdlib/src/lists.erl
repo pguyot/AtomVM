@@ -62,6 +62,10 @@
     unzip/1,
     enumerate/1,
     enumerate/2,
+    enumerate/3,
+    merge/1,
+    flatlength/1,
+    keysearch/3,
     sum/1,
     uniq/1,
     uniq/2,
@@ -1231,3 +1235,78 @@ prefix(_, _) ->
 suffix(Suffix, List) ->
     Delta = length(List) - length(Suffix),
     Delta >= 0 andalso lists:nthtail(Delta, List) =:= Suffix.
+
+%%-----------------------------------------------------------------------------
+%% @param   Index index of the first element
+%% @param   Step increment between indices
+%% @param   List list
+%% @returns the elements of List paired with indices starting at Index and
+%%          incremented by Step
+%% @doc     Pair every element of a list with an index.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec enumerate(Index :: integer(), Step :: integer(), List :: [term()]) ->
+    [{integer(), term()}].
+enumerate(Index, Step, List) when is_integer(Index), is_integer(Step) ->
+    enumerate_2(Index, Step, List).
+
+enumerate_2(_Index, _Step, []) ->
+    [];
+enumerate_2(Index, Step, [H | T]) ->
+    [{Index, H} | enumerate_2(Index + Step, Step, T)].
+
+%%-----------------------------------------------------------------------------
+%% @param   ListOfLists a list of sorted lists
+%% @returns the sorted list obtained by merging all sublists
+%% @doc     Merge a list of sorted lists.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec merge(ListOfLists :: [[term()]]) -> [term()].
+merge([]) ->
+    [];
+merge([L]) ->
+    L;
+merge(Ls) ->
+    merge(merge_pairs(Ls)).
+
+merge_pairs([L1, L2 | Ls]) ->
+    [merge(L1, L2) | merge_pairs(Ls)];
+merge_pairs(Ls) ->
+    Ls.
+
+%%-----------------------------------------------------------------------------
+%% @param   DeepList a possibly nested list
+%% @returns the length of the flattened list
+%% @doc     Equivalent to `length(flatten(DeepList))', without building the
+%%          flattened list.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec flatlength(DeepList :: list()) -> non_neg_integer().
+flatlength(DeepList) ->
+    flatlength(DeepList, 0).
+
+flatlength([H | T], Acc) when is_list(H) ->
+    flatlength(T, flatlength(H, Acc));
+flatlength([_ | T], Acc) ->
+    flatlength(T, Acc + 1);
+flatlength([], Acc) ->
+    Acc.
+
+%%-----------------------------------------------------------------------------
+%% @param   Key the key to search for
+%% @param   N the position in the tuples to compare
+%% @param   TupleList a list of tuples
+%% @returns `{value, Tuple}' for the first tuple whose `N'th element is
+%%          `Key', or `false'
+%% @doc     Search for a tuple by key. Equivalent to `keyfind/3' with a
+%%          `{value, Tuple}' wrapper, kept for backward compatibility.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec keysearch(Key :: term(), N :: pos_integer(), TupleList :: [tuple()]) ->
+    {value, tuple()} | false.
+keysearch(Key, N, TupleList) ->
+    % remote call so that the keyfind NIF is used instead of its local stub
+    case lists:keyfind(Key, N, TupleList) of
+        false -> false;
+        Tuple -> {value, Tuple}
+    end.
