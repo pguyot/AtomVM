@@ -26,6 +26,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <limits.h>
+
 #ifdef __APPLE__
 #include <Availability.h>
 // getsectiondata() was introduced in the macOS 10.7 SDK; on older deployment
@@ -35,13 +37,34 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #endif
+#include <errno.h>
+#include <fcntl.h>
+#include <mach-o/dyld.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #elif defined(__linux__)
 #define ATOMVM_HAS_EMBEDDED_AVM 1
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#else
+// Other POSIX platforms (e.g. the BSDs): the appended-trailer AVM loader still
+// needs open()/mmap()/stat() even without embedded-AVM section support.
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #endif
+
+// An AVM pack can also be appended to the executable, followed by a 16-byte
+// trailer: an 8-byte little-endian pack size and this 8-byte magic. Unlike
+// the objcopy section mechanism this requires no binary tooling (cat + a
+// 16-byte write) and works on both Mach-O and ELF; on Mach-O in particular,
+// llvm-objcopy can produce an __ATOMVM segment that overlaps the __LINKEDIT
+// growth from re-signing, which the kernel rejects at exec.
+#define ATOMVM_TRAILER_MAGIC "ATOMVMv1"
+#define ATOMVM_TRAILER_SIZE 16
 
 #include "atom.h"
 #include "avm_version.h"
@@ -102,6 +125,90 @@ void print_help(const char *program_name)
 }
 
 /**
+ * @brief Get the path of the running executable
+ * @param buf buffer to store the path
+ * @param buf_size size of the buffer
+ * @return true if the path was resolved, false otherwise
+ */
+static bool get_executable_path(char *buf, size_t buf_size)
+{
+#if defined(__APPLE__)
+    uint32_t size = (uint32_t) buf_size;
+    return _NSGetExecutablePath(buf, &size) == 0;
+#elif defined(__linux__)
+    ssize_t len = readlink("/proc/self/exe", buf, buf_size - 1);
+    if (len <= 0) {
+        return false;
+    }
+    buf[len] = '\0';
+    return true;
+#else
+    UNUSED(buf);
+    UNUSED(buf_size);
+    return false;
+#endif
+}
+
+/**
+ * @brief Try to find an AVM pack appended to the executable with a trailer
+ * @details The trailer is the last 16 bytes of the file: an 8-byte
+ * little-endian pack size followed by the magic "ATOMVMv1". The pack
+ * immediately precedes the trailer. The mapping stays alive for the VM
+ * lifetime.
+ * @param data pointer to store the appended AVM data (if found)
+ * @param size pointer to store the size of the appended AVM data
+ * @return true if a trailer AVM was found, false otherwise
+ */
+static bool get_trailer_avm(const void **data, size_t *size)
+{
+    char exe_path[PATH_MAX];
+    if (!get_executable_path(exe_path, sizeof(exe_path))) {
+        return false;
+    }
+    int fd = open(exe_path, O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < ATOMVM_TRAILER_SIZE) {
+        close(fd);
+        return false;
+    }
+    uint8_t trailer[ATOMVM_TRAILER_SIZE];
+    if (pread(fd, trailer, ATOMVM_TRAILER_SIZE, st.st_size - ATOMVM_TRAILER_SIZE)
+        != ATOMVM_TRAILER_SIZE) {
+        close(fd);
+        return false;
+    }
+    if (memcmp(trailer + 8, ATOMVM_TRAILER_MAGIC, 8) != 0) {
+        close(fd);
+        return false;
+    }
+    uint64_t avm_size = 0;
+    for (int i = 7; i >= 0; i--) {
+        avm_size = (avm_size << 8) | trailer[i];
+    }
+    if (avm_size == 0 || avm_size > (uint64_t) st.st_size - ATOMVM_TRAILER_SIZE) {
+        close(fd);
+        return false;
+    }
+    off_t avm_offset = st.st_size - ATOMVM_TRAILER_SIZE - (off_t) avm_size;
+    long page_size = sysconf(_SC_PAGESIZE);
+    off_t page_aligned_offset = (avm_offset / page_size) * page_size;
+    size_t extra = (size_t) (avm_offset - page_aligned_offset);
+    size_t map_length = (size_t) avm_size + extra;
+    void *map = mmap(NULL, map_length, PROT_READ, MAP_PRIVATE, fd, page_aligned_offset);
+    close(fd);
+    if (map == MAP_FAILED) {
+        fprintf(stderr, "Failed to mmap current executable (errno = %d)\n", (int) errno);
+        return false;
+    }
+    *data = (const void *) ((const char *) map + extra);
+    *size = (size_t) avm_size;
+    return true;
+}
+
+/**
  * @brief Try to extract embedded AVM data from the executable itself
  * @param data pointer to store the embedded AVM data (if found)
  * @param size pointer to store the size of the embedded AVM data
@@ -109,6 +216,12 @@ void print_help(const char *program_name)
  */
 bool get_embedded_avm(const void **data, size_t *size)
 {
+    // An appended pack with a trailer takes precedence: it requires no
+    // platform binary tooling, and a build that embeds a section can still
+    // be extended by appending.
+    if (get_trailer_avm(data, size)) {
+        return true;
+    }
 #if defined(ATOMVM_HAS_EMBEDDED_AVM) && defined(__APPLE__)
     // On macOS, look for the __ATOMVM,__avm_data section
     unsigned long section_size = 0;
