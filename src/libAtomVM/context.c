@@ -81,9 +81,9 @@ Context *context_new(GlobalContext *glb)
     ctx->min_heap_size = 0;
     ctx->max_heap_size = 0;
     ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
-    // 0 = always full-sweep: the generational (minor) GC corrupts the heap
-    // under compiler-style workloads (large heaps, many binaries) and is
-    // disabled by default until the root cause is fixed; it can still be
+    // 0 = always full-sweep: the generational (minor) GC still corrupts the
+    // heap under compiler-style workloads (large heaps, many binaries) and
+    // is disabled by default until the root cause is fixed; it can still be
     // enabled per process via spawn_opt/process_flag fullsweep_after.
     ctx->fullsweep_after = 0;
     ctx->gc_count = 0;

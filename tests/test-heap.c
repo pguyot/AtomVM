@@ -36,6 +36,7 @@ void test_memory_ensure_free(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
     enum MemoryGCResult res = memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK);
     assert(res == MEMORY_GC_OK);
     size_t memory_size = memory_heap_memory_size(&ctx->heap);
@@ -67,6 +68,7 @@ void test_gc_ref_count(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
     enum MemoryGCResult res = memory_ensure_free_opt(ctx, 0, MEMORY_FORCE_SHRINK);
     assert(res == MEMORY_GC_OK);
     size_t memory_size = memory_heap_memory_size(&ctx->heap);
@@ -115,6 +117,7 @@ void test_generational_gc_basic(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
 
     // Allocate a tuple and GC to set HWM
     enum MemoryGCResult res = memory_ensure_free(ctx, TUPLE_SIZE(2));
@@ -171,6 +174,7 @@ void test_generational_gc_promotion(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
 
     // Allocate and GC to promote data to mature
     enum MemoryGCResult res = memory_ensure_free(ctx, TUPLE_SIZE(2));
@@ -221,6 +225,7 @@ void test_generational_gc_major_on_force_shrink(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
 
     // Build up an old heap
     enum MemoryGCResult res = memory_ensure_free(ctx, TUPLE_SIZE(2));
@@ -276,6 +281,7 @@ void test_generational_gc_mso(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
 
     struct ListHead *refc_binaries = synclist_nolock(&glb->refc_binaries);
     assert(list_is_empty(refc_binaries));
@@ -414,6 +420,7 @@ void test_generational_gc_incremental_list(void)
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
     ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
     // Large threshold so collections are minor (not full) sweeps.
     ctx->fullsweep_after = 1000000;
 
@@ -479,7 +486,8 @@ void test_generational_gc_can_shrink_keeps_old_heap(void)
 {
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
-    // Defaults: BoundedFreeHeapGrowth, fullsweep_after = 65535.
+    // Default growth strategy (BoundedFreeHeapGrowth), generational GC on.
+    ctx->fullsweep_after = 65535;
 
     // Allocate a large tuple that will become the mature data.
     enum MemoryGCResult res = memory_ensure_free(ctx, TUPLE_SIZE(200));
@@ -621,6 +629,59 @@ void test_fullsweep_after_large(void)
     globalcontext_destroy(glb);
 }
 
+// A fragment swap (memory_heap_alloc growing the heap into a fresh root
+// fragment) strands high_water_mark in the swapped-out fragment, where it
+// no longer delimits a mature region of the current root. The swap must
+// clear it so the next collection is a full GC; comparing the stale
+// pointer against the new root's range (as memory_gc used to do) is
+// undefined behaviour and spuriously enabled a minor GC with a garbage
+// mature region, corrupting the heap.
+void test_generational_gc_fragment_swap(void)
+{
+    GlobalContext *glb = globalcontext_new();
+    Context *ctx = context_new(glb);
+    ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
+
+    enum MemoryGCResult res = memory_ensure_free(ctx, TUPLE_SIZE(2));
+    assert(res == MEMORY_GC_OK);
+
+    term tuple1 = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(tuple1, 0, term_from_int(42));
+    term_put_tuple_element(tuple1, 1, term_from_int(43));
+
+    term roots[2];
+    roots[0] = tuple1;
+    roots[1] = term_nil();
+
+    // First GC sets HWM
+    res = memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 2, roots, MEMORY_CAN_SHRINK);
+    assert(res == MEMORY_GC_OK);
+    assert(ctx->heap.high_water_mark != NULL);
+    tuple1 = roots[0];
+
+    // A no-GC allocation larger than the free space swaps in a new root
+    // fragment (the path NIFs take when they cannot GC)
+    size_t free_space = context_avail_free_memory(ctx);
+    res = memory_ensure_free_opt(ctx, free_space + 16, MEMORY_NO_GC);
+    assert(res == MEMORY_GC_OK);
+
+    // high_water_mark no longer belongs to the root fragment: it must be
+    // cleared so the next GC is a full one
+    assert(ctx->heap.high_water_mark == NULL);
+
+    // The next collection must preserve the data reachable from roots
+    res = memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 2, roots, MEMORY_CAN_SHRINK);
+    assert(res == MEMORY_GC_OK);
+    tuple1 = roots[0];
+    assert(term_get_tuple_arity(tuple1) == 2);
+    assert(term_get_tuple_element(tuple1, 0) == term_from_int(42));
+    assert(term_get_tuple_element(tuple1, 1) == term_from_int(43));
+
+    context_destroy(ctx);
+    globalcontext_destroy(glb);
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
@@ -636,6 +697,7 @@ int main(int argc, char **argv)
     test_generational_gc_incremental_list();
     test_generational_gc_can_shrink_keeps_old_heap();
     test_fullsweep_after_large();
+    test_generational_gc_fragment_swap();
 
     return EXIT_SUCCESS;
 }

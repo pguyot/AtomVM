@@ -109,7 +109,6 @@ static inline enum MemoryGCResult memory_heap_alloc_new_fragment(Heap *heap, siz
     HeapFragment *root_fragment = heap->root;
     term *old_end = heap->heap_end;
     term mso_list = root_fragment->mso_list;
-    term *old_high_water_mark = heap->high_water_mark;
     term *old_old_heap_start = heap->old_heap_start;
     term *old_old_heap_ptr = heap->old_heap_ptr;
     term *old_old_heap_end = heap->old_heap_end;
@@ -118,7 +117,13 @@ static inline enum MemoryGCResult memory_heap_alloc_new_fragment(Heap *heap, siz
         TRACE("Unable to allocate memory fragment.  size=%u\n", (unsigned int) size);
         return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
-    heap->high_water_mark = old_high_water_mark;
+    // The swap strands the mature region in the old root fragment (now
+    // root->next): high_water_mark no longer delimits anything in the new
+    // root, so clear it to force the next collection to be a full GC.
+    // Comparing the stale pointer against the new root's range would be
+    // undefined behaviour and can spuriously enable a minor GC with a
+    // garbage mature region.
+    heap->high_water_mark = NULL;
     heap->old_heap_start = old_old_heap_start;
     heap->old_heap_ptr = old_old_heap_ptr;
     heap->old_heap_end = old_old_heap_end;
@@ -304,14 +309,10 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
     // Message delivery (memory_heap_append_fragment) preserves this: it links
     // the message as root->next without moving the root or high_water_mark, and
     // minor GC's pointer-driven copy already walks the whole fragment chain.
-    // But memory_heap_alloc_new_fragment swaps the root, stranding
-    // high_water_mark in root->next (a separate allocation) and making the
-    // mature range meaningless -- there we must full-GC to rechain every
-    // fragment into from-space.
-    bool mature_in_root = ctx->heap.high_water_mark >= ctx->heap.heap_start
-        && ctx->heap.high_water_mark <= ctx->heap.heap_ptr;
-    bool force_full = ctx->fullsweep_after == 0 || ctx->gc_count >= ctx->fullsweep_after
-        || !mature_in_root;
+    // memory_heap_alloc_new_fragment swaps the root, making the mature range
+    // meaningless; it clears high_water_mark so the NULL check below forces a
+    // full GC that rechains every fragment into from-space.
+    bool force_full = ctx->fullsweep_after == 0 || ctx->gc_count >= ctx->fullsweep_after;
     if (ctx->heap.high_water_mark == NULL || force_full) {
         enum MemoryGCResult result = memory_full_gc(ctx, new_size, num_roots, roots);
         if (result == MEMORY_GC_OK) {
