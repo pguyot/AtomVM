@@ -38,6 +38,7 @@
     posix_open/2,
     posix_open/3,
     posix_close/1,
+    posix_unlink/1,
     posix_read/2,
     posix_write/2,
     posix_seek/3,
@@ -280,6 +281,16 @@ posix_open(_Path, _Flags, _Mode) ->
 %%-----------------------------------------------------------------------------
 -spec posix_close(File :: posix_fd()) -> ok | {error, posix_error()}.
 posix_close(_File) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Path    Path to the file to remove
+%% @returns `ok' or an error tuple
+%% @doc     Remove (unlink) a file.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec posix_unlink(Path :: iodata()) -> ok | {error, posix_error()}.
+posix_unlink(_Path) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
