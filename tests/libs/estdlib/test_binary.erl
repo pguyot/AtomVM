@@ -25,6 +25,7 @@
 -include("etest.hrl").
 
 test() ->
+    ok = test_encode_unsigned(),
     ok = test_split(),
     ok = test_hex(),
     ok = test_list_to_bin(),
@@ -64,4 +65,20 @@ test_hex() ->
     ?ASSERT_MATCH(RawBinary, binary:decode_hex(<<"48656C6C6F2C2041746F6D564D21">>)),
     ?ASSERT_EXCEPTION(binary:decode_hex(<<"48656C6C6F2C2041746F6D564D2">>), error, badarg),
     ?ASSERT_EXCEPTION(binary:decode_hex(<<"ABCDEFGH">>), error, badarg),
+    ok.
+
+test_encode_unsigned() ->
+    ?ASSERT_MATCH(binary:encode_unsigned(0), <<0>>),
+    ?ASSERT_MATCH(binary:encode_unsigned(255), <<255>>),
+    ?ASSERT_MATCH(binary:encode_unsigned(258), <<1, 2>>),
+    ?ASSERT_MATCH(binary:encode_unsigned(16#DEADBEEF), <<16#DE, 16#AD, 16#BE, 16#EF>>),
+    ?ASSERT_MATCH(binary:encode_unsigned(258, big), <<1, 2>>),
+    ?ASSERT_MATCH(binary:encode_unsigned(258, little), <<2, 1>>),
+    ok =
+        try
+            binary:encode_unsigned(-1),
+            fail
+        catch
+            error:badarg -> ok
+        end,
     ok.
