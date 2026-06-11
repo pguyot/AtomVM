@@ -228,7 +228,7 @@ ets_result_t ets_multimap_remove(
     }
 
     assert(node->entries != NULL);
-    assert(term_compare(key, node_key(multimap, node), TermCompareExact, global) == TermEquals);
+    assert(term_compare(key, node_key(multimap, node), (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global) == TermEquals);
 
     uint32_t idx = term_hash(key, global) % ETS_MULTIMAP_NUM_BUCKETS;
     EtsMultimapNode *iter = multimap->buckets[idx];
@@ -285,7 +285,7 @@ ets_result_t ets_multimap_remove_tuple(
     }
 
     for (EtsMultimapEntry *iter = node->entries; iter != NULL; iter = iter->next) {
-        TermCompareResult result = term_compare(tuple, iter->tuple, TermCompareExact, global);
+        TermCompareResult result = term_compare(tuple, iter->tuple, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
 
         if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
             free(to_remove);
@@ -373,7 +373,7 @@ static ets_result_t node_find(
     EtsMultimapNode *node = multimap->buckets[idx];
 
     while (node) {
-        TermCompareResult result = term_compare(key, node_key(multimap, node), TermCompareExact, global);
+        TermCompareResult result = term_compare(key, node_key(multimap, node), (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
 
         if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
             return EtsAllocationError;
@@ -459,7 +459,7 @@ static ets_result_t tuple_exists(
     GlobalContext *global)
 {
     for (EtsMultimapEntry *iter = node->entries; iter != NULL; iter = iter->next) {
-        TermCompareResult result = term_compare(tuple, iter->tuple, TermCompareExact, global);
+        TermCompareResult result = term_compare(tuple, iter->tuple, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
 
         if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
             return EtsAllocationError;
