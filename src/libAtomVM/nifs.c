@@ -7294,7 +7294,11 @@ static term nif_lists_reverse(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, len * CONS_SIZE, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    // Only call the allocator when the heap actually lacks space (sort
+    // calls reverse at every merge level; the call's shrink evaluation is
+    // pure overhead then).
+    if (context_avail_free_memory(ctx) < len * CONS_SIZE
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, len * CONS_SIZE, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
