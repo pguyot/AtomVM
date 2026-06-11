@@ -274,6 +274,16 @@ term memory_copy_term_tree(Heap *new_heap, term t);
 enum MemoryGCResult memory_ensure_free_with_roots(Context *ctx, size_t size, size_t num_roots, term *roots, enum MemoryAllocMode alloc_mode) MUST_CHECK;
 
 /**
+ * @brief Generational GC write barrier for destructive updates.
+ *
+ * @details An in-place update may store a young-generation pointer into a
+ * tuple that has been promoted to the old generation, which is never
+ * rescanned by minor collections. Record the mutated cell in the remembered
+ * set in that case.
+ */
+void memory_record_old_cell_write(Context *ctx, term *cell);
+
+/**
  * @brief makes sure that the given context has given free memory.
  *
  * @details this function makes sure at least size terms are available. Optionally,
