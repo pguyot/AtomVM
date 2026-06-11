@@ -435,6 +435,42 @@ atom_index_t insert_atoms_into_atom_table(struct AtomTable *table)
     return decimals_index;
 }
 
+// Compare ordering must hold across node-group boundaries (groups are
+// chained as the table grows) and stay consistent with a direct
+// memcmp-style oracle on the atom names.
+void test_atom_table_cmp_many(void)
+{
+    struct AtomTable *table = atom_table_new();
+    enum
+    {
+        N = 3000
+    };
+    static char names[N][16];
+    static size_t lens[N];
+    atom_index_t idx[N];
+    for (int i = 0; i < N; i++) {
+        lens[i] = (size_t) snprintf(names[i], sizeof(names[i]), "a%d_%d", i % 7, i);
+        enum AtomTableEnsureAtomResult r = atom_table_ensure_atom(
+            table, (const uint8_t *) names[i], lens[i], AtomTableNoOpts, &idx[i]);
+        assert(r == AtomTableEnsureAtomOk);
+    }
+    unsigned seed = 42;
+    for (int t = 0; t < 20000; t++) {
+        seed = seed * 1103515245 + 12345;
+        int a = (seed >> 8) % N;
+        seed = seed * 1103515245 + 12345;
+        int b = (seed >> 8) % N;
+        size_t min_len = lens[a] < lens[b] ? lens[a] : lens[b];
+        int oracle = memcmp(names[a], names[b], min_len);
+        if (oracle == 0 && lens[a] != lens[b]) {
+            oracle = lens[a] > lens[b] ? 1 : -1;
+        }
+        int got = atom_table_cmp_using_atom_index(table, idx[a], idx[b]);
+        assert((oracle == 0 && got == 0) || (oracle < 0 && got < 0) || (oracle > 0 && got > 0));
+    }
+    atom_table_destroy(table);
+}
+
 void test_atom_table(void)
 {
     struct AtomTable *table = atom_table_new();
@@ -544,6 +580,7 @@ int main(int argc, char **argv)
     test_valueshashtable();
     test_atom_table();
     test_atom_table_bulk_grow();
+    test_atom_table_cmp_many();
 
     return EXIT_SUCCESS;
 }
