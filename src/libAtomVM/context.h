@@ -133,6 +133,17 @@ struct Context
     bool gc_remembered_overflow;
     size_t gc_count;
 
+    // Shrink-probe memoization: root-fragment heap_end as of the last
+    // test_heap shrink probe (the heap_free > heap_need * COEFF branch).
+    // Between heap replacements free space only decreases and the growth
+    // strategy's shrink condition is monotone in it, so once a probe ran
+    // the answer cannot flip until the root block changes (GC) or a
+    // fragment is appended — skip the memory_ensure_free_with_roots call
+    // until then. (A recycled block can coincidentally reuse the address
+    // right after a GC; that GC just right-sized the heap, so the skipped
+    // probe is moot.)
+    term *shrink_probe_heap_end;
+
     // saved state when scheduled out
     Module *saved_module;
     union

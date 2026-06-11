@@ -106,6 +106,7 @@ Context *context_new(GlobalContext *glb)
     ctx->gc_remembered_capacity = 0;
     ctx->gc_remembered_overflow = false;
     ctx->gc_count = 0;
+    ctx->shrink_probe_heap_end = NULL;
     ctx->has_min_heap_size = 0;
     ctx->has_max_heap_size = 0;
 
