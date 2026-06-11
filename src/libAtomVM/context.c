@@ -50,7 +50,13 @@
 #include "opcodesswitch.h"
 #undef IMPL_EXECUTE_LOOP
 
+#ifdef AVM_DEFAULT_HEAP_GROWTH_FIBONACCI
+// Match BEAM's default initial heap size (233 words): desktop-class
+// platforms trade memory for allocation throughput.
 #define DEFAULT_STACK_SIZE 8
+#else
+#define DEFAULT_STACK_SIZE 8
+#endif
 #define BYTES_PER_TERM (TERM_BITS / 8)
 
 // active_alias_count saturates at this value instead of wrapping to 0. A wrap would make
@@ -85,12 +91,21 @@ Context *context_new(GlobalContext *glb)
 
     ctx->min_heap_size = 0;
     ctx->max_heap_size = 0;
+#ifdef AVM_DEFAULT_HEAP_GROWTH_FIBONACCI
+    // Desktop-class platforms favor throughput: geometric heap growth with a
+    // conservative shrink policy avoids the grow/shrink thrash that the
+    // bounded strategy exhibits on allocation-heavy workloads (each cycle
+    // copies the whole live set).
+    ctx->heap_growth_strategy = FibonacciHeapGrowth;
+#else
     ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
+#endif
     // Same default as BEAM: a full sweep every 65535 collections, minor
     // (generational) collections in between. 0 disables the generational
     // collector (always full-sweep); both can be set per process via
     // spawn_opt/process_flag fullsweep_after.
     ctx->fullsweep_after = 65535;
+    ctx->nif_call_arity = 0;
     ctx->gc_count = 0;
     ctx->has_min_heap_size = 0;
     ctx->has_max_heap_size = 0;
