@@ -31,6 +31,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+#include <stdatomic.h>
+#endif
+
 #include "atom.h"
 #include "atom_table.h"
 #include "context.h"
@@ -146,6 +150,12 @@ struct Module
     size_t line_refs_offsets_count;
 
     const struct ExportedFunction **imported_funcs;
+
+    // UnresolvedFunctionCall entries replaced in imported_funcs, kept
+    // allocated (chained here, freed at module destruction) so lock-free
+    // readers of imported_funcs can safely inspect the type of a pointer
+    // read concurrently with its resolution.
+    struct UnresolvedFunctionCall *resolved_imports;
 
     const uint8_t **labels;
 
@@ -371,10 +381,19 @@ static inline term module_get_name(const Module *mod)
  */
 static inline const struct ExportedFunction *module_resolve_function(Module *mod, int import_table_index, GlobalContext *glb)
 {
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+    // Lock-free fast path: a slot is replaced exactly once (release store in
+    // module_resolve_function0) and the replaced UnresolvedFunctionCall stays
+    // allocated until module destruction (Module.resolved_imports), so the
+    // type of a concurrently replaced entry can be inspected safely.
+    const struct ExportedFunction *resolved = atomic_load_explicit(
+        (const struct ExportedFunction *_Atomic *) &mod->imported_funcs[import_table_index],
+        memory_order_acquire);
+    if (LIKELY(resolved->type != UnresolvedFunctionCall)) {
+        return resolved;
+    }
+#endif
     SMP_MODULE_LOCK(mod);
-    // We cannot optimistically read the unresolved function call.
-    // While reads of imported_funcs can happen outside the lock, read of the func
-    // pointer itself cannot, as UnresolvedFunctionCall pointers are freed.
     const struct ExportedFunction *func = mod->imported_funcs[import_table_index];
     if (func->type != UnresolvedFunctionCall) {
         SMP_MODULE_UNLOCK(mod);

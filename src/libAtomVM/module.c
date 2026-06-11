@@ -1675,6 +1675,12 @@ COLD_FUNC void module_destroy(Module *module)
 #endif
 
     free(module->labels);
+    struct UnresolvedFunctionCall *resolved_import = module->resolved_imports;
+    while (resolved_import != NULL) {
+        struct UnresolvedFunctionCall *next_resolved = resolved_import->next_resolved;
+        free(resolved_import);
+        resolved_import = next_resolved;
+    }
     free(module->imported_funcs);
     free(module->literals_table);
     free(module->local_atoms_to_global_table);
@@ -2054,8 +2060,18 @@ const struct ExportedFunction *module_resolve_function0(Module *mod, int import_
         if (IS_NULL_PTR(exported_function)) {
             return NULL;
         }
+        // Keep the unresolved entry allocated (freed at module destruction):
+        // lock-free readers may still be inspecting it. The release store
+        // pairs with the acquire load in module_resolve_function.
+        unresolved->next_resolved = mod->resolved_imports;
+        mod->resolved_imports = unresolved;
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+        atomic_store_explicit(
+            (const struct ExportedFunction *_Atomic *) &mod->imported_funcs[import_table_index],
+            exported_function, memory_order_release);
+#else
         mod->imported_funcs[import_table_index] = exported_function;
-        free(unresolved);
+#endif
         return exported_function;
     } else {
         size_t atom_string_len;
