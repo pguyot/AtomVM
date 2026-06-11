@@ -2558,7 +2558,8 @@ first_pass(
                 fun(BSt0) ->
                     {BSt1, OldValueReg} = MMod:get_array_element(BSt0, DestReg, UpdateIx),
                     {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
-                        ctx, jit_state, {free, OldValueReg}, UpdateValue, ?TERM_COMPARE_EXACT
+                        ctx, jit_state, {free, OldValueReg}, UpdateValue,
+                        ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
                     ]),
                     BSt3 = handle_error_if(
                         {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt2
@@ -4990,7 +4991,7 @@ op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
         jit_state,
         {free, unwrap_typed(Arg1)},
         {free, unwrap_typed(Arg2)},
-        ?TERM_COMPARE_NO_OPTS
+        ?TERM_COMPARE_EQUAL_ONLY
     ]),
     MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
     cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt2).
@@ -5036,21 +5037,72 @@ op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
     op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
 
 op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
-    %% Runtime fast path: if both operands are small integers, equality is a
-    %% direct tagged compare (equal iff tagged values equal), avoiding the
-    %% term_compare C call. Otherwise fall back to term_compare. is_eq_exact
-    %% jumps to Label when the operands are NOT equal.
-    emit_smallint_compare_fastpath(
-        MMod,
-        MSt0,
-        Label,
-        Arg1,
-        Arg2,
-        ?TERM_COMPARE_EXACT,
-        %% both-small fast path: jump to Label if tagged values differ.
-        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '!=', A2}, Label, MMod, BSt0) end,
-        %% term_compare result mask for "jump": LESS or GREATER (i.e. not equal).
-        ?TERM_LESS_THAN + ?TERM_GREATER_THAN
+    %% is_eq_exact jumps to Label when the operands are NOT equal.
+    emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, not_equal).
+
+%% Exact (=:=) equality needs no ordering: identical terms are equal, and a
+%% term with an immediate primary tag (atom, small integer, nil, local
+%% pid/port) is equal only to itself -- boxed integers are normalized, so no
+%% boxed term is exactly equal to an immediate. Inline:
+%%   if A == B                  -> equal
+%%   else if A or B immediate   -> not equal
+%%   else                       -> term_compare fallback
+%% JumpOn selects whether Label is taken on equal (is_ne_exact) or not_equal
+%% (is_eq_exact).
+emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, JumpOn) ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
+    JumpMask =
+        case JumpOn of
+            not_equal -> ?TERM_LESS_THAN + ?TERM_GREATER_THAN;
+            equal -> ?TERM_EQUALS
+        end,
+    Fallback = fun(BSt0) ->
+        {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_COMPARE, [
+            ctx,
+            jit_state,
+            {free, Arg1Reg},
+            {free, Arg2Reg},
+            ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
+        ]),
+        BSt2 = handle_error_if(
+            {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt1
+        ),
+        cond_jump_to_label({{free, ResultReg}, '&', JumpMask, '!=', 0}, Label, MMod, BSt2)
+    end,
+    Equal = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [Arg1Reg, Arg2Reg]),
+        case JumpOn of
+            equal -> MMod:jump_to_label(BSt1, Label);
+            not_equal -> BSt1
+        end
+    end,
+    Unequal = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [Arg1Reg, Arg2Reg]),
+        case JumpOn of
+            not_equal -> MMod:jump_to_label(BSt1, Label);
+            equal -> BSt1
+        end
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {Arg1Reg, '==', Arg2Reg},
+        Equal,
+        fun(NeSt0) ->
+            MMod:if_else_block(
+                NeSt0,
+                {Arg1Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_IMMED},
+                fun(N0) ->
+                    MMod:if_else_block(
+                        N0,
+                        {Arg2Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_IMMED},
+                        Fallback,
+                        Unequal
+                    )
+                end,
+                Unequal
+            )
+        end
     ).
 
 %% Emit a runtime small-integer fast path wrapping a term_compare fallback,
@@ -5144,16 +5196,7 @@ op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
 
 op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
     %% is_ne_exact jumps to Label when the operands ARE equal.
-    emit_smallint_compare_fastpath(
-        MMod,
-        MSt0,
-        Label,
-        Arg1,
-        Arg2,
-        ?TERM_COMPARE_EXACT,
-        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '==', A2}, Label, MMod, BSt0) end,
-        ?TERM_EQUALS
-    ).
+    emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, equal).
 
 op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
     %% is_equal (==) jumps to Label when the operands are NOT equal. For two
@@ -5164,7 +5207,7 @@ op_is_equal(MMod, MSt0, Label, Arg1, Arg2) ->
         Label,
         Arg1,
         Arg2,
-        ?TERM_COMPARE_NO_OPTS,
+        ?TERM_COMPARE_EQUAL_ONLY,
         fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '!=', A2}, Label, MMod, BSt0) end,
         ?TERM_LESS_THAN + ?TERM_GREATER_THAN
     ).
@@ -5215,7 +5258,8 @@ op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
     {JmpLabel, Rest2} = decode_label(Rest1),
     ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
     {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, unwrap_typed(CmpValue)}, unwrap_typed(SrcValue), ?TERM_COMPARE_EXACT
+        ctx, jit_state, {free, unwrap_typed(CmpValue)}, unwrap_typed(SrcValue),
+        ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
     ]),
     MSt3 = handle_error_if(
         {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt2

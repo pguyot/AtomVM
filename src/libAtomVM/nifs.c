@@ -7643,7 +7643,7 @@ static term nif_erlang_lists_subtract(Context *ctx, int argc, term argv[])
                 continue;
             }
             term item = term_get_list_head(cons[i]);
-            TermCompareResult cmp_result = term_compare(to_nullify, item, TermCompareExact, ctx->global);
+            TermCompareResult cmp_result = term_compare(to_nullify, item, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
 
             if (UNLIKELY(cmp_result == TermCompareMemoryAllocFail)) {
                 free(cons);
@@ -7816,7 +7816,7 @@ static term nif_lists_member(Context *ctx, int argc, term argv[])
     while (term_is_nonempty_list(list)) {
         term head = term_get_list_head(list);
 
-        TermCompareResult cmp_result = term_compare(head, elem, TermCompareExact, ctx->global);
+        TermCompareResult cmp_result = term_compare(head, elem, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
 
         if (cmp_result == TermEquals) {
             return TRUE_ATOM;
@@ -7875,7 +7875,7 @@ static term nif_lists_keyfind(Context *ctx, int argc, term argv[])
 
         term nth_element = term_get_tuple_element(tuple, n_pos - 1);
 
-        TermCompareResult cmp_result = term_compare(nth_element, key, TermCompareExact, ctx->global);
+        TermCompareResult cmp_result = term_compare(nth_element, key, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
 
         if (cmp_result == TermEquals) {
             return tuple;
