@@ -106,6 +106,10 @@ Context *context_new(GlobalContext *glb)
     // spawn_opt/process_flag fullsweep_after.
     ctx->fullsweep_after = 65535;
     ctx->nif_call_arity = 0;
+    ctx->gc_remembered_set = NULL;
+    ctx->gc_remembered_size = 0;
+    ctx->gc_remembered_capacity = 0;
+    ctx->gc_remembered_overflow = false;
     ctx->gc_count = 0;
     ctx->has_min_heap_size = 0;
     ctx->has_max_heap_size = 0;
@@ -163,6 +167,7 @@ Context *context_new(GlobalContext *glb)
 
 void context_destroy(Context *ctx)
 {
+    free(ctx->gc_remembered_set);
     // Hold and release the spin lock for timers and cancel any timer
     scheduler_cancel_timeout(ctx);
 

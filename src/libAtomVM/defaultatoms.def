@@ -124,6 +124,7 @@ X(FLOAT_ATOM, "\x5", "float")
 
 X(COPY_ATOM, "\x4", "copy")
 X(REUSE_ATOM, "\x5", "reuse")
+X(INPLACE_ATOM, "\x7", "inplace")
 X(ENSURE_AT_LEAST_ATOM, "\xF", "ensure_at_least")
 X(ENSURE_EXACTLY_ATOM, "\xE", "ensure_exactly")
 X(SKIP_ATOM, "\x4", "skip")

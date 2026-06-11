@@ -119,6 +119,24 @@ struct Context
     // are made GC roots so a NIF-triggered collection does not free terms
     // the NIF still references through argv.
     int nif_call_arity;
+
+    // Remembered set for the generational GC: old-generation cells that
+    // hold young-generation pointers. Two sources: in-place update_record
+    // stores (memory_record_old_cell_write, the write barrier) and the
+    // collector itself, when promotion runs out of old-generation space and
+    // spills terms to the young heap. Entries are extra roots for the next
+    // minor collection, which promotes their targets and drops the entries.
+    // Cleared by full GCs. BEAM instead updates records in place only when
+    // the tuple is young (copying otherwise) and sizes the old heap up
+    // front so a promotion always fits; the remembered set avoids that
+    // worst-case reservation and may be revisited. Standing cost: these
+    // four fields per process; the array is allocated on first use.
+    term **gc_remembered_set;
+    size_t gc_remembered_size;
+    size_t gc_remembered_capacity;
+    // Set when growing the remembered set failed: the next collection must
+    // be a full one (which clears the set and the flag).
+    bool gc_remembered_overflow;
     size_t gc_count;
 
     // saved state when scheduled out
