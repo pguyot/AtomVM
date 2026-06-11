@@ -95,11 +95,11 @@ Context *context_new(GlobalContext *glb)
 #else
     ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
 #endif
-    // 0 = always full-sweep: the generational (minor) GC still corrupts the
-    // heap under compiler-style workloads (large heaps, many binaries) and
-    // is disabled by default until the root cause is fixed; it can still be
-    // enabled per process via spawn_opt/process_flag fullsweep_after.
-    ctx->fullsweep_after = 0;
+    // Same default as BEAM: a full sweep every 65535 collections, minor
+    // (generational) collections in between. 0 disables the generational
+    // collector (always full-sweep); both can be set per process via
+    // spawn_opt/process_flag fullsweep_after.
+    ctx->fullsweep_after = 65535;
     ctx->nif_call_arity = 0;
     ctx->gc_remembered_set = NULL;
     ctx->gc_remembered_size = 0;
