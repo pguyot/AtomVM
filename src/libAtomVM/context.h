@@ -119,6 +119,18 @@ struct Context
     // are made GC roots so a NIF-triggered collection does not free terms
     // the NIF still references through argv.
     int nif_call_arity;
+
+    // Remembered set for the generational GC: old-generation cells that
+    // hold young-generation pointers (created when an old-region scan
+    // dereferences a moved marker whose target was copied to the young
+    // to-space). They are extra roots for the next minor collection, which
+    // promotes their targets and drops the entries. Cleared by full GCs.
+    term **gc_remembered_set;
+    size_t gc_remembered_size;
+    size_t gc_remembered_capacity;
+    // Set when growing the remembered set failed: the next collection must
+    // be a full one (which clears the set and the flag).
+    bool gc_remembered_overflow;
     size_t gc_count;
 
     // saved state when scheduled out
