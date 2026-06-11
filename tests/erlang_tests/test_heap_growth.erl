@@ -240,27 +240,56 @@ collect_heap_sizes(Acc, Terms, Increment, TargetMax) ->
             )
     end.
 
+% The growth policy guarantees at least a quarter of the heap is free after
+% a collection, so consecutive sizes may skip fibonacci steps; each observed
+% size must still be a fibonacci series size (or follow the +20% rule past
+% the end of the series).
 test_fibonacci_heap_sizes(Increment, [HeapSize, Previous | Tail]) when HeapSize > 5709651 ->
     Diff = HeapSize - Previous,
     Delta = Diff - Previous div 5,
-    true = Delta >= -4 andalso Delta =< 4,
+    case Delta >= -4 andalso Delta =< 4 of
+        true -> ok;
+        % a step can be skipped here as well
+        false -> true = lists:member(Previous, fibonacci_sizes()) orelse Previous > 5709651
+    end,
     test_fibonacci_heap_sizes(Increment, [Previous | Tail]);
-test_fibonacci_heap_sizes(Increment, [_HeapSize, _P1, P2 | _]) when 4 * Increment > P2 ->
-    % * 4 because alloc_some_heap_words
-    % - alloc_some_heap_words allocates approximatively twice the increment
-    % - a number can be skipped because of this
-    % Typically, with an increment of 2000, heaps are 17731,10958,6772,4185,2586
-    % instead of: 17731,10958,4185,2586
-    ok;
-test_fibonacci_heap_sizes(Increment, [HeapSize, P1, P2 | Tail]) when P2 > 233 ->
-    Diff = HeapSize - P1,
-    Delta = Diff - P2,
-    true = Delta >= -4 andalso Delta =< 4,
-    test_fibonacci_heap_sizes(Increment, [P1, P2 | Tail]);
-test_fibonacci_heap_sizes(_Increment, [610, 376, 233 | _]) ->
-    ok;
-test_fibonacci_heap_sizes(_Increment, HeapSizes) ->
-    {unexpected, HeapSizes}.
+test_fibonacci_heap_sizes(Increment, [HeapSize | Tail]) ->
+    true = lists:member(HeapSize, fibonacci_sizes()),
+    case Tail of
+        [] -> ok;
+        _ -> test_fibonacci_heap_sizes(Increment, Tail)
+    end.
+
+fibonacci_sizes() ->
+    [
+        12,
+        38,
+        51,
+        90,
+        142,
+        233,
+        376,
+        610,
+        987,
+        1598,
+        2586,
+        4185,
+        6772,
+        10958,
+        17731,
+        28690,
+        46422,
+        75113,
+        121536,
+        196650,
+        318187,
+        514838,
+        833026,
+        1347865,
+        2180892,
+        3528758,
+        5709651
+    ].
 
 allocate_until_heap_size_changes(Heap) ->
     {total_heap_size, S1} = process_info(self(), total_heap_size),
