@@ -271,6 +271,7 @@ compile_erlang(test_process_info)
 compile_erlang(test_min_heap_size)
 compile_erlang(test_heap_growth)
 compile_erlang(test_put_map_exact_shared_keys)
+compile_erlang(test_update_record_inplace)
 compile_erlang(test_system_flag)
 compile_erlang(test_system_info)
 compile_erlang(test_binary_to_term)
@@ -854,6 +855,7 @@ set(erlang_test_beams
     test_min_heap_size.beam
     test_heap_growth.beam
     test_put_map_exact_shared_keys.beam
+    test_update_record_inplace.beam
     test_system_flag.beam
     test_system_info.beam
     test_binary_to_term.beam
