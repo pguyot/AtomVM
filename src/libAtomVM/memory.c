@@ -1274,7 +1274,7 @@ static size_t initial_old_heap_size(enum HeapGrowthStrategy strategy, size_t mat
             return mature_size + 2 * MIN_FREE_SPACE_SIZE;
         case FibonacciHeapGrowth:
         default:
-            return next_fibonacci_heap_size(mature_size);
+            return next_fibonacci_heap_size(3 * mature_size);
     }
 }
 
