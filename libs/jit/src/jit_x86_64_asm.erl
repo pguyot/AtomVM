@@ -628,6 +628,18 @@ cmpq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#39, 3:2, MODRM_REG:3, MODRM_RM:3>>;
+cmpq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), is_atom(Reg), ?IS_SINT8_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 1:2, 7:3, MODRM_RM:3, Offset, Imm>>;
+cmpq(Imm, {Offset, Reg}) when ?IS_SINT32_T(Imm), is_atom(Reg), ?IS_SINT8_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 1:2, 7:3, MODRM_RM:3, Offset, Imm:32/little>>;
+cmpq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), is_atom(Reg), ?IS_SINT32_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 2:2, 7:3, MODRM_RM:3, Offset:32/little, Imm>>;
+cmpq(Imm, {Offset, Reg}) when ?IS_SINT32_T(Imm), is_atom(Reg), ?IS_SINT32_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 2:2, 7:3, MODRM_RM:3, Offset:32/little, Imm:32/little>>;
 cmpq(Imm, Reg) when ?IS_SINT8_T(Imm) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#83, (16#F8 + Index), Imm>>;
