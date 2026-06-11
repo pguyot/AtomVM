@@ -351,7 +351,7 @@ static void retire_entry(PersistentTerm *persistent_term, struct PersistentTermE
 
 static bool term_is_equal(term a, term b, GlobalContext *global, persistent_term_result_t *result)
 {
-    TermCompareResult compare_result = term_compare(a, b, TermCompareExact, global);
+    TermCompareResult compare_result = term_compare(a, b, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
     if (UNLIKELY(compare_result == TermCompareMemoryAllocFail)) {
         *result = PersistentTermAllocationError;
         return false;
