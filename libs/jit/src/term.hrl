@@ -22,6 +22,7 @@
 -define(TERM_PRIMARY_CP, 16#0).
 -define(TERM_PRIMARY_LIST, 16#1).
 -define(TERM_PRIMARY_BOXED, 16#2).
+-define(TERM_PRIMARY_IMMED, 16#3).
 % ~3
 -define(TERM_PRIMARY_CLEAR_MASK, -4).
 
@@ -62,6 +63,9 @@
 
 -define(TERM_COMPARE_NO_OPTS, 0).
 -define(TERM_COMPARE_EXACT, 1).
+%% Caller only distinguishes equals from not-equals; ordering of unequal
+%% terms is arbitrary (skips the atom table for unequal atoms).
+-define(TERM_COMPARE_EQUAL_ONLY, 2).
 
 -define(TERM_COMPARE_MEMORY_ALLOC_FAIL, 0).
 -define(TERM_EQUALS, 1).

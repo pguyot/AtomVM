@@ -2588,7 +2588,7 @@ schedule_in:
 
                 TRACE("is_equal/3, label=%" PRIu32 ", arg1=%" TERM_X_FMT ", arg2=%" TERM_X_FMT "\n", label, arg1, arg2);
 
-                TermCompareResult result = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+                TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), ctx->global);
                 if (result & (TermLessThan | TermGreaterThan)) {
                     pc = mod->labels[label];
                 } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
@@ -2608,7 +2608,7 @@ schedule_in:
 
                 TRACE("is_not_equal/3, label=%" PRIu32 ", arg1=%" TERM_X_FMT ", arg2=%" TERM_X_FMT "\n", label, arg1, arg2);
 
-                TermCompareResult result = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+                TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), ctx->global);
                 if (result == TermEquals) {
                     pc = mod->labels[label];
                 } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
@@ -2628,7 +2628,7 @@ schedule_in:
 
                 TRACE("is_eq_exact/3, label=%" PRIu32 ", arg1=%" TERM_X_FMT ", arg2=%" TERM_X_FMT "\n", label, arg1, arg2);
 
-                TermCompareResult result = term_compare(arg1, arg2, TermCompareExact, ctx->global);
+                TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
                 if (result & (TermLessThan | TermGreaterThan)) {
                     pc = mod->labels[label];
                 } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
@@ -2648,7 +2648,7 @@ schedule_in:
 
                 TRACE("is_not_eq_exact/3, label=%" PRIu32 ", arg1=%" TERM_X_FMT ", arg2=%" TERM_X_FMT "\n", label, arg1, arg2);
 
-                TermCompareResult result = term_compare(arg1, arg2, TermCompareExact, ctx->global);
+                TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
                 if (result == TermEquals) {
                     pc = mod->labels[label];
                 } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
@@ -2876,8 +2876,8 @@ schedule_in:
                     DECODE_LABEL(jmp_label, pc)
 
                     if (!jump_to_address) {
-                        TermCompareResult result = term_compare(
-                            src_value, cmp_value, TermCompareExact, ctx->global);
+                        TermCompareResult result = term_compare(src_value, cmp_value,
+                            (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
                         if (result == TermEquals) {
                             jump_to_address = mod->labels[jmp_label];
                         } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
@@ -6038,7 +6038,7 @@ schedule_in:
                     DECODE_COMPACT_TERM(update_value, pc);
                     if (reuse) {
                         term old_value = term_get_tuple_element(dst, update_ix - 1);
-                        TermCompareResult result = term_compare(update_value, old_value, TermCompareExact, ctx->global);
+                        TermCompareResult result = term_compare(update_value, old_value, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
                         if (result == TermEquals) {
                             continue;
                         } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {

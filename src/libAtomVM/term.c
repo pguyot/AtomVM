@@ -584,6 +584,117 @@ static enum TermTypeIndex term_type_to_index(term t)
     }                                        \
     t = temp_stack_pop(&temp_stack);
 
+// Structural exact-equality walk for TermCompareExact | TermCompareEqualOnly:
+// no ordering, so no type-index dispatch and no atom table. Immediates are
+// equal only to themselves, lists and same-header tuples are walked inline,
+// and the remaining boxed pairs (binaries, floats, big integers, maps, funs,
+// external terms) are delegated per pair to the generic comparator.
+static TermCompareResult term_exact_equals(term t, term other, GlobalContext *global)
+{
+    struct TempStack temp_stack;
+    if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
+        return TermCompareMemoryAllocFail;
+    }
+    if (UNLIKELY(temp_stack_push(&temp_stack, t) != TempStackOk)) {
+        temp_stack_destroy(&temp_stack);
+        return TermCompareMemoryAllocFail;
+    }
+    if (UNLIKELY(temp_stack_push(&temp_stack, other) != TempStackOk)) {
+        temp_stack_destroy(&temp_stack);
+        return TermCompareMemoryAllocFail;
+    }
+
+    TermCompareResult result = TermEquals;
+
+    while (!temp_stack_is_empty(&temp_stack)) {
+        if (t == other) {
+            other = temp_stack_pop(&temp_stack);
+            t = temp_stack_pop(&temp_stack);
+            continue;
+        }
+        if (((t ^ other) & TERM_PRIMARY_MASK) != 0) {
+            // Distinct primary tags are never exactly equal: boxed integers
+            // are normalized, so no boxed term equals an immediate.
+            result = TermLessThan;
+            break;
+        }
+        switch (t & TERM_PRIMARY_MASK) {
+            case TERM_PRIMARY_IMMED:
+                // distinct immediates
+                result = TermLessThan;
+                goto done;
+            case TERM_PRIMARY_LIST: {
+                term *t_ptr = term_get_list_ptr(t);
+                term *other_ptr = term_get_list_ptr(other);
+                if (UNLIKELY(temp_stack_push(&temp_stack, t_ptr[0]) != TempStackOk)
+                    || UNLIKELY(temp_stack_push(&temp_stack, other_ptr[0]) != TempStackOk)) {
+                    temp_stack_destroy(&temp_stack);
+                    return TermCompareMemoryAllocFail;
+                }
+                t = t_ptr[1];
+                other = other_ptr[1];
+                continue;
+            }
+            case TERM_PRIMARY_BOXED: {
+                const term *t_ptr = term_to_const_term_ptr(t);
+                const term *other_ptr = term_to_const_term_ptr(other);
+                term t_header = t_ptr[0];
+                term other_header = other_ptr[0];
+                if (t_header == other_header
+                    && ((t_header & TERM_BOXED_TAG_MASK) == TERM_BOXED_TUPLE)) {
+                    int arity = term_get_size_from_boxed_header(t_header);
+                    if (arity == 0) {
+                        other = temp_stack_pop(&temp_stack);
+                        t = temp_stack_pop(&temp_stack);
+                        continue;
+                    }
+                    for (int i = arity; i >= 2; i--) {
+                        if (UNLIKELY(temp_stack_push(&temp_stack, t_ptr[i]) != TempStackOk)
+                            || UNLIKELY(temp_stack_push(&temp_stack, other_ptr[i]) != TempStackOk)) {
+                            temp_stack_destroy(&temp_stack);
+                            return TermCompareMemoryAllocFail;
+                        }
+                    }
+                    t = t_ptr[1];
+                    other = other_ptr[1];
+                    continue;
+                }
+                term t_tag = t_header & TERM_BOXED_TAG_MASK;
+                term other_tag = other_header & TERM_BOXED_TAG_MASK;
+                bool t_is_bin = (t_tag == TERM_BOXED_REFC_BINARY)
+                    || (t_tag == TERM_BOXED_HEAP_BINARY) || (t_tag == TERM_BOXED_SUB_BINARY);
+                bool other_is_bin = (other_tag == TERM_BOXED_REFC_BINARY)
+                    || (other_tag == TERM_BOXED_HEAP_BINARY) || (other_tag == TERM_BOXED_SUB_BINARY);
+                if (t_tag != other_tag && !(t_is_bin && other_is_bin)) {
+                    result = TermLessThan;
+                    goto done;
+                }
+                // Same boxed class with differing headers or a non-tuple tag:
+                // delegate this pair to the generic comparator (plain Exact,
+                // not EqualOnly, so it is not routed back here).
+                TermCompareResult pair = term_compare(t, other, TermCompareExact, global);
+                if (pair == TermEquals) {
+                    other = temp_stack_pop(&temp_stack);
+                    t = temp_stack_pop(&temp_stack);
+                    continue;
+                }
+                if (UNLIKELY(pair == TermCompareMemoryAllocFail)) {
+                    temp_stack_destroy(&temp_stack);
+                    return TermCompareMemoryAllocFail;
+                }
+                result = TermLessThan;
+                goto done;
+            }
+            default:
+                UNREACHABLE();
+        }
+    }
+
+done:
+    temp_stack_destroy(&temp_stack);
+    return result;
+}
+
 TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
 {
     // Fast paths for the common scalar cases, avoiding the temp-stack machinery
@@ -598,6 +709,10 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
         avm_int_t t_int = term_to_int(t);
         avm_int_t other_int = term_to_int(other);
         return (t_int > other_int) ? TermGreaterThan : TermLessThan;
+    }
+    if ((opts & (TermCompareExact | TermCompareEqualOnly))
+        == (TermCompareExact | TermCompareEqualOnly)) {
+        return term_exact_equals(t, other, global);
     }
 
     struct TempStack temp_stack;
@@ -1168,10 +1283,14 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
                         }
                     } break;
                     case TERM_TYPE_INDEX_ATOM: {
+                        // it cannot be equal since we check for term equality as first thing
+                        if (opts & TermCompareEqualOnly) {
+                            result = TermLessThan;
+                            goto unequal;
+                        }
                         int t_atom_index = term_to_atom_index(t);
                         int other_atom_index = term_to_atom_index(other);
 
-                        // it cannot be equal since we check for term equality as first thing
                         // so let's ignore 0
                         int atom_cmp_result = atom_table_cmp_using_atom_index(
                             global->atom_table, t_atom_index, other_atom_index);
