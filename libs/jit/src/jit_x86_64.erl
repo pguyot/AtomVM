@@ -79,6 +79,7 @@
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     read_avail_heap_memory/1,
+    supports_vm_reg_cond/0,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -975,6 +976,25 @@ if_block_cond0(State0, {'(int)', RegOrTuple, '==', 0}) ->
     {RelocJNZOffset, I2} = jit_x86_64_asm:jnz_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJNZOffset};
+if_block_cond0(#state{regs = Regs0} = State0, {{x_reg, X}, Op, Val}) when
+    (Op =:= '!=' orelse Op =:= '=='), X < ?MAX_REG, ?IS_SINT32_T(Val)
+->
+    %% Compare an x register against an immediate. When the register is
+    %% cached in a native register compare that; otherwise fuse the load into
+    %% a memory-operand compare (cmp imm, x_reg slot), saving an instruction
+    %% and a temporary.
+    case jit_regs:find_reg_with_contents(Regs0, {x_reg, X}) of
+        {ok, CachedReg} ->
+            if_block_cond0(State0, {CachedReg, Op, Val});
+        none ->
+            I1 = jit_x86_64_asm:cmpq(Val, ?X_REG(X)),
+            {RelocOffset, I2} =
+                case Op of
+                    '!=' -> jit_x86_64_asm:jz_rel8(1);
+                    '==' -> jit_x86_64_asm:jnz_rel8(1)
+                end,
+            {State0, <<I1/binary, I2/binary>>, byte_size(I1) + RelocOffset}
+    end;
 if_block_cond0(State0, {RegOrTuple, '!=', 0}) ->
     Reg =
         case RegOrTuple of
@@ -3075,6 +3095,12 @@ move_float_to_fp_reg(
 %% Load the free space between heap and stack (ctx->e - ctx->heap.heap_ptr,
 %% in bytes) into a freshly allocated register, for the inline test_heap fast
 %% path.
+%% This backend accepts {{x_reg, X}, '!=' | '==', Imm} if_block conditions
+%% (fused memory-operand compare).
+-spec supports_vm_reg_cond() -> true.
+supports_vm_reg_cond() ->
+    true.
+
 -spec read_avail_heap_memory(state()) -> {state(), x86_64_register()}.
 read_avail_heap_memory(
     #state{
