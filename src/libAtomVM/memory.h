@@ -385,6 +385,17 @@ static inline void memory_heap_append_heap(Heap *target, Heap *source)
 void memory_sweep_mso_list(term mso_list, GlobalContext *global, bool from_task);
 
 /**
+ * @brief Allocate / release a heap block through the per-thread block cache.
+ *
+ * @details Heap blocks are allocated and released on every collection;
+ * routing them through a small per-scheduler-thread cache avoids the global
+ * allocator (and its locking) on the hot path. On platforms without the
+ * cache these are plain malloc/free.
+ */
+void *memory_heap_block_alloc(size_t size_bytes);
+void memory_heap_block_free(void *ptr);
+
+/**
  * @brief Destroy a chain of heap fragments.
  *
  * @param fragment fragment to destroy.
@@ -393,10 +404,10 @@ static inline void memory_destroy_heap_fragment(HeapFragment *fragment)
 {
     while (fragment->next) {
         HeapFragment *next = fragment->next;
-        free((void *) fragment);
+        memory_heap_block_free((void *) fragment);
         fragment = next;
     }
-    free((void *) fragment);
+    memory_heap_block_free((void *) fragment);
 }
 
 /**
@@ -420,7 +431,7 @@ static inline void memory_destroy_heap(Heap *heap, GlobalContext *global)
     memory_sweep_mso_list(heap->root->mso_list, global, false);
     if (heap->old_heap_start) {
         memory_sweep_mso_list(heap->old_mso_list, global, false);
-        free(OLD_HEAP_TO_FRAGMENT(heap->old_heap_start));
+        memory_heap_block_free(OLD_HEAP_TO_FRAGMENT(heap->old_heap_start));
     }
     memory_destroy_heap_fragment(heap->root);
 }
@@ -439,7 +450,7 @@ static inline void memory_destroy_heap_from_task(Heap *heap, GlobalContext *glob
     memory_sweep_mso_list(heap->root->mso_list, global, true);
     if (heap->old_heap_start) {
         memory_sweep_mso_list(heap->old_mso_list, global, true);
-        free(OLD_HEAP_TO_FRAGMENT(heap->old_heap_start));
+        memory_heap_block_free(OLD_HEAP_TO_FRAGMENT(heap->old_heap_start));
     }
     memory_destroy_heap_fragment(heap->root);
 }

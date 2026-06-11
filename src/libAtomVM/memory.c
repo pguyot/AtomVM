@@ -63,9 +63,111 @@ static void memory_scan_and_rewrite(size_t count, term *terms, const term *old_s
 static inline term *memory_rewrite_pointer(term *ptr, const term *old_start, const term *old_end, intptr_t delta);
 #endif
 
+// Per-thread cache of heap blocks, keyed by the allocator's usable size:
+// every collection allocates a new heap block and releases the old one, and
+// funnelling those through the global allocator means lock traffic on SMP
+// (and page churn) on the hottest path in the VM. A handful of recently
+// released blocks per scheduler thread covers the steady state, where
+// processes cycle through the same few heap sizes. First-fit on usable size
+// can return a slightly larger block than requested, which is harmless: the
+// heap's capacity is defined by heap_end, computed from the requested size.
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#define HEAP_BLOCK_USABLE_SIZE(ptr) malloc_size(ptr)
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#define HEAP_BLOCK_USABLE_SIZE(ptr) malloc_usable_size(ptr)
+#endif
+
+#if defined(HEAP_BLOCK_USABLE_SIZE) && !defined(AVM_DISABLE_HEAP_BLOCK_CACHE) \
+    && (defined(__GNUC__) || defined(__clang__))
+
+#define HEAP_BLOCK_CACHE_SLOTS 8
+#define HEAP_BLOCK_CACHE_MAX_PER_SLOT 4
+#define HEAP_BLOCK_CACHE_MIN_BYTES 256
+#define HEAP_BLOCK_CACHE_MAX_BYTES 65536
+#define HEAP_BLOCK_CACHE_TOTAL_BYTES (512 * 1024)
+
+struct HeapBlockCacheEntry
+{
+    struct HeapBlockCacheEntry *next;
+};
+
+static __thread struct
+{
+    size_t size;
+    uint8_t count;
+    struct HeapBlockCacheEntry *head;
+} heap_block_cache[HEAP_BLOCK_CACHE_SLOTS];
+static __thread size_t heap_block_cache_bytes = 0;
+
+void *memory_heap_block_alloc(size_t size_bytes)
+{
+    for (int i = 0; i < HEAP_BLOCK_CACHE_SLOTS; i++) {
+        if (heap_block_cache[i].head != NULL && heap_block_cache[i].size >= size_bytes) {
+            struct HeapBlockCacheEntry *entry = heap_block_cache[i].head;
+            heap_block_cache[i].head = entry->next;
+            heap_block_cache[i].count--;
+            heap_block_cache_bytes -= heap_block_cache[i].size;
+            return entry;
+        }
+    }
+    return malloc(size_bytes);
+}
+
+void memory_heap_block_free(void *ptr)
+{
+    size_t usable = HEAP_BLOCK_USABLE_SIZE(ptr);
+    if (usable >= HEAP_BLOCK_CACHE_MIN_BYTES && usable <= HEAP_BLOCK_CACHE_MAX_BYTES
+        && heap_block_cache_bytes + usable <= HEAP_BLOCK_CACHE_TOTAL_BYTES) {
+        int empty = -1;
+        for (int i = 0; i < HEAP_BLOCK_CACHE_SLOTS; i++) {
+            if (heap_block_cache[i].size == usable) {
+                if (heap_block_cache[i].count < HEAP_BLOCK_CACHE_MAX_PER_SLOT) {
+                    struct HeapBlockCacheEntry *entry = (struct HeapBlockCacheEntry *) ptr;
+                    entry->next = heap_block_cache[i].head;
+                    heap_block_cache[i].head = entry;
+                    heap_block_cache[i].count++;
+                    heap_block_cache_bytes += usable;
+                    return;
+                }
+                free(ptr);
+                return;
+            }
+            if (empty < 0 && heap_block_cache[i].head == NULL) {
+                empty = i;
+            }
+        }
+        if (empty >= 0) {
+            struct HeapBlockCacheEntry *entry = (struct HeapBlockCacheEntry *) ptr;
+            entry->next = NULL;
+            heap_block_cache[empty].size = usable;
+            heap_block_cache[empty].head = entry;
+            heap_block_cache[empty].count = 1;
+            heap_block_cache_bytes += usable;
+            return;
+        }
+    }
+    free(ptr);
+}
+
+#else
+
+void *memory_heap_block_alloc(size_t size_bytes)
+{
+    return malloc(size_bytes);
+}
+
+void memory_heap_block_free(void *ptr)
+{
+    free(ptr);
+}
+
+#endif
+
 enum MemoryGCResult memory_init_heap(Heap *heap, size_t size)
 {
-    HeapFragment *fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + size * sizeof(term));
+    HeapFragment *fragment = (HeapFragment *) memory_heap_block_alloc(sizeof(HeapFragment) + size * sizeof(term));
     if (IS_NULL_PTR(fragment)) {
         return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
@@ -1343,7 +1445,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
                 }
                 old_heap_size = ctx->max_heap_size - young_size;
             }
-            HeapFragment *old_fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + old_heap_size * sizeof(term));
+            HeapFragment *old_fragment = (HeapFragment *) memory_heap_block_alloc(sizeof(HeapFragment) + old_heap_size * sizeof(term));
             if (IS_NULL_PTR(old_fragment)) {
                 goto fallback_full_gc;
             }
@@ -1362,7 +1464,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
 
     if (UNLIKELY(memory_init_heap(&ctx->heap, young_size) != MEMORY_GC_OK)) {
         if (newly_allocated_old_heap) {
-            free(OLD_HEAP_TO_FRAGMENT(saved_old_heap_start));
+            memory_heap_block_free(OLD_HEAP_TO_FRAGMENT(saved_old_heap_start));
         }
         return MEMORY_GC_ERROR_FAILED_ALLOCATION;
     }
