@@ -151,6 +151,7 @@ _Static_assert(
 // Verify offsets in jit_x86_64.erl
 #if JIT_ARCH_TARGET == JIT_ARCH_X86_64 || JIT_ARCH_TARGET == JIT_ARCH_AARCH64 || JIT_ARCH_TARGET == JIT_ARCH_RISCV64
 _Static_assert(offsetof(Context, e) == 0x50, "ctx->e is 0x50 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(Context, heap.heap_ptr) == 0x18, "ctx->heap.heap_ptr is 0x18 in jit/src/jit_x86_64.erl (read_avail_heap_memory)");
 _Static_assert(offsetof(Context, x) == 0x58, "ctx->x is 0x58 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, cp) == 0xE0, "ctx->cp is 0xE0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, fr) == 0xE8, "ctx->fr is 0xE8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
