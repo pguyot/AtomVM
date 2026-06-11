@@ -2524,77 +2524,12 @@ first_pass(
     {HintAtomIndex, Rest1} = decode_atom(Rest0),
     Hint = AtomResolver(HintAtomIndex),
     {Size, Rest2} = decode_literal(Rest1),
-    {MSt1, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
-    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
-    {MSt3, SrcReg} = MMod:and_(MSt2, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt4, Dest, Rest4} = decode_dest(Rest3, MMod, MSt3),
-    {ListLen, Rest5} = decode_extended_list_header(Rest4),
-    ?TRACE("OP_UPDATE_RECORD ~p, ~p, ~p, ~p, [", [Hint, Size, Src, Dest]),
-    {MSt5, DestReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
-    {MSt6, DestReg} = MMod:and_(MSt5, {free, DestReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt7, ReuseReg} = MMod:move_to_native_register(
-        MSt6,
-        if
-            Hint =:= reuse -> 1;
-            true -> 0
-        end
-    ),
-    MSt8 = lists:foldl(
-        fun(Index, AccMSt0) ->
-            {AccMSt1, SrcValue} = MMod:get_array_element(AccMSt0, SrcReg, Index),
-            AccMSt2 = MMod:move_to_array_element(AccMSt1, SrcValue, DestReg, Index),
-            MMod:free_native_registers(AccMSt2, [SrcValue])
-        end,
-        MSt7,
-        lists:seq(1, Size)
-    ),
-    {MSt9, Rest6} = lists:foldl(
-        fun(_Index, {AccMSt0, AccRest0}) ->
-            {UpdateIx, AccRest1} = decode_literal(AccRest0),
-            {AccMSt1, UpdateValue, AccRest2} = decode_compact_term(AccRest1, MMod, AccMSt0, State0),
-            AccMSt2 = MMod:if_else_block(
-                AccMSt1,
-                {'(bool)', ReuseReg, '!=', false},
-                fun(BSt0) ->
-                    {BSt1, OldValueReg} = MMod:get_array_element(BSt0, DestReg, UpdateIx),
-                    {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
-                        ctx, jit_state, {free, OldValueReg}, UpdateValue,
-                        ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
-                    ]),
-                    BSt3 = handle_error_if(
-                        {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt2
-                    ),
-                    MMod:if_block(BSt3, {'(int)', {free, ResultReg}, '!=', ?TERM_EQUALS}, fun(ESt0) ->
-                        ESt1 = MMod:move_to_array_element(ESt0, UpdateValue, DestReg, UpdateIx),
-                        MMod:move_to_native_register(ESt1, 0, ReuseReg)
-                    end)
-                end,
-                fun(BSt0) ->
-                    MMod:move_to_array_element(BSt0, UpdateValue, DestReg, UpdateIx)
-                end
-            ),
-            AccMSt3 = MMod:free_native_registers(AccMSt2, [UpdateValue]),
-            {AccMSt3, AccRest2}
-        end,
-        {MSt8, Rest5},
-        lists:seq(1, ListLen div 2)
-    ),
-    ?TRACE("]\n", []),
-    MSt10 = MMod:if_else_block(
-        MSt9,
-        {'(bool)', {free, ReuseReg}, '!=', false},
-        fun(BSt0) ->
-            BSt1 = MMod:or_(BSt0, SrcReg, ?TERM_PRIMARY_BOXED),
-            MMod:move_to_vm_register(BSt1, SrcReg, Dest)
-        end,
-        fun(BSt0) ->
-            BSt1 = MMod:or_(BSt0, DestReg, ?TERM_PRIMARY_BOXED),
-            MMod:move_to_vm_register(BSt1, DestReg, Dest)
-        end
-    ),
-    MSt11 = MMod:free_native_registers(MSt10, [DestReg, SrcReg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt11),
-    first_pass(Rest6, MMod, MSt11, State0);
+    case Hint of
+        inplace ->
+            first_pass_update_record_inplace(Rest2, MMod, MSt0, State0);
+        _ ->
+            first_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0)
+    end;
 % 182
 first_pass(<<?OP_BS_MATCH, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -3233,6 +3168,109 @@ first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt0, Offset, Size,
     MSt1 = MMod:add(MSt0, Offset, Size),
     MSt2 = MMod:free_native_registers(MSt1, [Size]),
     {MSt2, Offset}.
+
+%% The compiler proved the source tuple unique and dying with this update
+%% (and never a literal): update it destructively instead of copying. The
+%% set_tuple_element primitive applies the generational write barrier for
+%% stores into a promoted tuple.
+first_pass_update_record_inplace(Rest0, MMod, MSt0, State0) ->
+    {MSt1, Src, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
+    {MSt3, Dest, Rest2} = decode_dest(Rest1, MMod, MSt2),
+    {ListLen, Rest3} = decode_extended_list_header(Rest2),
+    ?TRACE("OP_UPDATE_RECORD inplace, ~p, ~p, [", [Src, Dest]),
+    {MSt4, Rest4} = lists:foldl(
+        fun(_Index, {AccMSt0, AccRest0}) ->
+            {UpdateIx, AccRest1} = decode_literal(AccRest0),
+            {AccMSt1, UpdateValue, AccRest2} = decode_compact_term(AccRest1, MMod, AccMSt0, State0),
+            ?TRACE("(~p,~p),", [UpdateIx, UpdateValue]),
+            {AccMSt2, ResultReg} = MMod:call_primitive(AccMSt1, ?PRIM_SET_TUPLE_ELEMENT, [
+                ctx, SrcReg, UpdateIx - 1, {free, UpdateValue}
+            ]),
+            AccMSt3 = MMod:free_native_registers(AccMSt2, [ResultReg]),
+            {AccMSt3, AccRest2}
+        end,
+        {MSt3, Rest3},
+        lists:seq(1, ListLen div 2)
+    ),
+    ?TRACE("]\n", []),
+    MSt5 = MMod:move_to_vm_register(MSt4, SrcReg, Dest),
+    MSt6 = MMod:free_native_registers(MSt5, [SrcReg, Dest]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt6),
+    first_pass(Rest4, MMod, MSt6, State0).
+
+first_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0) ->
+    {MSt1, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
+    {MSt3, SrcReg} = MMod:and_(MSt2, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Dest, Rest4} = decode_dest(Rest3, MMod, MSt3),
+    {ListLen, Rest5} = decode_extended_list_header(Rest4),
+    ?TRACE("OP_UPDATE_RECORD ~p, ~p, ~p, ~p, [", [Hint, Size, Src, Dest]),
+    {MSt5, DestReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
+    {MSt6, DestReg} = MMod:and_(MSt5, {free, DestReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt7, ReuseReg} = MMod:move_to_native_register(
+        MSt6,
+        if
+            Hint =:= reuse -> 1;
+            true -> 0
+        end
+    ),
+    MSt8 = lists:foldl(
+        fun(Index, AccMSt0) ->
+            {AccMSt1, SrcValue} = MMod:get_array_element(AccMSt0, SrcReg, Index),
+            AccMSt2 = MMod:move_to_array_element(AccMSt1, SrcValue, DestReg, Index),
+            MMod:free_native_registers(AccMSt2, [SrcValue])
+        end,
+        MSt7,
+        lists:seq(1, Size)
+    ),
+    {MSt9, Rest6} = lists:foldl(
+        fun(_Index, {AccMSt0, AccRest0}) ->
+            {UpdateIx, AccRest1} = decode_literal(AccRest0),
+            {AccMSt1, UpdateValue, AccRest2} = decode_compact_term(AccRest1, MMod, AccMSt0, State0),
+            AccMSt2 = MMod:if_else_block(
+                AccMSt1,
+                {'(bool)', ReuseReg, '!=', false},
+                fun(BSt0) ->
+                    {BSt1, OldValueReg} = MMod:get_array_element(BSt0, DestReg, UpdateIx),
+                    {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
+                        ctx, jit_state, {free, OldValueReg}, UpdateValue,
+                        ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
+                    ]),
+                    BSt3 = handle_error_if(
+                        {'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, BSt2
+                    ),
+                    MMod:if_block(BSt3, {'(int)', {free, ResultReg}, '!=', ?TERM_EQUALS}, fun(ESt0) ->
+                        ESt1 = MMod:move_to_array_element(ESt0, UpdateValue, DestReg, UpdateIx),
+                        MMod:move_to_native_register(ESt1, 0, ReuseReg)
+                    end)
+                end,
+                fun(BSt0) ->
+                    MMod:move_to_array_element(BSt0, UpdateValue, DestReg, UpdateIx)
+                end
+            ),
+            AccMSt3 = MMod:free_native_registers(AccMSt2, [UpdateValue]),
+            {AccMSt3, AccRest2}
+        end,
+        {MSt8, Rest5},
+        lists:seq(1, ListLen div 2)
+    ),
+    ?TRACE("]\n", []),
+    MSt10 = MMod:if_else_block(
+        MSt9,
+        {'(bool)', {free, ReuseReg}, '!=', false},
+        fun(BSt0) ->
+            BSt1 = MMod:or_(BSt0, SrcReg, ?TERM_PRIMARY_BOXED),
+            MMod:move_to_vm_register(BSt1, SrcReg, Dest)
+        end,
+        fun(BSt0) ->
+            BSt1 = MMod:or_(BSt0, DestReg, ?TERM_PRIMARY_BOXED),
+            MMod:move_to_vm_register(BSt1, DestReg, Dest)
+        end
+    ),
+    MSt11 = MMod:free_native_registers(MSt10, [DestReg, SrcReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt11),
+    first_pass(Rest6, MMod, MSt11, State0).
 
 first_pass_bs_match(_Fail, MatchState, _BSBinaryReg, BSOffsetReg, 0, Rest, _MMod, MSt, _State) ->
     {MSt, Rest, MatchState, BSOffsetReg};
