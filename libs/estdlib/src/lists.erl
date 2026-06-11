@@ -686,7 +686,29 @@ seq_r(From, To, Incr, Acc) -> seq_r(From, To - Incr, Incr, [To | Acc]).
 %%-----------------------------------------------------------------------------
 -spec sort(List :: [T]) -> [T].
 sort(List) when is_list(List) ->
-    sort(fun lt/2, List).
+    merge_sort_default(List).
+
+%% Direct-comparison clones of merge_sort/merge for sort/1 and merge/2:
+%% routing the default order through a comparison fun costs a fun call per
+%% comparison, which dominates sort time.
+merge_sort_default([]) ->
+    [];
+merge_sort_default([_] = L) ->
+    L;
+merge_sort_default(List) ->
+    {H1, H2} = merge_sort_split(List, List, []),
+    merge_default(merge_sort_default(H1), merge_sort_default(H2), []).
+
+merge_default([], Right, Acc) ->
+    lists:reverse(Acc, Right);
+merge_default(Left, [], Acc) ->
+    lists:reverse(Acc, Left);
+merge_default([A | As] = Left, [B | Bs] = Right, Acc) ->
+    % keep sort stable, if B < A, put it first, otherwise keep A first
+    case B < A of
+        true -> merge_default(Left, Bs, [B | Acc]);
+        false -> merge_default(As, Right, [A | Acc])
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   Fun sort function
@@ -757,7 +779,7 @@ split(_, [], _) ->
 %% @end
 %%-----------------------------------------------------------------------------
 merge(List1, List2) ->
-    merge(fun lt/2, List1, List2, []).
+    merge_default(List1, List2, []).
 
 %%-----------------------------------------------------------------------------
 %% @param   Fun ordering function
@@ -783,7 +805,6 @@ merge(Fun, [A | As], [B | Bs], Acc) ->
     end.
 
 %% @private
-lt(A, B) -> A < B.
 
 %%-----------------------------------------------------------------------------
 %% @param   List a list
@@ -795,7 +816,7 @@ lt(A, B) -> A < B.
 -spec usort(List :: [T]) -> [T].
 usort(List) ->
     Sorted = sort(List),
-    unique(Sorted).
+    unique_default(Sorted).
 
 %%-----------------------------------------------------------------------------
 %% @param   Fun sort function
@@ -811,8 +832,16 @@ usort(Fun, List) ->
     unique(Sorted, Fun).
 
 %% @private
-unique(Sorted) ->
-    unique(Sorted, fun(X, Y) -> X =< Y end).
+%% Direct-comparison clone of unique/2 for usort/1: two elements are
+%% duplicates when they compare equal in term order, i.e. `=='.
+unique_default([X, Y | Tail]) when X == Y ->
+    unique_default([Y | Tail]);
+unique_default([X | [_ | _] = Tail]) ->
+    [X | unique_default(Tail)];
+unique_default([_] = L) ->
+    L;
+unique_default([]) ->
+    [].
 
 %% @private
 unique([], _Fun) ->
