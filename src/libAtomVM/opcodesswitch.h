@@ -1433,7 +1433,9 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
 
     struct Nif *nif = (struct Nif *) nifs_get(mfa);
     if (nif) {
+        ctx->nif_call_arity = arity;
         *return_value = nif->nif_ptr(ctx, arity, ctx->x);
+        ctx->nif_call_arity = 0;
         return true;
     }
 
@@ -1921,7 +1923,9 @@ schedule_in:
                 switch (func->type) {
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
+                        ctx->nif_call_arity = arity;
                         term return_value = nif->nif_ptr(ctx, arity, x_regs);
+                        ctx->nif_call_arity = 0;
                         PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC_INDEX_ARITY(return_value, orig_pc, mod, index, arity);
                         x_regs[0] = return_value;
                         if (ctx->heap.root->next) {
@@ -2038,7 +2042,9 @@ schedule_in:
                 switch (func->type) {
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
+                        ctx->nif_call_arity = arity;
                         term return_value = nif->nif_ptr(ctx, arity, x_regs);
+                        ctx->nif_call_arity = 0;
                         PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value);
                         x_regs[0] = return_value;
 
@@ -3136,7 +3142,9 @@ schedule_in:
                 switch (func->type) {
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
+                        ctx->nif_call_arity = arity;
                         term return_value = nif->nif_ptr(ctx, arity, x_regs);
+                        ctx->nif_call_arity = 0;
                         PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value);
                         x_regs[0] = return_value;
 

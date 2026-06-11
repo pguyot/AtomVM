@@ -713,7 +713,9 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
     switch (func->type) {
         case NIFFunctionType: {
             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
+            ctx->nif_call_arity = arity;
             term return_value = nif->nif_ptr(ctx, arity, ctx->x);
+            ctx->nif_call_arity = 0;
             if (UNLIKELY(term_is_invalid_term(return_value))) {
                 if (n_words == CALL_EXT_NO_DEALLOC_MFA) {
                     // CALL_EXT_NO_DEALLOC_MFA uses MFA enriched error handling
@@ -1419,7 +1421,9 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
 
     struct Nif *nif = (struct Nif *) nifs_get(mfa);
     if (nif) {
+        ctx->nif_call_arity = arity;
         *return_value = nif->nif_ptr(ctx, arity, ctx->x);
+        ctx->nif_call_arity = 0;
         return true;
     }
 

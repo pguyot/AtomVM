@@ -486,7 +486,7 @@ void test_generational_gc_can_shrink_keeps_old_heap(void)
 {
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
-    // Default growth strategy (BoundedFreeHeapGrowth), generational GC on.
+    ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
     ctx->fullsweep_after = 65535;
 
     // Allocate a large tuple that will become the mature data.
