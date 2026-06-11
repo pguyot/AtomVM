@@ -1039,25 +1039,31 @@ static term jit_alloc_big_integer_fragment(
 {
     TRACE("jit_alloc_big_integer_fragment: len=%lu sign=%i\n", (unsigned long) digits_len,
         (int) sign);
-    Heap heap;
-
     size_t intn_data_size;
     size_t rounded_res_len;
     term_bigint_size_requirements(digits_len, &intn_data_size, &rounded_res_len);
 
-    if (UNLIKELY(memory_init_heap(&heap, BOXED_BIGINT_HEAP_SIZE(intn_data_size)) != MEMORY_GC_OK)) {
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    term bigint_term;
+    if (context_avail_free_memory(ctx) >= BOXED_BIGINT_HEAP_SIZE(intn_data_size)) {
+        // Enough free space on the context heap: allocate there directly (no
+        // GC can run here, so live native-cached registers are unaffected).
+        // A fragment would force a heap-merging GC at the next allocation.
+        bigint_term = term_create_uninitialized_bigint(
+            intn_data_size, (term_integer_sign_t) sign, &ctx->heap);
+    } else {
+        Heap heap;
+        if (UNLIKELY(memory_init_heap(&heap, BOXED_BIGINT_HEAP_SIZE(intn_data_size)) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        bigint_term
+            = term_create_uninitialized_bigint(intn_data_size, (term_integer_sign_t) sign, &heap);
+        memory_heap_append_heap(&ctx->heap, &heap);
     }
-
-    term bigint_term
-        = term_create_uninitialized_bigint(intn_data_size, (term_integer_sign_t) sign, &heap);
     // Assumption: here we assume that bigints have standard boxed term layout
     // This code might need to be updated when changing bigint memory layout
     void *digits_mem = (void *) (term_to_const_term_ptr(bigint_term) + 1);
     // TODO: optimize: just initialize space that will not be used
     memset(digits_mem, 0, intn_data_size * sizeof(term));
-
-    memory_heap_append_heap(&ctx->heap, &heap);
 
     return bigint_term;
 }
