@@ -78,6 +78,7 @@
     float_conv_float/3,
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
+    read_avail_heap_memory/1,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
@@ -198,6 +199,7 @@
 -define(X_REG(N), {16#58 + (N * ?WORD_SIZE), ?CTX_REG}).
 -define(CP, {16#E0, ?CTX_REG}).
 -define(FP_REGS, {16#E8, ?CTX_REG}).
+-define(HEAP_PTR, {16#18, ?CTX_REG}).
 -define(FP_REG_OFFSET(State, F),
     (F *
         case (State)#state.variant band ?JIT_VARIANT_FLOAT32 of
@@ -3058,6 +3060,30 @@ move_float_to_fp_reg(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BitsReg), BaseReg),
     State0#state{stream = Stream1, regs = Regs1}.
+
+%% Load the free space between heap and stack (ctx->e - ctx->heap.heap_ptr,
+%% in bytes) into a freshly allocated register, for the inline test_heap fast
+%% path.
+-spec read_avail_heap_memory(state()) -> {state(), x86_64_register()}.
+read_avail_heap_memory(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
+    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
+    I2 = jit_x86_64_asm:movq(?HEAP_PTR, Tmp),
+    I3 = jit_x86_64_asm:subq(Tmp, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
 
 %% Load the fp register array pointer (ctx->fr) into a freshly allocated
 %% register and return it, so the caller can test it for NULL and only call
