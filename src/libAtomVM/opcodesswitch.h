@@ -1107,7 +1107,7 @@ static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
             PROCESS_MAYBE_TRAP_RETURN_VALUE(return_value);              \
             x_regs[0] = return_value;                                   \
             if (ctx->heap.root->next) {                                 \
-                if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) { \
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) { \
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);                    \
                 }                                                       \
             }                                                           \
@@ -1929,7 +1929,7 @@ schedule_in:
                         PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC_INDEX_ARITY(return_value, orig_pc, mod, index, arity);
                         x_regs[0] = return_value;
                         if (ctx->heap.root->next) {
-                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
+                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
                         }
@@ -2056,7 +2056,7 @@ schedule_in:
                         ctx->e += (n_words + 1);
 
                         if (ctx->heap.root->next) {
-                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
+                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
                         }
@@ -2345,7 +2345,7 @@ schedule_in:
                 DEBUG_DUMP_STACK(ctx);
                 // Hopefully, we only need x[0]
                 if (ctx->heap.root->next) {
-                    if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
+                    if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
                 }
@@ -3149,7 +3149,7 @@ schedule_in:
                         x_regs[0] = return_value;
 
                         if (ctx->heap.root->next) {
-                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
+                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
                         }
