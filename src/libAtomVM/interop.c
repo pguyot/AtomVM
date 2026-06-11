@@ -29,6 +29,7 @@
 #include "utils.h"
 #include "valueshashtable.h"
 #include <stdint.h>
+#include <string.h>
 
 char *interop_term_to_string(term t, int *ok)
 {
@@ -670,8 +671,17 @@ term interop_map_get_value_default(GlobalContext *glb, term map, term key, term 
 int interop_atom_term_select_int(const AtomStringIntPair *table, term atom, GlobalContext *global)
 {
     int i;
+    size_t atom_len = 0;
+    const uint8_t *atom_data = NULL;
+    if (LIKELY(term_is_atom(atom))) {
+        // Fetch the atom's name once (one atom-table lock) instead of a
+        // locked table lookup per entry.
+        atom_data = atom_table_get_atom_string(
+            global->atom_table, term_to_atom_index(atom), &atom_len);
+    }
     for (i = 0; table[i].as_val != NULL; i++) {
-        if (globalcontext_is_term_equal_to_atom_string(global, atom, table[i].as_val)) {
+        if (atom_data != NULL && atom_len == atom_string_len(table[i].as_val)
+            && memcmp(atom_data, atom_string_data(table[i].as_val), atom_len) == 0) {
             return table[i].i_val;
         }
     }
