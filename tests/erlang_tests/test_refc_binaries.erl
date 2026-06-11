@@ -108,7 +108,7 @@ test_send() ->
     Bin = create_binary(1024),
     ?VERIFY(MemoryBinarySize + 1024 =< erlang:memory(binary)),
 
-    Pid = spawn_opt(fun() -> loop(#state{}) end, []),
+    Pid = spawn_opt(fun() -> loop(#state{}) end, [{atomvm_heap_growth, bounded_free}]),
     PidHeapSize0 = get_heap_size(Pid),
     %%
     %% Send the process a refc binary, and check heap size
@@ -136,7 +136,7 @@ test_spawn() ->
     %%
     %% Spawn a function, passing a refc binary through the args
     %%
-    Pid = spawn_opt(?MODULE, loop, [#state{bin = Bin}], []),
+    Pid = spawn_opt(?MODULE, loop, [#state{bin = Bin}], [{atomvm_heap_growth, bounded_free}]),
     PidHeapSize0 = get_heap_size(Pid),
     %%
     %% Make sure we can get what we spawned
@@ -156,7 +156,7 @@ test_spawn_fun() ->
     %%
     %% Spawn a function, passing a refc binary through the args
     %%
-    Pid = spawn_opt(fun() -> loop(#state{bin = Bin}) end, []),
+    Pid = spawn_opt(fun() -> loop(#state{bin = Bin}) end, [{atomvm_heap_growth, bounded_free}]),
     PidHeapSize0 = get_heap_size(Pid),
     %%
     %% Make sure we can get what we spawned
@@ -229,7 +229,10 @@ create_string(N, Accum) ->
 
 run_test(Fun) ->
     Self = self(),
-    _Pid = spawn_opt(fun() -> execute(Self, Fun) end, []),
+    _Pid = spawn_opt(fun() -> execute(Self, Fun) end, [
+        % heap-size assertions assume a tight heap
+        {atomvm_heap_growth, bounded_free}
+    ]),
     receive
         ok ->
             ok;

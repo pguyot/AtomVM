@@ -219,9 +219,16 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
                 case MinimumHeapGrowth:
                     target_size = memory_size - free_space + size;
                     break;
-                case FibonacciHeapGrowth:
-                    target_size = next_fibonacci_heap_size(memory_size - free_space + size);
+                case FibonacciHeapGrowth: {
+                    // Pick the step so at least a quarter of the new heap is
+                    // free after the collection: fib(needed) alone can land
+                    // in the bucket the heap is already in, leaving only the
+                    // bucket-boundary gap as headroom and triggering a full
+                    // collection every few hundred allocated words.
+                    size_t needed = memory_size - free_space + size;
+                    target_size = next_fibonacci_heap_size(needed + needed / 3);
                     break;
+                }
                 default:
                     UNREACHABLE();
             }
@@ -395,6 +402,14 @@ static enum MemoryGCResult memory_full_gc(Context *ctx, size_t new_size, size_t 
     TRACE("- Running copy GC on provided roots\n");
     for (size_t i = 0; i < num_roots; i++) {
         roots[i] = memory_shallow_copy_term(old_root_fragment, roots[i], &ctx->heap.heap_ptr, true);
+    }
+
+    // x registers referenced by a NIF call in progress: a collection
+    // triggered from inside a NIF (memory_ensure_free with no explicit
+    // roots) must not free terms the NIF still uses through argv. Copying
+    // is idempotent with any explicit root above thanks to moved markers.
+    for (int i = 0; i < ctx->nif_call_arity; i++) {
+        ctx->x[i] = memory_shallow_copy_term(old_root_fragment, ctx->x[i], &ctx->heap.heap_ptr, true);
     }
 
     term *temp_start = new_heap;
@@ -1309,6 +1324,13 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
         for (size_t i = 0; i < num_roots; i++) {
             roots[i] = memory_shallow_copy_term_generational(
                 old_root_fragment, &gen_heap, roots[i],
+                &ctx->heap.heap_ptr, &old_heap_ptr);
+        }
+
+        // See memory_full_gc: argv of a NIF call in progress are roots.
+        for (int i = 0; i < ctx->nif_call_arity; i++) {
+            ctx->x[i] = memory_shallow_copy_term_generational(
+                old_root_fragment, &gen_heap, ctx->x[i],
                 &ctx->heap.heap_ptr, &old_heap_ptr);
         }
 

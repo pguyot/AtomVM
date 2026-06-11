@@ -115,6 +115,10 @@ struct Context
     enum HeapGrowthStrategy heap_growth_strategy;
     size_t fullsweep_after;
 
+    // Arity of the NIF call in progress (0 outside NIF calls): x[0..arity)
+    // are made GC roots so a NIF-triggered collection does not free terms
+    // the NIF still references through argv.
+    int nif_call_arity;
     size_t gc_count;
 
     // saved state when scheduled out
