@@ -310,7 +310,11 @@ enum RefcBinaryFlags
 typedef enum
 {
     TermCompareNoOpts = 0,
-    TermCompareExact = 1
+    TermCompareExact = 1,
+    // Caller only distinguishes TermEquals from not-equal: for unequal terms
+    // the Less/Greater result is arbitrary. Lets the compare skip ordering
+    // work, e.g. the atom table lookup for unequal atoms.
+    TermCompareEqualOnly = 2
 } TermCompareOpts;
 
 typedef enum
@@ -3141,10 +3145,62 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
 {
     term keys = term_get_map_keys(map);
     int arity = term_get_tuple_arity(keys);
+
+    // Atoms, small integers and nil are exactly equal only to themselves
+    // (boxed integers are normalized, so no boxed term can be exactly equal
+    // to an immediate integer): the common scan is a plain identity loop.
+    if (term_is_atom(key) || term_is_integer(key) || term_is_nil(key)) {
+        for (int i = 0; i < arity; ++i) {
+            if (term_get_tuple_element(keys, i) == key) {
+                return i;
+            }
+        }
+        return TERM_MAP_NOT_FOUND;
+    }
+
+    bool key_is_tuple = term_is_tuple(key);
+    int key_arity = key_is_tuple ? term_get_tuple_arity(key) : 0;
+
     for (int i = 0; i < arity; ++i) {
         term k = term_get_tuple_element(keys, i);
-        // TODO: not sure if exact is the right choice here
-        TermCompareResult result = term_compare(key, k, TermCompareExact, global);
+        if (k == key) {
+            return i;
+        }
+        // Exact equality of distinct terms requires the same primary tag.
+        if (((k ^ key) & TERM_PRIMARY_MASK) != 0) {
+            continue;
+        }
+        if (key_is_tuple && term_is_boxed(k)) {
+            // Tuple keys (e.g. compiler records) resolve element-wise without
+            // the generic comparator: a differing header (tag or arity)
+            // rejects, identical elements accept, and a differing element
+            // pair with an immediate on either side rejects (immediates are
+            // exactly equal only to themselves). Only a differing pair of
+            // boxed/list elements needs the full comparison.
+            const term *key_ptr = term_to_const_term_ptr(key);
+            const term *k_ptr = term_to_const_term_ptr(k);
+            if (key_ptr[0] != k_ptr[0]) {
+                continue;
+            }
+            int j = 1;
+            while (j <= key_arity) {
+                term key_elem = key_ptr[j];
+                term k_elem = k_ptr[j];
+                if (key_elem != k_elem) {
+                    break;
+                }
+                j++;
+            }
+            if (j > key_arity) {
+                return i;
+            }
+            if (((key_ptr[j] & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED)
+                || ((k_ptr[j] & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED)) {
+                continue;
+            }
+        }
+        TermCompareResult result = term_compare(
+            key, k, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
         if (result == TermEquals) {
             return i;
         } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
