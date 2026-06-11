@@ -6113,11 +6113,12 @@ op_fconv(MMod, MSt0, {typed, Term, {t_integer, _Range}}, FPRegIndex) ->
         false -> op_fconv_number(MMod, MSt0, Term, FPRegIndex)
     end;
 op_fconv(MMod, MSt0, {typed, Term, {t_number, _Range}}, FPRegIndex) ->
-    %% Provably a number (integer or float). On FPU backends inline the
-    %% immediate-integer case; a boxed float or bignum goes through the C
-    %% conversion (which handles both), avoiding a boxed-header tag test here.
+    %% Provably a number (integer or float). On FPU backends inline both the
+    %% immediate-integer case and the boxed-float unbox (float accumulator
+    %% loops convert a boxed float on every iteration); only bignums go
+    %% through the C conversion.
     case MMod:supports_fp(MSt0) of
-        true -> op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex);
+        true -> op_fconv_number_inline(MMod, MSt0, Term, FPRegIndex);
         false -> op_fconv_number(MMod, MSt0, Term, FPRegIndex)
     end;
 op_fconv(MMod, MSt0, {typed, Term, {t_float, _Range}}, FPRegIndex) ->
@@ -6165,6 +6166,49 @@ op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex) ->
         end
     ),
     MMod:free_native_registers(MSt3, [Reg]).
+
+%% Inline conversion of a number-typed source: an immediate small integer is
+%% untagged and converted in registers; a boxed float (the hot case in float
+%% accumulator loops, where the accumulator is reconverted on every
+%% iteration) is unboxed inline; only boxed integers / bignums fall back to
+%% the C term_conv_to_float.
+op_fconv_number_inline(MMod, MSt0, Term, FPRegIndex) ->
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
+    MSt2 = ensure_fpregs(MMod, MSt1),
+    MSt3 = MMod:if_else_block(
+        MSt2,
+        {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        %% Boxed number: float or integer/bignum, dispatch on the boxed tag.
+        fun(BSt0) ->
+            {BSt1, PtrReg} = MMod:and_(BSt0, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+            {BSt2, HeaderReg} = MMod:get_array_element(BSt1, PtrReg, 0),
+            MMod:if_else_block(
+                BSt2,
+                {{free, HeaderReg}, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_FLOAT},
+                %% Boxed integer / bignum: re-tag the pointer and call the C
+                %% conversion.
+                fun(CSt0) ->
+                    CSt1 = MMod:or_(CSt0, PtrReg, ?TERM_PRIMARY_BOXED),
+                    {CSt2, ConvReg} = MMod:call_primitive(CSt1, ?PRIM_TERM_CONV_TO_FLOAT, [
+                        ctx, {free, PtrReg}, FPRegIndex
+                    ]),
+                    MMod:free_native_registers(CSt2, [ConvReg])
+                end,
+                %% Boxed float: unbox inline (the untag inside is a no-op on
+                %% the already-untagged pointer).
+                fun(CSt0) ->
+                    MMod:float_conv_float(CSt0, {free, PtrReg}, FPRegIndex)
+                end
+            )
+        end,
+        %% Immediate small integer: untag and convert inline.
+        fun(BSt0) ->
+            {BSt1, IntReg} = MMod:shift_right_arith(BSt0, {free, Reg}, 4),
+            BSt2 = MMod:float_conv_int(BSt1, IntReg, FPRegIndex),
+            MMod:free_native_registers(BSt2, [IntReg])
+        end
+    ),
+    MSt3.
 
 %% Ensure the fp register array is allocated. context_ensure_fpregs only does
 %% a lazy malloc on the first call, so on FPU backends test ctx->fr inline and

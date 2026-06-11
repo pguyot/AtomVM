@@ -2979,15 +2979,18 @@ float_conv_int(
 
 %% Unbox a boxed float term (in BoxedReg) and store its double value into
 %% fr[FPRegIndex]. The double lives just past the boxed header word, i.e. at
-%% offset one word from the untagged boxed pointer. BoxedReg is consumed.
--spec float_conv_float(state(), aarch64_register(), non_neg_integer()) -> state().
+%% offset one word from the untagged boxed pointer. BoxedReg is clobbered by
+%% the in-place untag, so it must be passed as {free, Reg}: it is invalidated
+%% (any cached vm-register association would be stale) and returned to the
+%% pool.
+-spec float_conv_float(state(), {free, aarch64_register()}, non_neg_integer()) -> state().
 float_conv_float(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         regs = Regs0
     } = State0,
-    BoxedReg,
+    {free, BoxedReg},
     FPRegIndex
 ) ->
     Avail0 = jit_regs:available_regs(Regs0),
@@ -3001,7 +3004,9 @@ float_conv_float(
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    State0#state{stream = Stream1, regs = Regs1}.
+    Regs2 = jit_regs:invalidate_reg(Regs1, BoxedReg),
+    Regs3 = jit_regs:free_reg(Regs2, reg_bit(BoxedReg)),
+    State0#state{stream = Stream1, regs = Regs3}.
 
 %% Store a compile-time float constant directly into fr[FPRegIndex] as its
 %% IEEE-754 double bits, avoiding any literal-table access at runtime. Only
