@@ -1787,6 +1787,7 @@ emit_unwrapped_to_stack(Imm) when is_integer(Imm) ->
 
 %% Must be kept in sync with ModuleNativeInterface in jit.h.
 primitive_returns_void(?PRIM_TRIM_LIVE_REGS) -> true;
+primitive_returns_void(?PRIM_SET_TUPLE_ELEMENT) -> true;
 primitive_returns_void(?PRIM_MAILBOX_REMOVE_MESSAGE) -> true;
 primitive_returns_void(?PRIM_TIMEOUT) -> true;
 primitive_returns_void(?PRIM_MAILBOX_NEXT) -> true;

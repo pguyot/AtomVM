@@ -6032,6 +6032,24 @@ schedule_in:
                 DECODE_EXTENDED_LIST_TAG(pc);
                 int list_len;
                 DECODE_LITERAL(list_len, pc);
+
+                if (hint == INPLACE_ATOM) {
+                    // The compiler proved src unique and dying with this
+                    // update (and never a literal): update destructively.
+                    // The write barrier covers stores into a promoted tuple.
+                    TRACE("update_record/5 hint=inplace, size=%i, src=%p, updates_len=%d\n", size, (void *) src, list_len);
+                    for (int j = 0; j < list_len; j += 2) {
+                        int update_ix;
+                        DECODE_LITERAL(update_ix, pc);
+                        term update_value;
+                        DECODE_COMPACT_TERM(update_value, pc);
+                        term_put_tuple_element(src, update_ix - 1, update_value);
+                        memory_record_old_cell_write(ctx, term_to_term_ptr(src) + update_ix);
+                    }
+                    WRITE_REGISTER(dreg, src);
+                    break;
+                }
+
                 term dst;
                 dst = term_alloc_tuple(size, &ctx->heap);
 
