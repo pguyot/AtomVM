@@ -710,7 +710,16 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
         return jit_raise_error(ctx, jit_state, 0, UNDEF_ATOM);
     }
 
-    switch (func->type) {
+    // Acquire pairing with the in-place ModuleFunction -> ModuleNativeFunction
+    // upgrade below: seeing ModuleNativeFunction must imply seeing the
+    // entry_point written before the type.
+#if defined(HAVE_ATOMIC)
+    enum FunctionType func_type = atomic_load_explicit(
+        (const _Atomic enum FunctionType *) &func->type, memory_order_acquire);
+#else
+    enum FunctionType func_type = func->type;
+#endif
+    switch (func_type) {
         case NIFFunctionType: {
             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
             ctx->nif_call_arity = arity;
@@ -782,7 +791,15 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
                 // label and entry_point are union, wasm uses label
                 ((struct ModuleFunction *) jump)->entry_point = module_get_native_entry_point(jump->target, target_label);
 #endif
+                // Release so lock-free readers that observe the upgraded type
+                // also observe the entry_point written above.
+#if defined(HAVE_ATOMIC)
+                atomic_store_explicit(
+                    (_Atomic enum FunctionType *) &((struct ModuleFunction *) jump)->base.type,
+                    ModuleNativeFunction, memory_order_release);
+#else
                 ((struct ModuleFunction *) jump)->base.type = ModuleNativeFunction;
+#endif
                 SMP_MODULE_UNLOCK(jit_state->module);
 
                 jit_state->module = jump->target;

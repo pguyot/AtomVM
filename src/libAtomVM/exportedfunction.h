@@ -111,6 +111,10 @@ struct UnresolvedFunctionCall
     atom_index_t module_atom_index;
     atom_index_t function_atom_index;
     int arity;
+    // Once resolved away, chained on Module.resolved_imports until module
+    // destruction instead of being freed: lock-free readers of
+    // imported_funcs may still be inspecting this entry's type.
+    struct UnresolvedFunctionCall *next_resolved;
 };
 
 struct ModuleFunction
