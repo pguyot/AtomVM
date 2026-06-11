@@ -317,11 +317,12 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
     // the message as root->next without moving the root or high_water_mark, and
     // minor GC's pointer-driven copy already walks the whole fragment chain.
     // memory_heap_alloc_new_fragment swaps the root, making the mature range
-    // meaningless; it clears high_water_mark so the NULL check below forces a
-    // full GC that rechains every fragment into from-space.
+    // meaningless; it clears high_water_mark and the minor GC below runs with
+    // an empty mature region (chain fragments are still promoted when reached
+    // from the old generation, and the remembered set covers the rest).
     bool force_full = ctx->fullsweep_after == 0 || ctx->gc_count >= ctx->fullsweep_after
         || ctx->gc_remembered_overflow;
-    if (ctx->heap.high_water_mark == NULL || force_full) {
+    if (force_full) {
         enum MemoryGCResult result = memory_full_gc(ctx, new_size, num_roots, roots);
         if (result == MEMORY_GC_OK) {
             ctx->heap.high_water_mark = ctx->heap.heap_ptr;
@@ -348,6 +349,22 @@ static bool remembered_set_add(Context *ctx, term *cell)
     }
     ctx->gc_remembered_set[ctx->gc_remembered_size++] = cell;
     return true;
+}
+
+void memory_record_old_cell_write(Context *ctx, term *cell)
+{
+    if (ctx->heap.old_heap_start == NULL
+        || cell < ctx->heap.old_heap_start || cell >= ctx->heap.old_heap_ptr) {
+        return;
+    }
+    term v = *cell;
+    if ((v & TERM_PRIMARY_MASK) != TERM_PRIMARY_BOXED
+        && (v & TERM_PRIMARY_MASK) != TERM_PRIMARY_LIST) {
+        return;
+    }
+    if (UNLIKELY(!remembered_set_add(ctx, cell))) {
+        ctx->gc_remembered_overflow = true;
+    }
 }
 
 static enum MemoryGCResult memory_full_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots)
@@ -1137,6 +1154,7 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
 
             term *dest;
             if (generational && *old_heap_ptr != NULL
+                && *old_heap_ptr + boxed_size <= heap->old_heap_end
                 && (promote_children
                     || (boxed_value >= heap->heap_start && boxed_value < heap->high_water_mark)
                     || boxed_value < old_fragment->storage
@@ -1148,7 +1166,9 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
                 // allocations, which carry no allocation-order relationship
                 // with the high water mark). The old generation is not
                 // rescanned by later minor collections, so it must never
-                // reference the young one.
+                // reference the young one -- when the old heap is full the
+                // term goes young instead and the referencing cells are
+                // tracked by the remembered set.
                 dest = *old_heap_ptr;
                 *old_heap_ptr += boxed_size;
             } else {
@@ -1185,6 +1205,7 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
 
             term *dest;
             if (generational && *old_heap_ptr != NULL
+                && *old_heap_ptr + 2 <= heap->old_heap_end
                 && (promote_children
                     || (list_ptr >= heap->heap_start && list_ptr < heap->high_water_mark)
                     || list_ptr < old_fragment->storage
@@ -1267,17 +1288,17 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
     HeapFragment *old_root_fragment = ctx->heap.root;
     term *high_water_mark = ctx->heap.high_water_mark;
 
-    size_t mature_size = high_water_mark - ctx->heap.heap_start;
+    size_t mature_size = high_water_mark != NULL ? (size_t) (high_water_mark - ctx->heap.heap_start) : 0;
 
-    // Promotion is transitive: anything reachable from a promoted container
-    // is promoted with it, and chained fragments (messages, no-GC overflow
-    // allocations) are promoted wherever they are reached from. Size the old
-    // heap for the worst case: the whole young from-space plus all chained
-    // fragments could be promoted.
-    size_t worst_case_promotion = ctx->heap.heap_ptr - ctx->heap.heap_start;
+    // Chained fragments (messages, no-GC overflow allocations) are promoted
+    // wherever they are reached from, so account for them along with the
+    // mature region. Children of promoted containers may need more space
+    // still; when the old heap runs out, the copy spills into the young
+    // to-space and the remembered set keeps the old generation sound.
+    size_t expected_promotion = mature_size;
     for (HeapFragment *fragment = old_root_fragment->next; fragment != NULL;
          fragment = fragment->next) {
-        worst_case_promotion += fragment->heap_end - fragment->storage;
+        expected_promotion += fragment->heap_end - fragment->storage;
     }
 
     // new_size was computed by memory_ensure_free_with_roots against the whole
@@ -1299,7 +1320,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
 
     if (saved_old_heap_start == NULL) {
         if (mature_size > 0) {
-            size_t old_heap_size = initial_old_heap_size(ctx->heap_growth_strategy, worst_case_promotion);
+            size_t old_heap_size = initial_old_heap_size(ctx->heap_growth_strategy, expected_promotion);
             HeapFragment *old_fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + old_heap_size * sizeof(term));
             if (IS_NULL_PTR(old_fragment)) {
                 goto fallback_full_gc;
@@ -1312,7 +1333,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
         }
     } else {
         size_t old_free = saved_old_heap_end - saved_old_heap_ptr;
-        if (old_free < worst_case_promotion) {
+        if (old_free < expected_promotion) {
             goto fallback_full_gc;
         }
     }

@@ -3010,6 +3010,9 @@ schedule_in:
                 }
 
                 term_put_tuple_element(tuple, position, new_element);
+                // Generational write barrier: the destructive update may
+                // store a young pointer into a promoted (old gen) tuple.
+                memory_record_old_cell_write(ctx, term_to_term_ptr(tuple) + position + 1);
 
                 break;
             }

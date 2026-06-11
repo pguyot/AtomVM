@@ -960,12 +960,14 @@ first_pass(<<?OP_SET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Tuple, Rest2} = decode_compact_term(Rest1, MMod, MSt1, State0),
     {Position, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_SET_TUPLE_ELEMENT ~p, ~p, ~p\n", [NewElement, Tuple, Position]),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Tuple),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt5 = MMod:move_to_array_element(MSt4, NewElement, Reg, Position + 1),
-    MSt6 = MMod:free_native_registers(MSt5, [NewElement, Reg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    first_pass(Rest3, MMod, MSt6, State0);
+    %% Done in C so that the generational GC write barrier is applied: the
+    %% destructive update may store a young pointer into a promoted tuple.
+    {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_SET_TUPLE_ELEMENT, [
+        ctx, {free, Tuple}, Position, {free, NewElement}
+    ]),
+    MSt4 = MMod:free_native_registers(MSt3, [ResultReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest3, MMod, MSt4, State0);
 % 69
 first_pass(<<?OP_PUT_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),

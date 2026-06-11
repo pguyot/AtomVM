@@ -2241,6 +2241,15 @@ static term jit_stacktrace_build(Context *ctx)
     return stacktrace_build(ctx, ctx->x, 1);
 }
 
+static void jit_set_tuple_element(Context *ctx, term tuple, uint32_t position, term value)
+{
+    TRACE("jit_set_tuple_element: tuple=%p position=%u\n", (void *) tuple, (unsigned) position);
+    term_put_tuple_element(tuple, position, value);
+    // Generational write barrier: the destructive update may store a
+    // young pointer into a promoted (old generation) tuple.
+    memory_record_old_cell_write(ctx, term_to_term_ptr(tuple) + position + 1);
+}
+
 const ModuleNativeInterface module_native_interface = {
     jit_raise_error,
     jit_return,
@@ -2327,7 +2336,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_is_record_accessible,
     jit_get_record_field,
     jit_put_record_resolved,
-    jit_get_imported_gcbif
+    jit_get_imported_gcbif,
+    jit_set_tuple_element
 };
 
 #endif
