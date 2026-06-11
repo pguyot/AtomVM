@@ -2263,7 +2263,7 @@ term bif_erlang_xor_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
 
 term bif_erlang_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
 {
-    TermCompareResult result = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+    TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), ctx->global);
     if (result == TermEquals) {
         return TRUE_ATOM;
     } else if (result & (TermLessThan | TermGreaterThan)) {
@@ -2275,7 +2275,7 @@ term bif_erlang_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, term ar
 
 term bif_erlang_not_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
 {
-    TermCompareResult result = term_compare(arg1, arg2, TermCompareNoOpts, ctx->global);
+    TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), ctx->global);
     if (result & (TermLessThan | TermGreaterThan)) {
         return TRUE_ATOM;
     } else if (result == TermEquals) {
@@ -2288,7 +2288,7 @@ term bif_erlang_not_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, ter
 term bif_erlang_exactly_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
 {
     // TODO: 5.0 != 5
-    TermCompareResult result = term_compare(arg1, arg2, TermCompareExact, ctx->global);
+    TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
     if (result == TermEquals) {
         return TRUE_ATOM;
     } else if (result & (TermLessThan | TermGreaterThan)) {
@@ -2300,7 +2300,7 @@ term bif_erlang_exactly_equal_to_2(Context *ctx, uint32_t fail_label, term arg1,
 
 term bif_erlang_exactly_not_equal_to_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
 {
-    TermCompareResult result = term_compare(arg1, arg2, TermCompareExact, ctx->global);
+    TermCompareResult result = term_compare(arg1, arg2, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
     if (result & (TermLessThan | TermGreaterThan)) {
         return TRUE_ATOM;
     } else if (result == TermEquals) {
