@@ -1520,7 +1520,8 @@ static term do_spawn(Context *ctx, Context *new_ctx, size_t arity, size_t n_free
     term fullsweep_after_term = interop_proplist_get_value(opts_term, FULLSWEEP_AFTER_ATOM);
     term link_term = interop_proplist_get_value(opts_term, LINK_ATOM);
     term monitor_term = interop_proplist_get_value_default(opts_term, MONITOR_ATOM, term_invalid_term());
-    term heap_growth_strategy = interop_proplist_get_value_default(opts_term, ATOMVM_HEAP_GROWTH_ATOM, BOUNDED_FREE_ATOM);
+    // term_nil() = option absent: keep the platform default set by context_new
+    term heap_growth_strategy = interop_proplist_get_value(opts_term, ATOMVM_HEAP_GROWTH_ATOM);
     term request_term = interop_proplist_get_value_default(opts_term, REQUEST_ATOM, UNDEFINED_ATOM);
     term group_leader;
     bool valid_request = false;
@@ -1582,19 +1583,21 @@ static term do_spawn(Context *ctx, Context *new_ctx, size_t arity, size_t n_free
         new_ctx->x[i] = memory_copy_term_tree(&new_ctx->heap, new_ctx->x[i]);
     }
 
-    switch (heap_growth_strategy) {
-        case BOUNDED_FREE_ATOM:
-            new_ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
-            break;
-        case MINIMUM_ATOM:
-            new_ctx->heap_growth_strategy = MinimumHeapGrowth;
-            break;
-        case FIBONACCI_ATOM:
-            new_ctx->heap_growth_strategy = FibonacciHeapGrowth;
-            break;
-        default:
-            context_destroy(new_ctx);
-            RAISE_ERROR(BADARG_ATOM);
+    if (heap_growth_strategy != term_nil()) {
+        switch (heap_growth_strategy) {
+            case BOUNDED_FREE_ATOM:
+                new_ctx->heap_growth_strategy = BoundedFreeHeapGrowth;
+                break;
+            case MINIMUM_ATOM:
+                new_ctx->heap_growth_strategy = MinimumHeapGrowth;
+                break;
+            case FIBONACCI_ATOM:
+                new_ctx->heap_growth_strategy = FibonacciHeapGrowth;
+                break;
+            default:
+                context_destroy(new_ctx);
+                RAISE_ERROR(BADARG_ATOM);
+        }
     }
     RefData ref_data;
     bool is_spawn_monitor = false;
