@@ -93,13 +93,14 @@ has_working_ptys() ->
     stop_socat(SocatFd),
     Result.
 
-%% Start socat and return {SocatFd, PtyA, PtyB}
+%% Start socat and return {SocatHandle, PtyA, PtyB}
 %% socat -d -d pty,raw,echo=0 pty,raw,echo=0
 %% outputs on stderr: "N PTY is /dev/ttysXXX" twice
+%% exec so the subprocess pid is socat itself, not the wrapping shell.
 start_socat() ->
-    {ok, _Pid, Fd} = atomvm:subprocess(
+    {ok, OsPid, Fd} = atomvm:subprocess(
         "/bin/sh",
-        ["sh", "-c", "socat -d -d pty,raw,echo=0 pty,raw,echo=0 2>&1"],
+        ["sh", "-c", "exec socat -d -d pty,raw,echo=0 pty,raw,echo=0 2>&1"],
         undefined,
         [stdout]
     ),
@@ -109,9 +110,14 @@ start_socat() ->
     receive
     after 200 -> ok
     end,
-    {Fd, PtyA, PtyB}.
+    {{OsPid, Fd}, PtyA, PtyB}.
 
-stop_socat(Fd) ->
+%% socat keeps running (holding both ptys) until killed: closing the
+%% stdout pipe is not enough, and leaked socats eventually exhaust the
+%% system pty pool.
+stop_socat({OsPid, Fd}) ->
+    %% SIGTERM
+    ok = atomvm:posix_kill(OsPid, 15),
     atomvm:posix_close(Fd).
 
 %% Read a line like "... N PTY is /dev/ttysXXX" and extract the path

@@ -56,6 +56,10 @@
 #include <spawn.h>
 #endif
 
+#if HAVE_KILL
+#include <signal.h>
+#endif
+
 #include "defaultatoms.h"
 #include "erl_nif_priv.h"
 #include "globalcontext.h"
@@ -954,6 +958,22 @@ static term nif_atomvm_subprocess(Context *ctx, int argc, term argv[])
 #endif
 #endif
 
+#if HAVE_KILL
+static term nif_atomvm_posix_kill(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    // A pid may exceed the unboxed integer range on 32-bit builds, so accept
+    // any integer (small or boxed) rather than just unboxed ones.
+    VALIDATE_VALUE(argv[0], term_is_any_integer);
+    VALIDATE_VALUE(argv[1], term_is_non_neg_int);
+
+    if (UNLIKELY(kill((pid_t) term_maybe_unbox_int(argv[0]), term_to_int(argv[1])) != 0)) {
+        return errno_to_error_tuple_maybe_gc(ctx);
+    }
+    return OK_ATOM;
+}
+#endif
+
 #if HAVE_MKFIFO
 static term nif_atomvm_posix_mkfifo(Context *ctx, int argc, term argv[])
 {
@@ -1835,6 +1855,12 @@ const struct Nif atomvm_subprocess_nif = {
     .nif_ptr = nif_atomvm_subprocess
 };
 #endif
+#endif
+#if HAVE_KILL
+const struct Nif atomvm_posix_kill_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_atomvm_posix_kill
+};
 #endif
 #if HAVE_OPEN && HAVE_CLOSE && HAVE_LSEEK
 const struct Nif atomvm_posix_seek_nif = {

@@ -57,7 +57,8 @@
     posix_closedir/1,
     posix_readdir/1,
     get_creation/0,
-    subprocess/4
+    subprocess/4,
+    posix_kill/2
 ]).
 
 -export_type([
@@ -528,4 +529,17 @@ get_creation() ->
 ) ->
     {ok, non_neg_integer(), posix_fd()} | {error, posix_error()}.
 subprocess(_Path, _Args, _Env, _Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   OsPid   operating system process id, as returned by `subprocess/4'
+%% @param   Signal  signal number to send, e.g. 15 for SIGTERM
+%% @returns `ok' or an error tuple
+%% @doc     Send a signal to a process using kill(2). Typically used to
+%%          terminate a process started with `subprocess/4'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec posix_kill(OsPid :: integer(), Signal :: non_neg_integer()) ->
+    ok | {error, posix_error()}.
+posix_kill(_OsPid, _Signal) ->
     erlang:nif_error(undefined).
