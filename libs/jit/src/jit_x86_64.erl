@@ -79,6 +79,7 @@
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     read_avail_heap_memory/1,
+    term_from_float_inline/2,
     supports_vm_reg_cond/0,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -3095,6 +3096,45 @@ move_float_to_fp_reg(
 %% Load the free space between heap and stack (ctx->e - ctx->heap.heap_ptr,
 %% in bytes) into a freshly allocated register, for the inline test_heap fast
 %% path.
+%% Box the double in fr[FPRegIndex] as a float term, inline: the BEAM
+%% compiler emits fmove-to-register only after a test_heap that reserved the
+%% float's words, so the bump allocation cannot overflow. Replaces the
+%% PRIM_TERM_FROM_FLOAT call (one C call per iteration in float loops).
+%% Only used when supports_fp/1 holds (double-precision variant).
+-spec term_from_float_inline(state(), non_neg_integer()) -> {state(), x86_64_register()}.
+term_from_float_inline(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State0,
+    FPRegIndex
+) ->
+    Avail0 = jit_regs:available_regs(Regs0),
+    HpReg = first_avail(Avail0),
+    Tmp = first_avail(Avail0 band (bnot reg_bit(HpReg))),
+    %% float boxed term: header ((FLOAT_SIZE - 1) << 6) | TERM_BOXED_FLOAT
+    %% = (1 << 6) | 16#18 on 64-bit, then the raw double (term.hrl is not
+    %% included here, so use the literals directly).
+    FloatHeader = (1 bsl 6) bor 16#18,
+    I1 = jit_x86_64_asm:movq(?HEAP_PTR, HpReg),
+    I2 = jit_x86_64_asm:movq(FloatHeader, {0, HpReg}),
+    I3 = jit_x86_64_asm:movq(?FP_REGS, Tmp),
+    I4 = jit_x86_64_asm:movq({?FP_REG_OFFSET(State0, FPRegIndex), Tmp}, Tmp),
+    I5 = jit_x86_64_asm:movq(Tmp, {8, HpReg}),
+    I6 = jit_x86_64_asm:leaq({16, HpReg}, Tmp),
+    I7 = jit_x86_64_asm:movq(Tmp, ?HEAP_PTR),
+    %% TERM_PRIMARY_BOXED = 2
+    I8 = jit_x86_64_asm:orq(2, HpReg),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, HpReg), Tmp),
+    {
+        State0#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(HpReg))},
+        HpReg
+    }.
+
 %% This backend accepts {{x_reg, X}, '!=' | '==', Imm} if_block conditions
 %% (fused memory-operand compare).
 -spec supports_vm_reg_cond() -> true.
