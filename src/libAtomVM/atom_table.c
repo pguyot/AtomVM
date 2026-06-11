@@ -74,6 +74,10 @@ struct AtomTable
 #endif
     struct HNode **buckets;
 
+    // O(1) atom index -> node mapping, grown under the write lock.
+    struct HNode **index_to_node;
+    size_t index_capacity;
+
     struct HNodeGroup *first_node_group;
     struct HNodeGroup *last_node_group;
 };
@@ -94,6 +98,14 @@ struct AtomTable *atom_table_new(void)
 
     htable->count = 0;
     htable->capacity = DEFAULT_SIZE;
+
+    htable->index_to_node = malloc(DEFAULT_SIZE * sizeof(struct HNode *));
+    if (IS_NULL_PTR(htable->index_to_node)) {
+        free(htable->buckets);
+        free(htable);
+        return NULL;
+    }
+    htable->index_capacity = DEFAULT_SIZE;
 
     htable->last_node_group = NULL;
     htable->first_node_group = new_node_group(htable, DEFAULT_SIZE);
@@ -117,6 +129,7 @@ void atom_table_destroy(struct AtomTable *table)
     smp_rwlock_destroy(table->lock);
 #endif
     free(table->buckets);
+    free(table->index_to_node);
     free(table);
 }
 
@@ -138,6 +151,21 @@ static struct HNodeGroup *new_node_group(struct AtomTable *table, int len)
     new_group->next = NULL;
     new_group->first_index = table->count;
     new_group->len = len;
+
+    size_t needed = (size_t) table->count + len;
+    if (needed > table->index_capacity) {
+        size_t new_capacity = table->index_capacity;
+        while (new_capacity < needed) {
+            new_capacity *= 2;
+        }
+        struct HNode **new_array = realloc(table->index_to_node, new_capacity * sizeof(struct HNode *));
+        if (IS_NULL_PTR(new_array)) {
+            free(new_group);
+            return NULL;
+        }
+        table->index_to_node = new_array;
+        table->index_capacity = new_capacity;
+    }
 
     if (LIKELY(table->last_node_group != NULL)) {
         table->last_node_group->next = new_group;
@@ -197,17 +225,7 @@ static struct HNode *get_node_using_index(struct AtomTable *table, atom_index_t 
         return NULL;
     }
 
-    struct HNodeGroup *node_group = table->first_node_group;
-    while (node_group) {
-        atom_index_t first_index = node_group->first_index;
-        if (first_index + node_group->len > index) {
-            return &node_group->nodes[index - first_index];
-        }
-
-        node_group = node_group->next;
-    }
-
-    return NULL;
+    return table->index_to_node[index];
 }
 
 const uint8_t *atom_table_get_atom_string(struct AtomTable *table, atom_index_t index, size_t *out_size)
@@ -240,17 +258,20 @@ bool atom_table_is_equal_to_atom_string(struct AtomTable *table, atom_index_t t_
 
 int atom_table_cmp_using_atom_index(struct AtomTable *table, atom_index_t t_atom_index, atom_index_t other_atom_index)
 {
-    size_t t_atom_len;
-    const uint8_t *t_atom_data = atom_table_get_atom_string(table, t_atom_index, &t_atom_len);
-    if (IS_NULL_PTR(t_atom_data)) {
+    SMP_RDLOCK(table);
+    struct HNode *t_node = get_node_using_index(table, t_atom_index);
+    struct HNode *other_node = get_node_using_index(table, other_atom_index);
+    SMP_UNLOCK(table);
+    if (IS_NULL_PTR(t_node)) {
         return -1;
     }
-
-    size_t other_atom_len;
-    const uint8_t *other_atom_data = atom_table_get_atom_string(table, other_atom_index, &other_atom_len);
-    if (IS_NULL_PTR(other_atom_data)) {
+    if (IS_NULL_PTR(other_node)) {
         return 1;
     }
+    const uint8_t *t_atom_data = t_node->key;
+    size_t t_atom_len = t_node->bytes_len;
+    const uint8_t *other_atom_data = other_node->key;
+    size_t other_atom_len = other_node->bytes_len;
 
     int cmp_size = (t_atom_len > other_atom_len) ? other_atom_len : t_atom_len;
 
@@ -308,6 +329,7 @@ static inline atom_index_t insert_node(struct AtomTable *table, struct HNodeGrou
     table->last_node_group_avail--;
     init_node(node, atom_data, atom_len, new_index);
     insert_node_into_bucket(table, bucket_index, node);
+    table->index_to_node[new_index] = node;
 
     return new_index;
 }
