@@ -50,6 +50,9 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
 endif()
 
 
+# Desktop-class platform: favor allocation throughput over footprint
+add_compile_definitions(AVM_DEFAULT_HEAP_GROWTH_FIBONACCI)
+
 add_subdirectory(lib)
 target_include_directories(AtomVM PUBLIC lib/)
 
