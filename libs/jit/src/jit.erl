@@ -445,10 +445,7 @@ first_pass(<<?OP_TEST_HEAP, Rest0/binary>>, MMod, MSt0, State0) ->
     {HeapNeed, Rest1} = decode_allocator_list(MMod, Rest0),
     {Live, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_TEST_HEAP ~p, ~p\n", [HeapNeed, Live]),
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TEST_HEAP, [
-        ctx, jit_state, HeapNeed, Live
-    ]),
-    MSt2 = handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1),
+    MSt2 = op_test_heap(MMod, MSt0, HeapNeed, Live),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State0);
 % 18
@@ -4220,6 +4217,19 @@ resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif) ->
         false ->
             MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif])
     end.
+
+%% OP_TEST_HEAP: measured 2026-06-11 on x86_64, inlining the free-space
+%% corridor check (read_avail_heap_memory + if_block, with the C helper as
+%% slow path) is a net LOSS on the AOT benchmark: the helper call is cheap
+%% (hot and well-predicted) while the per-site inline check and duplicated
+%% slow-path call sites cost icache (pingpong +10-25%, total +3-4%, both for
+%% the corridor variant and a slimmed GC-direction-only variant). Keep the
+%% plain call.
+op_test_heap(MMod, MSt0, HeapNeed, Live) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TEST_HEAP, [
+        ctx, jit_state, HeapNeed, Live
+    ]),
+    handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1).
 
 % Platform-specific bounds for small integers
 small_integer_bounds(MMod) ->
