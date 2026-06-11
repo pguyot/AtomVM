@@ -2311,7 +2311,7 @@ float_conv_int_test() ->
 float_conv_float_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, BoxedReg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
-    State2 = ?BACKEND:float_conv_float(State1, BoxedReg, 1),
+    State2 = ?BACKEND:float_conv_float(State1, {free, BoxedReg}, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
         %% move_to_native_register loads the boxed-float term x_reg[0] into rax
