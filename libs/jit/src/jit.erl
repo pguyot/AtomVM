@@ -1064,7 +1064,18 @@ first_pass(<<?OP_FMOVE, ?COMPACT_EXTENDED_FP_REGISTER, Rest0/binary>>, MMod, MSt
     {FPRegIndex, Rest1} = decode_literal(Rest0),
     {MSt1, Dest, Rest2} = decode_dest(Rest1, MMod, MSt0),
     ?TRACE("OP_FMOVE {fp_reg, ~p}, ~p\n", [FPRegIndex, Dest]),
-    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_FROM_FLOAT, [ctx, FPRegIndex]),
+    %% Boxing the float is a guaranteed-space bump allocation (the compiler
+    %% only emits fmove-to-register after a test_heap reserving the float's
+    %% words), so FPU backends box it inline instead of calling
+    %% PRIM_TERM_FROM_FLOAT.
+    {MSt2, ResultReg} =
+        case
+            MMod:supports_fp(MSt1) andalso
+                erlang:function_exported(MMod, term_from_float_inline, 2)
+        of
+            true -> MMod:term_from_float_inline(MSt1, FPRegIndex);
+            false -> MMod:call_primitive(MSt1, ?PRIM_TERM_FROM_FLOAT, [ctx, FPRegIndex])
+        end,
     MSt3 = MMod:move_to_vm_register(MSt2, ResultReg, Dest),
     MSt4 = MMod:free_native_registers(MSt3, [ResultReg, Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
