@@ -2350,7 +2350,11 @@ static term nif_erlang_setelement_3(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, tuple_size + 1, 2, argv + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    // Only call the allocator when the heap actually lacks space: tuple
+    // update loops hit this per iteration, and the call's shrink evaluation
+    // is pure overhead then (and can fire a full-sweep shrink collection).
+    if (context_avail_free_memory(ctx) < (size_t) tuple_size + 1
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, tuple_size + 1, 2, argv + 1, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term new_tuple = term_alloc_tuple(tuple_size, &ctx->heap);
