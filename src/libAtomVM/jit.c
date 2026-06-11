@@ -951,11 +951,22 @@ static bool jit_test_heap(Context *ctx, JITState *jit_state, uint32_t heap_need,
         // otherwise, there is enough space for the needed heap, but there might
         // more more than necessary.  In that case, try to shrink the heap.
     } else if (heap_free > heap_need * HEAP_NEED_GC_SHRINK_THRESHOLD_COEFF) {
+        // Skip the probe while the heap is unchanged since the last one:
+        // allocations only decrease free space, so the growth strategy
+        // would keep deciding no-GC. (A varying heap_need can re-create
+        // shrink headroom; missing that merely defers the shrink to the
+        // next real GC.)
+        if (ctx->heap.root->next == NULL && ctx->heap.heap_end == ctx->shrink_probe_heap_end) {
+            return true;
+        }
         TRIM_LIVE_REGS(live_registers);
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_need * (HEAP_NEED_GC_SHRINK_THRESHOLD_COEFF / 2), live_registers, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             TRACE("Unable to ensure free memory.  heap_need=%" PRIu32 "\n", heap_need);
             set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
             return false;
+        }
+        if (ctx->heap.root->next == NULL) {
+            ctx->shrink_probe_heap_end = ctx->heap.heap_end;
         }
     }
     return true;
