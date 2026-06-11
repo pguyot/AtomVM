@@ -50,7 +50,7 @@ void print_num(const intn_digit_t num[], int len)
 
 static size_t neg_and_count_in_place(intn_digit_t out[], size_t len);
 
-static inline size_t pad_uint16_to_digits(uint16_t n16[], size_t n16_len)
+__attribute__((unused)) static inline size_t pad_uint16_to_digits(uint16_t n16[], size_t n16_len)
 {
     _Static_assert(UINT16_IN_A_DIGIT == 2, "assuming 32-bit intn_digit_t");
     if ((n16_len % UINT16_IN_A_DIGIT) != 0) {
@@ -64,6 +64,13 @@ static inline size_t pad_uint16_to_digits(uint16_t n16[], size_t n16_len)
 /*
  * Multiplication
  */
+
+// On 64-bit targets, use the 32-bit-digit cores with 64-bit intermediates:
+// half the digits in each dimension of the schoolbook loops (4x fewer steps)
+// compared to the 16-bit-digit cores kept for smaller targets.
+#if !defined(USE_64BIT_MUL) && UINTPTR_MAX == UINT64_MAX
+#define USE_64BIT_MUL
+#endif
 
 #ifdef USE_64BIT_MUL
 
@@ -373,6 +380,10 @@ static void big_endian_digits_to_uint16(const intn_digit_t num[], size_t len, ui
     }
 }
 
+// Only the uint16 (non-USE_64BIT_MUL) intn_divu reorders digits in place; on a
+// 64-bit big-endian target (e.g. s390x) USE_64BIT_MUL is set and that path is
+// compiled out, so guard the definition to avoid -Werror=unused-function.
+#ifndef USE_64BIT_MUL
 static void big_endian_uint16_to_digit_in_place(uint16_t num16[], size_t len16)
 {
     for (size_t i = 0; i < len16; i += UINT16_IN_A_DIGIT) {
@@ -383,6 +394,135 @@ static void big_endian_uint16_to_digit_in_place(uint16_t num16[], size_t len16)
     }
 }
 #endif
+#endif
+
+#ifdef USE_64BIT_MUL
+
+// Code based on Hacker's Delight book (divmnu64): 32-bit digits with 64-bit
+// intermediates, the same algorithm as divmnu16 with twice-wider digits.
+static int divmnu32(
+    uint32_t q[], uint32_t r[], const uint32_t u[], const uint32_t v[], int m, int n)
+{
+    const uint64_t b = UINT64_C(0x100000000); // Number base (32 bits).
+    uint64_t qhat; // Estimated quotient digit.
+    uint64_t rhat; // A remainder.
+    uint64_t p; // Product of two digits.
+    int64_t t, k;
+    int s, i, j;
+
+    if (m < n || n <= 0 || v[n - 1] == 0) {
+        return 1; // Return if invalid param.
+    }
+
+    if (n == 1) { // Take care of
+        k = 0; // the case of a
+        for (j = m - 1; j >= 0; j--) { // single-digit
+            uint64_t acc = ((uint64_t) k << 32) + u[j]; // divisor here.
+            q[j] = acc / v[0];
+            k = acc - (uint64_t) q[j] * v[0];
+        }
+        if (r != NULL) {
+            r[0] = k;
+        }
+        return 0;
+    }
+
+    // Normalize by shifting v left just enough so that its high-order bit
+    // is on, and shift u left the same amount. We may have to append a
+    // high-order digit on the dividend; we do that unconditionally.
+    // The 64-bit promotions keep the (32 - s) shifts defined when s == 0.
+
+    s = uint32_nlz(v[n - 1]); // 0 <= s <= 31.
+    uint32_t vn[INTN_DIVMNU_MAX_IN_LEN];
+    for (i = n - 1; i > 0; i--) {
+        vn[i] = (v[i] << s) | (uint32_t) ((uint64_t) v[i - 1] >> (32 - s));
+    }
+    vn[0] = v[0] << s;
+
+    uint32_t un[INTN_DIVMNU_MAX_IN_LEN + 1];
+    un[m] = (uint32_t) ((uint64_t) u[m - 1] >> (32 - s));
+    for (i = m - 1; i > 0; i--) {
+        un[i] = (u[i] << s) | (uint32_t) ((uint64_t) u[i - 1] >> (32 - s));
+    }
+    un[0] = u[0] << s;
+
+    for (j = m - n; j >= 0; j--) { // Main loop.
+        // Compute estimate qhat of q[j].
+        uint64_t num = ((uint64_t) un[j + n] << 32) + un[j + n - 1];
+        qhat = num / vn[n - 1];
+        rhat = num - qhat * vn[n - 1];
+    again:
+        if (qhat >= b || qhat * vn[n - 2] > b * rhat + un[j + n - 2]) {
+            qhat = qhat - 1;
+            rhat = rhat + vn[n - 1];
+            if (rhat < b) {
+                goto again;
+            }
+        }
+
+        // Multiply and subtract.
+        k = 0;
+        for (i = 0; i < n; i++) {
+            p = qhat * vn[i];
+            t = (int64_t) ((uint64_t) un[i + j] - k - (p & 0xFFFFFFFF));
+            un[i + j] = t;
+            k = (p >> 32) - (t >> 32);
+        }
+        t = un[j + n] - k;
+        un[j + n] = t;
+
+        q[j] = qhat; // Store quotient digit.
+        if (t < 0) { // If we subtracted too
+            q[j] = q[j] - 1; // much, add back.
+            k = 0;
+            for (i = 0; i < n; i++) {
+                t = (int64_t) ((uint64_t) un[i + j] + vn[i] + k);
+                un[i + j] = t;
+                k = t >> 32;
+            }
+            un[j + n] = un[j + n] + k;
+        }
+    } // End j.
+    // If the caller wants the remainder, unnormalize
+    // it and pass it back.
+    if (r != NULL) {
+        for (i = 0; i < n - 1; i++) {
+            r[i] = (un[i] >> s) | (uint32_t) ((uint64_t) un[i + 1] << (32 - s));
+        }
+        r[n - 1] = un[n - 1] >> s;
+    }
+    return 0;
+}
+
+size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], size_t n_len,
+    intn_digit_t q_out[], intn_digit_t r_out[], size_t *r_out_len)
+{
+    size_t u_len = intn_count_digits(m, m_len);
+    size_t v_len = intn_count_digits(n, n_len);
+
+    if (UNLIKELY(divmnu32(q_out, r_out, m, n, u_len, v_len) != 0)) {
+        abort();
+    }
+
+    size_t q_len = intn_count_digits(q_out, u_len - v_len + 1);
+    if (q_len == 0) {
+        q_out[0] = 0;
+        q_len = 1;
+    }
+
+    if (r_out != NULL && r_out_len != NULL) {
+        size_t r_len = intn_count_digits(r_out, v_len);
+        if (r_len == 0) {
+            r_out[0] = 0;
+            r_len = 1;
+        }
+        *r_out_len = r_len;
+    }
+
+    return q_len;
+}
+
+#else
 
 size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], size_t n_len,
     intn_digit_t q_out[], intn_digit_t r_out[], size_t *r_out_len)
@@ -433,6 +573,8 @@ size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], s
 
     return padded_q_len / UINT16_IN_A_DIGIT;
 }
+
+#endif
 
 int intn_cmpu(const intn_digit_t a[], size_t a_len, const intn_digit_t b[], size_t b_len)
 {
