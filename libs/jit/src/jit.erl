@@ -3671,9 +3671,83 @@ op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, erlang, 'byte_size', Arg, Dest) ->
         false ->
             op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg), Dest)
     end;
+op_gc_bif1(
+    MMod, MSt0, FailLabel, Live, Bif, erlang, '-', {typed, _, {t_integer, Range}} = Arg, Dest
+) ->
+    case can_inline_neg(Range, MMod) of
+        true ->
+            %% term(n) = (n bsl 4) bor 0xF = 16n + 15, so term(-n) = 30 - term(n).
+            %% The range proves the argument and its negation are both small.
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg)),
+            {MSt2, TmpReg} = MMod:move_to_native_register(MSt1, 2 * ?TERM_INTEGER_TAG),
+            MSt3 = MMod:sub(MSt2, TmpReg, Reg),
+            MSt4 = MMod:free_native_registers(MSt3, [Reg]),
+            MSt5 = MMod:move_to_vm_register(MSt4, TmpReg, Dest),
+            MMod:free_native_registers(MSt5, [TmpReg, Dest]);
+        false ->
+            op_gc_bif1_neg_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest)
+    end;
 % Default: call BIF via function pointer
 op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg, Dest) ->
     op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg), Dest).
+
+%% Negation maps [Min, Max] to [-Max, -Min]; inline when both the argument
+%% and the negated range are provably small integers.
+can_inline_neg({Min, Max}, MMod) when is_integer(Min), is_integer(Max) ->
+    {MinSafe, MaxSafe} = small_integer_bounds(MMod),
+    Min >= MinSafe andalso Max =< MaxSafe andalso
+        -Max >= MinSafe andalso -Min =< MaxSafe;
+can_inline_neg(_Range, _MMod) ->
+    false.
+
+%% Integer-typed argument whose range cannot prove the absence of overflow
+%% (e.g. {t_integer, any}, as produced for a sign value flipped on every
+%% loop iteration): use a runtime small-int check with hardware overflow
+%% detection. The small encoding fills the machine word exactly
+%% (term = 16n + 15), so signed overflow of 30 - term coincides with the
+%% negation leaving the small range.
+op_gc_bif1_neg_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest) ->
+    case
+        addsub_fastpath_reloadable(unwrap_typed(Arg)) andalso
+            erlang:function_exported(MMod, sub_overflow, 3)
+    of
+        true ->
+            op_gc_bif1_neg_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest);
+        false ->
+            op_gc_bif1_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg), Dest)
+    end.
+
+op_gc_bif1_neg_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg, Dest) ->
+    UArg = unwrap_typed(Arg),
+    {MSt1, R} = MMod:move_to_native_register(MSt0, UArg),
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R]),
+        op_gc_bif1_default(MMod, BSt1, FailLabel, Live, Bif, UArg, Dest)
+    end,
+    MMod:if_else_block(
+        MSt1,
+        {R, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(BSt0) ->
+            %% Compute into a temp so the operand register keeps its (possibly
+            %% cached) value; the overflow fallback re-reads the VM operand.
+            {BSt1, TmpReg} = MMod:move_to_native_register(BSt0, 2 * ?TERM_INTEGER_TAG),
+            BSt2 = MMod:sub_overflow(BSt1, TmpReg, R),
+            BSt3 = MMod:free_native_registers(BSt2, [R]),
+            MMod:if_else_block(
+                BSt3,
+                overflow_set,
+                fun(CSt0) ->
+                    CSt1 = MMod:free_native_registers(CSt0, [TmpReg]),
+                    op_gc_bif1_default(MMod, CSt1, FailLabel, Live, Bif, UArg, Dest)
+                end,
+                fun(CSt0) ->
+                    CSt1 = MMod:move_to_vm_register(CSt0, TmpReg, Dest),
+                    MMod:free_native_registers(CSt1, [TmpReg, Dest])
+                end
+            )
+        end
+    ).
 
 is_known_tuple({typed, _Arg, t_tuple}) -> true;
 is_known_tuple(_) -> false.
