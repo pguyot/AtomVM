@@ -53,7 +53,7 @@ static void memory_scan_and_copy(HeapFragment *old_fragment, term *mem_start, co
 static term memory_shallow_copy_term(HeapFragment *old_fragment, term t, term **new_heap, bool move);
 static inline bool memory_is_in_old_heap(const Heap *heap, const term *ptr);
 static term memory_shallow_copy_term_generational(HeapFragment *old_fragment, const Heap *heap, term t, term **new_young_heap, term **old_heap_ptr);
-static inline term memory_shallow_copy_term_impl(HeapFragment *old_fragment, const Heap *heap, term t, term **new_heap, term **old_heap_ptr, bool move, bool generational);
+static inline term memory_shallow_copy_term_impl(HeapFragment *old_fragment, const Heap *heap, term t, term **new_heap, term **old_heap_ptr, bool move, bool generational, bool promote_children);
 static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 static enum MemoryGCResult memory_full_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
@@ -721,7 +721,8 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
     HeapFragment *old_fragment, const Heap *heap,
     term *mem_start, const term *mem_end,
     term **new_heap_pos, term **old_heap_ptr,
-    term *young_mso_list, term *old_mso_list, bool move, bool generational)
+    term *young_mso_list, term *old_mso_list, bool move, bool generational,
+    bool promote_children)
 {
     term *ptr = mem_start;
 
@@ -742,7 +743,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
 
                         for (size_t i = 1; i <= arity; i++) {
                             TRACE("-- Elem: %" TERM_X_FMT "\n", ptr[i]);
-                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational);
+                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         }
                         break;
                     }
@@ -753,14 +754,14 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
                         TRACE("- Boxed is record, arity: %i\n", (int) arity);
                         for (size_t i = 2; i <= arity; i++) {
                             TRACE("-- Record field: %" TERM_X_FMT "\n", ptr[i]);
-                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational);
+                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         }
                         break;
                     }
 
                     case TERM_BOXED_BIN_MATCH_STATE: {
                         TRACE("- Found bin match state.\n");
-                        ptr[1] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[1], new_heap_pos, old_heap_ptr, move, generational);
+                        ptr[1] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[1], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         break;
                     }
 
@@ -801,7 +802,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
 
                         for (size_t i = 3; i <= arity; i++) {
                             TRACE("-- Frozen: %" TERM_X_FMT "\n", ptr[i]);
-                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational);
+                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         }
                         break;
                     }
@@ -823,7 +824,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
 
                     case TERM_BOXED_SUB_BINARY: {
                         TRACE("- Found sub binary.\n");
-                        ptr[3] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[3], new_heap_pos, old_heap_ptr, move, generational);
+                        ptr[3] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[3], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         break;
                     }
 
@@ -837,10 +838,10 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
                         size_t keys_offset = term_get_map_keys_offset();
                         size_t value_offset = term_get_map_value_offset();
                         TRACE("-- Map keys: %" TERM_X_FMT "\n", ptr[keys_offset]);
-                        ptr[keys_offset] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[keys_offset], new_heap_pos, old_heap_ptr, move, generational);
+                        ptr[keys_offset] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[keys_offset], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         for (size_t i = value_offset; i < value_offset + map_size; ++i) {
                             TRACE("-- Map Value: %" TERM_X_FMT "\n", ptr[i]);
-                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational);
+                            ptr[i] = memory_shallow_copy_term_impl(old_fragment, heap, ptr[i], new_heap_pos, old_heap_ptr, move, generational, promote_children);
                         }
                     } break;
 
@@ -854,12 +855,12 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
             }
             case TERM_PRIMARY_LIST:
                 TRACE("Found nonempty list (%p)\n", (void *) t);
-                *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational);
+                *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational, promote_children);
                 ptr++;
                 break;
             case TERM_PRIMARY_BOXED:
                 TRACE("Found boxed (%p)\n", (void *) t);
-                *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational);
+                *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational, promote_children);
                 ptr++;
                 break;
             default:
@@ -870,7 +871,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
 
 static void memory_scan_and_copy(HeapFragment *old_fragment, term *mem_start, const term *mem_end, term **new_heap_pos, term *mso_list, bool move)
 {
-    memory_scan_and_copy_impl(old_fragment, NULL, mem_start, mem_end, new_heap_pos, NULL, mso_list, NULL, move, false);
+    memory_scan_and_copy_impl(old_fragment, NULL, mem_start, mem_end, new_heap_pos, NULL, mso_list, NULL, move, false, false);
 }
 
 #ifdef ENABLE_REALLOC_GC
@@ -1022,7 +1023,7 @@ HOT_FUNC static inline bool memory_is_in_old_heap(const Heap *heap, const term *
 // a single source of truth for the empty-tuple and moved-marker protocols.
 HOT_FUNC static inline term memory_shallow_copy_term_impl(
     HeapFragment *old_fragment, const Heap *heap, term t,
-    term **new_heap, term **old_heap_ptr, bool move, bool generational)
+    term **new_heap, term **old_heap_ptr, bool move, bool generational, bool promote_children)
 {
     switch (t & TERM_PRIMARY_MASK) {
         case TERM_PRIMARY_IMMED:
@@ -1061,8 +1062,19 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
             }
 
             term *dest;
-            if (generational && boxed_value >= heap->heap_start && boxed_value < heap->high_water_mark) {
-                // Promote mature young term to the old generation.
+            if (generational && *old_heap_ptr != NULL
+                && (promote_children
+                    || (boxed_value >= heap->heap_start && boxed_value < heap->high_water_mark)
+                    || boxed_value < old_fragment->storage
+                    || boxed_value >= old_fragment->heap_end)) {
+                // Promote to the old generation: mature young terms, anything
+                // reachable from an already-promoted container
+                // (promote_children), and terms living in chained fragments
+                // (messages appended to the heap, no-GC overflow
+                // allocations, which carry no allocation-order relationship
+                // with the high water mark). The old generation is not
+                // rescanned by later minor collections, so it must never
+                // reference the young one.
                 dest = *old_heap_ptr;
                 *old_heap_ptr += boxed_size;
             } else {
@@ -1098,7 +1110,12 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
             }
 
             term *dest;
-            if (generational && list_ptr >= heap->heap_start && list_ptr < heap->high_water_mark) {
+            if (generational && *old_heap_ptr != NULL
+                && (promote_children
+                    || (list_ptr >= heap->heap_start && list_ptr < heap->high_water_mark)
+                    || list_ptr < old_fragment->storage
+                    || list_ptr >= old_fragment->heap_end)) {
+                // See the boxed branch above.
                 dest = *old_heap_ptr;
                 *old_heap_ptr += 2;
             } else {
@@ -1124,23 +1141,23 @@ HOT_FUNC static inline term memory_shallow_copy_term_impl(
 
 HOT_FUNC static term memory_shallow_copy_term(HeapFragment *old_fragment, term t, term **new_heap, bool move)
 {
-    return memory_shallow_copy_term_impl(old_fragment, NULL, t, new_heap, NULL, move, false);
+    return memory_shallow_copy_term_impl(old_fragment, NULL, t, new_heap, NULL, move, false, false);
 }
 
 HOT_FUNC static term memory_shallow_copy_term_generational(
     HeapFragment *old_fragment, const Heap *heap, term t,
     term **new_young_heap, term **old_heap_ptr)
 {
-    return memory_shallow_copy_term_impl(old_fragment, heap, t, new_young_heap, old_heap_ptr, true, true);
+    return memory_shallow_copy_term_impl(old_fragment, heap, t, new_young_heap, old_heap_ptr, true, true, false);
 }
 
 static void memory_scan_and_copy_generational(
     HeapFragment *old_fragment, const Heap *heap,
     term *mem_start, const term *mem_end,
     term **new_young_heap, term **old_heap_ptr,
-    term *young_mso_list, term *old_mso_list)
+    term *young_mso_list, term *old_mso_list, bool promote_children)
 {
-    memory_scan_and_copy_impl(old_fragment, heap, mem_start, mem_end, new_young_heap, old_heap_ptr, young_mso_list, old_mso_list, true, true);
+    memory_scan_and_copy_impl(old_fragment, heap, mem_start, mem_end, new_young_heap, old_heap_ptr, young_mso_list, old_mso_list, true, true, promote_children);
 }
 
 // Initial size of a freshly allocated old heap, given the amount of mature
@@ -1177,6 +1194,17 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
 
     size_t mature_size = high_water_mark - ctx->heap.heap_start;
 
+    // Promotion is transitive: anything reachable from a promoted container
+    // is promoted with it, and chained fragments (messages, no-GC overflow
+    // allocations) are promoted wherever they are reached from. Size the old
+    // heap for the worst case: the whole young from-space plus all chained
+    // fragments could be promoted.
+    size_t worst_case_promotion = ctx->heap.heap_ptr - ctx->heap.heap_start;
+    for (HeapFragment *fragment = old_root_fragment->next; fragment != NULL;
+         fragment = fragment->next) {
+        worst_case_promotion += fragment->heap_end - fragment->storage;
+    }
+
     // new_size was computed by memory_ensure_free_with_roots against the whole
     // heap, old generation included. A minor GC keeps the old generation in
     // place, so the new young heap must be sized without it; otherwise the
@@ -1196,7 +1224,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
 
     if (saved_old_heap_start == NULL) {
         if (mature_size > 0) {
-            size_t old_heap_size = initial_old_heap_size(ctx->heap_growth_strategy, mature_size);
+            size_t old_heap_size = initial_old_heap_size(ctx->heap_growth_strategy, worst_case_promotion);
             HeapFragment *old_fragment = (HeapFragment *) malloc(sizeof(HeapFragment) + old_heap_size * sizeof(term));
             if (IS_NULL_PTR(old_fragment)) {
                 goto fallback_full_gc;
@@ -1209,7 +1237,7 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
         }
     } else {
         size_t old_free = saved_old_heap_end - saved_old_heap_ptr;
-        if (old_free < mature_size) {
+        if (old_free < worst_case_promotion) {
             goto fallback_full_gc;
         }
     }
@@ -1304,18 +1332,22 @@ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t
                         old_root_fragment, &gen_heap,
                         scan_from, young_end,
                         &young_end, &old_heap_ptr,
-                        &new_young_mso_list, &new_old_mso_list);
+                        &new_young_mso_list, &new_old_mso_list, false);
                     old_end = old_heap_ptr;
                 }
 
                 if (old_scan < old_end) {
                     term *scan_from = old_scan;
                     old_scan = old_end;
+                    // Children of old-generation containers are promoted with
+                    // them: the old generation is not rescanned by later
+                    // minor collections, so it must never reference the young
+                    // one.
                     memory_scan_and_copy_generational(
                         old_root_fragment, &gen_heap,
                         scan_from, old_end,
                         &young_end, &old_heap_ptr,
-                        &new_young_mso_list, &new_old_mso_list);
+                        &new_young_mso_list, &new_old_mso_list, true);
                     old_end = old_heap_ptr;
                 }
             } while (young_scan != young_end || old_scan != old_end);
