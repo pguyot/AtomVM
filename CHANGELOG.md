@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by adding the `elixir_erl_pass` runtime helpers that compiled Elixir code calls
 - Fixed `maps:from_keys/2` (and `sets:from_list/1`, which is built on top of it) not
   deduplicating structurally equal but separately-allocated boxed terms, such as tuples
+- Fixed `put_map_exact` writing the new key into a keys tuple shared with other maps
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
