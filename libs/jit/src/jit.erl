@@ -2163,8 +2163,8 @@ first_pass(<<?OP_BS_START_MATCH3, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Dest, Rest4} = decode_dest(Rest3, MMod, MSt1),
     ?TRACE("OP_BS_START_MATCH3 ~p, ~p, ~p, ~p\n", [Fail, Src, Live, Dest]),
     MSt3 = verify_is_binary_or_match_state(Fail, Src, MMod, MSt2),
-    {MSt4, NewSrc} = term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt3),
-    MSt5 = MMod:free_native_registers(MSt4, [NewSrc, Dest]),
+    MSt4 = term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt3),
+    MSt5 = MMod:free_native_registers(MSt4, [Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest4, MMod, MSt5, State0);
 % 167
@@ -2223,8 +2223,8 @@ first_pass(<<?OP_BS_START_MATCH4, Rest0/binary>>, MMod, MSt0, State0) ->
             Fail =:= resume ->
                 MSt2
         end,
-    {MSt4, NewSrc} = term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt3),
-    MSt5 = MMod:free_native_registers(MSt4, [NewSrc, Dest]),
+    MSt4 = term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt3),
+    MSt5 = MMod:free_native_registers(MSt4, [Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest4, MMod, MSt5, State0);
 % 171
@@ -3258,7 +3258,10 @@ first_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0) ->
                 fun(BSt0) ->
                     {BSt1, OldValueReg} = MMod:get_array_element(BSt0, DestReg, UpdateIx),
                     {BSt2, ResultReg} = MMod:call_primitive(BSt1, ?PRIM_TERM_COMPARE, [
-                        ctx, jit_state, {free, OldValueReg}, UpdateValue,
+                        ctx,
+                        jit_state,
+                        {free, OldValueReg},
+                        UpdateValue,
                         ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
                     ]),
                     BSt3 = handle_error_if(
@@ -5419,7 +5422,10 @@ op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
     {JmpLabel, Rest2} = decode_label(Rest1),
     ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
     {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, unwrap_typed(CmpValue)}, unwrap_typed(SrcValue),
+        ctx,
+        jit_state,
+        {free, unwrap_typed(CmpValue)},
+        unwrap_typed(SrcValue),
         ?TERM_COMPARE_EXACT bor ?TERM_COMPARE_EQUAL_ONLY
     ]),
     MSt3 = handle_error_if(
@@ -5437,19 +5443,37 @@ can_inline_select_val_src({typed, _, t_atom}) -> true;
 can_inline_select_val_src({typed, _, pid}) -> true;
 can_inline_select_val_src(_) -> false.
 
+%% Src is known to be boxed (a binary or a match state): callers either
+%% verified it or the compiler guarantees it (bs_start_match4 no_fail/resume).
+%% Match contexts are used linearly (beam_ssa_bsm), so an existing match state
+%% is reused in place like BEAM does instead of allocating a copy: per-byte
+%% matching loops would otherwise allocate (and GC) a match state per byte.
 term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
-    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
-    % Write Src to x_reg to have it as a gc root
-    {MSt3, NewSrc} = memory_ensure_free_with_extra_root(
-        Src, Live, ?TERM_BOXED_BIN_MATCH_STATE_SIZE, MMod, MSt2
-    ),
-    {MSt4, AllocMatchStateReg} = MMod:call_primitive(MSt3, ?PRIM_TERM_ALLOC_BIN_MATCH_STATE, [
-        ctx, NewSrc, 0
-    ]),
-    MSt5 = MMod:move_to_vm_register(MSt4, AllocMatchStateReg, Dest),
-    MSt6 = MMod:free_native_registers(MSt5, [AllocMatchStateReg]),
-    {MSt6, NewSrc}.
+    {MSt1, TagReg} = MMod:copy_to_native_register(MSt0, Src),
+    {MSt2, TagReg} = MMod:and_(MSt1, {free, TagReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    MSt3 = MMod:move_array_element(MSt2, TagReg, 0, TagReg),
+    {MSt4, TagReg} = MMod:and_(MSt3, {free, TagReg}, ?TERM_BOXED_TAG_MASK),
+    MMod:if_else_block(
+        MSt4,
+        {'(int)', {free, TagReg}, '==', ?TERM_BOXED_BIN_MATCH_STATE},
+        fun(BSt0) ->
+            BSt1 = MMod:move_to_vm_register(BSt0, Src, Dest),
+            MMod:free_native_registers(BSt1, [Src])
+        end,
+        fun(BSt0) ->
+            {BSt1, TrimResultReg} = MMod:call_primitive(BSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+            BSt2 = MMod:free_native_registers(BSt1, [TrimResultReg]),
+            % Write Src to x_reg to have it as a gc root
+            {BSt3, NewSrc} = memory_ensure_free_with_extra_root(
+                Src, Live, ?TERM_BOXED_BIN_MATCH_STATE_SIZE, MMod, BSt2
+            ),
+            {BSt4, AllocMatchStateReg} = MMod:call_primitive(
+                BSt3, ?PRIM_TERM_ALLOC_BIN_MATCH_STATE, [ctx, NewSrc, 0]
+            ),
+            BSt5 = MMod:move_to_vm_register(BSt4, AllocMatchStateReg, Dest),
+            MMod:free_native_registers(BSt5, [AllocMatchStateReg, NewSrc])
+        end
+    ).
 
 term_from_catch_label(Dest, Label, MMod, MSt1) ->
     {MSt2, Reg} = MMod:get_module_index(MSt1),
