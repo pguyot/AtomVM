@@ -237,41 +237,43 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
         binary:match(CompiledCode, <<16#4c, 16#8b, 16#5f, 16#60, 16#49, 16#c1, 16#eb, 16#04>>)
     ),
 
-    % Check call to bs_start_match3 is followed by a skip of verify_is_boxed
-    % The register value cache eliminates the redundant load after the store,
-    % since %rax already holds the value.
-    %   48 8b 77 58          	mov    0x58(%rdi),%rsi
-    %   31 d2                	xor    %edx,%edx
-    %   ff d0                	callq  *%rax
-    %   5a                   	pop    %rdx
-    %   5e                   	pop    %rsi
-    %   5f                   	pop    %rdi
-    %   48 89 47 68          	mov    %rax,0x68(%rdi)
+    % Check bs_start_match3 emits the match-state reuse fast path: load the
+    % boxed header tag of the source and, when it already is a match state,
+    % store the source itself to the destination, skipping the allocation.
+    %   48 8b 47 58          	mov    0x58(%rdi),%rax
     %   48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
-
-    % As opposed to (without typed optimization, verify_is_boxed would be emitted):
-    %   48 8b 77 58          	mov    0x58(%rdi),%rsi
-    %   31 d2                	xor    %edx,%edx
-    %   ff d0                	callq  *%rax
-    %   5a                   	pop    %rdx
-    %   5e                   	pop    %rsi
-    %   5f                   	pop    %rdi
+    %   48 8b 00             	mov    (%rax),%rax
+    %   83 e0 3f             	and    $0x3f,%eax
+    %   83 f8 04             	cmp    $0x4,%eax
+    %   75 0d                	jne    <alloc path>
+    %   48 8b 47 58          	mov    0x58(%rdi),%rax
     %   48 89 47 68          	mov    %rax,0x68(%rdi)
-    %   49 89 c3             	mov    %rax,%r11
-    %   41 80 e3 03          	and    $0x3,%r11b
-    %   41 80 fb 02          	cmp    $0x2,%r11b
-    %   74 0f                	je     <skip>
-    %   48 8b 02             	mov    (%rdx),%rax
-    %   ba xx xx 00 00       	mov    $0x...,%edx
-    %   b9 xx xx 00 00       	mov    $0x...,%ecx
-    %   ff e0                	jmpq   *%rax
-    %   48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
     ?assertMatch(
-        {_, 19},
+        {_, 27},
+        binary:match(
+            CompiledCode,
+            <<16#48, 16#8b, 16#47, 16#58, 16#48, 16#83, 16#e0, 16#fc, 16#48, 16#8b, 16#00, 16#83,
+                16#e0, 16#3f, 16#83, 16#f8, 16#04, 16#75, 16#0d, 16#48, 16#8b, 16#47, 16#58, 16#48,
+                16#89, 16#47, 16#68>>
+        )
+    ),
+
+    % The allocation fallback is still emitted: call to term_alloc_bin_match_state
+    % with the source as a gc-rooted argument, storing the result to the
+    % destination.
+    %   48 8b 77 58          	mov    0x58(%rdi),%rsi
+    %   31 d2                	xor    %edx,%edx
+    %   ff d0                	callq  *%rax
+    %   5a                   	pop    %rdx
+    %   5e                   	pop    %rsi
+    %   5f                   	pop    %rdi
+    %   48 89 47 68          	mov    %rax,0x68(%rdi)
+    ?assertMatch(
+        {_, 15},
         binary:match(
             CompiledCode,
             <<16#48, 16#8b, 16#77, 16#58, 16#31, 16#d2, 16#ff, 16#d0, 16#5a, 16#5e, 16#5f, 16#48,
-                16#89, 16#47, 16#68, 16#48, 16#83, 16#e0, 16#fc>>
+                16#89, 16#47, 16#68>>
         )
     ),
 
