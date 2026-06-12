@@ -86,4 +86,10 @@
 -define(TERM_BOXED_REFC_BINARY_SIZE, 6).
 -define(BINARY_HEADER_SIZE, 2).
 
+% enum RefcBinaryFlags, stored in the third word of a refc binary boxed term
+-define(REFC_BINARY_IS_CONST, 1).
+-define(REFC_BINARY_IS_RESOURCE_MANAGED, 2).
+% offsetof(struct RefcBinary, data) in words (static assert in jit.c)
+-define(REFC_BINARY_DATA_OFFSET_WORDS, 5).
+
 -define(TERM_INVALID_TERM, 0).
