@@ -323,6 +323,40 @@ shrq_test_() ->
         )
     ].
 
+movzbq_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#48, 16#0F, 16#B6, 16#00>>,
+            "movzbq (%rax),%rax",
+            jit_x86_64_asm:movzbq({0, rax}, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#49, 16#0F, 16#B6, 16#0A>>,
+            "movzbq (%r10),%rcx",
+            jit_x86_64_asm:movzbq({0, r10}, rcx)
+        )
+    ].
+
+movzwq_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#48, 16#0F, 16#B7, 16#00>>,
+            "movzwq (%rax),%rax",
+            jit_x86_64_asm:movzwq({0, rax}, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#4D, 16#0F, 16#B7, 16#0B>>,
+            "movzwq (%r11),%r9",
+            jit_x86_64_asm:movzwq({0, r11}, r9)
+        )
+    ].
+
+bswapl_test_() ->
+    [
+        ?_assertAsmEqual(<<16#0F, 16#C8>>, "bswap %eax", jit_x86_64_asm:bswapl(rax)),
+        ?_assertAsmEqual(<<16#41, 16#0F, 16#CA>>, "bswap %r10d", jit_x86_64_asm:bswapl(r10))
+    ].
+
 testb_test_() ->
     [
         ?_assertAsmEqual(<<16#A8, 16#01>>, "test $0x1,%al", jit_x86_64_asm:testb(1, rax)),
