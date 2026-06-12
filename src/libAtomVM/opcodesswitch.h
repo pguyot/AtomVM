@@ -4196,7 +4196,13 @@ schedule_in:
                 DECODE_DEST_REGISTER_GC_SAFE(dreg, pc);
 
                 TRACE("bs_start_match3/4, fail=%i src=0x%" TERM_X_FMT " live=%u dreg=%c%i\n", fail, src, live, T_DEST_REG_GC_SAFE(dreg));
-                if (!(term_is_bitstring(src) || term_is_match_state(src))) {
+                if (term_is_match_state(src)) {
+                    // Match contexts are used linearly (beam_ssa_bsm), so an
+                    // existing one is reused in place like BEAM does instead
+                    // of allocating a copy: per-byte matching loops would
+                    // otherwise allocate a match state for every byte.
+                    WRITE_REGISTER_GC_SAFE(dreg, src);
+                } else if (!term_is_bitstring(src)) {
                     pc = mod->labels[fail];
                 } else {
                     // MEMORY_CAN_SHRINK because bs_start_match is classified as gc in beam_ssa_codegen.erl
@@ -5583,10 +5589,14 @@ schedule_in:
 
                 // no_fail: we know it's a binary or a match_state
                 // resume: we know it's a match_state
-                if (term_is_invalid_term(fail_atom) && !(term_is_bitstring(src) || term_is_match_state(src))) {
+                if (term_is_match_state(src)) {
+                    // Reuse an existing match state in place, like
+                    // bs_start_match3 above.
+                    WRITE_REGISTER_GC_SAFE(dreg, src);
+                } else if (term_is_invalid_term(fail_atom) && !term_is_bitstring(src)) {
                     pc = mod->labels[fail_label];
                 } else {
-                    assert(term_is_bitstring(src) || term_is_match_state(src));
+                    assert(term_is_bitstring(src));
 
                     TRIM_LIVE_REGS(live);
                     x_regs[live] = src;
