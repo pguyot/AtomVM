@@ -1454,32 +1454,59 @@ term term_alloc_refc_binary(size_t size, bool is_const, Heap *heap, GlobalContex
     return ret;
 }
 
+// Slack kept past the requested size when growing a reused binary, so a
+// sequence of appends reallocates (and takes the global refc-binaries lock)
+// O(log n) times instead of on every call: doubling, capped so a large binary
+// never holds more than this many spare bytes.
+#define REUSE_BINARY_MAX_SLACK 4096
+
 term term_reuse_binary(term src, size_t size, Heap *heap, GlobalContext *glb)
 {
     if (term_is_refc_binary(src) && !term_refc_binary_is_const(src)) {
         term *boxed_value = term_to_term_ptr(src);
         struct RefcBinary *old_refc = (struct RefcBinary *) boxed_value[3];
-        size_t old_size = old_refc->size;
+        size_t old_size = term_binary_size(src);
 
         // Only reuse if refcount is 1 (only this term references it)
         if (old_refc->ref_count == 1) {
+            // refc->size is the allocated capacity and can exceed the logical
+            // size stored in the boxed term: when the new size fits, just
+            // expose more of the allocation.
+            if (size <= old_refc->size) {
+                if (size > old_size) {
+                    // Bit-level inserts OR into partially written bytes, so
+                    // newly exposed bytes must read as zero.
+                    memset((char *) &old_refc->data + old_size, 0, size - old_size);
+                }
+                boxed_value[1] = (term) size;
+                return src;
+            }
+
+            size_t capacity = size + MINI(size, (size_t) REUSE_BINARY_MAX_SLACK);
+
             // Lock the list of refc binaries while we're trying to realloc.
             struct ListHead *refc_binaries = synclist_wrlock(&glb->refc_binaries);
 
             // Remove from list before realloc because realloc might move the memory
             list_remove(&old_refc->head);
 
-            // Realloc to new size.
-            size_t n = sizeof(struct RefcBinary) + size;
-            struct RefcBinary *new_refc = realloc(old_refc, n);
-            if (IS_NULL_PTR(new_refc)) {
-                // Re-add to list before unlocking
-                // Some versions of gcc don't know that if allocation fails,
-                // original pointer is still valid
+            // Realloc to the new capacity; if the slack doesn't fit (tight
+            // MCU heaps), retry with the exact requested size.
+            // Some versions of gcc don't know that if allocation fails,
+            // the original pointer is still valid
 #pragma GCC diagnostic push
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12)
 #pragma GCC diagnostic ignored "-Wuse-after-free"
 #endif
+            size_t n = sizeof(struct RefcBinary) + capacity;
+            struct RefcBinary *new_refc = realloc(old_refc, n);
+            if (IS_NULL_PTR(new_refc) && capacity != size) {
+                capacity = size;
+                n = sizeof(struct RefcBinary) + capacity;
+                new_refc = realloc(old_refc, n);
+            }
+            if (IS_NULL_PTR(new_refc)) {
+                // Re-add to list before unlocking
                 list_append(refc_binaries, &old_refc->head);
 #pragma GCC diagnostic pop
                 synclist_unlock(&glb->refc_binaries);
@@ -1487,10 +1514,10 @@ term term_reuse_binary(term src, size_t size, Heap *heap, GlobalContext *glb)
                 return term_invalid_term();
             }
 
-            // Update size
-            new_refc->size = size;
+            // Update capacity
+            new_refc->size = capacity;
 
-            // Zero the new part if size increased
+            // Zero the newly exposed part if size increased
             if (LIKELY(size > old_size)) {
                 memset((char *) &new_refc->data + old_size, 0, size - old_size);
             }
