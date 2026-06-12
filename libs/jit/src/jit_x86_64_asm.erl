@@ -24,6 +24,9 @@
     movq/2,
     movabsq/2,
     movl/2,
+    movzbq/2,
+    movzwq/2,
+    bswapl/1,
     shlq/2,
     shrq/2,
     testb/2,
@@ -396,6 +399,25 @@ movl({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
         {0, 0} -> <<16#8B, 0:2, MODRM_REG:3, MODRM_RM:3>>;
         _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#8B, 0:2, MODRM_REG:3, MODRM_RM:3>>
     end).
+
+% movzx byte ptr [SrcReg], DestReg (zero-extended to 64 bits)
+movzbq({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
+    {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B6, 0:2, MODRM_REG:3, MODRM_RM:3>>.
+
+% movzx word ptr [SrcReg], DestReg (zero-extended to 64 bits)
+movzwq({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
+    {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B7, 0:2, MODRM_REG:3, MODRM_RM:3>>.
+
+% bswap on the 32-bit register (upper 32 bits are zeroed)
+bswapl(Reg) when is_atom(Reg) ->
+    case x86_64_x_reg(Reg) of
+        {0, Index} -> <<16#0F, (16#C8 + Index)>>;
+        {1, Index} -> <<16#41, 16#0F, (16#C8 + Index)>>
+    end.
 
 shlq(Imm, Reg) when ?IS_UINT8_T(Imm) ->
     case x86_64_x_reg(Reg) of
