@@ -31,6 +31,7 @@
 #include "dist_nifs.h"
 #include "module.h"
 #include "nifs.h"
+#include "refc_binary.h"
 #include "scheduler.h"
 #include "stacktrace.h"
 #include "term.h"
@@ -121,6 +122,14 @@ typedef struct
 
 // #define ENABLE_TRACE
 #include "trace.h"
+
+// The inline bs_get_integer fast path resolves refc binary data pointers in
+// generated code; verify the layout constants mirrored in libs/jit/src/term.hrl.
+_Static_assert(offsetof(struct RefcBinary, data) == 5 * sizeof(term),
+    "REFC_BINARY_DATA_OFFSET_WORDS is 5 in libs/jit/src/term.hrl");
+_Static_assert(RefcBinaryIsConst == 1, "REFC_BINARY_IS_CONST is 1 in libs/jit/src/term.hrl");
+_Static_assert(RefcBinaryIsResourceManaged == 2,
+    "REFC_BINARY_IS_RESOURCE_MANAGED is 2 in libs/jit/src/term.hrl");
 
 // Verify matching atom index in default_atoms.hrl
 _Static_assert(OK_ATOM_INDEX == 2, "OK_ATOM_INDEX is 2 in libs/jit/src/default_atoms.hrl ");
