@@ -52,6 +52,7 @@
     move_array_element/4,
     move_to_array_element/4,
     move_to_array_element/5,
+    load_be_unsigned/3,
     set_bs/2,
     copy_to_native_register/2,
     get_array_element/3,
@@ -1176,6 +1177,32 @@ if_block_free_reg(Reg, State0) when ?IS_GPR(Reg) ->
 %% @param Shift number of bits to shift
 %% @return new state
 %%-----------------------------------------------------------------------------
+%% Load NumBits (8, 16 or 32) bits big-endian, zero-extended, from the address
+%% in AddrReg, into AddrReg itself.
+-spec load_be_unsigned(#state{}, x86_64_register(), 8 | 16 | 32) -> #state{}.
+load_be_unsigned(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, AddrReg, NumBits
+) when
+    ?IS_GPR(AddrReg)
+->
+    Code =
+        case NumBits of
+            8 ->
+                jit_x86_64_asm:movzbq({0, AddrReg}, AddrReg);
+            16 ->
+                I1 = jit_x86_64_asm:movzwq({0, AddrReg}, AddrReg),
+                I2 = jit_x86_64_asm:bswapl(AddrReg),
+                I3 = jit_x86_64_asm:shrq(16, AddrReg),
+                <<I1/binary, I2/binary, I3/binary>>;
+            32 ->
+                I1 = jit_x86_64_asm:movl({0, AddrReg}, AddrReg),
+                I2 = jit_x86_64_asm:bswapl(AddrReg),
+                <<I1/binary, I2/binary>>
+        end,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(Regs0, AddrReg),
+    State#state{stream = Stream1, regs = Regs1}.
+
 -spec shift_right(#state{}, maybe_free_x86_64_register(), non_neg_integer()) ->
     {#state{}, x86_64_register()}.
 shift_right(

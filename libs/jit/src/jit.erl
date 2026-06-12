@@ -1305,25 +1305,30 @@ first_pass(<<?OP_BS_GET_INTEGER2, Rest0/binary>>, MMod, MSt0, State0) ->
                 MSt5 = MMod:mul(MSt4, SizeReg, Unit),
                 {MSt5, SizeReg}
         end,
-    {MSt7, BSBinaryReg} = MMod:get_array_element(MSt6, MatchStateRegPtr, 1),
-    {MSt8, BSOffsetReg} = MMod:get_array_element(MSt7, MatchStateRegPtr, 2),
-    {MSt9, Result} = MMod:call_primitive(MSt8, ?PRIM_BITSTRING_EXTRACT_INTEGER, [
-        ctx, jit_state, {free, BSBinaryReg}, BSOffsetReg, NumBits, {free, FlagsValue}
-    ]),
-    MSt10 = handle_error_if({Result, '==', 0}, MMod, MSt9),
-    MSt11 = cond_jump_to_label({Result, '==', ?FALSE_ATOM}, Fail, MMod, MSt10),
-    MSt12 = MMod:add(MSt11, BSOffsetReg, NumBits),
-    MSt13 = MMod:free_native_registers(MSt12, [NumBits]),
-    MSt14 = MMod:move_to_array_element(MSt13, BSOffsetReg, MatchStateRegPtr, 2),
-    MSt15 = MMod:free_native_registers(MSt14, [BSOffsetReg, MatchStateRegPtr]),
-    {MSt16, Dest, Rest7} = decode_dest(Rest6, MMod, MSt15),
+    {MSt7, Dest, Rest7} = decode_dest(Rest6, MMod, MSt6),
     ?TRACE("OP_BS_GET_INTEGER2 ~p,~p,~p,~p,~p,~p,~p\n", [
         Fail, Src, _Live, Size, Unit, FlagsValue, Dest
     ]),
-    MSt17 = MMod:move_to_vm_register(MSt16, Result, Dest),
-    MSt18 = MMod:free_native_registers(MSt17, [Result]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt18),
-    first_pass(Rest7, MMod, MSt18, State0);
+    % Byte-aligned unsigned big-endian extraction of a constant 8/16/32 bits
+    % is emitted inline on backends providing load_be_unsigned; the result
+    % always fits a small integer (on 32-bit targets only 8/16 do).
+    CanInline =
+        (NumBits =:= 8 orelse NumBits =:= 16 orelse NumBits =:= 32) andalso
+            NumBits =< MMod:word_size() * 4 andalso
+            FlagsValue =:= 0 andalso
+            Fail =/= 0 andalso
+            erlang:function_exported(MMod, load_be_unsigned, 3),
+    MSt8 =
+        case CanInline of
+            true ->
+                op_bs_get_integer2_inline(Fail, NumBits, MatchStateRegPtr, Dest, MMod, MSt7);
+            false ->
+                op_bs_get_integer2_prim(
+                    Fail, NumBits, FlagsValue, MatchStateRegPtr, Dest, MMod, MSt7
+                )
+        end,
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    first_pass(Rest7, MMod, MSt8, State0);
 % 118
 first_pass(<<?OP_BS_GET_FLOAT2, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -3425,6 +3430,40 @@ first_pass_bs_match_integer(
                 MSt3 = MMod:mul(SizeReg, Unit),
                 {MSt3, SizeReg}
         end,
+    % Byte-aligned unsigned big-endian extraction of a constant 8/16/32 bits
+    % is emitted inline on backends providing load_be_unsigned. Bounds are
+    % already guaranteed by the ensure_at_least/ensure_exactly commands the
+    % compiler emits before reads, like BEAM's JIT assumes.
+    CanInline =
+        (NumBits =:= 8 orelse NumBits =:= 16 orelse NumBits =:= 32) andalso
+            NumBits =< MMod:word_size() * 4 andalso
+            FlagsValue =:= 0 andalso
+            Fail =/= 0 andalso
+            erlang:function_exported(MMod, load_be_unsigned, 3) andalso
+            length(MMod:available_regs(MSt6)) >= 3,
+    case CanInline of
+        true ->
+            first_pass_bs_match_integer_inline(
+                Fail, MatchState, BSBinaryReg, BSOffsetReg, NumBits, J0, Rest4, MMod, MSt6
+            );
+        false ->
+            first_pass_bs_match_integer_prim(
+                Fail,
+                MatchState,
+                BSBinaryReg,
+                BSOffsetReg,
+                NumBits,
+                FlagsValue,
+                J0,
+                Rest4,
+                MMod,
+                MSt6
+            )
+    end.
+
+first_pass_bs_match_integer_prim(
+    Fail, MatchState, BSBinaryReg, BSOffsetReg, NumBits, FlagsValue, J0, Rest4, MMod, MSt6
+) ->
     {MSt7, Result} = MMod:call_primitive(MSt6, ?PRIM_BITSTRING_EXTRACT_INTEGER, [
         ctx, jit_state, BSBinaryReg, BSOffsetReg, NumBits, {free, FlagsValue}
     ]),
@@ -3454,6 +3493,115 @@ first_pass_bs_match_integer(
             MSt15 = MMod:free_native_registers(MSt14, [NumBits]),
             {J0 - 5, Rest5, MatchState, BSOffsetReg, MSt15}
     end.
+
+%% Inline fast path for the bs_match integer command: byte-aligned unsigned
+%% big-endian extraction of a constant 8/16/32 bits from a heap binary or a
+%% refc binary. Sub binaries, resource-managed refc binaries and unaligned
+%% offsets fall back to the primitive. BSBinaryReg and BSOffsetReg stay owned
+%% by the command loop; BSOffsetReg is advanced by NumBits like the primitive
+%% path does.
+first_pass_bs_match_integer_inline(
+    Fail, MatchState, BSBinaryReg, BSOffsetReg, NumBits, J0, Rest4, MMod, MSt0
+) ->
+    {MSt1, Dest, Rest5} = decode_dest(Rest4, MMod, MSt0),
+    ?TRACE("~p},", [Dest]),
+    Prim = fun(FSt0) ->
+        {FSt1, Result} = MMod:call_primitive(FSt0, ?PRIM_BITSTRING_EXTRACT_INTEGER, [
+            ctx, jit_state, BSBinaryReg, BSOffsetReg, NumBits, 0
+        ]),
+        FSt2 = handle_error_if({Result, '==', 0}, MMod, FSt1),
+        FSt3 = cond_jump_to_label({Result, '==', ?FALSE_ATOM}, Fail, MMod, FSt2),
+        FSt4 = MMod:move_to_vm_register(FSt3, Result, Dest),
+        FSt5 = MMod:free_native_registers(FSt4, [Result]),
+        MMod:add(FSt5, BSOffsetReg, NumBits)
+    end,
+    MSt2 = MMod:if_else_block(
+        MSt1,
+        {BSOffsetReg, '&', 16#7, '!=', 0},
+        Prim,
+        fun(ISt0) ->
+            {ISt1, DataReg} = MMod:copy_to_native_register(ISt0, BSBinaryReg),
+            {ISt2, HdrReg} = MMod:get_array_element(ISt1, DataReg, 0),
+            {ISt3, HdrReg} = MMod:and_(ISt2, {free, HdrReg}, ?TERM_BOXED_TAG_MASK),
+            MMod:if_else_block(
+                ISt3,
+                {'(int)', HdrReg, '==', ?TERM_BOXED_HEAP_BINARY},
+                fun(HSt0) ->
+                    HSt1 = MMod:free_native_registers(HSt0, [HdrReg]),
+                    HSt2 = MMod:add(HSt1, DataReg, 2 * MMod:word_size()),
+                    first_pass_bs_match_integer_inline_extract(
+                        NumBits, DataReg, BSOffsetReg, Dest, MMod, HSt2
+                    )
+                end,
+                fun(ESt0) ->
+                    % the '&' condition form emits a rel32 skip: the refc arm
+                    % below is far larger than a rel8 displacement allows
+                    MMod:if_else_block(
+                        ESt0,
+                        {{free, HdrReg}, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_REFC_BINARY},
+                        fun(FSt0) ->
+                            FSt1 = MMod:free_native_registers(FSt0, [DataReg]),
+                            Prim(FSt1)
+                        end,
+                        fun(RSt0) ->
+                            {RSt1, FlagsReg} = MMod:get_array_element(RSt0, DataReg, 2),
+                            MMod:if_else_block(
+                                RSt1,
+                                {FlagsReg, '&', ?REFC_BINARY_IS_RESOURCE_MANAGED, '!=', 0},
+                                fun(FSt0) ->
+                                    FSt1 = MMod:free_native_registers(FSt0, [FlagsReg, DataReg]),
+                                    Prim(FSt1)
+                                end,
+                                fun(DSt0) ->
+                                    % data pointer for const refc binaries,
+                                    % RefcBinary pointer otherwise
+                                    DSt1 = MMod:move_array_element(DSt0, DataReg, 3, DataReg),
+                                    DSt2 = MMod:if_block(
+                                        DSt1,
+                                        {
+                                            {free, FlagsReg},
+                                            '&',
+                                            ?REFC_BINARY_IS_CONST,
+                                            '!=',
+                                            ?REFC_BINARY_IS_CONST
+                                        },
+                                        fun(CSt0) ->
+                                            MMod:add(
+                                                CSt0,
+                                                DataReg,
+                                                ?REFC_BINARY_DATA_OFFSET_WORDS * MMod:word_size()
+                                            )
+                                        end
+                                    ),
+                                    first_pass_bs_match_integer_inline_extract(
+                                        NumBits, DataReg, BSOffsetReg, Dest, MMod, DSt2
+                                    )
+                                end
+                            )
+                        end
+                    )
+                end
+            )
+        end
+    ),
+    MSt3 = MMod:free_native_registers(MSt2, [Dest]),
+    {J0 - 5, Rest5, MatchState, BSOffsetReg, MSt3}.
+
+%% Common tail of the inline fast path: DataReg points at the binary data and
+%% is consumed; BSOffsetReg holds the byte-aligned bit offset and is advanced
+%% by NumBits.
+first_pass_bs_match_integer_inline_extract(NumBits, DataReg, BSOffsetReg, Dest, MMod, MSt0) ->
+    {MSt1, BSOffsetReg} = MMod:shift_right(MSt0, {free, BSOffsetReg}, 3),
+    MSt2 = MMod:add(MSt1, DataReg, BSOffsetReg),
+    MSt3 = MMod:load_be_unsigned(MSt2, DataReg, NumBits),
+    % tag as small integer
+    MSt4 = MMod:shift_left(MSt3, DataReg, 4),
+    MSt5 = MMod:or_(MSt4, DataReg, ?TERM_INTEGER_TAG),
+    % the byte offset back to bits, plus NumBits
+    MSt6 = MMod:shift_left(MSt5, BSOffsetReg, 3),
+    MSt7 = MMod:add(MSt6, BSOffsetReg, NumBits),
+    MSt8 = MMod:move_to_vm_register(MSt7, DataReg, Dest),
+    MMod:free_native_registers(MSt8, [DataReg]).
 
 first_pass_bs_match_binary(
     Fail,
@@ -5442,6 +5590,141 @@ op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
 can_inline_select_val_src({typed, _, t_atom}) -> true;
 can_inline_select_val_src({typed, _, pid}) -> true;
 can_inline_select_val_src(_) -> false.
+
+%% bs_get_integer2: extraction through the C primitive, updating the match
+%% state offset and storing the result on success.
+op_bs_get_integer2_prim(Fail, NumBits, FlagsValue, MatchStateRegPtr, Dest, MMod, MSt0) ->
+    {MSt1, BSBinaryReg} = MMod:get_array_element(MSt0, MatchStateRegPtr, 1),
+    {MSt2, BSOffsetReg} = MMod:get_array_element(MSt1, MatchStateRegPtr, 2),
+    {MSt3, Result} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_EXTRACT_INTEGER, [
+        ctx, jit_state, {free, BSBinaryReg}, BSOffsetReg, NumBits, {free, FlagsValue}
+    ]),
+    MSt4 = handle_error_if({Result, '==', 0}, MMod, MSt3),
+    MSt5 = cond_jump_to_label({Result, '==', ?FALSE_ATOM}, Fail, MMod, MSt4),
+    MSt6 = MMod:add(MSt5, BSOffsetReg, NumBits),
+    MSt7 = MMod:free_native_registers(MSt6, [NumBits]),
+    MSt8 = MMod:move_to_array_element(MSt7, BSOffsetReg, MatchStateRegPtr, 2),
+    MSt9 = MMod:free_native_registers(MSt8, [BSOffsetReg, MatchStateRegPtr]),
+    MSt10 = MMod:move_to_vm_register(MSt9, Result, Dest),
+    MMod:free_native_registers(MSt10, [Result, Dest]).
+
+%% bs_get_integer2 inline fast path: byte-aligned unsigned big-endian
+%% extraction of a constant 8/16/32 bits from a heap binary or a refc binary.
+%% Sub binaries, resource-managed refc binaries and unaligned offsets fall
+%% back to the primitive; running out of bits jumps to the fail label.
+op_bs_get_integer2_inline(Fail, NumBits, MatchStateRegPtr, Dest, MMod, MSt0) ->
+    {MSt1, BSBinaryReg} = MMod:get_array_element(MSt0, MatchStateRegPtr, 1),
+    {MSt2, BSOffsetReg} = MMod:get_array_element(MSt1, MatchStateRegPtr, 2),
+    MMod:if_else_block(
+        MSt2,
+        {BSOffsetReg, '&', 16#7, '!=', 0},
+        fun(FSt0) ->
+            FSt1 = MMod:free_native_registers(FSt0, [BSBinaryReg, BSOffsetReg]),
+            op_bs_get_integer2_prim(Fail, NumBits, 0, MatchStateRegPtr, Dest, MMod, FSt1)
+        end,
+        fun(BSt0) ->
+            {BSt1, BinPtr} = MMod:and_(BSt0, {free, BSBinaryReg}, ?TERM_PRIMARY_CLEAR_MASK),
+            % running out of bits is a match failure; the size in bytes is at
+            % index 1 for all binary types
+            {BSt2, SizeReg} = MMod:get_array_element(BSt1, BinPtr, 1),
+            BSt3 = MMod:shift_left(BSt2, SizeReg, 3),
+            BSt4 = MMod:sub(BSt3, SizeReg, BSOffsetReg),
+            BSt5 = cond_jump_to_label({SizeReg, '<', NumBits}, Fail, MMod, BSt4),
+            BSt6 = MMod:free_native_registers(BSt5, [SizeReg]),
+            {BSt7, HdrReg} = MMod:get_array_element(BSt6, BinPtr, 0),
+            {BSt8, HdrReg} = MMod:and_(BSt7, {free, HdrReg}, ?TERM_BOXED_TAG_MASK),
+            MMod:if_else_block(
+                BSt8,
+                {'(int)', HdrReg, '==', ?TERM_BOXED_HEAP_BINARY},
+                fun(HSt0) ->
+                    HSt1 = MMod:free_native_registers(HSt0, [HdrReg]),
+                    HSt2 = MMod:add(HSt1, BinPtr, 2 * MMod:word_size()),
+                    op_bs_get_integer2_inline_extract(
+                        NumBits, BinPtr, BSOffsetReg, MatchStateRegPtr, Dest, MMod, HSt2
+                    )
+                end,
+                fun(ESt0) ->
+                    % the '&' condition form emits a rel32 skip: the refc arm
+                    % below is far larger than a rel8 displacement allows
+                    MMod:if_else_block(
+                        ESt0,
+                        {{free, HdrReg}, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_REFC_BINARY},
+                        fun(FSt0) ->
+                            FSt1 = MMod:free_native_registers(FSt0, [BinPtr, BSOffsetReg]),
+                            op_bs_get_integer2_prim(
+                                Fail, NumBits, 0, MatchStateRegPtr, Dest, MMod, FSt1
+                            )
+                        end,
+                        fun(RSt0) ->
+                            {RSt1, FlagsReg} = MMod:get_array_element(RSt0, BinPtr, 2),
+                            MMod:if_else_block(
+                                RSt1,
+                                {FlagsReg, '&', ?REFC_BINARY_IS_RESOURCE_MANAGED, '!=', 0},
+                                fun(FSt0) ->
+                                    FSt1 = MMod:free_native_registers(FSt0, [
+                                        FlagsReg, BinPtr, BSOffsetReg
+                                    ]),
+                                    op_bs_get_integer2_prim(
+                                        Fail, NumBits, 0, MatchStateRegPtr, Dest, MMod, FSt1
+                                    )
+                                end,
+                                fun(DSt0) ->
+                                    % data pointer for const refc binaries,
+                                    % RefcBinary pointer otherwise
+                                    DSt1 = MMod:move_array_element(DSt0, BinPtr, 3, BinPtr),
+                                    DSt2 = MMod:if_block(
+                                        DSt1,
+                                        {
+                                            {free, FlagsReg},
+                                            '&',
+                                            ?REFC_BINARY_IS_CONST,
+                                            '!=',
+                                            ?REFC_BINARY_IS_CONST
+                                        },
+                                        fun(CSt0) ->
+                                            MMod:add(
+                                                CSt0,
+                                                BinPtr,
+                                                ?REFC_BINARY_DATA_OFFSET_WORDS * MMod:word_size()
+                                            )
+                                        end
+                                    ),
+                                    op_bs_get_integer2_inline_extract(
+                                        NumBits,
+                                        BinPtr,
+                                        BSOffsetReg,
+                                        MatchStateRegPtr,
+                                        Dest,
+                                        MMod,
+                                        DSt2
+                                    )
+                                end
+                            )
+                        end
+                    )
+                end
+            )
+        end
+    ).
+
+%% Common tail of the inline fast path: DataReg points at the binary data and
+%% BSOffsetReg holds the byte-aligned bit offset; both are consumed.
+op_bs_get_integer2_inline_extract(
+    NumBits, DataReg, BSOffsetReg, MatchStateRegPtr, Dest, MMod, MSt0
+) ->
+    {MSt1, BSOffsetReg} = MMod:shift_right(MSt0, {free, BSOffsetReg}, 3),
+    MSt2 = MMod:add(MSt1, DataReg, BSOffsetReg),
+    MSt3 = MMod:load_be_unsigned(MSt2, DataReg, NumBits),
+    % tag as small integer
+    MSt4 = MMod:shift_left(MSt3, DataReg, 4),
+    MSt5 = MMod:or_(MSt4, DataReg, ?TERM_INTEGER_TAG),
+    % new bit offset: the byte offset back to bits, plus NumBits
+    MSt6 = MMod:shift_left(MSt5, BSOffsetReg, 3),
+    MSt7 = MMod:add(MSt6, BSOffsetReg, NumBits),
+    MSt8 = MMod:move_to_array_element(MSt7, BSOffsetReg, MatchStateRegPtr, 2),
+    MSt9 = MMod:free_native_registers(MSt8, [BSOffsetReg, MatchStateRegPtr]),
+    MSt10 = MMod:move_to_vm_register(MSt9, DataReg, Dest),
+    MMod:free_native_registers(MSt10, [DataReg, Dest]).
 
 %% Src is known to be boxed (a binary or a match state): callers either
 %% verified it or the compiler guarantees it (bs_start_match4 no_fail/resume).
