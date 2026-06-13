@@ -53,6 +53,7 @@
     move_to_array_element/4,
     move_to_array_element/5,
     load_be_unsigned/3,
+    store_be/4,
     set_bs/2,
     copy_to_native_register/2,
     get_array_element/3,
@@ -1212,6 +1213,34 @@ load_be_unsigned(
         end,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, AddrReg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%% Store the low NumBits (8, 16 or 32) bits of ValReg big-endian to the address
+%% in AddrReg. ValReg is clobbered (byte-swapped in place for 16/32 bits).
+-spec store_be(#state{}, x86_64_register(), x86_64_register(), 8 | 16 | 32) -> #state{}.
+store_be(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    AddrReg,
+    ValReg,
+    NumBits
+) when
+    ?IS_GPR(AddrReg) andalso ?IS_GPR(ValReg)
+->
+    Code =
+        case NumBits of
+            8 ->
+                jit_x86_64_asm:movb_store(ValReg, {0, AddrReg});
+            16 ->
+                I1 = jit_x86_64_asm:rolw(8, ValReg),
+                I2 = jit_x86_64_asm:movw_store(ValReg, {0, AddrReg}),
+                <<I1/binary, I2/binary>>;
+            32 ->
+                I1 = jit_x86_64_asm:bswapl(ValReg),
+                I2 = jit_x86_64_asm:movl_store(ValReg, {0, AddrReg}),
+                <<I1/binary, I2/binary>>
+        end,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ValReg),
     State#state{stream = Stream1, regs = Regs1}.
 
 -spec shift_right(#state{}, maybe_free_x86_64_register(), non_neg_integer()) ->
