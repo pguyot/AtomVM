@@ -27,6 +27,10 @@
     movzbq/2,
     movzwq/2,
     bswapl/1,
+    movb_store/2,
+    movw_store/2,
+    movl_store/2,
+    rolw/2,
     shlq/2,
     shrq/2,
     testb/2,
@@ -413,6 +417,41 @@ bswapl(Reg) when is_atom(Reg) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#0F, (16#C8 + Index)>>;
         {1, Index} -> <<16#41, 16#0F, (16#C8 + Index)>>
+    end.
+
+% movb SrcReg(low byte), [AddrReg]: store the low byte of SrcReg to memory.
+movb_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
+    case {REX_R, REX_B} of
+        {0, 0} -> <<16#88, 0:2, MODRM_REG:3, MODRM_RM:3>>;
+        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#88, 0:2, MODRM_REG:3, MODRM_RM:3>>
+    end.
+
+% movw SrcReg(low word), [AddrReg]: store the low 16 bits of SrcReg to memory.
+movw_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
+    case {REX_R, REX_B} of
+        {0, 0} -> <<16#66, 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>;
+        _ -> <<16#66, ?X86_64_REX(0, REX_R, 0, REX_B), 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>
+    end.
+
+% movl SrcReg(low dword), [AddrReg]: store the low 32 bits of SrcReg to memory.
+movl_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
+    {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
+    {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
+    case {REX_R, REX_B} of
+        {0, 0} -> <<16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>;
+        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>
+    end.
+
+% rolw $Imm, Reg: rotate the low 16 bits of Reg left by Imm (used to byte-swap
+% a 16-bit value before a movw store).
+rolw(Imm, Reg) when ?IS_UINT8_T(Imm), is_atom(Reg) ->
+    case x86_64_x_reg(Reg) of
+        {0, Index} -> <<16#66, 16#C1, (16#C0 + Index), Imm>>;
+        {1, Index} -> <<16#66, 16#41, 16#C1, (16#C0 + Index), Imm>>
     end.
 
 shlq(Imm, Reg) when ?IS_UINT8_T(Imm) ->
