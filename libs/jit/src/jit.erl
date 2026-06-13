@@ -3031,16 +3031,36 @@ first_pass_bs_create_bin_insert_value(
                 % mul mutates the register in place to hold size*unit.
                 {MMod:mul(MSt3, SizeValue0, SegmentUnit), SizeValue0}
         end,
-    {MSt5, BoolResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_INTEGER, [
-        CreatedBin, Offset, {free, SrcReg}, SizeValue, {free, FlagsValue}
-    ]),
-    MSt6 = cond_raise_badarg_or_jump_to_fail_label(
-        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt5
-    ),
-    {MSt7, NewOffset} = first_pass_bs_create_bin_insert_value_increment_offset(
-        MMod, MSt6, Offset, SizeValue, 1
-    ),
-    {MSt7, NewOffset, CreatedBin};
+    % Byte-aligned unsigned/signed big-endian insertion of a constant 8/16/32
+    % bits is emitted inline on backends providing store_be. Signedness does
+    % not affect the stored bytes (only the low NumBits are written), so only
+    % the endianness must be big. Sign/size validity is otherwise the same as
+    % the primitive: a non-small-int source falls back, like a bignum would.
+    InlineEligible =
+        is_integer(SizeValue) andalso
+            (SizeValue =:= 8 orelse SizeValue =:= 16 orelse SizeValue =:= 32) andalso
+            is_integer(FlagsValue) andalso
+            (FlagsValue band (?BITSTRING_FLAG_LITTLE_ENDIAN bor ?BITSTRING_FLAG_NATIVE_ENDIAN)) =:=
+                0 andalso
+            erlang:function_exported(MMod, store_be, 4) andalso
+            length(MMod:available_regs(MSt4)) >= 3,
+    case InlineEligible of
+        true ->
+            first_pass_bs_create_bin_insert_integer_inline(
+                Fail, SrcReg, SizeValue, CreatedBin, Offset, MMod, MSt4
+            );
+        false ->
+            {MSt5, BoolResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_INTEGER, [
+                CreatedBin, Offset, {free, SrcReg}, SizeValue, {free, FlagsValue}
+            ]),
+            MSt6 = cond_raise_badarg_or_jump_to_fail_label(
+                {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt5
+            ),
+            {MSt7, NewOffset} = first_pass_bs_create_bin_insert_value_increment_offset(
+                MMod, MSt6, Offset, SizeValue, 1
+            ),
+            {MSt7, NewOffset, CreatedBin}
+    end;
 first_pass_bs_create_bin_insert_value(
     float, Flags, Src, Size, SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
@@ -3147,6 +3167,128 @@ first_pass_bs_create_bin_insert_value(
 ) ->
     MSt1 = MMod:free_native_registers(MSt0, [Src]),
     {MSt1, Offset, CreatedBin}.
+
+%% Inline fast path for the bs_create_bin integer segment: byte-aligned
+%% big-endian insertion of a constant 8/16/32 bits of a small-integer source
+%% into a heap binary or refc binary. SrcReg holds the (still tagged) source;
+%% it is consumed. CreatedBin and Offset stay live for the caller's offset
+%% increment. A bignum source, an unaligned offset, a resource-managed refc
+%% binary, or a binary type other than heap/refc falls back to the primitive.
+first_pass_bs_create_bin_insert_integer_inline(
+    Fail, SrcReg, NumBits, CreatedBin, Offset, MMod, MSt0
+) ->
+    Fallback = fun(FSt0) ->
+        {FSt1, BoolResult} = MMod:call_primitive(FSt0, ?PRIM_BITSTRING_INSERT_INTEGER, [
+            CreatedBin, Offset, {free, SrcReg}, NumBits, 0
+        ]),
+        cond_raise_badarg_or_jump_to_fail_label(
+            {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, FSt1
+        )
+    end,
+    %% StoreTail: SrcReg already untagged; add the byte offset to DataPtr and
+    %% store. DataPtr and SrcReg are consumed.
+    StoreTail = fun(TSt0, DataPtr) ->
+        TSt1 =
+            if
+                is_integer(Offset) ->
+                    MMod:add(TSt0, DataPtr, Offset div 8);
+                true ->
+                    {TSt0a, OffTmp} = MMod:shift_right(TSt0, Offset, 3),
+                    TSt0b = MMod:add(TSt0a, DataPtr, OffTmp),
+                    MMod:free_native_registers(TSt0b, [OffTmp])
+            end,
+        TSt2 = MMod:store_be(TSt1, DataPtr, SrcReg, NumBits),
+        MMod:free_native_registers(TSt2, [DataPtr, SrcReg])
+    end,
+    %% Resolve the data pointer of a heap/refc binary into DataPtr, then store.
+    %% Mirrors the extraction fast path's binary-type dispatch.
+    Resolve = fun(RSt0) ->
+        {RSt1, RSt1Src} = MMod:shift_right_arith(RSt0, {free, SrcReg}, 4),
+        SrcReg = RSt1Src,
+        {RSt2, DataPtr} = MMod:copy_to_native_register(RSt1, CreatedBin),
+        {RSt3, DataPtr} = MMod:and_(RSt2, {free, DataPtr}, ?TERM_PRIMARY_CLEAR_MASK),
+        {RSt4, HdrReg} = MMod:get_array_element(RSt3, DataPtr, 0),
+        {RSt5, HdrReg} = MMod:and_(RSt4, {free, HdrReg}, ?TERM_BOXED_TAG_MASK),
+        MMod:if_else_block(
+            RSt5,
+            {'(int)', HdrReg, '==', ?TERM_BOXED_HEAP_BINARY},
+            fun(HSt0) ->
+                HSt1 = MMod:free_native_registers(HSt0, [HdrReg]),
+                HSt2 = MMod:add(HSt1, DataPtr, 2 * MMod:word_size()),
+                StoreTail(HSt2, DataPtr)
+            end,
+            fun(ESt0) ->
+                MMod:if_else_block(
+                    ESt0,
+                    {{free, HdrReg}, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_REFC_BINARY},
+                    fun(FSt0) ->
+                        FSt1 = MMod:free_native_registers(FSt0, [DataPtr]),
+                        Fallback(FSt1)
+                    end,
+                    fun(CSt0) ->
+                        {CSt1, FlagsReg} = MMod:get_array_element(CSt0, DataPtr, 2),
+                        MMod:if_else_block(
+                            CSt1,
+                            {FlagsReg, '&', ?REFC_BINARY_IS_RESOURCE_MANAGED, '!=', 0},
+                            fun(FSt0) ->
+                                FSt1 = MMod:free_native_registers(FSt0, [FlagsReg, DataPtr]),
+                                Fallback(FSt1)
+                            end,
+                            fun(DSt0) ->
+                                DSt1 = MMod:move_array_element(DSt0, DataPtr, 3, DataPtr),
+                                DSt2 = MMod:if_block(
+                                    DSt1,
+                                    {
+                                        {free, FlagsReg},
+                                        '&',
+                                        ?REFC_BINARY_IS_CONST,
+                                        '!=',
+                                        ?REFC_BINARY_IS_CONST
+                                    },
+                                    fun(KSt0) ->
+                                        MMod:add(
+                                            KSt0,
+                                            DataPtr,
+                                            ?REFC_BINARY_DATA_OFFSET_WORDS * MMod:word_size()
+                                        )
+                                    end
+                                ),
+                                StoreTail(DSt2, DataPtr)
+                            end
+                        )
+                    end
+                )
+            end
+        )
+    end,
+    MSt1 =
+        if
+            is_integer(Offset) andalso (Offset rem 8) =/= 0 ->
+                %% statically unaligned: never inline
+                Fallback(MSt0);
+            is_integer(Offset) ->
+                MMod:if_else_block(
+                    MSt0,
+                    {SrcReg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                    Fallback,
+                    Resolve
+                );
+            true ->
+                MMod:if_else_block(
+                    MSt0,
+                    {SrcReg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                    Fallback,
+                    fun(ASt0) ->
+                        MMod:if_else_block(
+                            ASt0,
+                            {Offset, '&', 16#7, '!=', 0},
+                            Fallback,
+                            Resolve
+                        )
+                    end
+                )
+        end,
+    first_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt1, Offset, NumBits, 1).
 
 first_pass_bs_create_bin_insert_value_increment_offset(_MMod, MSt0, Offset, Size, Unit) when
     is_integer(Offset) andalso is_integer(Size) andalso is_integer(Unit)
