@@ -357,6 +357,51 @@ bswapl_test_() ->
         ?_assertAsmEqual(<<16#41, 16#0F, 16#CA>>, "bswap %r10d", jit_x86_64_asm:bswapl(r10))
     ].
 
+movb_store_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#88, 16#07>>, "movb %al, (%rdi)", jit_x86_64_asm:movb_store(rax, {0, rdi})
+        ),
+        ?_assertAsmEqual(
+            <<16#44, 16#88, 16#10>>, "movb %r10b, (%rax)", jit_x86_64_asm:movb_store(r10, {0, rax})
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 16#88, 16#09>>, "movb %cl, (%r9)", jit_x86_64_asm:movb_store(rcx, {0, r9})
+        )
+    ].
+
+movw_store_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#66, 16#89, 16#07>>, "movw %ax, (%rdi)", jit_x86_64_asm:movw_store(rax, {0, rdi})
+        ),
+        ?_assertAsmEqual(
+            <<16#66, 16#44, 16#89, 16#10>>,
+            "movw %r10w, (%rax)",
+            jit_x86_64_asm:movw_store(r10, {0, rax})
+        )
+    ].
+
+movl_store_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#89, 16#07>>, "movl %eax, (%rdi)", jit_x86_64_asm:movl_store(rax, {0, rdi})
+        ),
+        ?_assertAsmEqual(
+            <<16#44, 16#89, 16#10>>, "movl %r10d, (%rax)", jit_x86_64_asm:movl_store(r10, {0, rax})
+        )
+    ].
+
+rolw_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#66, 16#C1, 16#C0, 16#08>>, "rolw $8, %ax", jit_x86_64_asm:rolw(8, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#66, 16#41, 16#C1, 16#C2, 16#08>>, "rolw $8, %r10w", jit_x86_64_asm:rolw(8, r10)
+        )
+    ].
+
 testb_test_() ->
     [
         ?_assertAsmEqual(<<16#A8, 16#01>>, "test $0x1,%al", jit_x86_64_asm:testb(1, rax)),
