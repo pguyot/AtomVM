@@ -42,6 +42,10 @@
     and_/3,
     ldr/2,
     ldr_w/2,
+    ldrb/2,
+    ldrh/2,
+    rev16/2,
+    rev32_w/2,
     ldr/3,
     lsl/3,
     lsr/3,
@@ -299,6 +303,59 @@ ldr_w(Dst, {BaseReg, Offset}) when
     BaseRegNum = reg_to_num(BaseReg),
     <<
         (16#B9400000 bor ((Offset div 4) bsl 10) bor (BaseRegNum bsl 5) bor DstNum):32/little
+    >>.
+
+%% Emit a load register byte (LDRB) instruction, zero-extending one byte from
+%% memory into the 32-bit (and thus zeroed 64-bit) Dst register.
+-spec ldrb(aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) -> binary().
+ldrb(Dst, {BaseReg, Offset}) when
+    is_atom(Dst),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 4095
+->
+    DstNum = reg_to_num(Dst),
+    BaseRegNum = reg_to_num(BaseReg),
+    <<
+        (16#39400000 bor (Offset bsl 10) bor (BaseRegNum bsl 5) bor DstNum):32/little
+    >>.
+
+%% Emit a load register halfword (LDRH) instruction, zero-extending two bytes
+%% from memory into the 32-bit (and thus zeroed 64-bit) Dst register.
+-spec ldrh(aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) -> binary().
+ldrh(Dst, {BaseReg, Offset}) when
+    is_atom(Dst),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 8190,
+    (Offset rem 2) =:= 0
+->
+    DstNum = reg_to_num(Dst),
+    BaseRegNum = reg_to_num(BaseReg),
+    <<
+        (16#79400000 bor ((Offset div 2) bsl 10) bor (BaseRegNum bsl 5) bor DstNum):32/little
+    >>.
+
+%% Emit a REV16 instruction (32-bit): reverse the byte order within each 16-bit
+%% halfword of Src into Dst.
+-spec rev16(aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+rev16(Dst, Src) when is_atom(Dst), is_atom(Src) ->
+    DstNum = reg_to_num(Dst),
+    SrcNum = reg_to_num(Src),
+    <<
+        (16#5AC00400 bor (SrcNum bsl 5) bor DstNum):32/little
+    >>.
+
+%% Emit a REV instruction (32-bit): reverse the byte order of the whole 32-bit
+%% Src register into Dst (upper 32 bits of Dst are zeroed).
+-spec rev32_w(aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+rev32_w(Dst, Src) when is_atom(Dst), is_atom(Src) ->
+    DstNum = reg_to_num(Dst),
+    SrcNum = reg_to_num(Src),
+    <<
+        (16#5AC00800 bor (SrcNum bsl 5) bor DstNum):32/little
     >>.
 
 %% Emit a move immediate (MOV) instruction for various immediate sizes (AArch64 encoding)
