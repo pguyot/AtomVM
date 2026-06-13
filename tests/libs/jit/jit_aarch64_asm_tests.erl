@@ -264,6 +264,52 @@ ldr_w_test_() ->
         )
     ].
 
+ldrb_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#39400000:32/little>>, "ldrb w0, [x0]", jit_aarch64_asm:ldrb(r0, {r0, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#39400141:32/little>>, "ldrb w1, [x10]", jit_aarch64_asm:ldrb(r1, {r10, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#39400c60:32/little>>, "ldrb w0, [x3, 3]", jit_aarch64_asm:ldrb(r0, {r3, 3})
+        )
+    ].
+
+ldrh_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#79400000:32/little>>, "ldrh w0, [x0]", jit_aarch64_asm:ldrh(r0, {r0, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#79400169:32/little>>, "ldrh w9, [x11]", jit_aarch64_asm:ldrh(r9, {r11, 0})
+        ),
+        ?_assertAsmEqual(
+            <<16#79400c60:32/little>>, "ldrh w0, [x3, 6]", jit_aarch64_asm:ldrh(r0, {r3, 6})
+        )
+    ].
+
+rev16_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#5ac00400:32/little>>, "rev16 w0, w0", jit_aarch64_asm:rev16(r0, r0)
+        ),
+        ?_assertAsmEqual(
+            <<16#5ac00569:32/little>>, "rev16 w9, w11", jit_aarch64_asm:rev16(r9, r11)
+        )
+    ].
+
+rev32_w_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#5ac00800:32/little>>, "rev w0, w0", jit_aarch64_asm:rev32_w(r0, r0)
+        ),
+        ?_assertAsmEqual(
+            <<16#5ac00969:32/little>>, "rev w9, w11", jit_aarch64_asm:rev32_w(r9, r11)
+        )
+    ].
+
 str_w_test_() ->
     [
         ?_assertAsmEqual(
