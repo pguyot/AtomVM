@@ -25,7 +25,28 @@
 test() ->
     ok = test_md5(),
     ok = test_standard_error(),
+    ok = test_undef_names_mfa(),
     ok.
+
+%% Calling a function AtomVM cannot resolve (here, an unknown module) must raise
+%% undef whose stacktrace names the real Module:Function/Arity -- not the
+%% caller's module with undefined/0, which masked the actual missing function.
+test_undef_names_mfa() ->
+    Stk =
+        try atomvm_no_such_module:no_such_fun(1, 2, 3) of
+            _ -> error(should_have_failed)
+        catch
+            error:undef:S -> S
+        end,
+    case Stk of
+        % AVM_CREATE_STACKTRACES=off: no stacktrace to inspect, the undef
+        % itself (caught above) is all this build can assert.
+        undefined ->
+            ok;
+        [{atomvm_no_such_module, no_such_fun, A, _Loc} | _] ->
+            true = (A =:= 3 orelse A =:= [1, 2, 3]),
+            ok
+    end.
 
 test_md5() ->
     Digest = erlang:md5(<<"hello">>),
