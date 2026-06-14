@@ -2167,6 +2167,58 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
     size_t src_size = term_get_map_size(src);
     size_t new_map_size = src_size + new_entries;
     bool is_shared = new_entries == 0;
+
+    // Fast path for a single key (the common Map#{K => V}). Map keys are sorted
+    // (term_compare(TermCompareExact) order), so binary-search the position and
+    // block-copy, avoiding the O(n) per-element comparisons of the merge below.
+    if (num_elements == 1) {
+        term new_key = kv[0];
+        term new_value = kv[1];
+        int low = 0;
+        int high = (int) src_size - 1;
+        int found = -1;
+        while (low <= high) {
+            int mid = low + (high - low) / 2;
+            term k = term_get_map_key(src, mid);
+            if (k == new_key) {
+                found = mid;
+                break;
+            }
+            TermCompareResult cmp = term_compare(k, new_key, TermCompareExact, ctx->global);
+            if (cmp == TermLessThan) {
+                low = mid + 1;
+            } else if (cmp == TermGreaterThan) {
+                high = mid - 1;
+            } else if (LIKELY(cmp == TermEquals)) {
+                found = mid;
+                break;
+            } else {
+                set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+                return term_invalid_term();
+            }
+        }
+        if (is_shared) {
+            // Update of an existing key: share the keys tuple, copy the values
+            // and overwrite the one at `found`.
+            term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
+            for (size_t i = 0; i < src_size; i++) {
+                term value = ((int) i == found) ? new_value : term_get_map_value(src, i);
+                term_set_map_assoc(map, i, term_get_map_key(src, i), value);
+            }
+            return map;
+        }
+        // Insert of a new key at the binary-search insertion point `low`.
+        size_t at = (size_t) low;
+        term map = term_alloc_map(src_size + 1, &ctx->heap);
+        for (size_t i = 0; i < at; i++) {
+            term_set_map_assoc(map, i, term_get_map_key(src, i), term_get_map_value(src, i));
+        }
+        term_set_map_assoc(map, at, new_key, new_value);
+        for (size_t i = at; i < src_size; i++) {
+            term_set_map_assoc(map, i + 1, term_get_map_key(src, i), term_get_map_value(src, i));
+        }
+        return map;
+    }
     //
     //
     //
