@@ -418,6 +418,21 @@ static Context *jit_raise_error_mfa(
     return jit_handle_error(ctx, jit_state, 0);
 }
 
+// Raise undef for an unresolved external call, naming the real imported
+// Module:Function/Arity rather than the caller's module with undefined/0.
+static Context *jit_raise_undef_import(
+    Context *ctx, JITState *jit_state, int offset, int index, int arity)
+{
+    term module_atom, function_atom;
+    module_get_imported_function_module_and_name_atoms(
+        jit_state->module, index, &module_atom, &function_atom);
+    context_set_exception_class_use_live_flag(ctx, ERROR_ATOM);
+    ctx->exception_reason = UNDEF_ATOM;
+    ctx->exception_stacktrace = stacktrace_create_raw_mfa(
+        ctx, jit_state->module, offset, module_atom, function_atom, arity);
+    return jit_handle_error(ctx, jit_state, 0);
+}
+
 static const struct RecordDef *jit_resolve_record_id(Context *ctx, JITState *jit_state, term id)
 {
     if (term_is_atom(id)) {
@@ -717,7 +732,7 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
     TRACE("jit_call_ext: arity=%d index=%d n_words=%d\n", arity, index, n_words);
     const struct ExportedFunction *func = module_resolve_function(jit_state->module, index, ctx->global);
     if (IS_NULL_PTR(func)) {
-        return jit_raise_error(ctx, jit_state, 0, UNDEF_ATOM);
+        return jit_raise_undef_import(ctx, jit_state, offset, index, arity);
     }
 
     // Acquire pairing with the in-place ModuleFunction -> ModuleNativeFunction
