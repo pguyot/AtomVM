@@ -51,9 +51,25 @@ struct HNode
 {
     struct HNode *next;
     const uint8_t *key;
+    // First 8 bytes of the atom name, big-endian and zero-padded, so that
+    // comparing two sort_keys as unsigned integers matches memcmp of the
+    // names' first 8 bytes. Lets atom ordering (hot in sorted-map operations)
+    // be a single integer compare, falling back to the full name comparison
+    // only when the first 8 bytes tie.
+    uint64_t sort_key;
     uint32_t index : 20;
     uint32_t bytes_len : 10;
 };
+
+static inline uint64_t atom_sort_key(const uint8_t *atom_data, size_t atom_len)
+{
+    uint64_t key = 0;
+    size_t n = atom_len < 8 ? atom_len : 8;
+    for (size_t i = 0; i < n; i++) {
+        key |= ((uint64_t) atom_data[i]) << (56 - 8 * i);
+    }
+    return key;
+}
 
 struct HNodeGroup
 {
@@ -268,6 +284,14 @@ int atom_table_cmp_using_atom_index(struct AtomTable *table, atom_index_t t_atom
     if (IS_NULL_PTR(other_node)) {
         return 1;
     }
+    // Fast path: the first 8 bytes (as a big-endian integer) order most atom
+    // pairs without touching the names. Only a tie needs the full comparison.
+    uint64_t t_sort_key = t_node->sort_key;
+    uint64_t other_sort_key = other_node->sort_key;
+    if (t_sort_key != other_sort_key) {
+        return (t_sort_key > other_sort_key) ? 1 : -1;
+    }
+
     const uint8_t *t_atom_data = t_node->key;
     size_t t_atom_len = t_node->bytes_len;
     const uint8_t *other_atom_data = other_node->key;
@@ -309,6 +333,7 @@ static inline void init_node(struct HNode *node, const uint8_t *atom_data, size_
     node->key = atom_data;
     node->bytes_len = atom_len;
     node->index = index;
+    node->sort_key = atom_sort_key(atom_data, atom_len);
 }
 
 static inline void insert_node_into_bucket(
