@@ -3180,7 +3180,8 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
     // Map keys are kept sorted in term_compare(TermCompareExact) order (see
     // jit_put_map_assoc / sort_kv_pairs and the maps:from_* NIFs), so large
     // maps are looked up with a binary search instead of the linear scans
-    // below.
+    // below. The compiler's hot maps run to thousands of entries, where this
+    // wins even for atom keys (whose comparison is cached, see atom_table).
     if (arity > TERM_MAP_LINEAR_SCAN_MAX) {
         int low = 0;
         int high = arity - 1;
