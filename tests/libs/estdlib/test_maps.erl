@@ -36,6 +36,7 @@ test() ->
     ok = test_get(),
     ok = test_is_key(),
     ok = test_put(),
+    ok = test_large_map_lookup(),
     ok = test_iterator(),
     HasIterator2 =
         case erlang:system_info(machine) of
@@ -105,6 +106,54 @@ test_put() ->
     ?ASSERT_MATCH(maps:put(foo, tapas, id(#{foo => bar})), #{foo => tapas}),
     ?ASSERT_MATCH(maps:put(gnu, gnat, id(#{foo => bar})), #{foo => bar, gnu => gnat}),
     ok = check_bad_map(fun() -> maps:put(bar, tapas, id(not_a_map)) end),
+    ok.
+
+%% Exercise the large-map (binary-search) lookup path in term_find_map_pos:
+%% build maps well over the linear-scan threshold by several construction
+%% paths and key types, then check that every present key is found with its
+%% value and that absent keys are reported missing.
+test_large_map_lookup() ->
+    N = 300,
+    AtomKeys = [list_to_atom("key_" ++ integer_to_list(I)) || I <- lists:seq(1, N)],
+    IntKeys = [I * 3 || I <- lists:seq(1, N)],
+    ok = check_large_map(AtomKeys, [not_a_key, key_0, zzz]),
+    ok = check_large_map(IntKeys, [-1, 2, 1000000]),
+    ok = check_large_map(AtomKeys ++ IntKeys, [other, 7]),
+    ok.
+
+check_large_map(Keys, AbsentKeys) ->
+    Pairs = [{K, {val, K}} || K <- Keys],
+    %% from_list with shuffled input, then the same via incremental puts. The
+    %% index-based reorder guarantees the input is not already in key order, so
+    %% the map's sorted-keys invariant is built, not inherited.
+    Len = length(Pairs),
+    Shuffled = [
+        P
+     || {_, P} <- lists:sort([{(I * 7) rem Len, P} || {I, P} <- lists:zip(lists:seq(1, Len), Pairs)])
+    ],
+    M1 = maps:from_list(Shuffled),
+    M2 = lists:foldl(fun({K, V}, Acc) -> Acc#{K => V} end, id(#{}), Shuffled),
+    lists:foreach(
+        fun(M) ->
+            true = (map_size(M) >= 300),
+            lists:foreach(
+                fun({K, V}) ->
+                    V = maps:get(K, M),
+                    {ok, V} = maps:find(K, M),
+                    true = maps:is_key(K, M)
+                end,
+                Pairs
+            ),
+            lists:foreach(
+                fun(K) ->
+                    error = maps:find(K, M),
+                    false = maps:is_key(K, M)
+                end,
+                AbsentKeys
+            )
+        end,
+        [M1, M2]
+    ),
     ok.
 
 test_iterator() ->
