@@ -40,7 +40,8 @@ test() ->
             ok = test_list_dir_make_dir(),
             ok = test_path_open(),
             ok = test_device_write(),
-            ok = test_close_no_exit_to_trapping_owner();
+            ok = test_close_no_exit_to_trapping_owner(),
+            ok = test_read_file_info_open_device();
         true ->
             ok
     end,
@@ -245,5 +246,21 @@ test_close_no_exit_to_trapping_owner() ->
         after 5000 -> timeout
         end,
     none = Result,
+    ok = file:delete(Path),
+    ok.
+
+%% read_file_info/1 must accept an already-open io device (a pid), as epp does
+%% when reading -doc/-moduledoc {file, _} content. It must report the size and
+%% leave the read position unchanged.
+test_read_file_info_open_device() ->
+    Path = tmp_path("rfiod"),
+    ok = file:write_file(Path, <<"0123456789">>),
+    {ok, Fd} = file:open(Path, [read]),
+    {ok, Info} = file:read_file_info(Fd),
+    file_info = element(1, Info),
+    10 = element(2, Info),
+    %% position preserved: a subsequent read still returns the whole file
+    {ok, "0123456789"} = file:read(Fd, 100),
+    ok = file:close(Fd),
     ok = file:delete(Path),
     ok.
