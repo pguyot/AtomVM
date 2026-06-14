@@ -487,7 +487,27 @@ write(IoDevice, Data) when is_pid(IoDevice) ->
 %%          universal rather than local.
 %% @end
 %%-----------------------------------------------------------------------------
--spec read_file_info(Filename :: iodata()) -> {ok, tuple()} | {error, any()}.
+-spec read_file_info(File :: iodata() | pid()) -> {ok, tuple()} | {error, any()}.
+read_file_info(IoDevice) when is_pid(IoDevice) ->
+    %% Stat of an already-open file. AtomVM has no fstat, so the size is found
+    %% by seeking to the end and restoring the position; the other #file_info
+    %% fields use neutral defaults (callers such as epp's -doc/-moduledoc
+    %% handling only need the size).
+    case position(IoDevice, cur) of
+        {ok, Cur} ->
+            case position(IoDevice, eof) of
+                {ok, Size} ->
+                    _ = position(IoDevice, {bof, Cur}),
+                    Info =
+                        {file_info, Size, regular, read_write, undefined, undefined, undefined, 0,
+                            1, 0, 0, 0, 0, 0},
+                    {ok, Info};
+                {error, _} = SeekErr ->
+                    SeekErr
+            end;
+        {error, _} = CurErr ->
+            CurErr
+    end;
 read_file_info(Filename) ->
     case atomvm:posix_stat(Filename) of
         {ok, Stat} ->
