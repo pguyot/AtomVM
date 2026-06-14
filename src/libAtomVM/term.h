@@ -334,6 +334,12 @@ typedef enum
 #define TERM_MAP_NOT_FOUND -1
 #define TERM_MAP_MEMORY_ALLOC_FAIL -2
 
+// Maps with more than this many entries are looked up with a binary search in
+// term_find_map_pos; smaller maps use the linear identity scan, where a
+// per-step comparator would only add overhead. Compiler workloads build large
+// maps (hundreds to thousands of entries) where the linear scan dominates.
+#define TERM_MAP_LINEAR_SCAN_MAX 32
+
 /**
  * @brief All empty tuples will reference this
  */
@@ -3145,6 +3151,33 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
 {
     term keys = term_get_map_keys(map);
     int arity = term_get_tuple_arity(keys);
+
+    // Map keys are kept sorted in term_compare(TermCompareExact) order (see
+    // jit_put_map_assoc / sort_kv_pairs and the maps:from_* NIFs), so large
+    // maps are looked up with a binary search instead of the linear scans
+    // below.
+    if (arity > TERM_MAP_LINEAR_SCAN_MAX) {
+        int low = 0;
+        int high = arity - 1;
+        while (low <= high) {
+            int mid = low + (high - low) / 2;
+            term k = term_get_tuple_element(keys, mid);
+            if (k == key) {
+                return mid;
+            }
+            TermCompareResult cmp = term_compare(k, key, TermCompareExact, global);
+            if (cmp == TermLessThan) {
+                low = mid + 1;
+            } else if (cmp == TermGreaterThan) {
+                high = mid - 1;
+            } else if (LIKELY(cmp == TermEquals)) {
+                return mid;
+            } else {
+                return TERM_MAP_MEMORY_ALLOC_FAIL;
+            }
+        }
+        return TERM_MAP_NOT_FOUND;
+    }
 
     // Atoms, small integers and nil are exactly equal only to themselves
     // (boxed integers are normalized, so no boxed term can be exactly equal
