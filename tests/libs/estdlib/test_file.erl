@@ -39,7 +39,8 @@ test() ->
             ok = test_read_file_info(),
             ok = test_list_dir_make_dir(),
             ok = test_path_open(),
-            ok = test_device_write();
+            ok = test_device_write(),
+            ok = test_close_no_exit_to_trapping_owner();
         true ->
             ok
     end,
@@ -214,5 +215,35 @@ test_device_write() ->
     ok = file:write(Fd, "world"),
     ok = file:close(Fd),
     {ok, <<"hello world">>} = file:read_file(Path),
+    ok = file:delete(Path),
+    ok.
+
+%% Regression: closing a file must not deliver an {'EXIT', Device, _} signal to
+%% an owner that traps exits. epp opens include files while trapping exits and
+%% turns any {'EXIT',_,R} into exit(R), so a stray normal-exit from the file
+%% device would abort every -include directive (whole-module compile failure).
+test_close_no_exit_to_trapping_owner() ->
+    Path = tmp_path("noexit"),
+    ok = file:write_file(Path, <<"hello">>),
+    Parent = self(),
+    Child = spawn(fun() ->
+        process_flag(trap_exit, true),
+        {ok, Fd} = file:open(Path, [read]),
+        {ok, "hello"} = file:read(Fd, 5),
+        ok = file:close(Fd),
+        %% Any stray EXIT from the device would arrive as a message here.
+        Got =
+            receive
+                {'EXIT', _, _} = E -> E
+            after 200 -> none
+            end,
+        Parent ! {self(), Got}
+    end),
+    Result =
+        receive
+            {Child, R} -> R
+        after 5000 -> timeout
+        end,
+    none = Result,
     ok = file:delete(Path),
     ok.
