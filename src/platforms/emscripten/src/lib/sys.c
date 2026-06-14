@@ -729,6 +729,7 @@ uint64_t sys_monotonic_time_u64_to_ms(uint64_t t)
     return t / 1000000;
 }
 
+#ifndef AVM_EMSCRIPTEN_NODE
 static emscripten_fetch_t *fetch_file(const char *url)
 {
     emscripten_fetch_attr_t attr;
@@ -744,6 +745,7 @@ static emscripten_fetch_t *fetch_file(const char *url)
         return NULL;
     }
 }
+#endif
 
 static void *load_or_fetch_file(const char *path, emscripten_fetch_t **fetch, size_t *size)
 {
@@ -772,6 +774,14 @@ static void *load_or_fetch_file(const char *path, emscripten_fetch_t **fetch, si
         return NULL;
     }
 
+#ifdef AVM_EMSCRIPTEN_NODE
+    // On the node build there is no HTTP server to fetch modules from, and
+    // emscripten's FETCH falls back to XMLHttpRequest, which does not exist
+    // under node (it crashes the runtime). A missing file simply means the
+    // module is unavailable, so report it as such instead of crashing.
+    UNUSED(fetch);
+    return NULL;
+#else
     *fetch = fetch_file(path);
     if (IS_NULL_PTR(*fetch)) {
         return NULL;
@@ -780,6 +790,7 @@ static void *load_or_fetch_file(const char *path, emscripten_fetch_t **fetch, si
         *size = (*fetch)->numBytes;
     }
     return (void *) (*fetch)->data;
+#endif
 }
 
 enum OpenAVMResult sys_open_avm_from_file(

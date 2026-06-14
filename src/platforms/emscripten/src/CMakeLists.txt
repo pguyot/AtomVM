@@ -61,3 +61,9 @@ set(
 add_subdirectory(lib)
 target_link_libraries(AtomVM PRIVATE libAtomVM${PLATFORM_LIB_SUFFIX})
 target_include_directories(AtomVM PRIVATE lib)
+
+if (NOT AVM_EMSCRIPTEN_ENV STREQUAL "web")
+    # On node there is no HTTP server to fetch modules from, and emscripten's
+    # FETCH falls back to XMLHttpRequest, which does not exist under node.
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE AVM_EMSCRIPTEN_NODE)
+endif()
