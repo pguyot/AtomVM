@@ -74,9 +74,11 @@ open(Filename, Modes) ->
     case OpenResult of
         {ok, Fd} ->
             Binary = lists:member(binary, Modes),
+            Owner = self(),
             Pid = spawn_link(fun() ->
                 file_server(#{
                     fd => Fd,
+                    owner => Owner,
                     buffer => [],
                     binary => Binary,
                     pending_bytes => <<>>,
@@ -269,6 +271,12 @@ file_server(State) ->
             file_server(NewState);
         {file_request, From, ReplyAs, close} ->
             _ = atomvm:posix_close(maps:get(fd, State)),
+            %% This process is about to exit normally. It was spawn_link'ed by
+            %% the owner, so unlink first: an owner that traps exits (e.g. epp,
+            %% which opens and closes include files) would otherwise receive
+            %% {'EXIT', _, normal} and abort. OTP's file io server is likewise
+            %% not linked to the user process.
+            _ = unlink(maps:get(owner, State)),
             From ! {file_reply, ReplyAs, ok};
         {file_request, From, ReplyAs, Request} ->
             {reply, Reply, NewState} = file_request_impl(Request, State),
