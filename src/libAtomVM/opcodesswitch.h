@@ -1918,7 +1918,11 @@ schedule_in:
 
                 const struct ExportedFunction *func = module_resolve_function(mod, index, glb);
                 if (IS_NULL_PTR(func)) {
-                    RAISE_ERROR(UNDEF_ATOM);
+                    // Name the unresolved import in the error, instead of the
+                    // caller's module with undefined/0.
+                    term unresolved_module, unresolved_function;
+                    module_get_imported_function_module_and_name_atoms(mod, index, &unresolved_module, &unresolved_function);
+                    RAISE_ERROR_MFA(UNDEF_ATOM, unresolved_module, unresolved_function, (int) arity);
                 }
 
                 switch (func->type) {
@@ -2037,7 +2041,11 @@ schedule_in:
 
                 const struct ExportedFunction *func = module_resolve_function(mod, index, glb);
                 if (IS_NULL_PTR(func)) {
-                    RAISE_ERROR(UNDEF_ATOM);
+                    // Name the unresolved import in the error, instead of the
+                    // caller's module with undefined/0.
+                    term unresolved_module, unresolved_function;
+                    module_get_imported_function_module_and_name_atoms(mod, index, &unresolved_module, &unresolved_function);
+                    RAISE_ERROR_MFA(UNDEF_ATOM, unresolved_module, unresolved_function, (int) arity);
                 }
 
                 switch (func->type) {
@@ -3159,7 +3167,11 @@ schedule_in:
 
                 const struct ExportedFunction *func = module_resolve_function(mod, index, glb);
                 if (IS_NULL_PTR(func)) {
-                    RAISE_ERROR(UNDEF_ATOM);
+                    // Name the unresolved import in the error, instead of the
+                    // caller's module with undefined/0.
+                    term unresolved_module, unresolved_function;
+                    module_get_imported_function_module_and_name_atoms(mod, index, &unresolved_module, &unresolved_function);
+                    RAISE_ERROR_MFA(UNDEF_ATOM, unresolved_module, unresolved_function, (int) arity);
                 }
 
                 switch (func->type) {
