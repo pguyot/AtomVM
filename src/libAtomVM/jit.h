@@ -258,6 +258,8 @@ struct ModuleNativeInterface
     term (*put_record_resolved)(Context *ctx, JITState *jit_state, uint32_t record_index, term src, uint32_t num_pairs, term *kv);
     BifImpl0 (*get_imported_gcbif)(Context *ctx, JITState *jit_state, uint32_t live, uint32_t bif);
     void (*set_tuple_element)(Context *ctx, term tuple, uint32_t position, term value);
+    size_t (*put_map_heap_need)(Context *ctx, term src, size_t new_entries, size_t num_elements);
+    term (*map_get_value)(Context *ctx, term map, int pos);
 };
 
 extern const ModuleNativeInterface module_native_interface;

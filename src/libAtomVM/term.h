@@ -3002,6 +3002,61 @@ static inline term term_alloc_map(avm_uint_t size, Heap *heap)
     return term_alloc_map_maybe_shared(size, term_invalid_term(), heap);
 }
 
+// --- Large (tree-backed) maps --------------------------------------------
+// Maps with more than TERM_MAP_TREE_THRESHOLD entries are stored as a
+// persistent weight-balanced tree (termmap_tree.h), giving O(log n) single-key
+// insert/update instead of the flat array's O(n) (matching BEAM switching to a
+// HAMT above 32 entries). The boxed map is then a fixed 4 words:
+//
+//   [ header(arity=3) | NIL marker | tree root | size ]
+//
+// A flat map's first payload word is its always-boxed keys tuple, so a
+// non-boxed first payload word unambiguously marks the tree form. Every payload
+// word is a valid term, so the garbage collector copies the wrapper with the
+// flat-map code and recurses into the tree nodes (ordinary tuples) on its own.
+// An in-order walk of the tree yields keys ascending, preserving the sorted-map
+// invariant flat maps rely on. These helpers (defined in term.c) bridge to
+// termmap_tree.h without pulling it into this header.
+#define TERM_MAP_TREE_THRESHOLD 32
+#define TERM_MAP_TREE_BOXED_ARITY 3
+#define TERM_MAP_TREE_ROOT_INDEX 2
+#define TERM_MAP_TREE_SIZE_INDEX 3
+
+term term_map_tree_value_at(term map, avm_uint_t pos);
+term term_map_tree_key_at(term map, avm_uint_t pos);
+int term_map_tree_find_pos(term map, term key, GlobalContext *global);
+
+/**
+ * @brief Whether \p t is a large, tree-backed map (vs a flat map). Only valid
+ * to call on a term already known to be a map.
+ */
+static inline bool term_is_map_tree(term t)
+{
+    const term *boxed_value = term_to_const_term_ptr(t);
+    return !term_is_boxed(boxed_value[1]);
+}
+
+static inline term term_get_map_tree_root(term t)
+{
+    return term_to_const_term_ptr(t)[TERM_MAP_TREE_ROOT_INDEX];
+}
+
+/**
+ * @brief Allocate the 4-word wrapper of a tree-backed map around \p root (a
+ * termmap_tree node or NIL) holding \p size entries. The caller must have
+ * reserved TERM_MAP_TREE_BOXED_ARITY + 1 free words.
+ */
+static inline term term_alloc_map_tree(Heap *heap, term root, size_t size)
+{
+    term *boxed_value = memory_heap_alloc(heap, TERM_MAP_TREE_BOXED_ARITY + 1);
+    boxed_value[0] = (TERM_MAP_TREE_BOXED_ARITY << 6) | TERM_BOXED_MAP;
+    boxed_value[1] = term_nil(); // marker: distinguishes the tree form (a flat
+                                 // map's first payload word is its keys tuple)
+    boxed_value[TERM_MAP_TREE_ROOT_INDEX] = root;
+    boxed_value[TERM_MAP_TREE_SIZE_INDEX] = term_from_int((avm_int_t) size);
+    return ((term) boxed_value) | TERM_PRIMARY_BOXED;
+}
+
 static inline term term_get_map_keys(term t)
 {
     TERM_DEBUG_ASSERT(term_is_map(t));
@@ -3012,12 +3067,15 @@ static inline term term_get_map_keys(term t)
 static inline int term_get_map_size(term t)
 {
     TERM_DEBUG_ASSERT(term_is_map(t));
-
+    if (UNLIKELY(term_is_map_tree(t))) {
+        return term_to_int(term_to_const_term_ptr(t)[TERM_MAP_TREE_SIZE_INDEX]);
+    }
     return term_get_tuple_arity(term_get_map_keys(t));
 }
 
 static inline void term_set_map_assoc(term map, avm_uint_t pos, term key, term value)
 {
+    TERM_DEBUG_ASSERT(!term_is_map_tree(map));
     term_put_tuple_element(term_get_map_keys(map), pos, key);
     term *boxed_value = term_to_term_ptr(map);
     boxed_value[term_get_map_value_offset() + pos] = value;
@@ -3025,23 +3083,33 @@ static inline void term_set_map_assoc(term map, avm_uint_t pos, term key, term v
 
 static inline term term_get_map_key(term map, avm_uint_t pos)
 {
+    if (UNLIKELY(term_is_map_tree(map))) {
+        return term_map_tree_key_at(map, pos);
+    }
     return term_get_tuple_element(term_get_map_keys(map), pos);
 }
 
 static inline term term_get_map_value(term map, avm_uint_t pos)
 {
+    if (UNLIKELY(term_is_map_tree(map))) {
+        return term_map_tree_value_at(map, pos);
+    }
     term *boxed_value = term_to_term_ptr(map);
     return boxed_value[term_get_map_value_offset() + pos];
 }
 
 static inline void term_set_map_value(term map, avm_uint_t pos, term value)
 {
+    TERM_DEBUG_ASSERT(!term_is_map_tree(map));
     term *boxed_value = term_to_term_ptr(map);
     boxed_value[term_get_map_value_offset() + pos] = value;
 }
 
 static inline int term_find_map_pos(term map, term key, GlobalContext *global)
 {
+    if (UNLIKELY(term_is_map_tree(map))) {
+        return term_map_tree_find_pos(map, key, global);
+    }
     term keys = term_get_map_keys(map);
     int arity = term_get_tuple_arity(keys);
 

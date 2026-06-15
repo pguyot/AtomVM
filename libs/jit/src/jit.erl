@@ -1794,19 +1794,12 @@ first_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
         {MSt3, Rest5},
         lists:seq(1, NumElements)
     ),
-    {MSt5, SrcSizeReg} = term_get_map_size(Src, MMod, MSt4),
-    MSt6 = MMod:if_else_block(
-        MSt5,
-        {NewEntriesReg, '==', 0},
-        fun(BSt0) ->
-            MMod:add(BSt0, SrcSizeReg, 2)
-        end,
-        fun(BSt0) ->
-            BSt1 = MMod:add(BSt0, SrcSizeReg, NewEntriesReg),
-            BSt2 = MMod:shift_left(BSt1, SrcSizeReg, 1),
-            MMod:add(BSt2, SrcSizeReg, 3)
-        end
-    ),
+    % Heap words to reserve: computed in C because a large (tree-backed) result
+    % map has a very different footprint than a flat one. Src is still valid
+    % here (the ensure_free below may relocate it, returning NewSrc).
+    {MSt6, SrcSizeReg} = MMod:call_primitive(MSt4, ?PRIM_PUT_MAP_HEAP_NEED, [
+        ctx, Src, NewEntriesReg, NumElements
+    ]),
     {MSt7, TrimResultReg} = MMod:call_primitive(MSt6, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
     MSt8 = MMod:free_native_registers(MSt7, [TrimResultReg]),
     {MSt9, NewSrc} = memory_ensure_free_with_extra_root(
@@ -1876,46 +1869,46 @@ first_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
         {MSt2, Rest5},
         lists:seq(1, NumElements)
     ),
-    {MSt4, SrcSizeReg} = term_get_map_size(Src, MMod, MSt3),
-    % shared
-    MSt5 = MMod:add(MSt4, SrcSizeReg, 2),
-    {MSt6, TrimResultReg} = MMod:call_primitive(MSt5, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt7 = MMod:free_native_registers(MSt6, [TrimResultReg]),
-    {MSt8, NewSrc} = memory_ensure_free_with_extra_root(
-        Src, Live, {free, SrcSizeReg}, MMod, MSt7
+    % Every key is present, so an exact update is an assoc with zero new
+    % entries: reuse PRIM_PUT_MAP_ASSOC, which updates existing keys in place
+    % for flat maps and path-copies for tree-backed maps. Heap reservation is
+    % computed in C (PRIM_PUT_MAP_HEAP_NEED) with new_entries = 0.
+    {MSt4, SrcSizeReg} = MMod:call_primitive(MSt3, ?PRIM_PUT_MAP_HEAP_NEED, [
+        ctx, Src, 0, NumElements
+    ]),
+    {MSt5, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+    MSt6 = MMod:free_native_registers(MSt5, [TrimResultReg]),
+    {MSt7, NewSrc} = memory_ensure_free_with_extra_root(
+        Src, Live, {free, SrcSizeReg}, MMod, MSt6
     ),
-    {MSt9, NewMapPtrReg} = MMod:call_primitive(MSt8, ?PRIM_TERM_COPY_MAP, [ctx, NewSrc]),
-    {MSt10, NewMapPtrReg} = MMod:and_(MSt9, {free, NewMapPtrReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt11, Rest6} = lists:foldl(
-        fun(_Index, {ASt0, ARest0}) ->
+    {MSt8, KVReg} = MMod:call_primitive(MSt7, ?PRIM_MALLOC, [
+        ctx, jit_state, ListSize * MMod:word_size()
+    ]),
+    MSt9 = handle_error_if({KVReg, '==', 0}, MMod, MSt8),
+    {MSt10, Rest6} = lists:foldl(
+        fun(Index, {ASt0, ARest0}) ->
             {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
             {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
             ?TRACE("(~p,~p),", [Key, Value]),
-            {ASt3, PosReg} = MMod:call_primitive(ASt2, ?PRIM_TERM_FIND_MAP_POS, [
-                ctx, NewSrc, Key
-            ]),
-            ASt4 = MMod:if_block(ASt3, {'(int)', PosReg, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(
-                BSt0
-            ) ->
-                MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                ])
-            end),
-            ASt5 = term_set_map_value(
-                NewMapPtrReg, {free, PosReg}, {free, Value}, MMod, ASt4
-            ),
-            ASt6 = MMod:free_native_registers(ASt5, [Key]),
-            {ASt6, ARest2}
+            ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
+            ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
+            ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
+            {ASt5, ARest2}
         end,
-        {MSt10, Rest5},
-        lists:seq(1, NumElements)
+        {MSt9, Rest5},
+        lists:seq(0, NumElements - 1)
     ),
     ?TRACE("]\n", []),
-    MSt12 = MMod:or_(MSt11, NewMapPtrReg, ?TERM_PRIMARY_BOXED),
-    MSt13 = MMod:move_to_vm_register(MSt12, NewMapPtrReg, Dest),
-    MSt14 = MMod:free_native_registers(MSt13, [NewMapPtrReg, Dest, NewSrc]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt14),
-    first_pass(Rest6, MMod, MSt14, State0);
+    {MSt11, PutMapAssocReg} = MMod:call_primitive(MSt10, ?PRIM_PUT_MAP_ASSOC, [
+        ctx, jit_state, {free, NewSrc}, 0, NumElements, KVReg
+    ]),
+    {MSt12, FreeReg} = MMod:call_primitive(MSt11, ?PRIM_FREE, [{free, KVReg}]),
+    MSt13 = MMod:free_native_registers(MSt12, [FreeReg]),
+    MSt14 = handle_error_if({PutMapAssocReg, '==', 0}, MMod, MSt13),
+    MSt15 = MMod:move_to_vm_register(MSt14, PutMapAssocReg, Dest),
+    MSt16 = MMod:free_native_registers(MSt15, [PutMapAssocReg, Dest]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt16),
+    first_pass(Rest6, MMod, MSt16, State0);
 % 156
 first_pass(<<?OP_IS_MAP, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -1988,12 +1981,17 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
         ])
     end),
     {MSt6, SrcReg} = MMod:move_to_native_register(MSt5, Src),
-    {MSt7, MapReg} = MMod:and_(MSt6, SrcReg, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt8 = MMod:add(MSt7, MapReg, MMod:word_size() * 2),
-    {MSt9, Dest1, Rest5} = decode_dest(Rest4, MMod, MSt8),
+    % Read the value at the found position. The position is a flat array index
+    % for a flat map but an in-order rank for a tree-backed one, so dispatch
+    % through term_get_map_value (PRIM_MAP_GET_VALUE) rather than indexing the
+    % values array directly.
+    {MSt9, Dest1, Rest5} = decode_dest(Rest4, MMod, MSt6),
     ?TRACE(",~p", [Dest1]),
-    MSt10 = MMod:move_array_element(MSt9, MapReg, {free, PosReg1}, Dest1),
-    MSt11 = MMod:free_native_registers(MSt10, [Dest1]),
+    {MSt10a, Value1Reg} = MMod:call_primitive(MSt9, ?PRIM_MAP_GET_VALUE, [
+        ctx, SrcReg, {free, PosReg1}
+    ]),
+    MSt10 = MMod:move_to_vm_register(MSt10a, Value1Reg, Dest1),
+    MSt11 = MMod:free_native_registers(MSt10, [Value1Reg, Dest1]),
     {MSt12, Rest6} = lists:foldl(
         fun(_Index, {AccMSt0, AccRest0}) ->
             {AccMSt1, Key, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
@@ -2015,15 +2013,18 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
             AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
             {AccMSt6, Dest, AccRest2} = decode_dest(AccRest1, MMod, AccMSt5),
             ?TRACE(",~p", [Dest]),
-            AccMSt7 = MMod:move_array_element(AccMSt6, MapReg, {free, PosReg}, Dest),
-            AccMSt8 = MMod:free_native_registers(AccMSt7, [Dest]),
+            {AccMSt6b, ValueReg} = MMod:call_primitive(AccMSt6, ?PRIM_MAP_GET_VALUE, [
+                ctx, SrcReg, {free, PosReg}
+            ]),
+            AccMSt7 = MMod:move_to_vm_register(AccMSt6b, ValueReg, Dest),
+            AccMSt8 = MMod:free_native_registers(AccMSt7, [ValueReg, Dest]),
             {AccMSt8, AccRest2}
         end,
         {MSt11, Rest5},
         lists:seq(2, ListSize div 2)
     ),
     ?TRACE("]\n", []),
-    MSt13 = MMod:free_native_registers(MSt12, [MapReg, SrcReg]),
+    MSt13 = MMod:free_native_registers(MSt12, [SrcReg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt13),
     first_pass(Rest6, MMod, MSt13, State0);
 % 159
@@ -7232,20 +7233,6 @@ term_get_tuple_arity(Tuple, MMod, MSt0) ->
     {MSt4, ArityReg} = MMod:shift_right(MSt3, {free, Reg}, 6),
     {MSt4, ArityReg}.
 
-term_get_map_size(Map, MMod, MSt0) ->
-    {MSt1, MapKeys} = term_get_map_keys(Map, MMod, MSt0),
-    term_get_tuple_arity({free, MapKeys}, MMod, MSt1).
-
-term_get_map_keys(Map, MMod, MSt0) ->
-    {MSt1, Reg} =
-        case Map of
-            {free, MapReg} -> MMod:move_to_native_register(MSt0, MapReg);
-            _ -> MMod:copy_to_native_register(MSt0, Map)
-        end,
-    {MSt2, Reg} = MMod:and_(MSt1, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt3 = MMod:move_array_element(MSt2, Reg, 1, Reg),
-    {MSt3, Reg}.
-
 handle_error_if(Cond, MMod, MSt0) ->
     MMod:if_block(MSt0, Cond, fun(BSt0) ->
         MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
@@ -7318,10 +7305,6 @@ term_binary_size(Src, MMod, MSt0) ->
 %% The keys tuple is shared with the source map: only the value may be
 %% updated. Writing the key operand (equal but not necessarily identical)
 %% would mutate the source map's keys tuple in place.
-term_set_map_value(MapPtrReg, {free, PosReg}, {free, Value}, MMod, MSt0) ->
-    MSt1 = MMod:move_to_array_element(MSt0, Value, MapPtrReg, PosReg, 2),
-    MMod:free_native_registers(MSt1, [PosReg, Value]).
-
 %% @doc Get the stream module
 %% @return The stream module for jit on this platform
 -spec stream_module() -> module().

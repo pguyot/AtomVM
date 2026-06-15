@@ -29,6 +29,7 @@
 #include "memory.h"
 #include "refc_binary.h"
 #include "term.h"
+#include "termmap_tree.h"
 #include "utils.h"
 
 void test_memory_ensure_free(void)
@@ -682,10 +683,98 @@ void test_generational_gc_fragment_swap(void)
     globalcontext_destroy(glb);
 }
 
+// Exercise the persistent weight-balanced tree backing large maps: inserts in
+// scrambled order, lookups, in-order (sorted) selection, value updates, and a
+// balanced bulk build from a sorted array. GC runs between inserts (the tree
+// root is passed as a root), so this also checks the nodes survive collection.
+void test_termmap_tree(void)
+{
+    GlobalContext *glb = globalcontext_new();
+    Context *ctx = context_new(glb);
+    ctx->heap_growth_strategy = MinimumHeapGrowth;
+    ctx->fullsweep_after = 65535;
+
+    const int n = 2000;
+    term root = termtree_empty();
+    assert(termtree_size(root) == 0);
+
+    // Insert keys in a scrambled order (LCG over a power-of-two-ish range),
+    // value = key * 10 + 1. Each distinct key inserted exactly once.
+    bool seen[2000] = { false };
+    uint32_t x = 12345;
+    int inserted = 0;
+    while (inserted < n) {
+        x = x * 1103515245u + 12345u;
+        int key = (int) ((x >> 8) % (uint32_t) n);
+        if (seen[key]) {
+            continue;
+        }
+        seen[key] = true;
+        inserted++;
+
+        enum MemoryGCResult res = memory_ensure_free_with_roots(
+            ctx, termtree_put_heap_size(termtree_size(root)), 1, &root, MEMORY_CAN_SHRINK);
+        assert(res == MEMORY_GC_OK);
+        root = termtree_put(&ctx->heap, root, term_from_int(key), term_from_int(key * 10 + 1), glb);
+        assert(termtree_size(root) == (size_t) inserted);
+    }
+    assert(termtree_size(root) == (size_t) n);
+
+    // Every key present with the right value.
+    for (int key = 0; key < n; key++) {
+        term v = termtree_get(root, term_from_int(key), glb);
+        assert(!term_is_invalid_term(v));
+        assert(term_to_int(v) == key * 10 + 1);
+    }
+    // An absent key is reported as such.
+    assert(term_is_invalid_term(termtree_get(root, term_from_int(n + 7), glb)));
+
+    // In-order selection yields keys ascending (the sorted-map invariant).
+    for (int i = 0; i < n; i++) {
+        assert(term_to_int(termtree_select_key(root, i)) == i);
+        assert(term_to_int(termtree_select_value(root, i)) == i * 10 + 1);
+    }
+
+    // Update existing keys (value = key * 2), size unchanged.
+    for (int key = 0; key < n; key += 3) {
+        enum MemoryGCResult res = memory_ensure_free_with_roots(
+            ctx, termtree_put_heap_size(termtree_size(root)), 1, &root, MEMORY_CAN_SHRINK);
+        assert(res == MEMORY_GC_OK);
+        root = termtree_put(&ctx->heap, root, term_from_int(key), term_from_int(key * 2), glb);
+    }
+    assert(termtree_size(root) == (size_t) n);
+    for (int key = 0; key < n; key++) {
+        term v = termtree_get(root, term_from_int(key), glb);
+        int expected = (key % 3 == 0) ? key * 2 : key * 10 + 1;
+        assert(term_to_int(v) == expected);
+    }
+
+    // Balanced bulk build from a sorted array.
+    enum MemoryGCResult res = memory_ensure_free(ctx, termtree_from_sorted_heap_size(64));
+    assert(res == MEMORY_GC_OK);
+    term keys[64];
+    term vals[64];
+    for (int i = 0; i < 64; i++) {
+        keys[i] = term_from_int(i * 2);
+        vals[i] = term_from_int(i * 2 + 100);
+    }
+    term built = termtree_from_sorted(&ctx->heap, keys, vals, 64);
+    assert(termtree_size(built) == 64);
+    for (int i = 0; i < 64; i++) {
+        assert(term_to_int(termtree_select_key(built, i)) == i * 2);
+        assert(term_to_int(termtree_get(built, term_from_int(i * 2), glb)) == i * 2 + 100);
+    }
+
+    context_destroy(ctx);
+    globalcontext_destroy(glb);
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
     UNUSED(argv);
+
+    test_termmap_tree();
 
     test_memory_ensure_free();
     test_gc_ref_count();
