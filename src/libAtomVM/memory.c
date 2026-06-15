@@ -787,6 +787,14 @@ unsigned long memory_estimate_usage(term t)
                     } break;
 
                     case TERM_BOXED_MAP: {
+                        if (term_is_map_tree(t)) {
+                            // Tree-backed map: a fixed 4-word wrapper (header +
+                            // marker + root + size); the tree nodes are ordinary
+                            // tuples accounted for by recursing into the root.
+                            acc += TERM_MAP_TREE_BOXED_ARITY + 1;
+                            t = term_get_map_tree_root(t);
+                            break;
+                        }
                         int map_size = term_get_map_size(t);
                         acc += term_map_size_in_terms(map_size);
                         if (map_size > 0) {
