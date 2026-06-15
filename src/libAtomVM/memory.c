@@ -299,7 +299,18 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
                     break;
                 case FibonacciHeapGrowth: {
                     memory_size = memory_heap_memory_size(&c->heap);
-                    should_gc = ((alloc_mode == MEMORY_CAN_SHRINK) && free_space - size > 3 * memory_size / 4);
+                    // A shrink-motivated collection only pays off if the young
+                    // heap can actually end up smaller. min_heap_size pins a
+                    // floor the young heap cannot cross, so when it already sits
+                    // at that floor the GC would copy the whole live set for
+                    // zero reclaimed space; skip it (a process that pins a large
+                    // min_heap_size and frees most of it back would otherwise run
+                    // a no-op shrink GC on nearly every allocation).
+                    size_t young_size = memory_heap_youngest_size(&c->heap);
+                    size_t min_floor = c->has_min_heap_size ? c->min_heap_size : 0;
+                    should_gc = ((alloc_mode == MEMORY_CAN_SHRINK)
+                        && free_space - size > 3 * memory_size / 4
+                        && young_size > min_floor);
                     break;
                 }
             }
