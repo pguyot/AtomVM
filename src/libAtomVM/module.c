@@ -1682,6 +1682,11 @@ COLD_FUNC void module_destroy(Module *module)
         resolved_import = next_resolved;
     }
     free(module->imported_funcs);
+    // Free the shared literal pool. Literal binaries are const, so the
+    // fragments hold no refc binaries -- no mso sweep is needed.
+    if (module->literal_fragments != NULL) {
+        memory_destroy_heap_fragment(module->literal_fragments);
+    }
     free(module->literals_table);
     free(module->local_atoms_to_global_table);
     free(module->line_refs_offsets);
@@ -1769,10 +1774,49 @@ static struct LiteralEntry *module_build_literals_table(const void *literalsBuf)
 
 term module_load_literal(Module *mod, int index, Context *ctx)
 {
-    term t = external_term_from_const_literal(mod->literals_table[index].data, mod->literals_table[index].size, ctx);
-    if (UNLIKELY(term_is_invalid_term(t))) {
-        fprintf(stderr, "Either OOM or invalid term while reading literals_table[%i] from module\n", index);
+    struct LiteralEntry *entry = &mod->literals_table[index];
+
+    // Fast path: the literal was already deserialized into the module's shared
+    // pool. Each literal is deserialized exactly once, into a fragment that is
+    // never collected or moved, so the cached term is a stable pointer that can
+    // be returned directly -- no per-access deserialization, no heap fragment,
+    // and so no forced collection on the next allocation. The acquire load
+    // pairs with the release store below.
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+    term cached = atomic_load_explicit((_Atomic term *) &entry->cached_term, memory_order_acquire);
+#else
+    term cached = entry->cached_term;
+#endif
+    if (LIKELY(!term_is_invalid_term(cached))) {
+        return cached;
     }
+
+    SMP_MODULE_LOCK(mod);
+    // Re-check under the lock: another scheduler may have filled it meanwhile.
+    if (!term_is_invalid_term(entry->cached_term)) {
+        term t = entry->cached_term;
+        SMP_MODULE_UNLOCK(mod);
+        return t;
+    }
+
+    struct HeapFragment *fragment = NULL;
+    term t = externalterm_from_const_literal_to_fragment(entry->data, entry->size, ctx->global, &fragment);
+    if (UNLIKELY(term_is_invalid_term(t))) {
+        SMP_MODULE_UNLOCK(mod);
+        fprintf(stderr, "Either OOM or invalid term while reading literals_table[%i] from module\n", index);
+        return t;
+    }
+    // Link the fragment into the module pool, then publish the term with a
+    // release store so lock-free readers that observe a non-invalid cached_term
+    // also observe the fully initialized fragment contents.
+    fragment->next = mod->literal_fragments;
+    mod->literal_fragments = fragment;
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus)
+    atomic_store_explicit((_Atomic term *) &entry->cached_term, t, memory_order_release);
+#else
+    entry->cached_term = t;
+#endif
+    SMP_MODULE_UNLOCK(mod);
     return t;
 }
 
