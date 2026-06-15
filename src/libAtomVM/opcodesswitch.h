@@ -5029,7 +5029,10 @@ schedule_in:
                 //
                 size_t src_size = term_get_map_size(src);
                 size_t new_map_size = src_size + new_entries;
-                bool is_shared = new_entries == 0;
+                // A tree-backed src has no flat keys tuple to share (its keys
+                // offset holds the NIL marker), so build fresh keys for it; the
+                // term_get_map_key/value accessors below dispatch on tree vs flat.
+                bool is_shared = new_entries == 0 && !term_is_map_tree(src);
                 size_t heap_needed = term_map_size_in_terms_maybe_shared(new_map_size, is_shared);
                 TRIM_LIVE_REGS(live);
                 // MEMORY_CAN_SHRINK because put_map is classified as gc in beam_ssa_codegen.erl
@@ -5156,17 +5159,20 @@ schedule_in:
                 // Maybe GC
                 //
                 size_t src_size = term_get_map_size(src);
+                // A tree-backed src has no flat keys tuple to share (its keys
+                // offset holds the NIL marker), so build fresh keys for it.
+                bool is_shared = !term_is_map_tree(src);
                 TRIM_LIVE_REGS(live);
                 // MEMORY_CAN_SHRINK because put_map is classified as gc in beam_ssa_codegen.erl
                 x_regs[live] = src;
-                if (memory_ensure_free_with_roots(ctx, term_map_size_in_terms_maybe_shared(src_size, true), live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
+                if (memory_ensure_free_with_roots(ctx, term_map_size_in_terms_maybe_shared(src_size, is_shared), live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
                 src = x_regs[live];
                 //
                 // Create a new map of the same size as src and populate with entries from src
                 //
-                term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
+                term map = term_alloc_map_maybe_shared(src_size, is_shared ? term_get_map_keys(src) : term_invalid_term(), &ctx->heap);
                 for (size_t j = 0; j < src_size; ++j) {
                     term_set_map_assoc(map, j, term_get_map_key(src, j), term_get_map_value(src, j));
                 }
