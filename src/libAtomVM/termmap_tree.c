@@ -117,6 +117,20 @@ static bool node_find(term node, term key, GlobalContext *global, size_t *pos)
             *pos = mid;
             return true;
         }
+        // Small-integer fast path: ~a quarter of the Erlang compiler's large-map
+        // key comparisons are bare small integers (the rest are mostly small
+        // tuples, already handled inline by term_compare's tuple fast path).
+        // term_is_integer is small-int-only, so two such keys -- known unequal
+        // (k == key was just ruled out) -- compare numerically without the
+        // term_compare call and its preamble.
+        if (term_is_integer(key) && term_is_integer(k)) {
+            if (term_to_int(key) < term_to_int(k)) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+            continue;
+        }
         TermCompareResult cmp = term_compare(key, k, TermCompareExact, global);
         if (cmp == TermLessThan) {
             hi = mid;
