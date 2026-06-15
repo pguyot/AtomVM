@@ -64,6 +64,7 @@
 #include "tempstack.h"
 #include "term.h"
 #include "term_typedef.h"
+#include "termmap_tree.h"
 #include "unicode.h"
 #include "unlocalized.h"
 #include "utils.h"
@@ -7282,12 +7283,62 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
     VALIDATE_VALUE(iterator, term_is_nonempty_list);
 
     term post = term_get_list_head(iterator);
-    if (UNLIKELY(!term_is_integer(post) && !term_is_list(post))) {
+    term map = term_get_list_tail(iterator);
+    VALIDATE_VALUE(map, term_is_map);
+
+    // A tree-map cursor's post is a 1-tuple {RemainingKVList}; accept it before
+    // the generic integer/list validation below rejects it.
+    bool is_tree_cursor = term_is_tuple(post) && term_get_tuple_arity(post) == 1;
+    if (UNLIKELY(!term_is_integer(post) && !term_is_list(post) && !is_tree_cursor)) {
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    term map = term_get_list_tail(iterator);
-    VALIDATE_VALUE(map, term_is_map);
+    // Tree-backed maps: iterate via an in-order cursor instead of selecting by
+    // position (which is O(height) per element). The cursor is a 1-tuple
+    // {RemainingKVList}; the first step (integer post from maps:iterator)
+    // materialises the ordered [K0,V0,K1,V1,...] list in one O(n) walk. A
+    // plain-list post (the ordered-iterator key list) falls through to the
+    // generic path below.
+    if (term_is_map_tree(map)
+        && (term_is_integer(post) || (term_is_tuple(post) && term_get_tuple_arity(post) == 1))) {
+        term kvlist;
+        if (term_is_integer(post)) {
+            int size = term_get_map_size(map);
+            if (size == 0) {
+                return NONE_ATOM;
+            }
+            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 4 * (size_t) size + 8, 1, &iterator,
+                             MEMORY_CAN_SHRINK)
+                    != MEMORY_GC_OK)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            map = term_get_list_tail(iterator);
+            kvlist = termtree_to_kv_list(term_get_map_tree_root(map), term_nil(), &ctx->heap);
+        } else {
+            kvlist = term_get_tuple_element(post, 0);
+            if (term_is_nil(kvlist)) {
+                return NONE_ATOM;
+            }
+            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 8, 1, &iterator, MEMORY_CAN_SHRINK)
+                    != MEMORY_GC_OK)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            map = term_get_list_tail(iterator);
+            kvlist = term_get_tuple_element(term_get_list_head(iterator), 0);
+        }
+        term key = term_get_list_head(kvlist);
+        term rest1 = term_get_list_tail(kvlist);
+        term value = term_get_list_head(rest1);
+        term rest2 = term_get_list_tail(rest1);
+        term cursor = term_alloc_tuple(1, &ctx->heap);
+        term_put_tuple_element(cursor, 0, rest2);
+        term next_iterator = term_list_prepend(cursor, map, &ctx->heap);
+        term ret = term_alloc_tuple(3, &ctx->heap);
+        term_put_tuple_element(ret, 0, key);
+        term_put_tuple_element(ret, 1, value);
+        term_put_tuple_element(ret, 2, next_iterator);
+        return ret;
+    }
 
     int pos;
     if (term_is_integer(post)) {

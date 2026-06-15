@@ -28,6 +28,7 @@
 #include "intn.h"
 #include "module.h"
 #include "tempstack.h"
+#include "termmap_tree.h"
 #include "utils.h"
 
 #include <ctype.h>
@@ -721,6 +722,45 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
         return term_exact_equals(t, other, global);
     }
 
+    // Ordering fast path for tuples whose differing element is a scalar
+    // (integer or atom). The Erlang compiler compares small tagged tuples
+    // (e.g. #b_var{}) constantly; resolving them inline avoids the temp-stack
+    // setup and the type-dispatch of the general path. Falls through to that
+    // path if a differing element is compound (a list/tuple/map/etc.), so deep
+    // nesting is still handled without C recursion.
+    if (term_is_tuple(t) && term_is_tuple(other)) {
+        int sz = term_get_tuple_arity(t);
+        int other_sz = term_get_tuple_arity(other);
+        if (sz != other_sz) {
+            return (sz > other_sz) ? TermGreaterThan : TermLessThan;
+        }
+        bool resolved = true;
+        TermCompareResult tuple_result = TermEquals;
+        for (int i = 0; i < sz; i++) {
+            term a = term_get_tuple_element(t, i);
+            term b = term_get_tuple_element(other, i);
+            if (a == b) {
+                continue;
+            }
+            if (term_is_integer(a) && term_is_integer(b)) {
+                tuple_result = (term_to_int(a) > term_to_int(b)) ? TermGreaterThan : TermLessThan;
+                break;
+            }
+            if (term_is_atom(a) && term_is_atom(b)) {
+                int c = atom_table_cmp_using_atom_index(
+                    global->atom_table, term_to_atom_index(a), term_to_atom_index(b));
+                tuple_result = (c > 0) ? TermGreaterThan : TermLessThan;
+                break;
+            }
+            // A compound or mixed-type element needs the full comparator.
+            resolved = false;
+            break;
+        }
+        if (resolved) {
+            return tuple_result;
+        }
+    }
+
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;
@@ -1271,44 +1311,59 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
                             goto unequal;
                         }
                         if (t_size > 0) {
-                            for (int i = t_size - 1; i >= 1; i--) {
-                                if (UNLIKELY(temp_stack_push(&temp_stack, term_get_map_value(t, i))
-                                        != TempStackOk)) {
+                            // Read tree-backed maps sequentially (one O(n) walk
+                            // into a scratch array) instead of selecting each
+                            // entry by position, which would be O(height) each
+                            // -- comparing maps is hot in the Erlang compiler.
+                            term *t_buf = NULL;
+                            term *o_buf = NULL;
+                            if (term_is_map_tree(t)) {
+                                t_buf = malloc(2 * (size_t) t_size * sizeof(term));
+                                if (IS_NULL_PTR(t_buf)) {
                                     return TermCompareMemoryAllocFail;
                                 }
-                                if (UNLIKELY(temp_stack_push(&temp_stack, term_get_map_value(other, i))
-                                        != TempStackOk)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
-                                if (UNLIKELY(
-                                        temp_stack_push(&temp_stack, END_MAP_KEY) != TempStackOk)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
-                                if (UNLIKELY(
-                                        temp_stack_push(&temp_stack, term_get_map_key(t, i)) != TempStackOk)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
-                                if (UNLIKELY(temp_stack_push(&temp_stack, term_get_map_key(other, i))
-                                        != TempStackOk)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
-                                if (UNLIKELY(
-                                        temp_stack_push(&temp_stack, BEGIN_MAP_KEY) != TempStackOk)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
+                                termtree_fill_array(term_get_map_tree_root(t), t_buf);
                             }
-                            if (UNLIKELY(temp_stack_push(&temp_stack, term_get_map_value(t, 0)) != TempStackOk)) {
-                                return TermCompareMemoryAllocFail;
+                            if (term_is_map_tree(other)) {
+                                o_buf = malloc(2 * (size_t) other_size * sizeof(term));
+                                if (IS_NULL_PTR(o_buf)) {
+                                    free(t_buf);
+                                    return TermCompareMemoryAllocFail;
+                                }
+                                termtree_fill_array(term_get_map_tree_root(other), o_buf);
                             }
-                            if (UNLIKELY(temp_stack_push(&temp_stack, term_get_map_value(other, 0)) != TempStackOk)) {
+#define TC_TKEY(i) (t_buf ? t_buf[2 * (i)] : term_get_map_key(t, (i)))
+#define TC_TVAL(i) (t_buf ? t_buf[2 * (i) + 1] : term_get_map_value(t, (i)))
+#define TC_OKEY(i) (o_buf ? o_buf[2 * (i)] : term_get_map_key(other, (i)))
+#define TC_OVAL(i) (o_buf ? o_buf[2 * (i) + 1] : term_get_map_value(other, (i)))
+                            bool push_ok = true;
+                            for (int i = t_size - 1; i >= 1 && push_ok; i--) {
+                                push_ok = temp_stack_push(&temp_stack, TC_TVAL(i)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, TC_OVAL(i)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, END_MAP_KEY) == TempStackOk
+                                    && temp_stack_push(&temp_stack, TC_TKEY(i)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, TC_OKEY(i)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, BEGIN_MAP_KEY) == TempStackOk;
+                            }
+                            if (push_ok) {
+                                push_ok = temp_stack_push(&temp_stack, TC_TVAL(0)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, TC_OVAL(0)) == TempStackOk
+                                    && temp_stack_push(&temp_stack, END_MAP_KEY) == TempStackOk;
+                            }
+                            term t_key0 = push_ok ? TC_TKEY(0) : term_nil();
+                            term other_key0 = push_ok ? TC_OKEY(0) : term_nil();
+#undef TC_TKEY
+#undef TC_TVAL
+#undef TC_OKEY
+#undef TC_OVAL
+                            free(t_buf);
+                            free(o_buf);
+                            if (UNLIKELY(!push_ok)) {
                                 return TermCompareMemoryAllocFail;
                             }
                             map_key_nesting++;
-                            if (UNLIKELY(temp_stack_push(&temp_stack, END_MAP_KEY) != TempStackOk)) {
-                                return TermCompareMemoryAllocFail;
-                            }
-                            t = term_get_map_key(t, 0);
-                            other = term_get_map_key(other, 0);
+                            t = t_key0;
+                            other = other_key0;
                         } else {
                             CMP_POP_AND_CONTINUE();
                             break;
@@ -1709,4 +1764,25 @@ term term_from_resource_binary(void *obj, const void *data, size_t size, Heap *h
 
     refc_binary_decrement_refcount(refc, glb);
     return ret;
+}
+
+// --- Large (tree-backed) map accessor bridges ----------------------------
+// term.h dispatches the position-based map accessors here for tree maps,
+// keeping termmap_tree.h out of that widely-included header. A tree map's
+// boxed payload is [ NIL marker | root | size ]; positions are in-order ranks.
+
+term term_map_tree_value_at(term map, avm_uint_t pos)
+{
+    return termtree_select_value(term_get_map_tree_root(map), (size_t) pos);
+}
+
+term term_map_tree_key_at(term map, avm_uint_t pos)
+{
+    return termtree_select_key(term_get_map_tree_root(map), (size_t) pos);
+}
+
+int term_map_tree_find_pos(term map, term key, GlobalContext *global)
+{
+    int rank = termtree_rank(term_get_map_tree_root(map), key, global);
+    return rank < 0 ? TERM_MAP_NOT_FOUND : rank;
 }

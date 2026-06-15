@@ -35,6 +35,7 @@
 #include "scheduler.h"
 #include "stacktrace.h"
 #include "term.h"
+#include "termmap_tree.h"
 #include "utils.h"
 
 #include <math.h>
@@ -2121,12 +2122,72 @@ static bool sort_kv_pairs(term *kv, int size, GlobalContext *global)
     return true;
 }
 
+// Number of free heap words jit_put_map_assoc may need. The codegen reserves
+// this (via PRIM_PUT_MAP_HEAP_NEED) before the call, since a tree-backed result
+// has a very different footprint than a flat one. Kept in lock-step with the
+// allocation done by jit_put_map_assoc / jit_map_build_tree below.
+size_t jit_put_map_heap_need(Context *ctx, term src, size_t new_entries, size_t num_elements)
+{
+    UNUSED(ctx);
+    size_t src_size = term_get_map_size(src);
+    size_t new_size = src_size + new_entries;
+    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)) {
+        // Flat result: a new values array (shared keys) for a pure update, or a
+        // whole new flat map when the key set grows.
+        if (new_entries == 0) {
+            return TERM_MAP_SHARED_SIZE(src_size);
+        }
+        return TERM_MAP_SIZE(new_size);
+    }
+    // Tree result: convert a flat src in one O(src_size) build (skipped when src
+    // is already a tree), then path-copy each inserted/updated key.
+    size_t base = term_is_map_tree(src) ? 0 : termtree_from_sorted_heap_size(src_size);
+    return base + num_elements * termtree_put_heap_size(new_size)
+        + (TERM_MAP_TREE_BOXED_ARITY + 1);
+}
+
+// Build/extend the persistent tree backing a large map and wrap it. The caller
+// has reserved jit_put_map_heap_need(...) words.
+static term jit_map_build_tree(Context *ctx, term src, size_t src_size, size_t num_elements, term *kv)
+{
+    Heap *heap = &ctx->heap;
+    GlobalContext *global = ctx->global;
+    term root;
+    if (term_is_map_tree(src)) {
+        root = term_get_map_tree_root(src);
+    } else {
+        // Flat src keys are already sorted, so build a balanced tree directly.
+        const term *src_keys = term_to_const_term_ptr(term_get_map_keys(src)) + 1;
+        const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+        root = termtree_from_sorted(heap, src_keys, src_vals, src_size);
+    }
+    for (size_t i = 0; i < num_elements; i++) {
+        root = termtree_put(heap, root, kv[2 * i], kv[(2 * i) + 1], global);
+    }
+    return term_alloc_map_tree(heap, root, termtree_size(root));
+}
+
+// Read a map value by the position returned by term_find_map_pos. Dispatches
+// flat vs tree (a tree position is an in-order rank, not a flat array index), so
+// the get_map_elements opcode cannot read the value with a raw array offset.
+static term jit_map_get_value(Context *ctx, term map, int pos)
+{
+    UNUSED(ctx);
+    return term_get_map_value(map, (avm_uint_t) pos);
+}
+
 static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_t new_entries, size_t num_elements, term *kv)
 {
     TRACE("jit_put_map_assoc: src=%p new_entries=%d num_elements=%d\n", (void *) src, (int) new_entries, (int) num_elements);
     size_t src_size = term_get_map_size(src);
     size_t new_map_size = src_size + new_entries;
     bool is_shared = new_entries == 0;
+
+    // Large maps are backed by a persistent weight-balanced tree (O(log n) put)
+    // rather than a flat sorted array (O(n) put); see termmap_tree.h.
+    if (new_map_size > TERM_MAP_TREE_THRESHOLD || term_is_map_tree(src)) {
+        return jit_map_build_tree(ctx, src, src_size, num_elements, kv);
+    }
 
     // Fast path for a single key (the common Map#{K => V}). Map keys are sorted
     // (term_compare(TermCompareExact) order), so binary-search the position and
@@ -2158,25 +2219,36 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
             }
         }
         if (is_shared) {
-            // Update of an existing key: share the keys tuple, copy the values
-            // and overwrite the one at `found`.
+            // Update of an existing key: share the keys tuple and bulk-copy the
+            // values array (matching BEAM's erts_maps_put found_key path), then
+            // overwrite the one value at `found`. The values are contiguous, so
+            // a single memcpy replaces the O(n) per-element stores (which also
+            // needlessly re-wrote the shared keys tuple).
             term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
-            for (size_t i = 0; i < src_size; i++) {
-                term value = ((int) i == found) ? new_value : term_get_map_value(src, i);
-                term_set_map_assoc(map, i, term_get_map_key(src, i), value);
+            term *dst_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+            const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+            memcpy(dst_vals, src_vals, src_size * sizeof(term));
+            if (LIKELY(found >= 0)) {
+                dst_vals[found] = new_value;
             }
             return map;
         }
-        // Insert of a new key at the binary-search insertion point `low`.
+        // Insert of a new key at the binary-search insertion point `low`. Keys
+        // and values are each contiguous, so the unchanged head/tail ranges are
+        // bulk-copied and only the inserted slot is written individually.
         size_t at = (size_t) low;
         term map = term_alloc_map(src_size + 1, &ctx->heap);
-        for (size_t i = 0; i < at; i++) {
-            term_set_map_assoc(map, i, term_get_map_key(src, i), term_get_map_value(src, i));
-        }
-        term_set_map_assoc(map, at, new_key, new_value);
-        for (size_t i = at; i < src_size; i++) {
-            term_set_map_assoc(map, i + 1, term_get_map_key(src, i), term_get_map_value(src, i));
-        }
+        term *dst_keys = term_to_term_ptr(term_get_map_keys(map));
+        const term *src_keys = term_to_const_term_ptr(term_get_map_keys(src));
+        term *dst_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+        const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+        // tuple elements start at offset 1 (after the arity header)
+        memcpy(&dst_keys[1], &src_keys[1], at * sizeof(term));
+        memcpy(dst_vals, src_vals, at * sizeof(term));
+        dst_keys[1 + at] = new_key;
+        dst_vals[at] = new_value;
+        memcpy(&dst_keys[1 + at + 1], &src_keys[1 + at], (src_size - at) * sizeof(term));
+        memcpy(&dst_vals[at + 1], &src_vals[at], (src_size - at) * sizeof(term));
         return map;
     }
     //
@@ -2462,7 +2534,9 @@ const ModuleNativeInterface module_native_interface = {
     jit_get_record_field,
     jit_put_record_resolved,
     jit_get_imported_gcbif,
-    jit_set_tuple_element
+    jit_set_tuple_element,
+    jit_put_map_heap_need,
+    jit_map_get_value
 };
 
 #endif
