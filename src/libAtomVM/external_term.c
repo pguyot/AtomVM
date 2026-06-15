@@ -177,6 +177,37 @@ term external_term_from_const_literal(const void *external_term, size_t size, Co
     return result;
 }
 
+term externalterm_from_const_literal_to_fragment(const void *external_term, size_t size, GlobalContext *glb, struct HeapFragment **out_fragment)
+{
+    *out_fragment = NULL;
+    const uint8_t *external_term_buf = external_term;
+    if (UNLIKELY(external_term_buf[0] != EXTERNAL_TERM_TAG)) {
+        return term_invalid_term();
+    }
+    size_t eterm_size;
+    size_t stack_depth = 0;
+    int heap_usage = calculate_heap_usage(external_term_buf + 1, size - 1, &eterm_size, &stack_depth, false, ExternalTermReadNoOpts, glb);
+    if (heap_usage == INVALID_TERM_SIZE) {
+        return term_invalid_term();
+    }
+    // Deserialize into a fresh standalone fragment that the caller takes
+    // ownership of: it lives as long as the module and is never collected or
+    // moved, so the term is a stable shared pointer (atoms and binaries are
+    // const, so there is nothing on the fragment's mso list to sweep).
+    Heap heap;
+    if (UNLIKELY(memory_init_heap(&heap, heap_usage) != MEMORY_GC_OK)) {
+        return term_invalid_term();
+    }
+    term result = parse_external_terms(external_term_buf + 1, &eterm_size, stack_depth, false, &heap, glb, ExternalTermReadNoOpts);
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        memory_destroy_heap_fragment(heap.root);
+        return term_invalid_term();
+    }
+    // Steal the root fragment out of the Heap (do not destroy it).
+    *out_fragment = heap.root;
+    return result;
+}
+
 static int external_term_from_term(uint8_t **buf, size_t *len, term t, GlobalContext *glb)
 {
     *len = compute_external_size(t, glb) + 1;
