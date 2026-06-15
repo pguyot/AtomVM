@@ -101,6 +101,11 @@ struct LiteralEntry
 {
     uint32_t size;
     void const *data;
+    // Deserialized literal, cached in the module's literal pool
+    // (Module.literal_fragments). term_invalid_term() until first loaded.
+    // Published with a release store under Module.mutex and read with an
+    // acquire load on the lock-free fast path of module_load_literal.
+    term cached_term;
 };
 
 struct RecordFieldDef
@@ -162,6 +167,13 @@ struct Module
     void *literals_data;
 
     struct LiteralEntry *literals_table;
+
+    // Pool of deserialized literal term trees, each its own never-collected,
+    // never-moved fragment, referenced by LiteralEntry.cached_term and shared
+    // across every process. Freed at module destruction. Mutated only under
+    // Module.mutex. Literal binaries are const (they reference literals_data),
+    // so fragments hold no refc binaries and need no mso sweep at teardown.
+    struct HeapFragment *literal_fragments;
 
     void *types_data;
 
