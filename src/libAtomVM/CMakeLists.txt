@@ -68,6 +68,7 @@ set(HEADER_FILES
     term_typedef.h
     term.h
     term_hash.h
+    termmap_tree.h
     timer_list.h
     trace.h
     unicode.h
@@ -110,6 +111,7 @@ set(SOURCE_FILES
     stacktrace.c
     term.c
     term_hash.c
+    termmap_tree.c
     timer_list.c
     unicode.c
     unlocalized.c
