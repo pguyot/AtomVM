@@ -219,6 +219,25 @@ term external_term_from_binary_with_roots(Context *ctx, size_t binary_ix, size_t
 term external_term_from_const_literal(const void *external_term, size_t size, Context *ctx);
 
 /**
+ * @brief Deserialize a const module literal into a fresh standalone fragment.
+ *
+ * @details Like @ref external_term_from_const_literal, but instead of appending
+ * the deserialized term to a process heap, it allocates a dedicated heap
+ * fragment, deserializes into it and returns the fragment via @p out_fragment
+ * for the caller to own (e.g. a module's shared literal pool). The fragment is
+ * never garbage-collected nor moved, so the returned term and its sub-terms are
+ * stable pointers that can be shared across processes. Atoms and binaries are
+ * const (not copied), so the fragment holds no refc binaries.
+ * @param external_term the const literal buffer that will be deserialized.
+ * @param size size of the literal buffer.
+ * @param glb the global context (for atom resolution).
+ * @param out_fragment set to the newly allocated fragment on success, NULL on
+ * failure. The caller owns it and must free() it (no mso sweep needed).
+ * @return the deserialized term, or term_invalid_term() on failure.
+ */
+term externalterm_from_const_literal_to_fragment(const void *external_term, size_t size, GlobalContext *glb, struct HeapFragment **out_fragment);
+
+/**
  * @brief Create a binary from a term.
  *
  * @details Serialize a term in Erlang external term format, and store the result in
