@@ -28,6 +28,7 @@
     madd/4,
     b/1,
     bcc/2,
+    bl/1,
     blr/1,
     br/1,
     brk/1,
@@ -222,6 +223,19 @@ b(Offset) when
     Offset26 = Offset div 4,
     <<(16#14000000 bor (Offset26 band 16#3FFFFFF)):32/little>>;
 b(Offset) when is_integer(Offset) ->
+    error({unencodable_offset, Offset}).
+
+%% Emit an unconditional branch with link (BL) to a 32-bit relative offset.
+%% offset is in bytes, relative to this instruction. Same encoding as B but
+%% with bit 31 set. Used by the direct-call codegen: the offset is a
+%% placeholder (0) patched by the loader to reach a runtime primitive address.
+-spec bl(integer()) -> binary().
+bl(Offset) when
+    is_integer(Offset), Offset >= -16#8000000, Offset < 16#8000000
+->
+    Offset26 = Offset div 4,
+    <<(16#94000000 bor (Offset26 band 16#3FFFFFF)):32/little>>;
+bl(Offset) when is_integer(Offset) ->
     error({unencodable_offset, Offset}).
 
 %% Emit a breakpoint (BRK) instruction with immediate (AArch64 encoding)

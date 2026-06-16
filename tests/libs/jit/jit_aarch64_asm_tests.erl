@@ -193,6 +193,14 @@ b_test_() ->
         ?_assertAsmEqual(<<16#14000001:32/little>>, "b .+4", jit_aarch64_asm:b(4))
     ].
 
+bl_test_() ->
+    [
+        ?_assertAsmEqual(<<16#94000000:32/little>>, "bl .+0", jit_aarch64_asm:bl(0)),
+        ?_assertAsmEqual(<<16#94000004:32/little>>, "bl .+16", jit_aarch64_asm:bl(16)),
+        ?_assertAsmEqual(<<16#97fffff0:32/little>>, "bl .-64", jit_aarch64_asm:bl(-64)),
+        ?_assertAsmEqual(<<16#94000001:32/little>>, "bl .+4", jit_aarch64_asm:bl(4))
+    ].
+
 brk_test_() ->
     [
         ?_assertAsmEqual(<<16#D4200000:32/little>>, "brk #0", jit_aarch64_asm:brk(0)),
