@@ -296,6 +296,28 @@ void sys_free_platform(GlobalContext *global);
 ModuleNativeEntryPoint sys_map_native_code(const uint8_t *code, size_t code_size);
 
 /**
+ * @brief Callback that patches relocations into freshly-mapped, still-writable
+ * native code. Called by sys_map_native_code_reloc inside the writable window
+ * (before the code is made executable).
+ * @param mapped_code base of the writable mapped native code
+ * @param arg opaque caller context (relocation table, primitive table, ...)
+ */
+typedef void (*NativeCodeRelocFn)(uint8_t *mapped_code, void *arg);
+
+/**
+ * @brief Like sys_map_native_code, but applies caller-provided relocations while
+ * the mapping is writable (JIT_VARIANT_RELOC native code). The hint requests an
+ * address near the relocation targets so PC-relative branches stay in range.
+ * @param code pointer to the architecture's native code (without the reloc trailer)
+ * @param code_size size of that native code
+ * @param hint preferred mapping address (near the primitive table), or NULL
+ * @param reloc_fn relocation callback invoked on the writable mapping
+ * @param arg opaque context passed to reloc_fn
+ */
+ModuleNativeEntryPoint sys_map_native_code_reloc(const uint8_t *code, size_t code_size,
+    const void *hint, NativeCodeRelocFn reloc_fn, void *arg);
+
+/**
  * @brief Get the cache (typically on flash) of native code for a given module
  *
  * @details If module is found in cache, return a pointer to the entry point.

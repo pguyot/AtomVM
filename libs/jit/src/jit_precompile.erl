@@ -58,6 +58,7 @@ parse_target(Target) ->
                     case Variant of
                         "float32" -> Acc + ?JIT_VARIANT_FLOAT32;
                         "thumb2" -> Acc + ?JIT_VARIANT_THUMB2;
+                        "reloc" -> Acc + ?JIT_VARIANT_RELOC;
                         _ -> error({unsupported_variant, Variant})
                     end
                 end,
@@ -210,7 +211,28 @@ compile(Target, Dir, Dwarf, Path) ->
                             [{"avmN", EmbeddedElfChunk}]
                     end;
                 false ->
-                    [{"avmN", Backend:stream(Stream3)}]
+                    NativeCode0 = Backend:stream(Stream3),
+                    %% In JIT_VARIANT_RELOC mode append a relocation trailer the
+                    %% loader uses to patch primitive-call branches:
+                    %%   [reloc entries...][num_relocs:32]
+                    %% each entry [code_offset:32][primitive_index:32], big-endian
+                    %% (chunk metadata convention). code_offset is relative to the
+                    %% mapped native code (= stream offset minus the 4+InfoSize
+                    %% chunk info header).
+                    Chunk =
+                        case (RequestedVariant band ?JIT_VARIANT_RELOC) =/= 0 of
+                            true ->
+                                HeaderSize = 4 + InfoSize,
+                                Relocs = Backend:relocations(Stream3),
+                                Entries = <<
+                                    <<(Off - HeaderSize):32, Prim:32>>
+                                 || {Off, Prim} <- Relocs
+                                >>,
+                                <<NativeCode0/binary, Entries/binary, (length(Relocs)):32>>;
+                            false ->
+                                NativeCode0
+                        end,
+                    [{"avmN", Chunk}]
             end,
 
         UpdatedChunks = FilteredChunks ++ NewChunks,
