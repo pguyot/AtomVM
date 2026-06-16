@@ -36,5 +36,9 @@
 -define(JIT_VARIANT_PIC, 1).
 -define(JIT_VARIANT_FLOAT32, 2).
 -define(JIT_VARIANT_THUMB2, 4).
+%% Native code carries a relocation table applied by the loader: primitive calls
+%% become a direct branch instead of an indirect load through the native-interface
+%% table.
+-define(JIT_VARIANT_RELOC, 8).
 
 -define(MAX_REG, 16).
