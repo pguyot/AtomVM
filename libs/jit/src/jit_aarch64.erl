@@ -615,19 +615,14 @@ call_primitive_last(
     {Stream3, Relocations1} =
         case Reloc of
             true ->
-                %% Tail call: materialize the primitive address (adrp+add,
-                %% loader-patched) then branch to it.
-                AddrOffset = StreamModule:offset(Stream2),
-                Seq = <<
-                    (jit_aarch64_asm:adrp(?IP0_REG, 0))/binary,
-                    (jit_aarch64_asm:add(?IP0_REG, ?IP0_REG, 0))/binary,
-                    (jit_aarch64_asm:br(?IP0_REG))/binary
-                >>,
-                {StreamModule:append(Stream2, Seq),
-                    [{AddrOffset, Primitive} | State1#state.relocations]};
+                %% Tail call: single direct branch, loader-bound to the primitive
+                %% or its in-module veneer.
+                BOffset = StreamModule:offset(Stream2),
+                {StreamModule:append(Stream2, jit_aarch64_asm:b(0)), [
+                    {BOffset, Primitive} | State1#state.relocations
+                ]};
             false ->
-                {StreamModule:append(Stream2, jit_aarch64_asm:br(Temp)),
-                    State1#state.relocations}
+                {StreamModule:append(Stream2, jit_aarch64_asm:br(Temp)), State1#state.relocations}
         end,
     State1#state{
         stream = Stream3,
@@ -1425,8 +1420,10 @@ call_func_ptr(
     Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
     SavedRegs =
         case Reloc of
-            true -> [?LR_REG, ?CTX_REG, ?JITSTATE_REG | mask_to_list(UsedRegs1)];
-            false -> [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)]
+            true ->
+                [?LR_REG, ?CTX_REG, ?JITSTATE_REG | mask_to_list(UsedRegs1)];
+            false ->
+                [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)]
         end,
     {SavedRegsOdd, Stream1} = push_registers(SavedRegs, StreamModule, Stream0),
 
@@ -1459,20 +1456,17 @@ call_func_ptr(
     {Stream4, Relocations1} =
         case FuncPtrReg of
             {reloc, PrimIdx} ->
-                %% Materialize the primitive address (adrp+add, loader-patched)
-                %% then call it. Range-unlimited (+-4 GiB) so it works wherever
-                %% the code is mapped relative to the primitive table.
-                AddrOffset = StreamModule:offset(Stream3),
-                Seq = <<
-                    (jit_aarch64_asm:adrp(?IP0_REG, 0))/binary,
-                    (jit_aarch64_asm:add(?IP0_REG, ?IP0_REG, 0))/binary,
-                    (jit_aarch64_asm:blr(?IP0_REG))/binary
-                >>,
-                {StreamModule:append(Stream3, Seq),
-                    [{AddrOffset, PrimIdx} | State1#state.relocations]};
+                %% Single direct call. The loader binds it to the primitive when
+                %% in branch range, otherwise to a per-primitive in-module veneer.
+                BlOffset = StreamModule:offset(Stream3),
+                {StreamModule:append(Stream3, jit_aarch64_asm:bl(0)), [
+                    {BlOffset, PrimIdx} | State1#state.relocations
+                ]};
             _ ->
-                {StreamModule:append(Stream3, jit_aarch64_asm:blr(FuncPtrReg)),
-                    State1#state.relocations}
+                {
+                    StreamModule:append(Stream3, jit_aarch64_asm:blr(FuncPtrReg)),
+                    State1#state.relocations
+                }
         end,
 
     % If r0 is in used regs, save it to another temporary register
