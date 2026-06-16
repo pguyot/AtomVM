@@ -34,7 +34,14 @@ set(C_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 set(CXX_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 
 # Use C and C++ compiler optimizations for size and speed.
+#
+# 512KB-ROM devices are always size-optimized. Larger-ROM devices use -O2 and
+# rely on minimal opcodes to fit the firmware budget, except the STM32H5 family
+# whose HAL is large enough that -O2 still overflows the 512KB budget even with
+# minimal opcodes, so size-optimize it too.
 if (${CMAKE_FLASH_SIZE} STREQUAL "ROM_512K")
+    set(OPTIMIZE_FLAG "-Os")
+elseif (DEVICE MATCHES "^stm32h5")
     set(OPTIMIZE_FLAG "-Os")
 else()
     set(OPTIMIZE_FLAG "-O2")
