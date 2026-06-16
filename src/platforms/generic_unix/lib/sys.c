@@ -889,6 +889,59 @@ ModuleNativeEntryPoint sys_map_native_code(const uint8_t *code, size_t code_size
 #endif
 }
 
+ModuleNativeEntryPoint sys_map_native_code_reloc(const uint8_t *code, size_t code_size,
+    const void *hint, NativeCodeRelocFn reloc_fn, void *arg)
+{
+    // The relocation sequence (adrp+add) reaches +-4 GiB, so the mapping may land
+    // anywhere relative to the primitive table; the hint only biases placement
+    // nearer for instruction-cache locality.
+    UNUSED(hint);
+    size_t total = sizeof(struct NativeCodeMmapHeader) + code_size;
+#if defined(__arm__) || defined(__aarch64__) || defined(__xtensa__)
+#if defined(__APPLE__)
+    struct NativeCodeMmapHeader *header = mmap(0, total, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+#else
+    struct NativeCodeMmapHeader *header = mmap(0, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+    if (header == MAP_FAILED) {
+        fprintf(stderr, "Could not allocate mmap for native code: size=%zu, errno=%d\n", total, errno);
+        return NULL;
+    }
+#if defined(__APPLE__)
+    pthread_jit_write_protect_np(0);
+#endif
+    header->mmap_size = total;
+    memcpy(header + 1, code, code_size);
+    reloc_fn((uint8_t *) (header + 1), arg);
+#if defined(__APPLE__)
+    pthread_jit_write_protect_np(1);
+    sys_icache_invalidate(header + 1, code_size);
+#else
+    if (mprotect(header, total, PROT_READ | PROT_EXEC) != 0) {
+        fprintf(stderr, "Could not make native code executable: size=%zu, errno=%d\n", total, errno);
+        munmap(header, total);
+        return NULL;
+    }
+    __builtin___clear_cache((char *) (header + 1), (char *) (header + 1) + code_size);
+#endif
+#if JIT_ARCH_TARGET == JIT_ARCH_ARMV6M
+    return (ModuleNativeEntryPoint) ((uintptr_t) (header + 1) | 1);
+#else
+    return (ModuleNativeEntryPoint) (uintptr_t) (header + 1);
+#endif
+#else
+    struct NativeCodeMmapHeader *header = mmap(0, total, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (header == MAP_FAILED) {
+        fprintf(stderr, "Could not allocate mmap for native code: size=%zu, errno=%d\n", total, errno);
+        return NULL;
+    }
+    header->mmap_size = total;
+    memcpy(header + 1, code, code_size);
+    reloc_fn((uint8_t *) (header + 1), arg);
+    return (ModuleNativeEntryPoint) (uintptr_t) (header + 1);
+#endif
+}
+
 void sys_release_native_code(ModuleNativeEntryPoint entry_point)
 {
     // entry_point = header + 1; clear the armv6m thumb bit before the cast.
