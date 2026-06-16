@@ -286,6 +286,11 @@ enum TrapAndLoadResult
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
 #define JIT_VARIANT_THUMB2 4
+// Native code carries a relocation table applied by the loader: primitive calls
+// become a direct branch instead of an indirect load through the native-interface
+// table. Distinct instruction bytes + a relocation table, so it is its own
+// variant: a runtime built without it never matches (and never loads) such code.
+#define JIT_VARIANT_RELOC 8
 
 #ifdef JIT_JUMPTABLE_IS_DATA
 /**
