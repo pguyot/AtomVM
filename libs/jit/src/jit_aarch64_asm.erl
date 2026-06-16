@@ -68,6 +68,7 @@
     adds/3,
     subs/3,
     adr/2,
+    adrp/2,
     eor/3,
     asr/3,
     sdiv/3,
@@ -1369,6 +1370,17 @@ adr(Dst, Imm) when is_atom(Dst), is_integer(Imm), Imm >= -1048576, Imm =< 104857
     ImmLo = Imm band 3,
     ImmHi = Imm bsr 2,
     Word = (16#10000000) bor (ImmLo bsl 29) bor ((ImmHi band 16#7FFFF) bsl 5) bor DstNum,
+    <<Word:32/little>>.
+
+%% Emit ADRP: form the PC-relative address of a 4 KiB page. Imm is the signed
+%% page count (target_page - pc_page) >> 12. The direct-call codegen emits this
+%% with Imm = 0 as a placeholder; the loader patches the page offset.
+-spec adrp(aarch64_gpr_register(), integer()) -> binary().
+adrp(Dst, Imm) when is_atom(Dst), is_integer(Imm), Imm >= -1048576, Imm =< 1048575 ->
+    DstNum = reg_to_num(Dst),
+    ImmLo = Imm band 3,
+    ImmHi = Imm bsr 2,
+    Word = (16#90000000) bor (ImmLo bsl 29) bor ((ImmHi band 16#7FFFF) bsl 5) bor DstNum,
     <<Word:32/little>>.
 
 -spec mul(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register()) -> binary().

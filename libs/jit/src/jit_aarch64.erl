@@ -25,6 +25,7 @@
     new/3,
     stream/1,
     offset/1,
+    relocations/1,
     flush/1,
     debugger/1,
     used_regs/1,
@@ -174,7 +175,11 @@
     jump_table_start :: non_neg_integer(),
     labels :: #{integer() | reference() => integer()},
     variant :: non_neg_integer(),
-    regs :: jit_regs:regs()
+    regs :: jit_regs:regs(),
+    %% Primitive-call relocations recorded in JIT_VARIANT_RELOC mode: a list of
+    %% {ByteOffset, PrimitiveIndex}. The loader patches the b/bl imm26 at each
+    %% ByteOffset to reach module_native_interface[PrimitiveIndex] at run time.
+    relocations = [] :: [{non_neg_integer(), non_neg_integer()}]
 }).
 
 -type state() :: #state{}.
@@ -313,7 +318,8 @@ new(Variant, StreamModule, Stream) ->
         offset = StreamModule:offset(Stream),
         labels = #{},
         variant = Variant,
-        regs = jit_regs:new(?AVAILABLE_REGS_MASK, 0)
+        relocations = [],
+        regs = jit_regs:new(avail_mask_for_variant(Variant), 0)
     }.
 
 %%-----------------------------------------------------------------------------
@@ -335,6 +341,30 @@ stream(#state{stream = Stream}) ->
 -spec offset(state()) -> non_neg_integer().
 offset(#state{stream_module = StreamModule, stream = Stream}) ->
     StreamModule:offset(Stream).
+
+%%-----------------------------------------------------------------------------
+%% @doc Primitive-call relocations recorded in JIT_VARIANT_RELOC mode, as a list
+%% of {ByteOffset, PrimitiveIndex} (ByteOffset relative to the stream start,
+%% i.e. including the chunk info header). Empty in non-reloc mode.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec relocations(state()) -> [{non_neg_integer(), non_neg_integer()}].
+relocations(#state{relocations = Relocations}) ->
+    Relocations.
+
+%% Registers the allocator may use. In JIT_VARIANT_RELOC mode primitive calls are
+%% direct, so the native-interface register (r2) is never live between calls and
+%% becomes an extra general-purpose register (it is already a parameter register,
+%% so it behaves exactly like r3-r5 around calls).
+-spec avail_mask(state()) -> non_neg_integer().
+avail_mask(#state{variant = Variant}) ->
+    avail_mask_for_variant(Variant).
+
+avail_mask_for_variant(Variant) ->
+    case (Variant band ?JIT_VARIANT_RELOC) =/= 0 of
+        true -> ?AVAILABLE_REGS_MASK bor ?REG_BIT_R2;
+        false -> ?AVAILABLE_REGS_MASK
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Flush the current state (unused on aarch64)
@@ -515,16 +545,23 @@ call_primitive(
     Primitive,
     Args
 ) ->
-    PrepCall =
-        case Primitive of
-            0 ->
-                jit_aarch64_asm:ldr(?IP0_REG, {?NATIVE_INTERFACE_REG, 0});
-            N ->
-                jit_aarch64_asm:ldr(?IP0_REG, {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE})
-        end,
-    Stream1 = StreamModule:append(Stream0, PrepCall),
-    StateCall = State#state{stream = Stream1},
-    call_func_ptr(StateCall, {free, ?IP0_REG}, Args).
+    case (State#state.variant band ?JIT_VARIANT_RELOC) =/= 0 of
+        true ->
+            %% Direct, loader-relocated call: no table load, emit the branch in
+            %% call_func_ptr from the {primitive, _} form.
+            call_func_ptr(State, {primitive, Primitive}, Args);
+        false ->
+            PrepCall =
+                case Primitive of
+                    0 ->
+                        jit_aarch64_asm:ldr(?IP0_REG, {?NATIVE_INTERFACE_REG, 0});
+                    N ->
+                        jit_aarch64_asm:ldr(?IP0_REG, {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE})
+                end,
+            Stream1 = StreamModule:append(Stream0, PrepCall),
+            StateCall = State#state{stream = Stream1},
+            call_func_ptr(StateCall, {free, ?IP0_REG}, Args)
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a jump (call without return) to a primitive with arguments. This
@@ -548,16 +585,24 @@ call_primitive_last(
     % We need a register for the function pointer that should not be used as a parameter
     % Since we're not returning, we can use all scratch registers except
     % registers used for parameters
+    Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
     #{temp := Temp, available_mask := AvailableRegs1, used_mask := UsedRegs} =
         prepare_call_scratch(Args),
-    PrepCall =
-        case Primitive of
-            0 ->
-                jit_aarch64_asm:ldr(Temp, {?NATIVE_INTERFACE_REG, 0});
-            N ->
-                jit_aarch64_asm:ldr(Temp, {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE})
+    Stream1 =
+        case Reloc of
+            true ->
+                %% No table load: the tail branch below is loader-relocated.
+                Stream0;
+            false ->
+                PrepCall =
+                    case Primitive of
+                        0 ->
+                            jit_aarch64_asm:ldr(Temp, {?NATIVE_INTERFACE_REG, 0});
+                        N ->
+                            jit_aarch64_asm:ldr(Temp, {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE})
+                    end,
+                StreamModule:append(Stream0, PrepCall)
         end,
-    Stream1 = StreamModule:append(Stream0, PrepCall),
     State1 = set_args(
         State0#state{
             stream = Stream1,
@@ -568,12 +613,28 @@ call_primitive_last(
         Args
     ),
     #state{stream = Stream2} = State1,
-    Call = jit_aarch64_asm:br(Temp),
-    Stream3 = StreamModule:append(Stream2, Call),
+    {Stream3, Relocations1} =
+        case Reloc of
+            true ->
+                %% Tail call: materialize the primitive address (adrp+add,
+                %% loader-patched) then branch to it.
+                AddrOffset = StreamModule:offset(Stream2),
+                Seq = <<
+                    (jit_aarch64_asm:adrp(?IP0_REG, 0))/binary,
+                    (jit_aarch64_asm:add(?IP0_REG, ?IP0_REG, 0))/binary,
+                    (jit_aarch64_asm:br(?IP0_REG))/binary
+                >>,
+                {StreamModule:append(Stream2, Seq),
+                    [{AddrOffset, Primitive} | State1#state.relocations]};
+            false ->
+                {StreamModule:append(Stream2, jit_aarch64_asm:br(Temp)),
+                    State1#state.relocations}
+        end,
     State1#state{
         stream = Stream3,
+        relocations = Relocations1,
         regs = jit_regs:set_masks(
-            jit_regs:unreachable(State1#state.regs), ?AVAILABLE_REGS_MASK, 0
+            jit_regs:unreachable(State1#state.regs), avail_mask(State1), 0
         )
     }.
 
@@ -705,7 +766,7 @@ jump_to_continuation(
     State#state{
         stream = Stream1,
         regs = jit_regs:set_masks(
-            jit_regs:unreachable(Regs0), ?AVAILABLE_REGS_MASK, 0
+            jit_regs:unreachable(Regs0), avail_mask(State), 0
         )
     }.
 
@@ -765,7 +826,7 @@ if_block(
         Replacements
     ),
     MergedRegs = jit_regs:merge(
-        State1#state.regs, State2#state.regs, ?AVAILABLE_REGS_MASK
+        State1#state.regs, State2#state.regs, avail_mask(State2)
     ),
     State2#state{stream = Stream3, regs = MergedRegs};
 if_block(
@@ -783,7 +844,7 @@ if_block(
     NewBranchInstr = rewrite_branch_instruction(CC, BranchOffset),
     Stream3 = StreamModule:replace(Stream2, Offset + BranchInstrOffset, NewBranchInstr),
     MergedRegs = jit_regs:merge(
-        State1#state.regs, State2#state.regs, ?AVAILABLE_REGS_MASK
+        State1#state.regs, State2#state.regs, avail_mask(State2)
     ),
     State2#state{stream = Stream3, regs = MergedRegs}.
 
@@ -832,7 +893,7 @@ if_else_block(
     NewElseJumpInstr = jit_aarch64_asm:b(FinalJumpOffset),
     Stream6 = StreamModule:replace(Stream5, ElseJumpOffset, NewElseJumpInstr),
     MergedRegs = jit_regs:merge(
-        State2#state.regs, State3#state.regs, ?AVAILABLE_REGS_MASK
+        State2#state.regs, State3#state.regs, avail_mask(State3)
     ),
     State3#state{stream = Stream6, regs = MergedRegs}.
 
@@ -1380,7 +1441,14 @@ call_func_ptr(
     ),
     FreeMask = jit_regs:regs_to_mask(FreeRegs, fun reg_bit/1),
     UsedRegs1 = UsedRegs0 band (bnot FreeMask),
-    SavedRegs = [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)],
+    %% In JIT_VARIANT_RELOC mode primitive calls are direct branches, so the
+    %% native-interface table register is never used and need not be preserved.
+    Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
+    SavedRegs =
+        case Reloc of
+            true -> [?LR_REG, ?CTX_REG, ?JITSTATE_REG | mask_to_list(UsedRegs1)];
+            false -> [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)]
+        end,
     {SavedRegsOdd, Stream1} = push_registers(SavedRegs, StreamModule, Stream0),
 
     % Set up arguments following AArch64 calling convention
@@ -1391,6 +1459,10 @@ call_func_ptr(
         case FuncPtrTuple of
             {free, Reg} ->
                 {Reg, Stream2};
+            {primitive, Primitive} when Reloc ->
+                %% No table load: the call below is a direct, loader-relocated
+                %% branch to the primitive.
+                {{reloc, Primitive}, Stream2};
             {primitive, Primitive} ->
                 % We use r16 for the address.
                 PrepCall =
@@ -1403,12 +1475,29 @@ call_func_ptr(
                 {?IP0_REG, StreamModule:append(Stream2, PrepCall)}
         end,
 
-    % Call the function pointer (using BLR for call with return)
-    Call = jit_aarch64_asm:blr(FuncPtrReg),
-    Stream4 = StreamModule:append(Stream3, Call),
+    % Call the function pointer: a direct BL (loader-relocated) in reloc mode,
+    % otherwise BLR through the loaded pointer.
+    {Stream4, Relocations1} =
+        case FuncPtrReg of
+            {reloc, PrimIdx} ->
+                %% Materialize the primitive address (adrp+add, loader-patched)
+                %% then call it. Range-unlimited (+-4 GiB) so it works wherever
+                %% the code is mapped relative to the primitive table.
+                AddrOffset = StreamModule:offset(Stream3),
+                Seq = <<
+                    (jit_aarch64_asm:adrp(?IP0_REG, 0))/binary,
+                    (jit_aarch64_asm:add(?IP0_REG, ?IP0_REG, 0))/binary,
+                    (jit_aarch64_asm:blr(?IP0_REG))/binary
+                >>,
+                {StreamModule:append(Stream3, Seq),
+                    [{AddrOffset, PrimIdx} | State1#state.relocations]};
+            _ ->
+                {StreamModule:append(Stream3, jit_aarch64_asm:blr(FuncPtrReg)),
+                    State1#state.relocations}
+        end,
 
     % If r0 is in used regs, save it to another temporary register
-    FreeGPMask = FreeMask band ?AVAILABLE_REGS_MASK,
+    FreeGPMask = FreeMask band avail_mask(State0),
     AvailableRegs1 = AvailableRegs0 bor FreeGPMask,
     {Stream5, ResultReg} =
         case lists:member(r0, SavedRegs) of
@@ -1423,12 +1512,13 @@ call_func_ptr(
 
     ResultBit = reg_bit(ResultReg),
     AvailableRegs2 = AvailableRegs1 band (bnot ResultBit),
-    AvailableRegs3 = AvailableRegs2 band ?AVAILABLE_REGS_MASK,
+    AvailableRegs3 = AvailableRegs2 band avail_mask(State0),
     Regs1 = jit_regs:invalidate_all(Regs0),
     UsedRegs2 = UsedRegs1 bor ResultBit,
     {
         State1#state{
             stream = Stream6,
+            relocations = Relocations1,
             regs = jit_regs:set_masks(Regs1, AvailableRegs3, UsedRegs2)
         },
         ResultReg
@@ -1493,7 +1583,7 @@ set_args(
         stream = Stream1,
         regs = jit_regs:set_masks(
             Regs0,
-            ?AVAILABLE_REGS_MASK band (bnot (ParamMask bor NewUsedMask)),
+            avail_mask(State0) band (bnot (ParamMask bor NewUsedMask)),
             ParamMask bor NewUsedMask
         )
     }.
