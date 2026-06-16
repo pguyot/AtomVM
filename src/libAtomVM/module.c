@@ -1457,6 +1457,46 @@ static void module_add_label(Module *mod, int index, const uint8_t *ptr)
 }
 #endif
 
+#if !defined(AVM_NO_JIT) && defined(AVM_JIT_RELOC)
+// Relocation entry as stored in the chunk trailer (big-endian): the byte offset
+// of a primitive-call branch in the native code, and the primitive's index in
+// module_native_interface.
+struct NativeCodeReloc
+{
+    const uint32_t *entries; // [code_offset, prim_index] pairs, big-endian
+    uint32_t count;
+    const void *const *prim_table;
+};
+
+// Patch each primitive-call site in the freshly-mapped writable native code so
+// the adrp+add pair materializes module_native_interface[prim_index]. adrp forms
+// the target's 4 KiB page PC-relative (+-4 GiB), add supplies the low 12 bits.
+static void module_apply_native_relocs(uint8_t *mapped_code, void *arg)
+{
+    const struct NativeCodeReloc *r = (const struct NativeCodeReloc *) arg;
+    for (uint32_t i = 0; i < r->count; i++) {
+        uint32_t code_offset = ENDIAN_SWAP_32(r->entries[2 * i]);
+        uint32_t prim_index = ENDIAN_SWAP_32(r->entries[2 * i + 1]);
+        uint32_t *adrp = (uint32_t *) (mapped_code + code_offset);
+        uint32_t *add = adrp + 1;
+        uintptr_t target = (uintptr_t) r->prim_table[prim_index];
+        uintptr_t pc_page = (uintptr_t) adrp & ~(uintptr_t) 0xFFF;
+        uintptr_t tgt_page = target & ~(uintptr_t) 0xFFF;
+        intptr_t page_off = ((intptr_t) tgt_page - (intptr_t) pc_page) >> 12;
+        // adrp's signed 21-bit page immediate reaches +-4 GiB; fail loudly past it.
+        if (page_off < -(intptr_t) (1 << 20) || page_off >= (intptr_t) (1 << 20)) {
+            fprintf(stderr, "JIT adrp reloc out of range: offset=%u prim=%u\n", code_offset, prim_index);
+            AVM_ABORT();
+        }
+        uint32_t immlo = (uint32_t) (page_off & 0x3);
+        uint32_t immhi = (uint32_t) ((page_off >> 2) & 0x7FFFF);
+        *adrp = (*adrp & ~((0x3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
+        uint32_t imm12 = (uint32_t) (target & 0xFFF);
+        *add = (*add & ~(0xFFFu << 10)) | (imm12 << 10);
+    }
+}
+#endif
+
 Module *module_new_from_iff_binary(GlobalContext *global, const void *iff_binary, unsigned long size)
 {
     uint8_t *beam_file = (void *) iff_binary;
@@ -1517,6 +1557,9 @@ Module *module_new_from_iff_binary(GlobalContext *global, const void *iff_binary
 #ifdef AVM_JIT_THUMB2
                 runtime_variant |= JIT_VARIANT_THUMB2;
 #endif
+#ifdef AVM_JIT_RELOC
+                runtime_variant |= JIT_VARIANT_RELOC;
+#endif
                 if (ENDIAN_SWAP_16(native_code->architectures[arch_index].architecture) == JIT_ARCH_TARGET && ENDIAN_SWAP_16(native_code->architectures[arch_index].variant) == runtime_variant) {
                     size_t arch_offset = ENDIAN_SWAP_32(native_code->architectures[arch_index].offset);
                     size_t arch_code_size;
@@ -1528,7 +1571,25 @@ Module *module_new_from_iff_binary(GlobalContext *global, const void *iff_binary
                     }
                     size_t header_offset = ENDIAN_SWAP_32(native_code->info_size) + arch_offset + sizeof(native_code->info_size);
                     const uint8_t *arch_code = (const uint8_t *) &native_code->info_size + header_offset;
-                    ModuleNativeEntryPoint module_entry_point = sys_map_native_code(arch_code, arch_code_size);
+                    ModuleNativeEntryPoint module_entry_point;
+#ifdef AVM_JIT_RELOC
+                    // RELOC variant: arch section is [native code][reloc entries]
+                    // [num_relocs:32]. Strip the trailer before mapping; patch the
+                    // primitive-call branches in the writable mapping.
+                    uint32_t num_relocs = ENDIAN_SWAP_32(
+                        *(const uint32_t *) (arch_code + arch_code_size - sizeof(uint32_t)));
+                    size_t trailer_size = sizeof(uint32_t) + (size_t) num_relocs * 2 * sizeof(uint32_t);
+                    size_t real_code_size = arch_code_size - trailer_size;
+                    struct NativeCodeReloc reloc = {
+                        .entries = (const uint32_t *) (arch_code + real_code_size),
+                        .count = num_relocs,
+                        .prim_table = (const void *const *) &module_native_interface,
+                    };
+                    module_entry_point = sys_map_native_code_reloc(arch_code, real_code_size,
+                        (const void *) &module_native_interface, module_apply_native_relocs, &reloc);
+#else
+                    module_entry_point = sys_map_native_code(arch_code, arch_code_size);
+#endif
                     module_set_native_code(mod, ENDIAN_SWAP_32(native_code->labels), module_entry_point);
 
 #ifndef AVM_NO_JIT_DWARF

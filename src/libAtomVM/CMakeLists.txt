@@ -288,6 +288,10 @@ if (AVM_USE_32BIT_FLOAT)
     target_compile_definitions(libAtomVM PUBLIC AVM_USE_SINGLE_PRECISION)
 endif()
 
+if (AVM_JIT_RELOC)
+    target_compile_definitions(libAtomVM PUBLIC AVM_JIT_RELOC)
+endif()
+
 if (AVM_VERBOSE_ABORT)
     target_compile_definitions(libAtomVM PUBLIC AVM_VERBOSE_ABORT)
 endif()
