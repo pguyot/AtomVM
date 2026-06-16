@@ -212,13 +212,18 @@ compile(Target, Dir, Dwarf, Path) ->
                     end;
                 false ->
                     NativeCode0 = Backend:stream(Stream3),
-                    %% In JIT_VARIANT_RELOC mode append a relocation trailer the
-                    %% loader uses to patch primitive-call branches:
-                    %%   [reloc entries...][num_relocs:32]
-                    %% each entry [code_offset:32][primitive_index:32], big-endian
-                    %% (chunk metadata convention). code_offset is relative to the
-                    %% mapped native code (= stream offset minus the 4+InfoSize
-                    %% chunk info header).
+                    %% In JIT_VARIANT_RELOC mode the chunk gets, after the mapped
+                    %% native code, a reserved veneer pool (one 16-byte slot per
+                    %% distinct primitive, filled by the loader) followed by a
+                    %% trailer the loader reads from the tail:
+                    %%   [reloc entries...][veneer_pool_offset:32][num_distinct:32][num_relocs:32]
+                    %% each reloc entry [code_offset:32][primitive_index:32],
+                    %% big-endian. code_offset and veneer_pool_offset are relative
+                    %% to the mapped native code (= stream offset minus the
+                    %% 4+InfoSize chunk info header). The loader binds each call's
+                    %% b/bl directly to the primitive when in branch range, else to
+                    %% that primitive's veneer (in the pool, always in range since
+                    %% it shares the module's <128 MiB code).
                     Chunk =
                         case (RequestedVariant band ?JIT_VARIANT_RELOC) =/= 0 of
                             true ->
@@ -228,7 +233,21 @@ compile(Target, Dir, Dwarf, Path) ->
                                     <<(Off - HeaderSize):32, Prim:32>>
                                  || {Off, Prim} <- Relocs
                                 >>,
-                                <<NativeCode0/binary, Entries/binary, (length(Relocs)):32>>;
+                                NumDistinct = length(
+                                    lists:usort([Prim || {_, Prim} <- Relocs])
+                                ),
+                                %% 4-align the code (the labels/lines table can be
+                                %% an odd size) so the veneer pool holds aligned
+                                %% instructions and beam_lib does not pad the chunk
+                                %% (which would shift the trailer the loader reads
+                                %% from the tail). All other sections are already
+                                %% multiples of 4, so the whole chunk stays aligned.
+                                Pad = (4 - (byte_size(NativeCode0) rem 4)) rem 4,
+                                VeneerPoolOffset = byte_size(NativeCode0) + Pad - HeaderSize,
+                                VeneerPool = <<0:(NumDistinct * 16 * 8)>>,
+                                <<NativeCode0/binary, 0:(Pad * 8), VeneerPool/binary,
+                                    Entries/binary, VeneerPoolOffset:32, NumDistinct:32,
+                                    (length(Relocs)):32>>;
                             false ->
                                 NativeCode0
                         end,
