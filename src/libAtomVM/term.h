@@ -3159,6 +3159,14 @@ term term_map_tree_key_at(term map, avm_uint_t pos);
 int term_map_tree_find_pos(term map, term key, GlobalContext *global);
 
 /**
+ * @brief Look up \p key directly in a tree-backed map, returning its value or
+ * `term_invalid_term()` if absent. Single O(log n) walk, versus the
+ * find_pos (rank) + value-at (select) pair that walks the tree twice. Only
+ * valid on a map for which term_is_map_tree/1 is true.
+ */
+term term_map_tree_get(term map, term key, GlobalContext *global);
+
+/**
  * @brief Whether \p t is a large, tree-backed map (vs a flat map). Only valid
  * to call on a term already known to be a map.
  */
