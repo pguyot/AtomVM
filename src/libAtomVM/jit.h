@@ -266,6 +266,7 @@ struct ModuleNativeInterface
     void (*set_tuple_element)(Context *ctx, term tuple, uint32_t position, term value);
     size_t (*put_map_heap_need)(Context *ctx, term src, size_t new_entries, size_t num_elements);
     term (*map_get_value)(Context *ctx, term map, int pos);
+    term (*term_get_map_assoc)(Context *ctx, term map, term key);
 };
 
 extern const ModuleNativeInterface module_native_interface;
