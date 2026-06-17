@@ -1149,17 +1149,36 @@ if_block_cond0(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask
     State1 = if_block_free_reg(RegTuple, State0#state{regs = Regs1}),
     {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJZOffset};
 if_block_cond0(#state{regs = Regs0} = State0, {Reg, '&', Mask, '!=', Val}) when ?IS_UINT8_T(Mask) ->
-    Temp = first_avail(jit_regs:available_regs(Regs0)),
-    I1 = jit_x86_64_asm:movq(Reg, Temp),
-    I2 = jit_x86_64_asm:andb(Mask, Temp),
-    I3 = jit_x86_64_asm:cmpb(Val, Temp),
-    {RelocJZOffset, I4} = jit_x86_64_asm:jz_rel32(1),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    {
-        State0#state{regs = Regs1},
-        <<I1/binary, I2/binary, I3/binary, I4/binary>>,
-        byte_size(I1) + byte_size(I2) + byte_size(I3) + RelocJZOffset
-    }.
+    case jit_regs:available_regs(Regs0) of
+        0 ->
+            %% No scratch register is free to hold a copy of `Reg', which must
+            %% survive the test (it is not `{free, _}'). Save it on the native
+            %% stack, run the destructive AND/CMP on its low byte, then restore
+            %% it with popq. Neither pushq nor popq touches EFLAGS, so the ZF
+            %% set by cmpb survives the pop and drives the skip jump.
+            I1 = jit_x86_64_asm:pushq(Reg),
+            I2 = jit_x86_64_asm:andb(Mask, Reg),
+            I3 = jit_x86_64_asm:cmpb(Val, Reg),
+            I4 = jit_x86_64_asm:popq(Reg),
+            {RelocJZOffset, I5} = jit_x86_64_asm:jz_rel32(1),
+            {
+                State0,
+                <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
+                byte_size(I1) + byte_size(I2) + byte_size(I3) + byte_size(I4) + RelocJZOffset
+            };
+        Avail ->
+            Temp = first_avail(Avail),
+            I1 = jit_x86_64_asm:movq(Reg, Temp),
+            I2 = jit_x86_64_asm:andb(Mask, Temp),
+            I3 = jit_x86_64_asm:cmpb(Val, Temp),
+            {RelocJZOffset, I4} = jit_x86_64_asm:jz_rel32(1),
+            Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+            {
+                State0#state{regs = Regs1},
+                <<I1/binary, I2/binary, I3/binary, I4/binary>>,
+                byte_size(I1) + byte_size(I2) + byte_size(I3) + RelocJZOffset
+            }
+    end.
 
 -spec if_block_free_reg(x86_64_register() | {free, x86_64_register()}, state()) -> state().
 if_block_free_reg({free, Reg}, #state{regs = Regs0} = State0) ->
