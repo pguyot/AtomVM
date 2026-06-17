@@ -657,15 +657,10 @@ term interop_map_get_value(GlobalContext *glb, term map, term key)
 
 term interop_map_get_value_default(GlobalContext *glb, term map, term key, term default_value)
 {
-    int pos = term_find_map_pos(map, key, glb);
-    if (pos == TERM_MAP_NOT_FOUND) {
-        return default_value;
-    } else if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
-        // TODO: do not crash, handle out of memory
-        AVM_ABORT();
-    } else {
-        return term_get_map_value(map, pos);
-    }
+    // term_get_map_assoc takes the single-walk path for tree-backed maps and
+    // keeps the flat-map behaviour (AVM_ABORT on the rare compare-OOM).
+    term value = term_get_map_assoc(map, key, glb);
+    return term_is_invalid_term(value) ? default_value : value;
 }
 
 int interop_atom_term_select_int(const AtomStringIntPair *table, term atom, GlobalContext *global)
