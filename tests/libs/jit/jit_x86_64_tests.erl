@@ -306,6 +306,49 @@ call_primitive_few_regs_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+%% Regression: the `{Reg, '&', Mask, '!=', Val}' condition (Reg is NOT `{free,_}',
+%% so it must survive the test) needs a scratch register to hold a copy of Reg
+%% while the AND/CMP destroys it. When every scratch register is already
+%% allocated, the backend used to crash in first_avail/1 (function_clause on an
+%% empty available mask). It must instead spill Reg via push/pop. This is hit in
+%% practice by term_to_int on the bs_create_bin path while precompiling
+%% sys_core_fold.beam for x86_64.
+if_block_cond_and_neq_no_scratch_reg_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    {State2, r11} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
+    {State3, r10} = ?BACKEND:move_to_native_register(State2, {x_reg, 2}),
+    {State4, r9} = ?BACKEND:move_to_native_register(State3, {x_reg, 3}),
+    {State5, r8} = ?BACKEND:move_to_native_register(State4, {x_reg, 4}),
+    {State6, rcx} = ?BACKEND:move_to_native_register(State5, {x_reg, 5}),
+    %% Every allocatable scratch register is now in use.
+    ?assertEqual([], ?BACKEND:available_regs(State6)),
+    State7 = ?BACKEND:if_block(
+        State6,
+        {rax, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        fun(BSt0) ->
+            ?BACKEND:add(BSt0, r11, 2)
+        end
+    ),
+    Stream = ?BACKEND:stream(State7),
+    Dump = <<
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
+        "   8:	4c 8b 57 68          	mov    0x68(%rdi),%r10\n"
+        "   c:	4c 8b 4f 70          	mov    0x70(%rdi),%r9\n"
+        "  10:	4c 8b 47 78          	mov    0x78(%rdi),%r8\n"
+        "  14:	48 8b 8f 80 00 00 00 	mov    0x80(%rdi),%rcx\n"
+        "  1b:	50                   	push   %rax\n"
+        "  1c:	24 0f                	and    $0xf,%al\n"
+        "  1e:	80 f8 0f             	cmp    $0xf,%al\n"
+        "  21:	58                   	pop    %rax\n"
+        "  22:	0f 84 04 00 00 00    	je     0x2c\n"
+        "  28:	49 83 c3 02          	add    $0x2,%r11"
+    >>,
+    ?assertStream(x86_64, Dump, Stream),
+    %% Reg is restored by popq, so it stays allocated after the block.
+    ?assertEqual([rcx, r8, r9, r10, r11, rax], ?BACKEND:used_regs(State7)).
+
 call_ext_only_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:decrement_reductions_and_maybe_schedule_next(State0),
