@@ -1980,62 +1980,48 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {ListSize, Rest3} = decode_extended_list_header(Rest2),
     ?TRACE("OP_GET_MAP_ELEMENTS ~p,~p,[", [Label, Src]),
-    {MSt2, Key1, Rest4} = decode_compact_term(Rest3, MMod, MSt1, State0),
-    ?TRACE("~p", [Key1]),
-    {MSt3, PosReg1} = MMod:call_primitive(MSt2, ?PRIM_TERM_FIND_MAP_POS, [ctx, Src, {free, Key1}]),
-    MSt4 = cond_jump_to_label({'(int)', PosReg1, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, MSt3),
-    MSt5 = MMod:if_block(MSt4, {'(int)', PosReg1, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-        ])
-    end),
-    {MSt6, SrcReg} = MMod:move_to_native_register(MSt5, Src),
-    % Read the value at the found position. The position is a flat array index
-    % for a flat map but an in-order rank for a tree-backed one, so dispatch
-    % through term_get_map_value (PRIM_MAP_GET_VALUE) rather than indexing the
-    % values array directly.
-    {MSt9, Dest1, Rest5} = decode_dest(Rest4, MMod, MSt6),
-    ?TRACE(",~p", [Dest1]),
-    {MSt10a, Value1Reg} = MMod:call_primitive(MSt9, ?PRIM_MAP_GET_VALUE, [
-        ctx, SrcReg, {free, PosReg1}
-    ]),
-    MSt10 = MMod:move_to_vm_register(MSt10a, Value1Reg, Dest1),
-    MSt11 = MMod:free_native_registers(MSt10, [Value1Reg, Dest1]),
-    {MSt12, Rest6} = lists:foldl(
+    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
+    {MSt3, Rest4} = lists:foldl(
         fun(_Index, {AccMSt0, AccRest0}) ->
             {AccMSt1, Key, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
             ?TRACE(",~p", [Key]),
-            {AccMSt2, PosReg} = MMod:call_primitive(AccMSt1, ?PRIM_TERM_FIND_MAP_POS, [
+            {AccMSt2, Dest, AccRest2} = decode_dest(AccRest1, MMod, AccMSt1),
+            ?TRACE(",~p", [Dest]),
+            % One walk: look the value up by key. A tree-backed map descends
+            % straight to the key (term_get_map_assoc -> term_map_tree_get)
+            % instead of the find_pos (rank) + map_get_value (select) pair that
+            % walked the tree twice. invalid_term means the key is absent (or,
+            % for a flat map, the rare compare-OOM): disambiguate on the cold
+            % miss path with term_find_map_pos so not-found jumps to the fail
+            % label and an alloc failure still raises.
+            {AccMSt3, ValueReg} = MMod:call_primitive(AccMSt2, ?PRIM_TERM_GET_MAP_ASSOC, [
                 ctx, SrcReg, Key
             ]),
-            AccMSt3 = cond_jump_to_label(
-                {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, AccMSt2
-            ),
-            AccMSt4 = MMod:if_block(
-                AccMSt3, {'(int)', PosReg, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    % TODO: previous implementation yielded a slightly smaller code as raise block was shared.
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
-                end
-            ),
+            AccMSt4 = MMod:if_block(AccMSt3, {ValueReg, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
+                {BSt1, PosReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_FIND_MAP_POS, [
+                    ctx, SrcReg, {free, Key}
+                ]),
+                BSt2 = cond_jump_to_label(
+                    {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, BSt1
+                ),
+                % Reaching here means the position is TERM_MAP_MEMORY_ALLOC_FAIL.
+                MMod:call_primitive_last(BSt2, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
+                ])
+            end),
+            % Key still live on the found (block-skipped) path; free it here.
             AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
-            {AccMSt6, Dest, AccRest2} = decode_dest(AccRest1, MMod, AccMSt5),
-            ?TRACE(",~p", [Dest]),
-            {AccMSt6b, ValueReg} = MMod:call_primitive(AccMSt6, ?PRIM_MAP_GET_VALUE, [
-                ctx, SrcReg, {free, PosReg}
-            ]),
-            AccMSt7 = MMod:move_to_vm_register(AccMSt6b, ValueReg, Dest),
-            AccMSt8 = MMod:free_native_registers(AccMSt7, [ValueReg, Dest]),
-            {AccMSt8, AccRest2}
+            AccMSt6 = MMod:move_to_vm_register(AccMSt5, ValueReg, Dest),
+            AccMSt7 = MMod:free_native_registers(AccMSt6, [ValueReg, Dest]),
+            {AccMSt7, AccRest2}
         end,
-        {MSt11, Rest5},
-        lists:seq(2, ListSize div 2)
+        {MSt2, Rest3},
+        lists:seq(1, ListSize div 2)
     ),
     ?TRACE("]\n", []),
-    MSt13 = MMod:free_native_registers(MSt12, [SrcReg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt13),
-    first_pass(Rest6, MMod, MSt13, State0);
+    MSt4b = MMod:free_native_registers(MSt3, [SrcReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4b),
+    first_pass(Rest4, MMod, MSt4b, State0);
 % 159
 first_pass(
     <<?OP_IS_TAGGED_TUPLE, Rest0/binary>>, MMod, MSt0, #state{atom_resolver = AtomResolver} = State0
