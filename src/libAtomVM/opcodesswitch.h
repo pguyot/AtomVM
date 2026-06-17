@@ -5139,21 +5139,35 @@ schedule_in:
                 uint32_t list_len;
                 DECODE_LITERAL(list_len, pc);
                 uint32_t num_elements = list_len / 2;
+                // Tree-backed maps look the value up in one walk (term_map_tree_get)
+                // instead of find_pos (rank) + value-at (select), which walks the
+                // tree twice. Tree lookups never hit the compare-OOM path that
+                // find_pos signals for flat maps, so the flat branch keeps it.
+                bool src_is_tree = term_is_map_tree(src);
                 for (uint32_t j = 0; j < num_elements; ++j) {
                     term key;
                     DECODE_COMPACT_TERM(key, pc);
                     DEST_REGISTER(dreg);
                     DECODE_DEST_REGISTER(dreg, pc);
 
-                    int pos = term_find_map_pos(src, key, ctx->global);
-                    if (pos == TERM_MAP_NOT_FOUND) {
-                        pc = mod->labels[label];
-                        break;
-                    } else if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
-                        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                    } else {
-                        term value = term_get_map_value(src, pos);
+                    if (src_is_tree) {
+                        term value = term_map_tree_get(src, key, ctx->global);
+                        if (term_is_invalid_term(value)) {
+                            pc = mod->labels[label];
+                            break;
+                        }
                         WRITE_REGISTER(dreg, value);
+                    } else {
+                        int pos = term_find_map_pos(src, key, ctx->global);
+                        if (pos == TERM_MAP_NOT_FOUND) {
+                            pc = mod->labels[label];
+                            break;
+                        } else if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
+                            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+                        } else {
+                            term value = term_get_map_value(src, pos);
+                            WRITE_REGISTER(dreg, value);
+                        }
                     }
                 }
                 break;

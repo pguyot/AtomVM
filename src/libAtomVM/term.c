@@ -1672,6 +1672,11 @@ term term_alloc_sub_binary(term binary_or_state, size_t offset, size_t len, Heap
 
 term term_get_map_assoc(term map, term key, GlobalContext *glb)
 {
+    // Tree-backed maps: a single walk to the key, versus find_pos (rank) +
+    // value-at (select) which walks the tree twice.
+    if (term_is_map_tree(map)) {
+        return term_map_tree_get(map, key, glb);
+    }
     int pos = term_find_map_pos(map, key, glb);
     if (pos == TERM_MAP_NOT_FOUND) {
         return term_invalid_term();
@@ -1785,4 +1790,9 @@ int term_map_tree_find_pos(term map, term key, GlobalContext *global)
 {
     int rank = termtree_rank(term_get_map_tree_root(map), key, global);
     return rank < 0 ? TERM_MAP_NOT_FOUND : rank;
+}
+
+term term_map_tree_get(term map, term key, GlobalContext *global)
+{
+    return termtree_get(term_get_map_tree_root(map), key, global);
 }
