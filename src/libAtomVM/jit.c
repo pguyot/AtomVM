@@ -2216,6 +2216,23 @@ static term jit_map_get_value(Context *ctx, term map, int pos)
     return term_get_map_value(map, (avm_uint_t) pos);
 }
 
+// Look a key up in a map, returning its value or term_invalid_term() if absent.
+// Tree-backed maps take a single direct walk (term_map_tree_get) instead of the
+// find_pos (rank) + map_get_value (select) pair. A flat map that hits the rare
+// compare-OOM also returns invalid here; OP_GET_MAP_ELEMENTS disambiguates
+// not-found from OOM with a term_find_map_pos call only on the (cold) miss path.
+static term jit_term_get_map_assoc(Context *ctx, term map, term key)
+{
+    if (term_is_map_tree(map)) {
+        return term_map_tree_get(map, key, ctx->global);
+    }
+    int pos = term_find_map_pos(map, key, ctx->global);
+    if (pos < 0) {
+        return term_invalid_term();
+    }
+    return term_get_map_value(map, (avm_uint_t) pos);
+}
+
 static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_t new_entries, size_t num_elements, term *kv)
 {
     TRACE("jit_put_map_assoc: src=%p new_entries=%d num_elements=%d\n", (void *) src, (int) new_entries, (int) num_elements);
@@ -2583,7 +2600,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_get_imported_gcbif,
     jit_set_tuple_element,
     jit_put_map_heap_need,
-    jit_map_get_value
+    jit_map_get_value,
+    jit_term_get_map_assoc
 };
 
 #endif
