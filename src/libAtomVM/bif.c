@@ -656,6 +656,15 @@ term bif_erlang_is_map_key_2(Context *ctx, uint32_t fail_label, term arg1, term 
         RAISE_ERROR(err);
     }
 
+    // Tree-backed maps: a single direct walk to the key (term_map_tree_get)
+    // instead of term_find_map_pos, which also sums subtree sizes to build an
+    // in-order rank we would immediately discard.
+    if (term_is_map_tree(arg2)) {
+        return term_is_invalid_term(term_map_tree_get(arg2, arg1, ctx->global))
+            ? FALSE_ATOM
+            : TRUE_ATOM;
+    }
+
     switch (term_find_map_pos(arg2, arg1, ctx->global)) {
         case TERM_MAP_NOT_FOUND:
             return FALSE_ATOM;
@@ -757,8 +766,19 @@ term bif_erlang_map_get_2(Context *ctx, uint32_t fail_label, term arg1, term arg
         RAISE_ERROR(err);
     }
 
-    int pos = term_find_map_pos(arg2, arg1, ctx->global);
-    if (pos == TERM_MAP_NOT_FOUND) {
+    // Tree-backed maps look the value up in a single walk (term_map_tree_get);
+    // flat maps keep term_find_map_pos so the compare-OOM signal is preserved.
+    term value;
+    if (term_is_map_tree(arg2)) {
+        value = term_map_tree_get(arg2, arg1, ctx->global);
+    } else {
+        int pos = term_find_map_pos(arg2, arg1, ctx->global);
+        if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
+            RAISE_ERROR_BIF(fail_label, OUT_OF_MEMORY_ATOM);
+        }
+        value = (pos == TERM_MAP_NOT_FOUND) ? term_invalid_term() : term_get_map_value(arg2, pos);
+    }
+    if (term_is_invalid_term(value)) {
         if (fail_label) {
             return term_invalid_term();
         }
@@ -771,10 +791,8 @@ term bif_erlang_map_get_2(Context *ctx, uint32_t fail_label, term arg1, term arg
         term_put_tuple_element(err, 1, arg1);
 
         RAISE_ERROR(err);
-    } else if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
-        RAISE_ERROR_BIF(fail_label, OUT_OF_MEMORY_ATOM);
     }
-    return term_get_map_value(arg2, pos);
+    return value;
 }
 
 term bif_erlang_unique_integer_0(Context *ctx)
