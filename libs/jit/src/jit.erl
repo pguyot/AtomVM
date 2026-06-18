@@ -1985,7 +1985,10 @@ first_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
                 ctx, SrcReg, Key
             ]),
             AccMSt4 = MMod:if_block(AccMSt3, {ValueReg, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
-                {BSt1, PosReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_FIND_MAP_POS, [
+                % term_get_map_assoc already walked the map; a tree miss is
+                % definitive, so this skips a redundant second walk and only a
+                % flat map still re-checks to tell a true miss from an alloc fail.
+                {BSt1, PosReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_GET_MAP_ASSOC_MISS, [
                     ctx, SrcReg, {free, Key}
                 ]),
                 BSt2 = cond_jump_to_label(
