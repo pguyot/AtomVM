@@ -1857,6 +1857,20 @@ static term jit_term_maybe_create_sub_binary(Context *ctx, term binary, size_t o
 
 static int jit_term_find_map_pos(Context *ctx, term map, term key)
 {
+    // Callers (OP_GET_MAP_ELEMENTS miss disambiguation, OP_HAS_MAP_FIELDS,
+    // OP_PUT_MAP_ASSOC entry counting) only test the result against
+    // TERM_MAP_NOT_FOUND / TERM_MAP_MEMORY_ALLOC_FAIL / found -- none uses the
+    // actual position. For a tree-backed map a direct walk (term_map_tree_get)
+    // answers presence in O(log n), avoiding term_find_map_pos -> termtree_rank,
+    // which additionally sums subtree sizes at every level to build an in-order
+    // rank we would discard. node_find does not surface the compare-OOM for
+    // trees, so a tree absence is simply not-found (matching is_map_key). 0 is
+    // returned for "found" as an arbitrary non-negative, non-sentinel position.
+    if (term_is_map_tree(map)) {
+        return term_is_invalid_term(term_map_tree_get(map, key, ctx->global))
+            ? TERM_MAP_NOT_FOUND
+            : 0;
+    }
     return term_find_map_pos(map, key, ctx->global);
 }
 
