@@ -260,7 +260,31 @@ test_from_list() ->
     ?ASSERT_EQUALS(maps:from_list([{a, 1}, {b, 2}, {c, 3}]), #{a => 1, b => 2, c => 3}),
     ?ASSERT_ERROR(maps:from_list(id(foo)), badarg),
     ?ASSERT_ERROR(maps:from_list(id([improper | list])), badarg),
+    %% Single element.
+    check_from_list([{x, 1}]),
+    %% Later duplicates override earlier ones.
+    ?ASSERT_EQUALS(maps:from_list([{a, 1}, {a, 2}, {a, 3}]), #{a => 3}),
+    check_from_list([{a, 1}, {b, 2}, {a, 3}, {c, 4}, {b, 5}]),
+    %% Unsorted input.
+    check_from_list([{3, c}, {1, a}, {2, b}, {0, z}]),
+    %% Large lists that cross the flat->tree threshold (TERM_MAP_TREE_THRESHOLD=32).
+    check_from_list([{I, I * 2} || I <- lists:seq(1, 40)]),
+    check_from_list([{I, I} || I <- lists:seq(40, 1, -1)]),
+    check_from_list([{{b_var, I}, I} || I <- lists:seq(1, 100)]),
+    %% Large list with duplicates (last wins).
+    check_from_list([{I rem 30, I} || I <- lists:seq(1, 200)]),
+    %% Mixed immediate / tuple keys.
+    check_from_list([{a, 1}, {1, b}, {{t, 2}, c}, {-5, d}, {<<"k">>, e}]),
     ok.
+
+%% maps:from_list/1 must agree with a left-fold of inserts (later entries win).
+check_from_list(KVs) ->
+    Got = maps:from_list(KVs),
+    Expected = lists:foldl(fun({K, V}, A) -> A#{K => V} end, #{}, KVs),
+    ?ASSERT_EQUALS(Got, Expected),
+    ?ASSERT_EQUALS(maps:size(Got), maps:size(Expected)),
+    assert_sorted_keys(Got),
+    Got.
 
 test_size() ->
     ?ASSERT_MATCH(maps:size(maps:new()), 0),
@@ -353,7 +377,72 @@ test_merge() ->
     }),
     ok = check_bad_map(fun() -> maps:merge(maps:new(), id(not_a_map)) end),
     ok = check_bad_map(fun() -> maps:merge(id(not_a_map), maps:new()) end),
+    %% Empty operands.
+    check_merge(#{}, #{}),
+    check_merge(rmap(1, 10, fun(I) -> I end), #{}),
+    check_merge(#{}, rmap(1, 10, fun(I) -> I end)),
+    %% Small flat, disjoint and overlapping (right wins).
+    check_merge(#{a => 1, b => 2}, #{c => 3, d => 4}),
+    check_merge(#{a => 1, b => 2, c => 3}, #{b => z, c => y, e => 5}),
+    %% Two small flat maps whose union crosses the flat->tree threshold (32).
+    check_merge(rmap(1, 20, fun(I) -> I end), rmap(21, 50, fun(I) -> I * 10 end)),
+    %% Flat + tree and tree + flat (mixed representations).
+    check_merge(rmap(1, 5, fun(I) -> I end), rmap(1, 60, fun(I) -> I * 100 end)),
+    check_merge(rmap(1, 60, fun(I) -> I end), rmap(50, 80, fun(I) -> -I end)),
+    %% Tree + tree: disjoint, heavy overlap (right wins), and full overlap.
+    check_merge(rmap(1, 60, fun(I) -> I end), rmap(100, 160, fun(I) -> I end)),
+    check_merge(rmap(1, 80, fun(I) -> I end), rmap(40, 120, fun(I) -> I * 7 end)),
+    LargeL = rmap(1, 80, fun(I) -> {left, I} end),
+    LargeR = rmap(1, 80, fun(I) -> {right, I} end),
+    check_merge(LargeL, LargeR),
+    %% Self-merge is idempotent.
+    ?ASSERT_EQUALS(maps:merge(LargeL, LargeL), LargeL),
+    %% Tuple keys (the compiler's #b_var{}-style keys) and mixed key types.
+    check_merge(
+        maps:from_list([{{b_var, I}, I} || I <- lists:seq(1, 50)]),
+        maps:from_list([{{b_var, I}, -I} || I <- lists:seq(25, 75)])
+    ),
+    check_merge(
+        #{a => 1, 1 => x, {t, 1} => u, -3 => n},
+        #{b => 2, 1 => y, {t, 2} => v, <<"k">> => w}
+    ),
     ok.
+
+%% maps:merge/2 must agree with folding the right map's entries into the left
+%% (right values win on key collisions), regardless of internal representation.
+check_merge(M1, M2) ->
+    Merged = maps:merge(M1, M2),
+    Expected = lists:foldl(fun({K, V}, A) -> A#{K => V} end, M1, maps:to_list(M2)),
+    ?ASSERT_EQUALS(Merged, Expected),
+    ?ASSERT_EQUALS(maps:size(Merged), maps:size(Expected)),
+    lists:foreach(
+        fun(K) ->
+            Want =
+                case maps:is_key(K, M2) of
+                    true -> maps:get(K, M2);
+                    false -> maps:get(K, M1)
+                end,
+            ?ASSERT_EQUALS(maps:get(K, Merged), Want)
+        end,
+        lists:usort(maps:keys(M1) ++ maps:keys(M2))
+    ),
+    assert_sorted_keys(Merged),
+    Merged.
+
+%% Build #{KeyFun(I) => I} for I in Lo..Hi.
+rmap(Lo, Hi, KeyFun) ->
+    lists:foldl(fun(I, A) -> A#{KeyFun(I) => I} end, #{}, lists:seq(Lo, Hi)).
+
+%% On AtomVM, maps keep keys in term order; assert the invariant where it holds.
+%% (BEAM maps:keys/1 is unordered, so this is a no-op there.)
+assert_sorted_keys(M) ->
+    case erlang:system_info(machine) of
+        "ATOM" ->
+            Ks = maps:keys(M),
+            ?ASSERT_EQUALS(Ks, lists:sort(Ks));
+        _ ->
+            ok
+    end.
 
 test_merge_with() ->
     ?ASSERT_EQUALS(maps:merge_with(fun(_K, V1, V2) -> V1 + V2 end, maps:new(), maps:new()), #{}),
@@ -399,7 +488,48 @@ test_remove() ->
     ?ASSERT_EQUALS(maps:remove(c, #{a => 1, b => 2, c => 3}), #{a => 1, b => 2}),
     ?ASSERT_EQUALS(maps:remove(d, #{a => 1, b => 2, c => 3}), #{a => 1, b => 2, c => 3}),
     ok = check_bad_map(fun() -> maps:remove(foo, id(not_a_map)) end),
+    %% Removing an absent key returns the map unchanged.
+    check_remove(missing, #{a => 1, b => 2}),
+    check_remove(99, rmap(1, 20, fun(I) -> I end)),
+    %% Remove from a large tree-backed map (>32): first/last/middle/absent keys.
+    Big = rmap(1, 80, fun(I) -> I * 3 end),
+    check_remove(1, Big),
+    check_remove(80, Big),
+    check_remove(40, Big),
+    check_remove(1000, Big),
+    %% Remove that brings a tree back below the flat threshold.
+    Edge = rmap(1, 33, fun(I) -> I end),
+    check_remove(17, Edge),
+    %% Tuple keys (compiler #b_var{}-style) and mixed key types.
+    check_remove({b_var, 25}, maps:from_list([{{b_var, I}, I} || I <- lists:seq(1, 60)])),
+    Mixed = #{a => 1, 1 => x, {t, 2} => u, -5 => n, <<"k">> => e},
+    check_remove(1, Mixed),
+    check_remove({t, 2}, Mixed),
+    check_remove(<<"k">>, Mixed),
+    %% Remove every key, in order and in reverse, down to the empty map.
+    Ten = rmap(1, 10, fun(I) -> I end),
+    ?ASSERT_EQUALS(lists:foldl(fun maps:remove/2, Ten, lists:seq(1, 10)), #{}),
+    ?ASSERT_EQUALS(lists:foldl(fun maps:remove/2, Ten, lists:seq(10, 1, -1)), #{}),
+    %% Removing the sole key yields the empty map.
+    check_remove(only, #{only => 1}),
     ok.
+
+%% maps:remove/2 must equal the map with that one key filtered out.
+check_remove(Key, Map) ->
+    Got = maps:remove(Key, Map),
+    Expected = maps:filter(fun(K, _V) -> K =/= Key end, Map),
+    ?ASSERT_EQUALS(Got, Expected),
+    ?ASSERT_EQUALS(maps:is_key(Key, Got), false),
+    ?ASSERT_EQUALS(
+        maps:size(Got),
+        maps:size(Map) -
+            (case maps:is_key(Key, Map) of
+                true -> 1;
+                false -> 0
+            end)
+    ),
+    assert_sorted_keys(Got),
+    Got.
 
 test_update() ->
     ?ASSERT_ERROR(maps:update(foo, bar, maps:new()), {badkey, foo}),
