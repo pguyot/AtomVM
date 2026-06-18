@@ -300,6 +300,7 @@ static term nif_lists_keyfind(Context *ctx, int argc, term argv[]);
 static term nif_lists_keymember(Context *ctx, int argc, term argv[]);
 static term nif_lists_member(Context *ctx, int argc, term argv[]);
 static term nif_maps_from_keys(Context *ctx, int argc, term argv[]);
+static term nif_maps_from_list(Context *ctx, int argc, term argv[]);
 static term nif_maps_merge(Context *ctx, int argc, term argv[]);
 static term nif_maps_remove(Context *ctx, int argc, term argv[]);
 static term nif_maps_next(Context *ctx, int argc, term argv[]);
@@ -989,6 +990,10 @@ static const struct Nif lists_reverse_nif = {
 static const struct Nif maps_from_keys_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_maps_from_keys
+};
+static const struct Nif maps_from_list_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_maps_from_list
 };
 static const struct Nif maps_merge_nif = {
     .base.type = NIFFunctionType,
@@ -7430,6 +7435,139 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
 
     term result = map_build_from_sorted_kv(ctx, kv, u);
     free(kv);
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    return result;
+}
+
+// Stable bottom-up merge sort of idx[0..n) by the term order of kv[2*idx[.]].
+// Stability (taking the left run on ties) keeps equal keys in ascending original
+// index order, so maps:from_list/1 last-wins dedup can keep the last of each run.
+// tmp is scratch of n ints. Returns 0, or -1 on a term_compare alloc failure.
+static int sort_kv_indices(int *idx, int *tmp, int n, const term *kv, GlobalContext *glb)
+{
+    for (int width = 1; width < n; width *= 2) {
+        for (int lo = 0; lo < n; lo += 2 * width) {
+            int mid = (lo + width < n) ? lo + width : n;
+            int hi = (lo + 2 * width < n) ? lo + 2 * width : n;
+            int i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                TermCompareResult c = term_compare(kv[2 * idx[i]], kv[2 * idx[j]], TermCompareExact, glb);
+                if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                    return -1;
+                }
+                if (c == TermGreaterThan) {
+                    tmp[k++] = idx[j++];
+                } else {
+                    tmp[k++] = idx[i++];
+                }
+            }
+            while (i < mid) {
+                tmp[k++] = idx[i++];
+            }
+            while (j < hi) {
+                tmp[k++] = idx[j++];
+            }
+        }
+        for (int x = 0; x < n; x++) {
+            idx[x] = tmp[x];
+        }
+    }
+    return 0;
+}
+
+// maps:from_list/1 -- build a map from a [{K,V}] list. The estdlib version
+// inserts each pair with a path-copying put (O(n log n), n allocations); this
+// sorts the pairs once (last duplicate winning, per the spec) and does a single
+// result allocation. BEAM has from_list/1 as a BIF too.
+static term nif_maps_from_list(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+    VALIDATE_VALUE(argv[0], term_is_list);
+
+    int proper;
+    avm_int_t len = term_list_length(argv[0], &proper);
+    if (UNLIKELY(!proper)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    if (len == 0) {
+        if (UNLIKELY(memory_ensure_free_opt(ctx, TERM_MAP_SIZE(0), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return term_alloc_map(0, &ctx->heap);
+    }
+
+    // Gather the pairs (interleaved) in list order, validating each is a 2-tuple.
+    term *kv = malloc(sizeof(term) * 2 * (size_t) len);
+    int *idx = malloc(sizeof(int) * (size_t) len);
+    int *tmp = malloc(sizeof(int) * (size_t) len);
+    if (UNLIKELY(IS_NULL_PTR(kv) || IS_NULL_PTR(idx) || IS_NULL_PTR(tmp))) {
+        free(kv);
+        free(idx);
+        free(tmp);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term l = argv[0];
+    for (avm_int_t i = 0; i < len; i++) {
+        term e = term_get_list_head(l);
+        if (UNLIKELY(!term_is_tuple(e) || term_get_tuple_arity(e) != 2)) {
+            free(kv);
+            free(idx);
+            free(tmp);
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        kv[2 * i] = term_get_tuple_element(e, 0);
+        kv[2 * i + 1] = term_get_tuple_element(e, 1);
+        idx[i] = (int) i;
+        l = term_get_list_tail(l);
+    }
+
+    if (UNLIKELY(sort_kv_indices(idx, tmp, (int) len, kv, glb) < 0)) {
+        free(kv);
+        free(idx);
+        free(tmp);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    free(tmp);
+
+    // Collapse equal-key runs (keeping the last, highest-index entry) into a
+    // fresh sorted-unique buffer that becomes the build's GC roots.
+    term *out = malloc(sizeof(term) * 2 * (size_t) len);
+    if (UNLIKELY(IS_NULL_PTR(out))) {
+        free(kv);
+        free(idx);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    size_t u = 0;
+    for (int x = 0; x < (int) len;) {
+        int y = x + 1;
+        while (y < (int) len) {
+            TermCompareResult c = term_compare(kv[2 * idx[x]], kv[2 * idx[y]],
+                TermCompareExact | TermCompareEqualOnly, glb);
+            if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                free(kv);
+                free(idx);
+                free(out);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            if (c != TermEquals) {
+                break;
+            }
+            y++;
+        }
+        int keep = idx[y - 1];
+        out[2 * u] = kv[2 * keep];
+        out[2 * u + 1] = kv[2 * keep + 1];
+        u++;
+        x = y;
+    }
+    free(kv);
+    free(idx);
+
+    term result = map_build_from_sorted_kv(ctx, out, u);
+    free(out);
     if (UNLIKELY(term_is_invalid_term(result))) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
