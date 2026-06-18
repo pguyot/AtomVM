@@ -61,6 +61,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_term/2,
     move_imported_gcbif_to_native_register/3,
     and_/3,
     or_/3,
@@ -231,6 +232,8 @@
 -define(JITSTATE_REDUCTIONCOUNT, {?JITSTATE_REG, 16#10}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+% module->local_atoms_to_global_table (see _Static_assert in jit.c).
+-define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#D8}).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
@@ -2661,6 +2664,58 @@ get_module_index(
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, module_index),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, Bit)
+        },
+        Reg
+    }.
+
+%% @doc Inline the resolution of a module-local atom id to its global atom term,
+%% i.e. module_get_atom_term_by_id(jit_state->module, AtomIndex). This is hot
+%% (every non-default atom literal access; hundreds of millions of times in the
+%% compiler), so emitting the four loads/ops here avoids the primitive-call
+%% overhead (table load + indirect branch + register save/restore) per access.
+-spec get_module_atom_term(state(), non_neg_integer()) -> {state(), aarch64_register()}.
+get_module_atom_term(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Bit = reg_bit(Reg),
+    %% Reg = jit_state->module
+    I1 = jit_aarch64_asm:ldr(Reg, ?JITSTATE_MODULE),
+    %% Reg = module->local_atoms_to_global_table
+    I2 = jit_aarch64_asm:ldr(Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
+    %% Reg = local_atoms_to_global_table[AtomIndex] (a 32-bit global atom index,
+    %% zero-extended into the 64-bit register). The entries are 4 bytes wide; the
+    %% scaled LDR (32-bit) immediate reaches an offset of 16380, beyond which the
+    %% offset is added to the base first.
+    Offset = AtomIndex * 4,
+    LoadGid =
+        case Offset =< 16380 of
+            true ->
+                jit_aarch64_asm:ldr_w(Reg, {Reg, Offset});
+            false ->
+                <<
+                    (jit_aarch64_asm:add(Reg, Reg, Offset))/binary,
+                    (jit_aarch64_asm:ldr_w(Reg, {Reg, 0}))/binary
+                >>
+        end,
+    %% Reg = (global_id bsl ?TERM_IMMED2_TAG_SIZE) bor ?TERM_IMMED2_ATOM, i.e.
+    %% TERM_FROM_ATOM_INDEX. The low tag bits are zero after the shift, so a
+    %% plain add applies the atom tag without a spare register.
+    I4 = jit_aarch64_asm:lsl(Reg, Reg, ?TERM_IMMED2_TAG_SIZE),
+    I5 = jit_aarch64_asm:add(Reg, Reg, ?TERM_IMMED2_ATOM),
+    Code = <<I1/binary, I2/binary, LoadGid/binary, I4/binary, I5/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, {atom_term, AtomIndex}),
     {
         State#state{
             stream = Stream1,
