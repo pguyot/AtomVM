@@ -7045,7 +7045,7 @@ decode_compact_term_atom(AtomIndex, MMod, MSt0, Rest, #state{atom_resolver = Res
     Atom = Resolver(AtomIndex),
     case maps:find(Atom, ?DEFAULT_ATOMS) of
         error ->
-            {MSt1, Reg} = emit_module_atom_term(MMod, MSt0, AtomIndex),
+            {MSt1, Reg} = get_module_atom_term(MMod, MSt0, AtomIndex),
             ?TRACE("(get_atom_term_by_id(~p) => ~p)", [AtomIndex, Reg]),
             {MSt1, Reg, Rest};
         {ok, DefaultAtomIndex} ->
@@ -7053,17 +7053,20 @@ decode_compact_term_atom(AtomIndex, MMod, MSt0, Rest, #state{atom_resolver = Res
     end.
 
 %% Resolve a module-local atom id to its global atom term, returning {State, Reg}.
-%% Backends that implement get_module_atom_term/2 inline the resolution (a few
-%% loads through jit_state->module); otherwise fall back to the primitive call.
-%% This path is extremely hot (every non-default atom literal access -- hundreds
-%% of millions of times when running the Erlang compiler).
-emit_module_atom_term(MMod, MSt, AtomIndex) ->
-    case erlang:function_exported(MMod, get_module_atom_term, 2) of
-        true ->
-            MMod:get_module_atom_term(MSt, AtomIndex);
-        false ->
-            MMod:call_primitive(MSt, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex])
-    end.
+%% This is extremely hot -- every non-default atom literal access, hundreds of
+%% millions of times when running the Erlang compiler -- so it is inlined rather
+%% than emitted as a primitive call. The arch-specific part (loading the 32-bit
+%% global atom index from jit_state->module->local_atoms_to_global_table[Index],
+%% which needs the backend's jit_state register and a 32-bit load) is the
+%% per-backend get_module_atom_index/2; the term encoding it shares with every
+%% backend -- TERM_FROM_ATOM_INDEX, i.e. (index << ?TERM_IMMED2_TAG_SIZE) bor
+%% ?TERM_IMMED2_ATOM -- is applied here. The low tag bits are zero after the
+%% shift, so a plain add sets the atom tag without an extra register.
+get_module_atom_term(MMod, MSt0, AtomIndex) ->
+    {MSt1, Reg} = MMod:get_module_atom_index(MSt0, AtomIndex),
+    MSt2 = MMod:shift_left(MSt1, Reg, ?TERM_IMMED2_TAG_SIZE),
+    MSt3 = MMod:add(MSt2, Reg, ?TERM_IMMED2_ATOM),
+    {MSt3, Reg}.
 
 decode_compact_term_module_literal(LiteralIndex, MMod, MSt0, Rest) ->
     {MSt1, Reg} = MMod:call_primitive(

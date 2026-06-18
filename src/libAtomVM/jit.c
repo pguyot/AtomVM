@@ -189,6 +189,8 @@ _Static_assert(offsetof(Context, bs_offset) == 0x7C, "ctx->bs_offset is 0x7C in 
 _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in 32-bit backends");
 _Static_assert(offsetof(JITState, continuation) == 0x4, "jit_state->continuation is 0x4 in 32-bit backends");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->remaining_reductions is 0x8 in 32-bit backends");
+// Offset for inlining atom-term resolution (module-local atom id -> term).
+_Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
 _Static_assert(offsetof(JITState, code_base) == 0xC, "jit_state->code_base is 0xC in jit/src/jit_xtensa.erl");
 #endif

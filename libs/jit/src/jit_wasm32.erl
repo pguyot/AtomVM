@@ -85,6 +85,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -146,6 +147,10 @@
 -define(JITSTATE_MODULE_OFFSET, 16#0).
 -define(JITSTATE_CONTINUATION_OFFSET, 16#4).
 -define(JITSTATE_REDUCTIONCOUNT_OFFSET, 16#8).
+
+%% Module struct offset: module->local_atoms_to_global_table (see _Static_assert
+%% in jit.c). 32-bit Module byte offset; the table is uint32_t[].
+-define(MODULE_LOCAL_ATOMS_TABLE_OFFSET, 16#6C).
 
 %% Jump table entry size: sizeof(uint32_t) for a function pointer
 -define(JUMP_TABLE_ENTRY_SIZE, 4).
@@ -1065,6 +1070,26 @@ get_module_index(State0) ->
         (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
         (jit_wasm32_asm:i32_load(2, ?JITSTATE_MODULE_OFFSET))/binary,
         (jit_wasm32_asm:i32_load(2, 0))/binary,
+        (jit_wasm32_asm:local_set(Local))/binary
+    >>,
+    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Local),
+    State2 = emit(State1, Code),
+    {State2#state{regs = Regs1}, Local}.
+
+%% Load the global atom index for a module-local atom literal, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% local. The shared jit.erl applies the term tag afterwards (shift_left 6,
+%% add 16#B), so the raw 32-bit global atom index is returned untagged.
+%% Each i32_load pops the address on the wasm stack and pushes the loaded i32,
+%% so the three chained loads walk ptr->module->table->table[AtomIndex]. The
+%% table is uint32_t[], so a single i32_load is exact (no zero-extend needed).
+get_module_atom_index(State0, AtomIndex) ->
+    {State1, Local} = alloc_local(State0),
+    Code = <<
+        (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?JITSTATE_MODULE_OFFSET))/binary,
+        (jit_wasm32_asm:i32_load(2, ?MODULE_LOCAL_ATOMS_TABLE_OFFSET))/binary,
+        (jit_wasm32_asm:i32_load(2, AtomIndex * 4))/binary,
         (jit_wasm32_asm:local_set(Local))/binary
     >>,
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Local),

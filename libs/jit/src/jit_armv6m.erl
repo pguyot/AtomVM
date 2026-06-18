@@ -60,6 +60,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -220,6 +221,8 @@
 -define(JITSTATE_REDUCTIONCOUNT(Reg), {Reg, 16#8}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+% module->local_atoms_to_global_table (see _Static_assert in jit.c).
+-define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#6C}).
 
 -define(JUMP_TABLE_ENTRY_SIZE, 12).
 -define(JUMP_TABLE_ENTRY_SIZE_THUMB2, 6).
@@ -3376,6 +3379,63 @@ get_module_index(
     {
         State#state{
             stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs2, RegBit)
+        },
+        Reg
+    }.
+
+%% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% register. The shared jit:get_module_atom_term/3 applies the term tag
+%% afterwards (shift_left 6, add 0xB); we return the raw 32-bit global atom
+%% index. Inlining these loads avoids the primitive-call overhead per access.
+-spec get_module_atom_index(state(), non_neg_integer()) -> {state(), armv6m_register()}.
+get_module_atom_index(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    Avail1 = Avail band (bnot RegBit),
+    TempJitState = first_avail(Avail1),
+    % Load jit_state pointer from stack, then module, then the
+    % local_atoms_to_global_table pointer (Module byte offset 0x6C = 108,
+    % which fits the 5-bit word-scaled LDR immediate: 108 =< 124, 108/4 = 27).
+    I1a = jit_armv6m_asm:ldr(TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I1b = jit_armv6m_asm:ldr(Reg, ?JITSTATE_MODULE(TempJitState)),
+    I2 = jit_armv6m_asm:ldr(Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
+    Stream1 = StreamModule:append(Stream0, <<I1a/binary, I1b/binary, I2/binary>>),
+    % Reg = table[AtomIndex]: each entry is a 4-byte uint32. The Thumb
+    % LDR Rt,[Rn,#imm5*4] immediate reaches only 0..124, so for larger
+    % indexes we materialize the byte offset in the (now free) scratch
+    % register and use the register-offset LDR Rt,[Rn,Rm] form.
+    Offset = AtomIndex * 4,
+    Regs1 = jit_regs:invalidate_reg(Regs0, TempJitState),
+    State1 =
+        case Offset =< 124 of
+            true ->
+                I3 = jit_armv6m_asm:ldr(Reg, {Reg, Offset}),
+                Stream2 = StreamModule:append(Stream1, I3),
+                State#state{stream = Stream2, regs = Regs1};
+            false ->
+                % Materialize AtomIndex*4 into TempJitState (any 32-bit value,
+                % falls back to the literal pool as needed), then use the
+                % register-offset load LDR Reg, [Reg, TempJitState].
+                StateA = mov_immediate(
+                    State#state{stream = Stream1, regs = Regs1}, TempJitState, Offset
+                ),
+                I3 = jit_armv6m_asm:ldr(Reg, {Reg, TempJitState}),
+                Stream2 = StreamModule:append(StateA#state.stream, I3),
+                StateA#state{stream = Stream2}
+        end,
+    Regs2 = jit_regs:set_contents(State1#state.regs, Reg, {atom_index, AtomIndex}),
+    {
+        State1#state{
             regs = jit_regs:alloc_reg(Regs2, RegBit)
         },
         Reg

@@ -63,6 +63,7 @@
     continuation_entry_point/1,
     move_imported_gcbif_to_native_register/3,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -219,6 +220,7 @@
 -define(JITSTATE_REMAINING_REDUCTIONS, {16#10, ?JITSTATE_REG}).
 -define(PRIMITIVE(N), {N * ?WORD_SIZE, ?NATIVE_INTERFACE_REG}).
 -define(MODULE_INDEX(ModuleReg), {0, ModuleReg}).
+-define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {16#D8, ModuleReg}).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
@@ -2628,6 +2630,55 @@ get_module_index(
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, module_index),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, Bit)
+        },
+        Reg
+    }.
+
+%% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% register. The shared jit:get_module_atom_term/3 applies the term tag (the
+%% shift_left/add in jit.erl), so this returns the raw, zero-extended 32-bit
+%% global atom index. This is hot (every non-default atom literal access), so
+%% inlining these loads avoids the primitive-call overhead per access.
+get_module_atom_index(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Bit = reg_bit(Reg),
+    %% Reg = jit_state->module
+    I1 = jit_x86_64_asm:movq(?JITSTATE_MODULE, Reg),
+    %% Reg = module->local_atoms_to_global_table
+    I2 = jit_x86_64_asm:movq(?MODULE_LOCAL_ATOMS_TABLE(Reg), Reg),
+    %% Reg = local_atoms_to_global_table[AtomIndex] (a 32-bit global atom index,
+    %% zero-extended into the 64-bit register). The entries are uint32_t (4 bytes
+    %% wide). movl/2 only has a zero-displacement memory-source form in
+    %% jit_x86_64_asm, so fold the AtomIndex*4 displacement into the base pointer
+    %% first (the offset is a 32-bit immediate so any AtomIndex fits), then do
+    %% the 32-bit movl which zero-extends into the full 64-bit register.
+    Offset = AtomIndex * 4,
+    LoadGid =
+        case Offset of
+            0 ->
+                jit_x86_64_asm:movl({0, Reg}, Reg);
+            _ ->
+                <<
+                    (jit_x86_64_asm:addq(Offset, Reg))/binary,
+                    (jit_x86_64_asm:movl({0, Reg}, Reg))/binary
+                >>
+        end,
+    Code = <<I1/binary, I2/binary, LoadGid/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, {atom_index, AtomIndex}),
     {
         State#state{
             stream = Stream1,
