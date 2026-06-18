@@ -1335,6 +1335,24 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
                             result = (t_size > other_size) ? TermGreaterThan : TermLessThan;
                             goto unequal;
                         }
+                        if (t_size > 0 && term_is_map_tree(t) && term_is_map_tree(other)) {
+                            // Structural equality fast path: a parallel walk that
+                            // short-circuits pointer-identical (shared) subtrees,
+                            // so comparing a map to a path-copied update of itself
+                            // costs O(height) instead of materialising all n
+                            // entries. 1 = equal, 0 = key/value differs, -1 =
+                            // shapes diverge (fall back to the sorted compare).
+                            int se = termtree_struct_equal(
+                                term_get_map_tree_root(t), term_get_map_tree_root(other), global);
+                            if (se == 1) {
+                                CMP_POP_AND_CONTINUE();
+                                break;
+                            }
+                            if (se == 0 && (opts & TermCompareEqualOnly)) {
+                                result = TermLessThan;
+                                goto unequal;
+                            }
+                        }
                         if (t_size > 0) {
                             // Read tree-backed maps sequentially (one O(n) walk
                             // into a scratch array) instead of selecting each

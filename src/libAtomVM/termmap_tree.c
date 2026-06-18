@@ -160,6 +160,53 @@ term termtree_get(term node, term key, GlobalContext *global)
     return term_invalid_term();
 }
 
+int termtree_struct_equal(term a, term b, GlobalContext *global)
+{
+    // Pointer-identical subtrees are trivially equal -- the key short-circuit.
+    // A single-key put path-copies only the root-to-leaf path (and even there
+    // the key terms are shared by reference, only the changed value differs), so
+    // comparing a map to a lightly-updated copy of itself touches O(height)
+    // nodes here instead of materialising and walking all n entries.
+    if (a == b) {
+        return 1;
+    }
+    bool a_leaf = node_is_leaf(a);
+    bool b_leaf = node_is_leaf(b);
+    size_t ak = node_nkeys(a);
+    size_t bk = node_nkeys(b);
+    if (a_leaf != b_leaf || ak != bk) {
+        // The two trees have a different shape here (e.g. an insert caused a
+        // split): aligned-position reasoning no longer holds, so let the caller
+        // fall back to the sorted materialise-and-compare.
+        return -1;
+    }
+    for (size_t i = 0; i < ak; i++) {
+        // In same-shape nodes position i is the i-th key in sorted order, so a
+        // differing key means the two maps have different key sets.
+        term ka = node_key(a, i);
+        term kb = node_key(b, i);
+        if (ka != kb
+            && term_compare(ka, kb, TermCompareExact | TermCompareEqualOnly, global) != TermEquals) {
+            return 0;
+        }
+        term va = node_value(a, i);
+        term vb = node_value(b, i);
+        if (va != vb
+            && term_compare(va, vb, TermCompareExact | TermCompareEqualOnly, global) != TermEquals) {
+            return 0;
+        }
+    }
+    if (!a_leaf) {
+        for (size_t i = 0; i <= ak; i++) {
+            int c = termtree_struct_equal(node_child(a, i), node_child(b, i), global);
+            if (c != 1) {
+                return c;
+            }
+        }
+    }
+    return 1;
+}
+
 // Result of inserting into a subtree: either no split (did_split false, the new
 // subtree is the function's return value) or a split into two siblings around a
 // median entry that the parent must absorb.

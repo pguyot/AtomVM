@@ -59,6 +59,17 @@ static inline term termtree_empty(void)
 size_t termtree_size(term node);
 
 /**
+ * @brief Structural equality of two tree roots, exploiting shared subtrees.
+ *
+ * Walks both trees in parallel, short-circuiting pointer-identical (shared)
+ * subtrees, so comparing a map to a path-copied update of itself is O(height).
+ * @return 1 if the two trees hold the same key/value set, 0 if they provably
+ * differ, or -1 if their shapes diverge (an insert split) so the caller must
+ * fall back to a full sorted comparison.
+ */
+int termtree_struct_equal(term a, term b, struct GlobalContext *global);
+
+/**
  * @brief Look up \p key.
  * @return the associated value, or term_invalid_term() if absent.
  */
