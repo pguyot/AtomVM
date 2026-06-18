@@ -37,6 +37,13 @@ COMPILERS = [
     ("JIT noSMP", str(MATRIX / "erlc-jit-nosmp")),
     ("JIT SMP", str(MATRIX / "erlc-jit-smp")),
 ]
+# Restrict to a subset of configs (comma-separated labels) via CONFIGS, e.g.
+# CONFIGS="BEAM,JIT noSMP,JIT SMP" to skip the slow interpreter columns. BEAM is
+# always kept as the reference even if omitted.
+_configs = os.environ.get("CONFIGS")
+if _configs:
+    _keep = {s.strip() for s in _configs.split(",")} | {"BEAM"}
+    COMPILERS = [c for c in COMPILERS if c[0] in _keep]
 LABELS = [c[0] for c in COMPILERS]
 
 BASE_INC = []
