@@ -7425,14 +7425,36 @@ static term nif_maps_from_keys(Context *ctx, int argc, term argv[])
 }
 
 // Sorted-index access to a map entry, dispatching flat vs tree representation.
-static inline term merge_key_at(term map, bool is_tree, term root, int i)
+// Sorted-index access to a map entry. Tree maps are materialized once into the
+// interleaved array arr = [k0,v0,k1,v1,...] (via termtree_fill_array, one O(n)
+// in-order walk), so each access is O(1); selecting each entry by position would
+// be O(log n), making a full walk O(n log n). For flat maps arr is NULL and the
+// entry is read straight from the map.
+static inline term merge_key_at(term map, const term *arr, int i)
 {
-    return is_tree ? termtree_select_key(root, i) : term_get_map_key(map, i);
+    return arr ? arr[2 * i] : term_get_map_key(map, i);
 }
 
-static inline term merge_value_at(term map, bool is_tree, term root, int i)
+static inline term merge_value_at(term map, const term *arr, int i)
 {
-    return is_tree ? termtree_select_value(root, i) : term_get_map_value(map, i);
+    return arr ? arr[2 * i + 1] : term_get_map_value(map, i);
+}
+
+// If map is tree-backed, materialize its entries into a freshly malloc'd
+// interleaved array of 2*n terms and return it (caller frees); flat maps return
+// NULL (the entry is read directly). Sets *oom on allocation failure.
+static term *map_tree_array(term map, int n, bool *oom)
+{
+    if (!term_is_map_tree(map)) {
+        return NULL;
+    }
+    term *arr = malloc(sizeof(term) * 2 * (size_t) n);
+    if (UNLIKELY(IS_NULL_PTR(arr))) {
+        *oom = true;
+        return NULL;
+    }
+    termtree_fill_array(term_get_map_tree_root(map), arr);
+    return arr;
 }
 
 // Build a flat (<= TERM_MAP_TREE_THRESHOLD) or tree map from u entries given as
@@ -7514,10 +7536,16 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
         return m2;
     }
 
-    bool t1 = term_is_map_tree(m1);
-    bool t2 = term_is_map_tree(m2);
-    term r1 = t1 ? term_get_map_tree_root(m1) : term_nil();
-    term r2 = t2 ? term_get_map_tree_root(m2) : term_nil();
+    // Materialize tree-backed operands once (O(n)) so the walk below is O(1)
+    // per entry; flat operands (a1/a2 == NULL) are read directly.
+    bool oom = false;
+    term *a1 = map_tree_array(m1, n1, &oom);
+    term *a2 = map_tree_array(m2, n2, &oom);
+    if (UNLIKELY(oom)) {
+        free(a1);
+        free(a2);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
 
     // Merge the two sorted (key, value) sequences into a temporary buffer.
     // term_compare uses its own scratch stack and never moves the context heap,
@@ -7527,6 +7555,8 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     size_t cap = (size_t) n1 + (size_t) n2;
     term *kv = malloc(sizeof(term) * 2 * cap);
     if (IS_NULL_PTR(kv)) {
+        free(a1);
+        free(a2);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
@@ -7534,42 +7564,46 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     int j = 0;
     size_t u = 0;
     while (i < n1 && j < n2) {
-        term k1 = merge_key_at(m1, t1, r1, i);
-        term k2 = merge_key_at(m2, t2, r2, j);
+        term k1 = merge_key_at(m1, a1, i);
+        term k2 = merge_key_at(m2, a2, j);
         TermCompareResult c = term_compare(k1, k2, TermCompareExact, glb);
         if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+            free(a1);
+            free(a2);
             free(kv);
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         if (c == TermLessThan) {
             kv[2 * u] = k1;
-            kv[2 * u + 1] = merge_value_at(m1, t1, r1, i);
+            kv[2 * u + 1] = merge_value_at(m1, a1, i);
             i++;
         } else if (c == TermGreaterThan) {
             kv[2 * u] = k2;
-            kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+            kv[2 * u + 1] = merge_value_at(m2, a2, j);
             j++;
         } else {
             // Equal keys: Map2's value wins, both advance.
             kv[2 * u] = k2;
-            kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+            kv[2 * u + 1] = merge_value_at(m2, a2, j);
             i++;
             j++;
         }
         u++;
     }
     while (i < n1) {
-        kv[2 * u] = merge_key_at(m1, t1, r1, i);
-        kv[2 * u + 1] = merge_value_at(m1, t1, r1, i);
+        kv[2 * u] = merge_key_at(m1, a1, i);
+        kv[2 * u + 1] = merge_value_at(m1, a1, i);
         i++;
         u++;
     }
     while (j < n2) {
-        kv[2 * u] = merge_key_at(m2, t2, r2, j);
-        kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+        kv[2 * u] = merge_key_at(m2, a2, j);
+        kv[2 * u + 1] = merge_value_at(m2, a2, j);
         j++;
         u++;
     }
+    free(a1);
+    free(a2);
 
     term result = map_build_from_sorted_kv(ctx, kv, u);
     free(kv);
@@ -7737,21 +7771,28 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     if (n == 0) {
         return map;
     }
-    bool tree = term_is_map_tree(map);
-    term root = tree ? term_get_map_tree_root(map) : term_nil();
+
+    // Materialize a tree-backed map once (O(n)) so the walk is O(1) per entry.
+    bool oom = false;
+    term *arr = map_tree_array(map, n, &oom);
+    if (UNLIKELY(oom)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
 
     // Gather every (key, value) except the target. term_compare never moves the
     // context heap, so the collected terms stay valid until the build below.
     term *kv = malloc(sizeof(term) * 2 * (size_t) n);
     if (IS_NULL_PTR(kv)) {
+        free(arr);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     size_t u = 0;
     bool found = false;
     for (int i = 0; i < n; i++) {
-        term k = merge_key_at(map, tree, root, i);
+        term k = merge_key_at(map, arr, i);
         TermCompareResult c = term_compare(k, key, TermCompareExact | TermCompareEqualOnly, glb);
         if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+            free(arr);
             free(kv);
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -7760,9 +7801,10 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
             continue;
         }
         kv[2 * u] = k;
-        kv[2 * u + 1] = merge_value_at(map, tree, root, i);
+        kv[2 * u + 1] = merge_value_at(map, arr, i);
         u++;
     }
+    free(arr);
     if (!found) {
         // Key absent: the map is returned unchanged (no allocation).
         free(kv);
