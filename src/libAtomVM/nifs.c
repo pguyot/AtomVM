@@ -301,6 +301,8 @@ static term nif_lists_keyfind(Context *ctx, int argc, term argv[]);
 static term nif_lists_keymember(Context *ctx, int argc, term argv[]);
 static term nif_lists_member(Context *ctx, int argc, term argv[]);
 static term nif_maps_from_keys(Context *ctx, int argc, term argv[]);
+static term nif_maps_merge(Context *ctx, int argc, term argv[]);
+static term nif_maps_remove(Context *ctx, int argc, term argv[]);
 static term nif_maps_next(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]);
@@ -993,6 +995,14 @@ static const struct Nif lists_reverse_nif = {
 static const struct Nif maps_from_keys_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_maps_from_keys
+};
+static const struct Nif maps_merge_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_maps_merge
+};
+static const struct Nif maps_remove_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_maps_remove
 };
 static const struct Nif maps_next_nif = {
     .base.type = NIFFunctionType,
@@ -7407,6 +7417,226 @@ static term nif_maps_from_keys(Context *ctx, int argc, term argv[])
     }
 
     return map;
+}
+
+// Sorted-index access to a map entry, dispatching flat vs tree representation.
+static inline term merge_key_at(term map, bool is_tree, term root, int i)
+{
+    return is_tree ? termtree_select_key(root, i) : term_get_map_key(map, i);
+}
+
+static inline term merge_value_at(term map, bool is_tree, term root, int i)
+{
+    return is_tree ? termtree_select_value(root, i) : term_get_map_value(map, i);
+}
+
+// Build a flat (<= TERM_MAP_TREE_THRESHOLD) or tree map from u entries given as
+// 2*u interleaved sorted (key, value) terms in kv. Reserves heap with kv as GC
+// roots so the pairs survive any collection while reserving, then fills the
+// result. Returns the map, or term_invalid_term() on allocation failure (the
+// caller frees kv and raises). Shared by maps:merge/2 and maps:remove/2.
+static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
+{
+    bool as_tree = u > TERM_MAP_TREE_THRESHOLD;
+    size_t need = as_tree
+        ? termtree_from_sorted_heap_size(u) + TERM_MAP_TREE_BOXED_ARITY + 1
+        : TERM_MAP_SIZE(u);
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 2 * u, kv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        return term_invalid_term();
+    }
+
+    if (!as_tree) {
+        term map = term_alloc_map(u, &ctx->heap);
+        for (size_t x = 0; x < u; x++) {
+            term_set_map_assoc(map, x, kv[2 * x], kv[2 * x + 1]);
+        }
+        return map;
+    }
+
+    // termtree_from_sorted needs separate key and value arrays; no GC can run
+    // between here and the build, so the kv terms stay valid.
+    term *keys = malloc(sizeof(term) * u);
+    term *values = malloc(sizeof(term) * u);
+    if (UNLIKELY(IS_NULL_PTR(keys) || IS_NULL_PTR(values))) {
+        free(keys);
+        free(values);
+        return term_invalid_term();
+    }
+    for (size_t x = 0; x < u; x++) {
+        keys[x] = kv[2 * x];
+        values[x] = kv[2 * x + 1];
+    }
+    term root = termtree_from_sorted(&ctx->heap, keys, values, u);
+    term map = term_alloc_map_tree(&ctx->heap, root, u);
+    free(keys);
+    free(values);
+    return map;
+}
+
+// maps:merge/2 -- merge Map2 into Map1, Map2 winning on shared keys. AtomVM
+// keeps map keys in term order, so this is an O(n+m) two-pointer merge of the
+// two already-sorted key sequences with a single result allocation, instead of
+// the O(m) path-copying inserts a fold of Map2 into Map1 would do. This mirrors
+// BEAM, where maps:merge/2 is the maps_merge_2 BIF rather than Erlang code.
+static term nif_maps_merge(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+
+    // Both arguments must be maps; raise {badmap, M} with Map1 checked first,
+    // matching erlang:merge/2 semantics.
+    for (int a = 0; a < 2; a++) {
+        if (UNLIKELY(!term_is_map(argv[a]))) {
+            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 2, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            term err = term_alloc_tuple(2, &ctx->heap);
+            term_put_tuple_element(err, 0, BADMAP_ATOM);
+            term_put_tuple_element(err, 1, argv[a]);
+            RAISE_ERROR(err);
+        }
+    }
+
+    term m1 = argv[0];
+    term m2 = argv[1];
+    int n1 = term_get_map_size(m1);
+    int n2 = term_get_map_size(m2);
+    // Merging with the empty map is identity (maps are immutable).
+    if (n2 == 0) {
+        return m1;
+    }
+    if (n1 == 0) {
+        return m2;
+    }
+
+    bool t1 = term_is_map_tree(m1);
+    bool t2 = term_is_map_tree(m2);
+    term r1 = t1 ? term_get_map_tree_root(m1) : term_nil();
+    term r2 = t2 ? term_get_map_tree_root(m2) : term_nil();
+
+    // Merge the two sorted (key, value) sequences into a temporary buffer.
+    // term_compare uses its own scratch stack and never moves the context heap,
+    // so the gathered terms stay valid until the ensure_free below, at which
+    // point we hand the whole buffer to the GC as roots so it survives any
+    // collection triggered while reserving room for the result.
+    size_t cap = (size_t) n1 + (size_t) n2;
+    term *kv = malloc(sizeof(term) * 2 * cap);
+    if (IS_NULL_PTR(kv)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    int i = 0;
+    int j = 0;
+    size_t u = 0;
+    while (i < n1 && j < n2) {
+        term k1 = merge_key_at(m1, t1, r1, i);
+        term k2 = merge_key_at(m2, t2, r2, j);
+        TermCompareResult c = term_compare(k1, k2, TermCompareExact, glb);
+        if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+            free(kv);
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        if (c == TermLessThan) {
+            kv[2 * u] = k1;
+            kv[2 * u + 1] = merge_value_at(m1, t1, r1, i);
+            i++;
+        } else if (c == TermGreaterThan) {
+            kv[2 * u] = k2;
+            kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+            j++;
+        } else {
+            // Equal keys: Map2's value wins, both advance.
+            kv[2 * u] = k2;
+            kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+            i++;
+            j++;
+        }
+        u++;
+    }
+    while (i < n1) {
+        kv[2 * u] = merge_key_at(m1, t1, r1, i);
+        kv[2 * u + 1] = merge_value_at(m1, t1, r1, i);
+        i++;
+        u++;
+    }
+    while (j < n2) {
+        kv[2 * u] = merge_key_at(m2, t2, r2, j);
+        kv[2 * u + 1] = merge_value_at(m2, t2, r2, j);
+        j++;
+        u++;
+    }
+
+    term result = map_build_from_sorted_kv(ctx, kv, u);
+    free(kv);
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    return result;
+}
+
+// maps:remove/2 -- a single key delete. AtomVM's estdlib version iterates the
+// whole map and rebuilds it one path-copying put at a time (O(n log n), n
+// allocations); this walks the sorted entries once, drops the target, and does
+// one result allocation (O(n)). BEAM has this as the maps_remove_2 BIF too.
+static term nif_maps_remove(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+    term key = argv[0];
+    term map = argv[1];
+
+    if (UNLIKELY(!term_is_map(map))) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 2, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        term err = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(err, 0, BADMAP_ATOM);
+        term_put_tuple_element(err, 1, map);
+        RAISE_ERROR(err);
+    }
+
+    int n = term_get_map_size(map);
+    if (n == 0) {
+        return map;
+    }
+    bool tree = term_is_map_tree(map);
+    term root = tree ? term_get_map_tree_root(map) : term_nil();
+
+    // Gather every (key, value) except the target. term_compare never moves the
+    // context heap, so the collected terms stay valid until the build below.
+    term *kv = malloc(sizeof(term) * 2 * (size_t) n);
+    if (IS_NULL_PTR(kv)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    size_t u = 0;
+    bool found = false;
+    for (int i = 0; i < n; i++) {
+        term k = merge_key_at(map, tree, root, i);
+        TermCompareResult c = term_compare(k, key, TermCompareExact | TermCompareEqualOnly, glb);
+        if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+            free(kv);
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        if (c == TermEquals) {
+            found = true;
+            continue;
+        }
+        kv[2 * u] = k;
+        kv[2 * u + 1] = merge_value_at(map, tree, root, i);
+        u++;
+    }
+    if (!found) {
+        // Key absent: the map is returned unchanged (no allocation).
+        free(kv);
+        return map;
+    }
+
+    term result = map_build_from_sorted_kv(ctx, kv, u);
+    free(kv);
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    return result;
 }
 
 static term nif_maps_next(Context *ctx, int argc, term argv[])
