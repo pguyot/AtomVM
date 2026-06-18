@@ -1874,6 +1874,21 @@ static int jit_term_find_map_pos(Context *ctx, term map, term key)
     return term_find_map_pos(map, key, ctx->global);
 }
 
+// OP_GET_MAP_ELEMENTS miss-path disambiguation. It is reached only after
+// term_get_map_assoc already walked the map and returned invalid_term, so the
+// key is absent (or, for a flat map, the rare compare-OOM rather than a true
+// miss). A tree was thus already walked once and node_find never surfaces the
+// compare-OOM, so it is definitively not-found -- skip the second walk entirely;
+// only a flat map still needs term_find_map_pos to tell a miss from an alloc
+// failure.
+static int jit_term_get_map_assoc_miss(Context *ctx, term map, term key)
+{
+    if (term_is_map_tree(map)) {
+        return TERM_MAP_NOT_FOUND;
+    }
+    return term_find_map_pos(map, key, ctx->global);
+}
+
 static int jit_bitstring_utf8_size(avm_int_t c)
 {
     size_t utf8_size;
@@ -2557,7 +2572,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_set_tuple_element,
     jit_put_map_heap_need,
     jit_map_get_value,
-    jit_term_get_map_assoc
+    jit_term_get_map_assoc,
+    jit_term_get_map_assoc_miss
 };
 
 #endif

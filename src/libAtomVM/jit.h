@@ -261,6 +261,7 @@ struct ModuleNativeInterface
     size_t (*put_map_heap_need)(Context *ctx, term src, size_t new_entries, size_t num_elements);
     term (*map_get_value)(Context *ctx, term map, int pos);
     term (*term_get_map_assoc)(Context *ctx, term map, term key);
+    int (*term_get_map_assoc_miss)(Context *ctx, term map, term key);
 };
 
 extern const ModuleNativeInterface module_native_interface;
