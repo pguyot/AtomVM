@@ -110,6 +110,7 @@
 -include_lib("jit.hrl").
 
 -include("primitives.hrl").
+-include("term.hrl").
 
 -ifdef(JIT_DWARF).
 -include("jit_dwarf.hrl").
@@ -3127,9 +3128,9 @@ float_conv_float(
 ) ->
     Avail0 = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail0 band (bnot reg_bit(BoxedReg))),
-    %% Clear the 2 primary (boxed) tag bits (mask 0x3) to get the boxed pointer,
-    %% load the double from boxed_ptr[1], load fr base, store to fr[FPRegIndex].
-    I1 = jit_aarch64_asm:and_(BoxedReg, BoxedReg, bnot 16#3),
+    %% Clear the 2 primary (boxed) tag bits to get the boxed pointer, load the
+    %% double from boxed_ptr[1], load fr base, store to fr[FPRegIndex].
+    I1 = jit_aarch64_asm:and_(BoxedReg, BoxedReg, bnot ?TERM_PRIMARY_MASK),
     I2 = jit_aarch64_asm:ldr_d(d0, {BoxedReg, ?WORD_SIZE}),
     I3 = jit_aarch64_asm:ldr(Temp, ?FP_REGS),
     I4 = jit_aarch64_asm:str_d(d0, {Temp, ?FP_REG_OFFSET(State0, FPRegIndex)}),

@@ -113,6 +113,7 @@
 -include_lib("jit.hrl").
 
 -include("primitives.hrl").
+-include("term.hrl").
 
 -ifdef(JIT_DWARF).
 -include("jit_dwarf.hrl").
@@ -2866,15 +2867,15 @@ mul_overflow(
     Val
 ) when is_atom(Val) ->
     Avail = jit_regs:available_regs(Regs0),
-    %% Tag size is 4 and the small-integer tag mask is 0xF (see term.h); the
-    %% x86_64 backend does not include term.hrl, so use the literals directly
-    %% (matching the aarch64 mul_overflow).
+    %% The small-integer tag occupies the low 4 bits (mask ?TERM_INTEGER_TAG);
+    %% clear it to get the untagged value, multiply, and the tag is re-applied
+    %% by the caller.
     {Code, Regs1} =
         case Reg =:= Val of
             false ->
                 {
                     <<
-                        (jit_x86_64_asm:andq(bnot 16#F, Reg))/binary,
+                        (jit_x86_64_asm:andq(bnot ?TERM_INTEGER_TAG, Reg))/binary,
                         (jit_x86_64_asm:sarq(4, Val))/binary,
                         (jit_x86_64_asm:imulq(Val, Reg))/binary
                     >>,
@@ -2889,7 +2890,7 @@ mul_overflow(
                 {
                     <<
                         (jit_x86_64_asm:movq(Reg, Tmp))/binary,
-                        (jit_x86_64_asm:andq(bnot 16#F, Reg))/binary,
+                        (jit_x86_64_asm:andq(bnot ?TERM_INTEGER_TAG, Reg))/binary,
                         (jit_x86_64_asm:sarq(4, Tmp))/binary,
                         (jit_x86_64_asm:imulq(Tmp, Reg))/binary
                     >>,
