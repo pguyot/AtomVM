@@ -173,6 +173,8 @@ _Static_assert(offsetof(JITState, remaining_reductions) == 0x10, "jit_state->rem
 
 // Offsets for inlining the imported-BIF resolution at gc_bif call sites.
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+// Offset for inlining atom-term resolution (module-local atom id -> term).
+_Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0x100, "ctx->extended_x_regs is 0x100 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(struct Bif, bif0_ptr) == 0x8, "bif->bif0_ptr is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(struct Bif, base) == 0x0, "bif->base is 0x0 (EXPORTED_FUNCTION_TO_BIF is identity)");

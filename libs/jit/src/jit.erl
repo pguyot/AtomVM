@@ -7045,13 +7045,24 @@ decode_compact_term_atom(AtomIndex, MMod, MSt0, Rest, #state{atom_resolver = Res
     Atom = Resolver(AtomIndex),
     case maps:find(Atom, ?DEFAULT_ATOMS) of
         error ->
-            {MSt1, Reg} = MMod:call_primitive(
-                MSt0, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
-            ),
+            {MSt1, Reg} = emit_module_atom_term(MMod, MSt0, AtomIndex),
             ?TRACE("(get_atom_term_by_id(~p) => ~p)", [AtomIndex, Reg]),
             {MSt1, Reg, Rest};
         {ok, DefaultAtomIndex} ->
             {MSt0, DefaultAtomIndex, Rest}
+    end.
+
+%% Resolve a module-local atom id to its global atom term, returning {State, Reg}.
+%% Backends that implement get_module_atom_term/2 inline the resolution (a few
+%% loads through jit_state->module); otherwise fall back to the primitive call.
+%% This path is extremely hot (every non-default atom literal access -- hundreds
+%% of millions of times when running the Erlang compiler).
+emit_module_atom_term(MMod, MSt, AtomIndex) ->
+    case erlang:function_exported(MMod, get_module_atom_term, 2) of
+        true ->
+            MMod:get_module_atom_term(MSt, AtomIndex);
+        false ->
+            MMod:call_primitive(MSt, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex])
     end.
 
 decode_compact_term_module_literal(LiteralIndex, MMod, MSt0, Rest) ->
