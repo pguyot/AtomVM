@@ -59,6 +59,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -239,6 +240,7 @@
 -define(JITSTATE_REDUCTIONCOUNT_OFFSET, 16#10).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 8}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+-define(MODULE_LOCAL_ATOMS_TABLE_OFFSET, 16#D8).
 
 -define(JUMP_TABLE_ENTRY_SIZE, 8).
 
@@ -344,6 +346,63 @@ supports_div(_State) -> true.
 %% calling the float primitives. False until the inline fp ops are implemented.
 -spec supports_fp(state()) -> boolean().
 supports_fp(_State) -> false.
+
+%% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% register. The shared jit caller applies the term tag; this only loads the raw
+%% 32-bit index. Inlining these loads avoids the primitive-call overhead per
+%% access (this is hot: every non-default atom literal access).
+-spec get_module_atom_index(state(), non_neg_integer()) -> {state(), riscv64_register()}.
+get_module_atom_index(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    %% Reg = jit_state->module (64-bit load, jit_state is in a1)
+    I1 = ?LOAD_WORD(Reg, ?JITSTATE_REG, ?JITSTATE_MODULE_OFFSET),
+    %% Reg = module->local_atoms_to_global_table (64-bit load)
+    I2 = jit_riscv64_asm:ld(Reg, Reg, ?MODULE_LOCAL_ATOMS_TABLE_OFFSET),
+    %% Reg = local_atoms_to_global_table[AtomIndex] (uint32_t[], 4 bytes wide).
+    %% Use lwu to zero-extend the 32-bit index into the 64-bit register (lw would
+    %% sign-extend). RISC-V load offsets are 12-bit signed (-2048..2047), so for
+    %% AtomIndex * 4 > 2047 the byte offset is added to the base first (the offset
+    %% can exceed the 12-bit addi range, so it is materialized in a scratch
+    %% register via li, then added).
+    Offset = AtomIndex * 4,
+    {LoadGid, Regs1} =
+        case Offset =< 2047 of
+            true ->
+                {jit_riscv64_asm:lwu(Reg, Reg, Offset), Regs0};
+            false ->
+                %% Reserve a scratch register to hold the byte offset.
+                AvailScratch = jit_regs:available_regs(jit_regs:alloc_reg(Regs0, RegBit)),
+                Temp = first_avail(AvailScratch),
+                LoadCode =
+                    <<
+                        (jit_riscv64_asm:li(Temp, Offset))/binary,
+                        (jit_riscv64_asm:add(Reg, Reg, Temp))/binary,
+                        (jit_riscv64_asm:lwu(Reg, Reg, 0))/binary
+                    >>,
+                %% Temp is consumed within this sequence; keep Regs unchanged so
+                %% it stays available for later use.
+                {LoadCode, Regs0}
+        end,
+    Code = <<I1/binary, I2/binary, LoadGid/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs2 = jit_regs:set_contents(Regs1, Reg, {atom_index, AtomIndex}),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs2, RegBit)
+        },
+        Reg
+    }.
 
 % LP64: all arguments (including 64-bit) fit in a single register
 parameter_regs0_avm_int64_t(T, [Reg | Rest], Acc) ->
