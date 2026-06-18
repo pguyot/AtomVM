@@ -60,6 +60,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -217,6 +218,8 @@
 -define(JITSTATE_CONTINUATION_OFFSET, 16#4).
 -define(JITSTATE_REDUCTIONCOUNT_OFFSET, 16#8).
 -define(JITSTATE_CODE_BASE_OFFSET, 16#C).
+% module->local_atoms_to_global_table byte offset (see _Static_assert in jit.c).
+-define(MODULE_LOCAL_ATOMS_TABLE_OFFSET, 16#6C).
 
 %% Each jump table entry: literal(4) + ENTRY(3) + L32R(3) + L32I(3) + ADD(3) + JX(3) + pad(1) = 20 bytes
 -define(JUMP_TABLE_ENTRY_SIZE, 20).
@@ -3158,6 +3161,59 @@ get_module_index(
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, module_index),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, RegBit)
+        },
+        Reg
+    }.
+
+%% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% register. The shared jit:get_module_atom_term/3 applies the term tag (shift
+%% left 6, add 16#B) afterwards; this returns the raw 32-bit global atom index.
+%% On Xtensa a word is 32 bits, so the table entry (uint32_t) is loaded directly
+%% with a single L32I.
+-spec get_module_atom_index(state(), non_neg_integer()) -> {state(), xtensa_register()}.
+get_module_atom_index(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    %% Reg = jit_state->module (jit_state is in a3)
+    I1 = jit_xtensa_asm:l32i(Reg, ?JITSTATE_REG, ?JITSTATE_MODULE_OFFSET),
+    %% Reg = module->local_atoms_to_global_table
+    %% (byte offset 0x6C = word index 27, within L32I's 0..1020 range)
+    I2 = jit_xtensa_asm:l32i(Reg, Reg, ?MODULE_LOCAL_ATOMS_TABLE_OFFSET),
+    %% Reg = local_atoms_to_global_table[AtomIndex] (a 32-bit global atom index).
+    %% The entries are 4 bytes wide. The L32I offset must be 0..1020 and a
+    %% multiple of 4; AtomIndex*4 is always a multiple of 4, so when it is within
+    %% range we load it directly. Beyond 1020 (AtomIndex > 255) we materialize the
+    %% byte offset into the a8 scratch register, add it to the base, then L32I at
+    %% offset 0. a8 (?A8_REG) is the file's dedicated scratch and never collides
+    %% with Reg (which comes from the JIT-managed available regs).
+    Offset = AtomIndex * 4,
+    I3 =
+        case Offset =< 1020 of
+            true ->
+                jit_xtensa_asm:l32i(Reg, Reg, Offset);
+            false ->
+                <<
+                    (mov_immediate(?A8_REG, Offset))/binary,
+                    (jit_xtensa_asm:add(Reg, Reg, ?A8_REG))/binary,
+                    (jit_xtensa_asm:l32i(Reg, Reg, 0))/binary
+                >>
+        end,
+    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, {atom_index, AtomIndex}),
     {
         State#state{
             stream = Stream1,

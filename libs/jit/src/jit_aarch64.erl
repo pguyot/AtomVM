@@ -61,7 +61,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
-    get_module_atom_term/2,
+    get_module_atom_index/2,
     move_imported_gcbif_to_native_register/3,
     and_/3,
     or_/3,
@@ -2672,13 +2672,14 @@ get_module_index(
         Reg
     }.
 
-%% @doc Inline the resolution of a module-local atom id to its global atom term,
-%% i.e. module_get_atom_term_by_id(jit_state->module, AtomIndex). This is hot
-%% (every non-default atom literal access; hundreds of millions of times in the
-%% compiler), so emitting the four loads/ops here avoids the primitive-call
-%% overhead (table load + indirect branch + register save/restore) per access.
--spec get_module_atom_term(state(), non_neg_integer()) -> {state(), aarch64_register()}.
-get_module_atom_term(
+%% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
+%% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
+%% register. The shared jit:get_module_atom_term/3 applies the term tag. This is
+%% hot (every non-default atom literal access; hundreds of millions of times in
+%% the compiler), so inlining these loads avoids the primitive-call overhead
+%% (table load + indirect branch + register save/restore) per access.
+-spec get_module_atom_index(state(), non_neg_integer()) -> {state(), aarch64_register()}.
+get_module_atom_index(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -2708,14 +2709,9 @@ get_module_atom_term(
                     (jit_aarch64_asm:ldr_w(Reg, {Reg, 0}))/binary
                 >>
         end,
-    %% Reg = (global_id bsl ?TERM_IMMED2_TAG_SIZE) bor ?TERM_IMMED2_ATOM, i.e.
-    %% TERM_FROM_ATOM_INDEX. The low tag bits are zero after the shift, so a
-    %% plain add applies the atom tag without a spare register.
-    I4 = jit_aarch64_asm:lsl(Reg, Reg, ?TERM_IMMED2_TAG_SIZE),
-    I5 = jit_aarch64_asm:add(Reg, Reg, ?TERM_IMMED2_ATOM),
-    Code = <<I1/binary, I2/binary, LoadGid/binary, I4/binary, I5/binary>>,
+    Code = <<I1/binary, I2/binary, LoadGid/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:set_contents(Regs0, Reg, {atom_term, AtomIndex}),
+    Regs1 = jit_regs:set_contents(Regs0, Reg, {atom_index, AtomIndex}),
     {
         State#state{
             stream = Stream1,

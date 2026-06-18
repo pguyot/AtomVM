@@ -60,6 +60,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module_atom_index/2,
     and_/3,
     or_/3,
     add/3,
@@ -200,6 +201,7 @@
 -define(JITSTATE_REDUCTIONCOUNT(Reg), {Reg, 16#8}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+-define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#6C}).
 
 -define(JUMP_TABLE_ENTRY_SIZE, 8).
 
@@ -3020,6 +3022,62 @@ get_module_index(
     {
         State#state{
             stream = Stream1,
+            regs = Regs3
+        },
+        Reg
+    }.
+
+%% @doc Load the global atom index for a module-local atom index.
+%% Returns a register holding the raw 32-bit global atom index (untagged); the
+%% caller (jit.erl) applies the term tag (shift_left 6, add 16#B) afterwards.
+get_module_atom_index(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    AtomIndex
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    Avail1 = Avail band (bnot RegBit),
+    TempJitState = first_avail(Avail1),
+    % Load jit_state pointer from stack, then Reg = jit_state->module
+    I1a = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
+    % Reg = module->local_atoms_to_global_table
+    I2 = jit_arm32_asm:ldr(al, Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
+    Stream1 = StreamModule:append(Stream0, <<I1a/binary, I1b/binary, I2/binary>>),
+    % Reg = local_atoms_to_global_table[AtomIndex] (table is uint32_t[]; each
+    % entry is 4 bytes). ldr immediate offset range is 0..4095. For larger
+    % offsets, materialize the offset into a temp register (reusing TempJitState,
+    % which is free after the jit_state load), add it to the base, then ldr at
+    % offset 0.
+    Offset = AtomIndex * 4,
+    State2 =
+        case Offset =< 4095 of
+            true ->
+                I3 = jit_arm32_asm:ldr(al, Reg, {Reg, Offset}),
+                State#state{
+                    stream = StreamModule:append(Stream1, I3),
+                    regs = Regs0
+                };
+            false ->
+                StateOff = mov_immediate(
+                    State#state{stream = Stream1, regs = Regs0}, TempJitState, Offset
+                ),
+                I3 = jit_arm32_asm:add(al, Reg, Reg, TempJitState),
+                I4 = jit_arm32_asm:ldr(al, Reg, {Reg, 0}),
+                StateOff#state{
+                    stream = StreamModule:append(StateOff#state.stream, <<I3/binary, I4/binary>>)
+                }
+        end,
+    Regs1 = jit_regs:invalidate_reg(State2#state.regs, TempJitState),
+    Regs2 = jit_regs:set_contents(Regs1, Reg, {atom_index, AtomIndex}),
+    Regs3 = jit_regs:alloc_reg(Regs2, RegBit),
+    {
+        State2#state{
             regs = Regs3
         },
         Reg
