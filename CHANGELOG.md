@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
   non-finite-result check, instead of calling the C float primitives
 - Added `persistent_term` module with `get/0,1,2`, `put/2`, `put_new/2`, `erase/1`, and `info/0`
+- Added `erlang:term_to_binary/2`, `erlang:is_builtin/3` and `erlang:bitstring_to_list/1`
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
