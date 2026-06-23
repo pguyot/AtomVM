@@ -46,6 +46,7 @@
 %% Internal API, used by the application module.
 -export([
     ensure_started/0,
+    start/1,
     load_application/1,
     unload_application/1,
     start_application/2,
@@ -87,6 +88,26 @@ ensure_started() ->
             case gen_server:start({local, ?MODULE}, ?MODULE, [], []) of
                 {ok, _Pid} -> ok;
                 {error, {already_started, _Pid}} -> ok
+            end
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @doc Start the controller with an application's data already loaded. Called
+%% from a boot script via
+%% `{kernelProcess, application_controller, {application_controller, start, [ApplData]}}'.
+%% Idempotent: if the controller is already running, the running pid is returned
+%% and ApplData is not re-loaded.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec start(ApplData :: {application, atom(), [tuple()]}) -> {ok, pid()}.
+start(ApplData) ->
+    case whereis(?MODULE) of
+        Pid when is_pid(Pid) ->
+            {ok, Pid};
+        undefined ->
+            case gen_server:start({local, ?MODULE}, ?MODULE, [ApplData], []) of
+                {ok, Pid} -> {ok, Pid};
+                {error, {already_started, Pid}} -> {ok, Pid}
             end
     end.
 
@@ -141,22 +162,16 @@ call(Request) ->
 %% @hidden
 init([]) ->
     process_flag(trap_exit, true),
-    {ok, #state{}}.
+    {ok, #state{}};
+init([{application, _App, _Keys} = ApplData]) ->
+    process_flag(trap_exit, true),
+    {_Reply, State} = load_app(ApplData, #state{}),
+    {ok, State}.
 
 %% @hidden
-handle_call({load, {application, App, Keys}}, _From, State) ->
-    case maps:is_key(App, State#state.loaded) of
-        true ->
-            {reply, {error, {already_loaded, App}}, State};
-        false ->
-            Env0 = proplists:get_value(env, Keys, []),
-            EnvMap = maps:from_list(Env0),
-            NewState = State#state{
-                loaded = maps:put(App, Keys, State#state.loaded),
-                env = maps:put(App, EnvMap, State#state.env)
-            },
-            {reply, ok, NewState}
-    end;
+handle_call({load, AppSpec}, _From, State) ->
+    {Reply, NewState} = load_app(AppSpec, State),
+    {reply, Reply, NewState};
 handle_call({unload, App}, _From, State) ->
     case is_active(App, State) of
         true ->
@@ -286,6 +301,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%-----------------------------------------------------------------------------
 %% internal
 %%-----------------------------------------------------------------------------
+load_app({application, App, Keys}, State) ->
+    case maps:is_key(App, State#state.loaded) of
+        true ->
+            {{error, {already_loaded, App}}, State};
+        false ->
+            Env0 = proplists:get_value(env, Keys, []),
+            EnvMap = maps:from_list(Env0),
+            {ok, State#state{
+                loaded = maps:put(App, Keys, State#state.loaded),
+                env = maps:put(App, EnvMap, State#state.env)
+            }}
+    end.
+
 do_start(App, Type, Keys, From, State) ->
     Deps = proplists:get_value(applications, Keys, []),
     case missing_dependency(Deps, State#state.running) of
