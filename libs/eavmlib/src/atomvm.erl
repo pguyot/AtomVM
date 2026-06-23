@@ -35,6 +35,7 @@
     add_avm_pack_file/2,
     close_avm_pack/2,
     get_start_beam/1,
+    get_boot/0,
     posix_open/2,
     posix_open/3,
     posix_close/1,
@@ -241,6 +242,19 @@ close_avm_pack(_Name, _Options) ->
 %%-----------------------------------------------------------------------------
 -spec get_start_beam(AVM :: atom()) -> {ok, binary()} | {error, not_found}.
 get_start_beam(_AVM) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, BootData}' if a boot script is embedded in a loaded AVM pack,
+%%          otherwise `undefined'
+%% @doc     Get the OTP `.boot' boot script embedded in a loaded AVM pack as a
+%%          top-level `start.boot' section. The returned binary is the
+%%          `term_to_binary' encoded boot script, suitable for
+%%          {@link init:boot_script/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_boot() -> {ok, binary()} | undefined.
+get_boot() ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
