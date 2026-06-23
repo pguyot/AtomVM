@@ -24,6 +24,7 @@ include(BuildErlang)
 
 set(ERLANG_MODULES
     test_apply
+    test_application
     test_binary
     test_calendar
     test_epmd
