@@ -61,6 +61,7 @@ get_non_networking_tests(OTPVersion) when OTPVersion >= 27 ->
 get_non_networking_tests(_OTPVersion) ->
     [
         test_apply,
+        test_application,
         test_binary,
         test_lists,
         test_calendar,
