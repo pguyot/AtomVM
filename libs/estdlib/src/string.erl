@@ -34,6 +34,7 @@
     trim/1, trim/2,
     find/2, find/3,
     length/1,
+    to_integer/1,
     jaro_similarity/2
 ]).
 
@@ -270,6 +271,32 @@ length(String) when is_list(String) ->
     erlang:length(String);
 length(String) when is_binary(String) ->
     erlang:length(unicode:characters_to_list(String)).
+
+%%-----------------------------------------------------------------------------
+%% @param String a string possibly beginning with an integer
+%% @returns `{Int, Rest}' where `Rest' is the remainder of the string, or
+%%          `{error, no_integer}' if it does not begin with an integer
+%% @doc Parse a leading (optionally signed) integer from a string.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec to_integer(String :: string()) -> {integer(), string()} | {error, no_integer}.
+to_integer(String) when is_list(String) ->
+    {Sign, Rest0} =
+        case String of
+            [$- | R] -> {-1, R};
+            [$+ | R] -> {1, R};
+            _ -> {1, String}
+        end,
+    case take_digits(Rest0, []) of
+        {[], _Rest} -> {error, no_integer};
+        {Digits, Rest} -> {Sign * list_to_integer(Digits), Rest}
+    end.
+
+%% @private
+take_digits([C | T], Acc) when C >= $0 andalso C =< $9 ->
+    take_digits(T, [C | Acc]);
+take_digits(Rest, Acc) ->
+    {lists:reverse(Acc), Rest}.
 
 %%-----------------------------------------------------------------------------
 %% @param String1 first string to compare

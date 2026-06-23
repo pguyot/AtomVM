@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application:load/1` can now load an application by name, reading its specification from an
   `<App>.app.bin` resource (a `term_to_binary` encoded `{application, Name, Keys}`) in the AVM
   pack; `application:ensure_all_started/1,2` loads applications this way as needed
+- Added `string:to_integer/1`
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
