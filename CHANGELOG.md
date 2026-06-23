@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for `rest_for_one` and `simple_one_for_one` supervisor restart strategies
 - Added `init:boot_script/1` to evaluate an OTP `.boot` boot script (as produced by
   `systools:make_script/2`), and `application:start_boot/2`
+- Added `atomvm:get_boot/0` to read an OTP `.boot` boot script embedded in an AVM pack as a
+  top-level `start.boot` section; `init:boot/1` now boots from it when present
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:

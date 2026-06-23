@@ -72,9 +72,17 @@ boot([<<"-s">>, escript, <<"--">>, _Filename | Args]) ->
             error
     end;
 boot([<<"-s">>, StartupModule]) when is_atom(StartupModule) ->
-    % Until we have boot scripts, we just start kernel application.
-    {ok, _KernelPid} = kernel:start(boot, []),
-    StartupModule:start().
+    case atomvm:get_boot() of
+        {ok, BootData} ->
+            % A release boot script is embedded: it is the sole kernel and
+            % application starter (it brings up kernel through the application
+            % controller), so we do not start kernel ourselves here.
+            boot_script(BootData);
+        undefined ->
+            % No boot script: start the kernel application and the start module.
+            {ok, _KernelPid} = kernel:start(boot, []),
+            StartupModule:start()
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param BootData the contents of an OTP `.boot' file: a `term_to_binary'
@@ -96,36 +104,44 @@ boot([<<"-s">>, StartupModule]) when is_atom(StartupModule) ->
 -spec boot_script(BootData :: binary()) -> ok.
 boot_script(BootData) when is_binary(BootData) ->
     {script, {_Name, _Vsn}, Instructions} = binary_to_term(BootData),
-    eval_script(Instructions).
+    %% The set of modules available from the AVM pack(s), used to skip applies
+    %% for modules AtomVM does not provide without triggering noisy load
+    %% failures (e.g. the heart/logger_server kernel processes of a stock boot).
+    Available = available_modules(),
+    eval_script(Instructions, Available).
 
 %% @private
-eval_script([]) ->
+eval_script([], _Available) ->
     ok;
-eval_script([Instruction | Rest]) ->
-    eval_instruction(Instruction),
-    eval_script(Rest).
+eval_script([Instruction | Rest], Available) ->
+    eval_instruction(Instruction, Available),
+    eval_script(Rest, Available).
 
 %% @private
-eval_instruction({progress, _Info}) -> ok;
-eval_instruction({preLoaded, _Modules}) -> ok;
-eval_instruction({path, _Paths}) -> ok;
-eval_instruction({primLoad, _Modules}) -> ok;
-eval_instruction({kernel_load_completed}) -> ok;
-eval_instruction({kernelProcess, _Name, MFA}) -> boot_apply(MFA);
-eval_instruction({apply, MFA}) -> boot_apply(MFA);
-eval_instruction(_Other) -> ok.
+eval_instruction({progress, _Info}, _Available) -> ok;
+eval_instruction({preLoaded, _Modules}, _Available) -> ok;
+eval_instruction({path, _Paths}, _Available) -> ok;
+eval_instruction({primLoad, _Modules}, _Available) -> ok;
+eval_instruction({kernel_load_completed}, _Available) -> ok;
+eval_instruction({kernelProcess, _Name, MFA}, Available) -> boot_apply(MFA, Available);
+eval_instruction({apply, MFA}, Available) -> boot_apply(MFA, Available);
+eval_instruction(_Other, _Available) -> ok.
 
 %% @private
 %% Apply a boot instruction, tolerating modules AtomVM does not provide so a
 %% stock OTP boot script remains usable.
-boot_apply({Module, Function, Args}) ->
-    case code:ensure_loaded(Module) of
-        {module, Module} ->
+boot_apply({Module, Function, Args}, Available) ->
+    case lists:member(atom_to_binary(Module, utf8), Available) of
+        true ->
             _ = apply(Module, Function, Args),
             ok;
-        _Error ->
+        false ->
             ok
     end.
+
+%% @private
+available_modules() ->
+    [Name || {Name, _Path, _Loaded} <- code:all_available()].
 
 %%-----------------------------------------------------------------------------
 %% @param Flag flag to get values for
