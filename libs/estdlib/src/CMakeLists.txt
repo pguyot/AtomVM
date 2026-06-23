@@ -24,6 +24,8 @@ include(BuildErlang)
 
 set(ERLANG_MODULES
     application
+    application_controller
+    application_master
     base64
     binary
     calendar
