@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `which_applications/0`, `get_key/2`, `get_env/2,3`, `set_env/3`, `unset_env/2` and
   `get_all_env/1`
 - Added support for `rest_for_one` and `simple_one_for_one` supervisor restart strategies
+- Added `init:boot_script/1` to evaluate an OTP `.boot` boot script (as produced by
+  `systools:make_script/2`), and `application:start_boot/2`
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
