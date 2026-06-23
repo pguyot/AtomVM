@@ -262,6 +262,7 @@ static term nif_atomvm_add_avm_pack_binary(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_add_avm_pack_file(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_close_avm_pack(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_get_start_beam(Context *ctx, int argc, term argv[]);
+static term nif_atomvm_get_boot(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_read_priv(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_get_creation(Context *ctx, int argc, term argv[]);
 static term nif_console_print(Context *ctx, int argc, term argv[]);
@@ -858,6 +859,10 @@ static const struct Nif atomvm_close_avm_pack_nif = {
 static const struct Nif atomvm_get_start_beam_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_atomvm_get_start_beam
+};
+static const struct Nif atomvm_get_boot_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_atomvm_get_boot
 };
 static const struct Nif atomvm_read_priv_nif = {
     .base.type = NIFFunctionType,
@@ -6002,6 +6007,44 @@ static term nif_atomvm_get_start_beam(Context *ctx, int argc, term argv[])
     term result = term_alloc_tuple(2, &ctx->heap);
     term_put_tuple_element(result, 0, ERROR_ATOM);
     term_put_tuple_element(result, 1, not_found);
+    return result;
+}
+
+// AtomVM extension: locate an OTP .boot boot script embedded in a loaded AVM
+// pack as a top-level "start.boot" section. Returns {ok, Binary} or undefined.
+static term nif_atomvm_get_boot(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    UNUSED(argv);
+
+    GlobalContext *glb = ctx->global;
+    const void *bin_data;
+    uint32_t size;
+    term result = UNDEFINED_ATOM;
+    struct ListHead *avmpack_data = synclist_rdlock(&glb->avmpack_data);
+    struct ListHead *item;
+    LIST_FOR_EACH (item, avmpack_data) {
+        struct AVMPackData *avmpack_data = GET_LIST_ENTRY(item, struct AVMPackData, avmpack_head);
+        bool prev_in_use = avmpack_data->in_use;
+        avmpack_data->in_use = true;
+        if (avmpack_find_section_by_name(avmpack_data->data, "start.boot", &bin_data, &size)) {
+            uint32_t file_size = READ_32_ALIGNED((uint32_t *) bin_data);
+            if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2) + TERM_BOXED_REFC_BINARY_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                avmpack_data->in_use = prev_in_use;
+                synclist_unlock(&glb->avmpack_data);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            term boot_bin = term_from_const_binary(((uint8_t *) bin_data) + sizeof(uint32_t), file_size, &ctx->heap, ctx->global);
+            result = term_alloc_tuple(2, &ctx->heap);
+            term_put_tuple_element(result, 0, OK_ATOM);
+            term_put_tuple_element(result, 1, boot_bin);
+            break;
+        } else {
+            avmpack_data->in_use = prev_in_use;
+        }
+    }
+    synclist_unlock(&glb->avmpack_data);
+
     return result;
 }
 
