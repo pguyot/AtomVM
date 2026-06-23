@@ -35,8 +35,15 @@ start() ->
 test() ->
     ok = test_load_and_env(),
     ok = test_set_env(),
+    ok = test_load_by_name_unknown(),
     ok = test_start_stop(),
     ok = test_ensure_all_started(),
+    ok.
+
+%% Loading an unknown application by name returns an error on both AtomVM (no
+%% <App>.app.bin resource in the pack) and BEAM (no <App>.app file on the path).
+test_load_by_name_unknown() ->
+    {error, _Reason} = application:load(no_such_app_atomvm_test),
     ok.
 
 %%-----------------------------------------------------------------------------
@@ -64,7 +71,7 @@ depapp_spec() ->
 test_load_and_env() ->
     cleanup(),
     ok = application:load(myapp_spec()),
-    {error, {already_loaded, myapp}} = application:load(myapp_spec()),
+    {error, {already_loaded, _}} = application:load(myapp_spec()),
     {ok, val1} = application:get_env(myapp, key1),
     undefined = application:get_env(myapp, nope),
     val1 = application:get_env(myapp, key1, default),

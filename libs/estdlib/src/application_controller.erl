@@ -111,10 +111,10 @@ start(ApplData) ->
             end
     end.
 
--spec load_application(AppSpec :: {application, atom(), [tuple()]}) ->
+-spec load_application(Application :: atom() | {application, atom(), [tuple()]}) ->
     ok | {error, term()}.
-load_application(AppSpec) ->
-    call({load, AppSpec}).
+load_application(Application) ->
+    call({load, Application}).
 
 -spec unload_application(App :: atom()) -> ok | {error, term()}.
 unload_application(App) ->
@@ -301,6 +301,18 @@ code_change(_OldVsn, State, _Extra) ->
 %%-----------------------------------------------------------------------------
 %% internal
 %%-----------------------------------------------------------------------------
+load_app(Application, State) when is_atom(Application) ->
+    %% Load by name: resolve the application spec from its <App>.app.bin
+    %% resource in the AVM pack, unless it is already loaded.
+    case maps:is_key(Application, State#state.loaded) of
+        true ->
+            {{error, {already_loaded, Application}}, State};
+        false ->
+            case read_app_spec(Application) of
+                {ok, AppSpec} -> load_app(AppSpec, State);
+                {error, _Reason} = Error -> {Error, State}
+            end
+    end;
 load_app({application, App, Keys}, State) ->
     case maps:is_key(App, State#state.loaded) of
         true ->
@@ -312,6 +324,23 @@ load_app({application, App, Keys}, State) ->
                 loaded = maps:put(App, Keys, State#state.loaded),
                 env = maps:put(App, EnvMap, State#state.env)
             }}
+    end.
+
+%% Read and decode an application's <App>.app.bin resource from the AVM pack.
+read_app_spec(Application) ->
+    FileName = atom_to_list(Application) ++ ".app.bin",
+    try atomvm:read_priv(Application, FileName) of
+        Bin when is_binary(Bin) ->
+            try binary_to_term(Bin) of
+                {application, _Name, _Keys} = AppSpec -> {ok, AppSpec};
+                _Other -> {error, {invalid_app_resource, Application}}
+            catch
+                _Class:_Reason -> {error, {invalid_app_resource, Application}}
+            end;
+        undefined ->
+            {error, {not_loaded, Application}}
+    catch
+        error:badarg -> {error, {not_loaded, Application}}
     end.
 
 do_start(App, Type, Keys, From, State) ->

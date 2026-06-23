@@ -53,14 +53,18 @@
 -type app_spec() :: {application, atom(), [tuple()]}.
 
 %%-----------------------------------------------------------------------------
-%% @param   AppSpec application specification `{application, Name, Keys}'
-%% @returns `ok' or `{error, {already_loaded, Name}}'
-%% @doc     Load an application from its specification.
+%% @param   Application an application name, or an application specification
+%%          `{application, Name, Keys}'
+%% @returns `ok' or `{error, Reason}' (e.g. `{already_loaded, Name}')
+%% @doc     Load an application. When given a name, the application
+%%          specification is read from an `<Application>.app.bin' resource (a
+%%          `term_to_binary' encoded `{application, Name, Keys}') in the AVM
+%%          pack; when given a specification, it is loaded directly.
 %% @end
 %%-----------------------------------------------------------------------------
--spec load(AppSpec :: app_spec()) -> ok | {error, term()}.
-load({application, _Name, _Keys} = AppSpec) ->
-    application_controller:load_application(AppSpec).
+-spec load(Application :: atom() | app_spec()) -> ok | {error, term()}.
+load(Application) ->
+    application_controller:load_application(Application).
 
 %%-----------------------------------------------------------------------------
 %% @param   Application application to unload
@@ -218,6 +222,9 @@ do_ensure_started(Application, Type, Started) ->
         true ->
             {ok, Started};
         false ->
+            %% Load the application (from its <App>.app.bin resource) if it is
+            %% not already loaded, so its dependencies can be resolved.
+            _ = load(Application),
             Deps = dependencies(Application),
             case do_ensure_started_list(Deps, Type, Started) of
                 {ok, Started1} ->
