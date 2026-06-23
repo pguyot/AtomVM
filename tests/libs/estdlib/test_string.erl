@@ -30,6 +30,16 @@ test() ->
     ok = test_trim(),
     ok = test_find(),
     ok = test_length(),
+    ok = test_to_integer(),
+    ok.
+
+test_to_integer() ->
+    {27, ""} = string:to_integer("27"),
+    {12, "abc"} = string:to_integer("12abc"),
+    {-5, "x"} = string:to_integer("-5x"),
+    {42, ""} = string:to_integer("+42"),
+    {error, no_integer} = string:to_integer("abc"),
+    {error, no_integer} = string:to_integer(""),
     ok.
 
 test_to_upper() ->
