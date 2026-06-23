@@ -37,8 +37,12 @@ test() ->
     error = init:get_argument(no_such_flag_atomvm_test),
     %% init:boot_script/1 is AtomVM-specific (BEAM's init has no such function).
     case erlang:system_info(machine) of
-        "BEAM" -> ok;
-        _ -> ok = test_boot_script()
+        "BEAM" ->
+            ok;
+        _ ->
+            %% No boot script is embedded in the test AVM pack.
+            undefined = atomvm:get_boot(),
+            ok = test_boot_script()
     end,
     ok.
 
