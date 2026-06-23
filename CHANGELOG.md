@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application:load/1` can now load an application by name, reading its specification from an
   `<App>.app.bin` resource (a `term_to_binary` encoded `{application, Name, Keys}`) in the AVM
   pack; `application:ensure_all_started/1,2` loads applications this way as needed
+- Added a Linux `gpio` driver for the generic_unix port (in `avm_unix`), backed by the sysfs
+  GPIO interface via `atomvm:posix_*`, with `set_pin_mode/2`, `digital_write/2` and
+  `digital_read/1`
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
