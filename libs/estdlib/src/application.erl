@@ -34,6 +34,7 @@
     unload/1,
     start/1,
     start/2,
+    start_boot/2,
     ensure_all_started/1,
     ensure_all_started/2,
     stop/1,
@@ -89,6 +90,19 @@ start(Application) ->
 %%-----------------------------------------------------------------------------
 -spec start(Application :: atom(), Type :: restart_type()) -> ok | {error, term()}.
 start(Application, Type) ->
+    application_controller:start_application(Application, Type).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to start
+%% @param   Type restart type
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Start an application from a boot script. The application is expected
+%%          to have been loaded already (the boot script loads it first). On
+%%          AtomVM this is equivalent to {@link start/2}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec start_boot(Application :: atom(), Type :: restart_type()) -> ok | {error, term()}.
+start_boot(Application, Type) ->
     application_controller:start_application(Application, Type).
 
 %%-----------------------------------------------------------------------------
