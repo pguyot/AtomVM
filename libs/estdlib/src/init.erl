@@ -29,6 +29,7 @@
 
 -export([
     boot/1,
+    boot_script/1,
     get_argument/1,
     get_plain_arguments/0,
     get_arguments/0,
@@ -74,6 +75,57 @@ boot([<<"-s">>, StartupModule]) when is_atom(StartupModule) ->
     % Until we have boot scripts, we just start kernel application.
     {ok, _KernelPid} = kernel:start(boot, []),
     StartupModule:start().
+
+%%-----------------------------------------------------------------------------
+%% @param BootData the contents of an OTP `.boot' file: a `term_to_binary'
+%% encoded boot script, as produced by `systools:make_script/2' (e.g. with the
+%% `no_dot_erlang' option).
+%% @doc Evaluate an OTP boot script.
+%%
+%% The boot script is decoded with `binary_to_term/1' and its instructions are
+%% evaluated in order. AtomVM loads modules on demand from its packbeam, so the
+%% module-loading instructions (`preLoaded', `path', `primLoad' and
+%% `kernel_load_completed') are no-ops, mirroring OTP's non-embedded behaviour
+%% where the code server loads modules dynamically. `kernelProcess' and `apply'
+%% instructions are applied; an instruction whose module is not available on
+%% AtomVM (for example the `heart' or `logger_server' kernel processes
+%% referenced by a stock OTP boot script) is skipped rather than aborting the
+%% boot.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec boot_script(BootData :: binary()) -> ok.
+boot_script(BootData) when is_binary(BootData) ->
+    {script, {_Name, _Vsn}, Instructions} = binary_to_term(BootData),
+    eval_script(Instructions).
+
+%% @private
+eval_script([]) ->
+    ok;
+eval_script([Instruction | Rest]) ->
+    eval_instruction(Instruction),
+    eval_script(Rest).
+
+%% @private
+eval_instruction({progress, _Info}) -> ok;
+eval_instruction({preLoaded, _Modules}) -> ok;
+eval_instruction({path, _Paths}) -> ok;
+eval_instruction({primLoad, _Modules}) -> ok;
+eval_instruction({kernel_load_completed}) -> ok;
+eval_instruction({kernelProcess, _Name, MFA}) -> boot_apply(MFA);
+eval_instruction({apply, MFA}) -> boot_apply(MFA);
+eval_instruction(_Other) -> ok.
+
+%% @private
+%% Apply a boot instruction, tolerating modules AtomVM does not provide so a
+%% stock OTP boot script remains usable.
+boot_apply({Module, Function, Args}) ->
+    case code:ensure_loaded(Module) of
+        {module, Module} ->
+            _ = apply(Module, Function, Args),
+            ok;
+        _Error ->
+            ok
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param Flag flag to get values for
