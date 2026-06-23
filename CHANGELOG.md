@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `systools:make_script/2`), and `application:start_boot/2`
 - Added `atomvm:get_boot/0` to read an OTP `.boot` boot script embedded in an AVM pack as a
   top-level `start.boot` section; `init:boot/1` now boots from it when present
+- `application:load/1` can now load an application by name, reading its specification from an
+  `<App>.app.bin` resource (a `term_to_binary` encoded `{application, Name, Keys}`) in the AVM
+  pack; `application:ensure_all_started/1,2` loads applications this way as needed
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
