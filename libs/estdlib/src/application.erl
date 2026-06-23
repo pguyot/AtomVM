@@ -18,32 +18,221 @@
 % SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %
 
+%%-----------------------------------------------------------------------------
+%% @doc An implementation of a subset of the Erlang/OTP application interface.
+%%
+%% Applications are backed by the {@link application_controller}, which is
+%% started lazily on first use. Loading currently expects an application
+%% specification term (`{application, Name, Keys}'); loading by name from a
+%% packbeam resource is not yet supported.
+%% @end
+%%-----------------------------------------------------------------------------
 -module(application).
--export([get_env/2, get_env/3]).
+
+-export([
+    load/1,
+    unload/1,
+    start/1,
+    start/2,
+    ensure_all_started/1,
+    ensure_all_started/2,
+    stop/1,
+    which_applications/0,
+    get_key/2,
+    get_env/2,
+    get_env/3,
+    set_env/3,
+    unset_env/2,
+    get_all_env/1
+]).
 -export_type([start_type/0]).
 
 -type start_type() :: normal | {takeover, Node :: node()} | {failover, Node :: node()}.
+-type restart_type() :: permanent | transient | temporary.
+-type app_spec() :: {application, atom(), [tuple()]}.
+
+%%-----------------------------------------------------------------------------
+%% @param   AppSpec application specification `{application, Name, Keys}'
+%% @returns `ok' or `{error, {already_loaded, Name}}'
+%% @doc     Load an application from its specification.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec load(AppSpec :: app_spec()) -> ok | {error, term()}.
+load({application, _Name, _Keys} = AppSpec) ->
+    application_controller:load_application(AppSpec).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to unload
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Unload an application. The application must not be running.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec unload(Application :: atom()) -> ok | {error, term()}.
+unload(Application) ->
+    application_controller:unload_application(Application).
+
+%%-----------------------------------------------------------------------------
+%% @equiv start(Application, temporary)
+%% @end
+%%-----------------------------------------------------------------------------
+-spec start(Application :: atom()) -> ok | {error, term()}.
+start(Application) ->
+    start(Application, temporary).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to start
+%% @param   Type restart type
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Start an application. Every application it depends on must already
+%%          be started, otherwise `{error, {not_started, Dep}}' is returned.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec start(Application :: atom(), Type :: restart_type()) -> ok | {error, term()}.
+start(Application, Type) ->
+    application_controller:start_application(Application, Type).
+
+%%-----------------------------------------------------------------------------
+%% @equiv ensure_all_started(Application, temporary)
+%% @end
+%%-----------------------------------------------------------------------------
+-spec ensure_all_started(Application :: atom()) ->
+    {ok, [atom()]} | {error, term()}.
+ensure_all_started(Application) ->
+    ensure_all_started(Application, temporary).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to start
+%% @param   Type restart type
+%% @returns `{ok, Started}' where `Started' lists the applications that were
+%%          started (dependencies first), or `{error, Reason}'
+%% @doc     Start an application and all the applications it depends on, in
+%%          dependency order.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec ensure_all_started(Application :: atom(), Type :: restart_type()) ->
+    {ok, [atom()]} | {error, term()}.
+ensure_all_started(Application, Type) ->
+    case do_ensure_started(Application, Type, []) of
+        {ok, Started} -> {ok, lists:reverse(Started)};
+        {error, _Reason} = Error -> Error
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to stop
+%% @returns `ok' or `{error, {not_started, Application}}'
+%% @doc     Stop a running application, tearing down its supervision tree.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stop(Application :: atom()) -> ok | {error, term()}.
+stop(Application) ->
+    application_controller:stop_application(Application).
+
+%%-----------------------------------------------------------------------------
+%% @returns A list of `{Application, Description, Vsn}' for running applications.
+%% @doc     Return the list of currently running applications.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec which_applications() -> [{atom(), string(), string()}].
+which_applications() ->
+    application_controller:which_applications().
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to read the key of
+%% @param   Key resource key
+%% @returns `{ok, Value}' or `undefined'
+%% @doc     Return the value of a resource key (e.g. `vsn', `applications').
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_key(Application :: atom(), Key :: atom()) -> {ok, term()} | undefined.
+get_key(Application, Key) ->
+    application_controller:get_key(Application, Key).
 
 %%-----------------------------------------------------------------------------
 %% @param   Application application to get the parameter value of
 %% @param   Parameter parameter to get the value of
-%% @returns undefined
-%% @doc     Retrieve the value of the configuration parameter `Parameter' for
-%%          application `Application' or `undefined' if not found.
+%% @returns `{ok, Value}' or `undefined' if not found.
 %% @end
 %%-----------------------------------------------------------------------------
--spec get_env(Application :: atom(), Parameter :: atom()) -> any().
+-spec get_env(Application :: atom(), Parameter :: atom()) -> {ok, term()} | undefined.
 get_env(Application, Parameter) ->
-    get_env(Application, Parameter, undefined).
+    application_controller:get_env(Application, Parameter).
 
 %%-----------------------------------------------------------------------------
 %% @param   Application application to get the parameter value of
 %% @param   Parameter parameter to get the value of
 %% @param   Default default value if parameter is not found
-%% @returns default value
-%% @doc     Retrieve the value of the configuration parameter `Parameter' for
-%%          application `Application' or `Default' if not found.
+%% @returns the parameter value or `Default' if not found.
 %% @end
 %%-----------------------------------------------------------------------------
--spec get_env(Application :: atom(), Parameter :: atom(), Default :: any()) -> any().
-get_env(_Application, _Parameter, Default) -> Default.
+-spec get_env(Application :: atom(), Parameter :: atom(), Default :: term()) -> term().
+get_env(Application, Parameter, Default) ->
+    case application_controller:get_env(Application, Parameter) of
+        {ok, Value} -> Value;
+        undefined -> Default
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @doc Set the value of a configuration parameter for an application.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_env(Application :: atom(), Parameter :: atom(), Value :: term()) -> ok.
+set_env(Application, Parameter, Value) ->
+    application_controller:set_env(Application, Parameter, Value).
+
+%%-----------------------------------------------------------------------------
+%% @doc Remove a configuration parameter for an application.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec unset_env(Application :: atom(), Parameter :: atom()) -> ok.
+unset_env(Application, Parameter) ->
+    application_controller:unset_env(Application, Parameter).
+
+%%-----------------------------------------------------------------------------
+%% @returns A list of `{Parameter, Value}' for the application's environment.
+%% @doc     Return all configuration parameters of an application.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_all_env(Application :: atom()) -> [{atom(), term()}].
+get_all_env(Application) ->
+    application_controller:get_all_env(Application).
+
+%%-----------------------------------------------------------------------------
+%% internal
+%%-----------------------------------------------------------------------------
+do_ensure_started(Application, Type, Started) ->
+    case is_running(Application) of
+        true ->
+            {ok, Started};
+        false ->
+            Deps = dependencies(Application),
+            case do_ensure_started_list(Deps, Type, Started) of
+                {ok, Started1} ->
+                    case start(Application, Type) of
+                        ok ->
+                            {ok, [Application | Started1]};
+                        {error, {already_started, Application}} ->
+                            {ok, Started1};
+                        {error, _Reason} = Error ->
+                            Error
+                    end;
+                {error, _Reason} = Error ->
+                    Error
+            end
+    end.
+
+do_ensure_started_list([], _Type, Started) ->
+    {ok, Started};
+do_ensure_started_list([Dep | Rest], Type, Started) ->
+    case do_ensure_started(Dep, Type, Started) of
+        {ok, Started1} -> do_ensure_started_list(Rest, Type, Started1);
+        {error, _Reason} = Error -> Error
+    end.
+
+dependencies(Application) ->
+    case get_key(Application, applications) of
+        {ok, Deps} when is_list(Deps) -> Deps;
+        _ -> []
+    end.
+
+is_running(Application) ->
+    lists:keymember(Application, 1, which_applications()).

@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
   non-finite-result check, instead of calling the C float primitives
 - Added `persistent_term` module with `get/0,1,2`, `put/2`, `put_new/2`, `erase/1`, and `info/0`
+- Added an OTP-style `application` controller and master, replacing the `application` stub with
+  real `load/1`, `unload/1`, `start/1,2`, `ensure_all_started/1,2`, `stop/1`,
+  `which_applications/0`, `get_key/2`, `get_env/2,3`, `set_env/3`, `unset_env/2` and
+  `get_all_env/1`
 
 ### Changed
 - Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
