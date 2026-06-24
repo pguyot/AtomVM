@@ -26,7 +26,30 @@ test() ->
     ok = test_md5(),
     ok = test_standard_error(),
     ok = test_undef_names_mfa(),
+    ok = test_statistics(),
     ok.
+
+test_statistics() ->
+    {Total1, _Since1} = erlang:statistics(wall_clock),
+    true = is_integer(Total1) andalso Total1 >= 0,
+    %% Busy-wait a little so the monotonic clock advances, then check the delta.
+    ok = spin_until_advanced(),
+    {Total2, Since2} = erlang:statistics(wall_clock),
+    true = Total2 >= Total1,
+    true = is_integer(Since2) andalso Since2 >= 0,
+    {RTotal, _RSince} = erlang:statistics(runtime),
+    true = is_integer(RTotal) andalso RTotal >= 0,
+    ok.
+
+spin_until_advanced() ->
+    Start = erlang:monotonic_time(millisecond),
+    spin_until_advanced(Start).
+
+spin_until_advanced(Start) ->
+    case erlang:monotonic_time(millisecond) > Start of
+        true -> ok;
+        false -> spin_until_advanced(Start)
+    end.
 
 %% Calling a function AtomVM cannot resolve (here, an unknown module) must raise
 %% undef whose stacktrace names the real Module:Function/Arity -- not the
