@@ -80,6 +80,16 @@ test_ntoa() ->
     {error, einval} = inet:ntoa({0, 0, 0, -1}),
     {error, einval} = inet:ntoa({1, 2, 3}),
     {error, einval} = inet:ntoa(not_an_address),
+    %% IPv6
+    "::" = inet:ntoa({0, 0, 0, 0, 0, 0, 0, 0}),
+    "::1" = inet:ntoa({0, 0, 0, 0, 0, 0, 0, 1}),
+    "1::" = inet:ntoa({1, 0, 0, 0, 0, 0, 0, 0}),
+    "fe80::ba27:ebff:fecb:222a" =
+        inet:ntoa({16#fe80, 0, 0, 0, 16#ba27, 16#ebff, 16#fecb, 16#222a}),
+    "2001:db8::1" = inet:ntoa({16#2001, 16#db8, 0, 0, 0, 0, 0, 1}),
+    "2001:db8:0:1:1:1:1:1" =
+        inet:ntoa({16#2001, 16#db8, 0, 1, 1, 1, 1, 1}),
+    {error, einval} = inet:ntoa({0, 0, 0, 0, 0, 0, 0, 16#10000}),
     ok.
 
 test_parse_address() ->
