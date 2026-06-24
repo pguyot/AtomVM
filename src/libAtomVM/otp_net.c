@@ -35,6 +35,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef HAVE_GETIFADDRS
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
 // #define ENABLE_TRACE
 #include <trace.h>
 
@@ -360,6 +365,209 @@ static term nif_net_gethostname(Context *ctx, int argc, term argv[])
 #endif
 
 //
+// net:getifaddrs/0
+//
+#ifdef HAVE_GETIFADDRS
+
+static int count_iface_flags(unsigned int f)
+{
+    int n = 0;
+    if (f & IFF_UP) {
+        n++;
+    }
+    if (f & IFF_BROADCAST) {
+        n++;
+    }
+    if (f & IFF_LOOPBACK) {
+        n++;
+    }
+    if (f & IFF_POINTOPOINT) {
+        n++;
+    }
+    if (f & IFF_RUNNING) {
+        n++;
+    }
+    if (f & IFF_MULTICAST) {
+        n++;
+    }
+    return n;
+}
+
+// Build the {flags, [...]} list of interface flag atoms.
+static term make_iface_flags(unsigned int f, GlobalContext *global, Heap *heap)
+{
+    term flags = term_nil();
+    if (f & IFF_MULTICAST) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\x9", "multicast")), flags, heap);
+    }
+    if (f & IFF_RUNNING) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\x7", "running")), flags, heap);
+    }
+    if (f & IFF_POINTOPOINT) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\xC", "pointtopoint")), flags, heap);
+    }
+    if (f & IFF_LOOPBACK) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\x8", "loopback")), flags, heap);
+    }
+    if (f & IFF_BROADCAST) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\x9", "broadcast")), flags, heap);
+    }
+    if (f & IFF_UP) {
+        flags = term_list_prepend(globalcontext_make_atom(global, ATOM_STR("\x2", "up")), flags, heap);
+    }
+    return flags;
+}
+
+// Build an IPv6 address tuple ({0..65535} x 8) from 16 raw bytes.
+static term make_addr6(const uint8_t *a, Heap *heap)
+{
+    term t = term_alloc_tuple(8, heap);
+    for (int i = 0; i < 8; i++) {
+        term_put_tuple_element(t, i, term_from_int((a[2 * i] << 8) | a[2 * i + 1]));
+    }
+    return t;
+}
+
+// The first entry of the next interface group (entries sharing ifa_name are
+// consecutive in the getifaddrs() result).
+static struct ifaddrs *iface_group_end(struct ifaddrs *start)
+{
+    const char *name = start->ifa_name ? start->ifa_name : "";
+    struct ifaddrs *e = start;
+    while (e != NULL && strcmp(e->ifa_name ? e->ifa_name : "", name) == 0) {
+        e = e->ifa_next;
+    }
+    return e;
+}
+
+// Heap words needed to represent one interface group as {Name, Opts}.
+static size_t iface_group_size(struct ifaddrs *start, struct ifaddrs *end)
+{
+    size_t namelen = strlen(start->ifa_name ? start->ifa_name : "");
+    size_t sz = 2 * namelen + TUPLE_SIZE(2) + 2;
+    sz += TUPLE_SIZE(2) + 2 + 2 * count_iface_flags(start->ifa_flags);
+    for (struct ifaddrs *e = start; e != end; e = e->ifa_next) {
+        if (e->ifa_addr != NULL) {
+            if (e->ifa_addr->sa_family == AF_INET) {
+                sz += (TUPLE_SIZE(4) + TUPLE_SIZE(2) + 2) * 2;
+            } else if (e->ifa_addr->sa_family == AF_INET6) {
+                sz += (TUPLE_SIZE(8) + TUPLE_SIZE(2) + 2) * 2;
+            }
+        }
+    }
+    return sz;
+}
+
+static term nif_net_getifaddrs(Context *ctx, int argc, term argv[])
+{
+    TRACE("nif_net_getifaddrs\n");
+    UNUSED(argc);
+    UNUSED(argv);
+
+    GlobalContext *global = ctx->global;
+
+    struct ifaddrs *ifap = NULL;
+    if (UNLIKELY(getifaddrs(&ifap) != 0)) {
+        if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2), MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return make_error_tuple(posix_errno_to_term(errno, global), ctx);
+    }
+
+    // Pass 1: size the whole result, so we can allocate once and build without
+    // triggering a GC mid-construction (a 0-arity NIF has no argv roots to keep
+    // a partially-built term alive across allocations).
+    size_t total = TUPLE_SIZE(2);
+    for (struct ifaddrs *cur = ifap; cur != NULL;) {
+        struct ifaddrs *end = iface_group_end(cur);
+        total += iface_group_size(cur, end);
+        cur = end;
+    }
+    if (UNLIKELY(memory_ensure_free_opt(ctx, total, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        freeifaddrs(ifap);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    Heap *heap = &ctx->heap;
+
+    // Pass 2: build. No further heap allocation calls below, so terms are stable.
+    term addr_atom = globalcontext_make_atom(global, ATOM_STR("\x4", "addr"));
+    term netmask_atom = globalcontext_make_atom(global, ATOM_STR("\x7", "netmask"));
+    term flags_atom = globalcontext_make_atom(global, ATOM_STR("\x5", "flags"));
+    term result_list = term_nil();
+    for (struct ifaddrs *cur = ifap; cur != NULL;) {
+        struct ifaddrs *end = iface_group_end(cur);
+        const char *name = cur->ifa_name ? cur->ifa_name : "";
+        size_t namelen = strlen(name);
+
+        // Emit addresses in order (addr before netmask) by walking the group
+        // backwards while prepending.
+        term opts = term_nil();
+        struct ifaddrs *prev;
+        for (struct ifaddrs *e = end; e != cur; e = prev) {
+            // step back one (singly linked list, so re-scan from cur)
+            prev = cur;
+            while (prev->ifa_next != e) {
+                prev = prev->ifa_next;
+            }
+            struct ifaddrs *ent = prev;
+            if (ent->ifa_addr == NULL) {
+                continue;
+            }
+            if (ent->ifa_addr->sa_family == AF_INET) {
+                uint32_t a = ntohl(((struct sockaddr_in *) ent->ifa_addr)->sin_addr.s_addr);
+                uint32_t m = ent->ifa_netmask
+                    ? ntohl(((struct sockaddr_in *) ent->ifa_netmask)->sin_addr.s_addr)
+                    : 0;
+                term nm = term_alloc_tuple(2, heap);
+                term_put_tuple_element(nm, 0, netmask_atom);
+                term_put_tuple_element(nm, 1, inet_make_addr4(m, heap));
+                opts = term_list_prepend(nm, opts, heap);
+                term ad = term_alloc_tuple(2, heap);
+                term_put_tuple_element(ad, 0, addr_atom);
+                term_put_tuple_element(ad, 1, inet_make_addr4(a, heap));
+                opts = term_list_prepend(ad, opts, heap);
+            } else if (ent->ifa_addr->sa_family == AF_INET6) {
+                const uint8_t *a = ((struct sockaddr_in6 *) ent->ifa_addr)->sin6_addr.s6_addr;
+                term nm = term_alloc_tuple(2, heap);
+                term_put_tuple_element(nm, 0, netmask_atom);
+                if (ent->ifa_netmask) {
+                    const uint8_t *m = ((struct sockaddr_in6 *) ent->ifa_netmask)->sin6_addr.s6_addr;
+                    term_put_tuple_element(nm, 1, make_addr6(m, heap));
+                } else {
+                    term_put_tuple_element(nm, 1, make_addr6(a, heap));
+                }
+                opts = term_list_prepend(nm, opts, heap);
+                term ad = term_alloc_tuple(2, heap);
+                term_put_tuple_element(ad, 0, addr_atom);
+                term_put_tuple_element(ad, 1, make_addr6(a, heap));
+                opts = term_list_prepend(ad, opts, heap);
+            }
+        }
+
+        // Prepend {flags, [...]} so it heads the option list.
+        term flags_tuple = term_alloc_tuple(2, heap);
+        term_put_tuple_element(flags_tuple, 0, flags_atom);
+        term_put_tuple_element(flags_tuple, 1, make_iface_flags(cur->ifa_flags, global, heap));
+        opts = term_list_prepend(flags_tuple, opts, heap);
+
+        term iface = term_alloc_tuple(2, heap);
+        term_put_tuple_element(iface, 0, interop_bytes_to_list(name, namelen, heap));
+        term_put_tuple_element(iface, 1, opts);
+        result_list = term_list_prepend(iface, result_list, heap);
+
+        cur = end;
+    }
+
+    freeifaddrs(ifap);
+
+    term result = term_alloc_tuple(2, heap);
+    term_put_tuple_element(result, 0, OK_ATOM);
+    term_put_tuple_element(result, 1, result_list);
+    return result;
+}
+#endif
+
+//
 // Nifs
 //
 
@@ -371,6 +579,12 @@ static const struct Nif net_getaddrinfo_nif = {
 static const struct Nif net_gethostname_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_net_gethostname
+};
+#endif
+#ifdef HAVE_GETIFADDRS
+static const struct Nif net_getifaddrs_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_net_getifaddrs
 };
 #endif
 
@@ -390,6 +604,12 @@ const struct Nif *otp_net_nif_get_nif(const char *nifname)
         if (strcmp("gethostname/0", rest) == 0) {
             TRACE("Resolved platform nif %s ...\n", nifname);
             return &net_gethostname_nif;
+        }
+#endif
+#ifdef HAVE_GETIFADDRS
+        if (strcmp("getifaddrs/0", rest) == 0) {
+            TRACE("Resolved platform nif %s ...\n", nifname);
+            return &net_getifaddrs_nif;
         }
 #endif
     }
