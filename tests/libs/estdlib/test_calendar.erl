@@ -25,6 +25,18 @@
 test() ->
     ok = test_gregorian_days(),
     ok = test_gregorian_seconds(),
+    ok = test_seconds_to_daystime(),
+    ok.
+
+test_seconds_to_daystime() ->
+    {0, 0, 0} = calendar:seconds_to_time(0),
+    {1, 1, 1} = calendar:seconds_to_time(3661),
+    {23, 59, 59} = calendar:seconds_to_time(86399),
+    {0, {0, 0, 0}} = calendar:seconds_to_daystime(0),
+    {0, {1, 1, 1}} = calendar:seconds_to_daystime(3661),
+    {1, {0, 0, 0}} = calendar:seconds_to_daystime(86400),
+    {2, {3, 4, 5}} = calendar:seconds_to_daystime(2 * 86400 + 3 * 3600 + 4 * 60 + 5),
+    {-1, {23, 59, 59}} = calendar:seconds_to_daystime(-1),
     ok.
 
 test_gregorian_days() ->

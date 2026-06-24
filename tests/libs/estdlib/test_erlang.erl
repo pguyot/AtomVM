@@ -39,6 +39,19 @@ test_statistics() ->
     true = is_integer(Since2) andalso Since2 >= 0,
     {RTotal, _RSince} = erlang:statistics(runtime),
     true = is_integer(RTotal) andalso RTotal >= 0,
+    ok = test_convert_time_unit(),
+    ok.
+
+test_convert_time_unit() ->
+    1000 = erlang:convert_time_unit(1, second, millisecond),
+    1 = erlang:convert_time_unit(1000, millisecond, second),
+    1000000 = erlang:convert_time_unit(1, second, microsecond),
+    1000000000 = erlang:convert_time_unit(1, second, nanosecond),
+    %% native is the nanosecond on AtomVM
+    1000000 = erlang:convert_time_unit(1, millisecond, native),
+    %% truncation towards negative infinity
+    0 = erlang:convert_time_unit(999, millisecond, second),
+    -1 = erlang:convert_time_unit(-1, millisecond, second),
     ok.
 
 spin_until_advanced() ->
