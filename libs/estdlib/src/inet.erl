@@ -197,8 +197,61 @@ ntoa({A, B, C, D} = Addr) ->
         false ->
             {error, einval}
     end;
+ntoa({_, _, _, _, _, _, _, _} = Addr) ->
+    case is_ipv6_address(Addr) of
+        true -> ipv6_to_list(tuple_to_list(Addr));
+        false -> {error, einval}
+    end;
 ntoa(_) ->
     {error, einval}.
+
+%% @private
+is_ipv6_address({A, B, C, D, E, F, G, H}) ->
+    lists:all(
+        fun(X) -> is_integer(X) andalso X >= 0 andalso X =< 16#FFFF end,
+        [A, B, C, D, E, F, G, H]
+    ).
+
+%% @private
+%% Format an IPv6 address (list of 8 groups) per RFC 5952: lowercase hex, no
+%% leading zeros, and the longest run of zero groups (>= 2) compressed to "::".
+ipv6_to_list(Groups) ->
+    {Start, Len} = ipv6_longest_zero_run(Groups, 0, 0, 0, 0, 0),
+    case Len >= 2 of
+        true ->
+            Before = lists:sublist(Groups, Start),
+            After = lists:nthtail(Start + Len, Groups),
+            ipv6_join(Before) ++ "::" ++ ipv6_join(After);
+        false ->
+            ipv6_join(Groups)
+    end.
+
+%% @private
+%% ipv6_longest_zero_run(Rest, Idx, CurStart, CurLen, BestStart, BestLen)
+ipv6_longest_zero_run([0 | T], Idx, _CurStart, 0, BestStart, BestLen) ->
+    ipv6_longest_zero_run(T, Idx + 1, Idx, 1, BestStart, BestLen);
+ipv6_longest_zero_run([0 | T], Idx, CurStart, CurLen, BestStart, BestLen) ->
+    ipv6_longest_zero_run(T, Idx + 1, CurStart, CurLen + 1, BestStart, BestLen);
+ipv6_longest_zero_run([_ | T], Idx, CurStart, CurLen, BestStart, BestLen) ->
+    {NextBestStart, NextBestLen} = ipv6_best_run(CurStart, CurLen, BestStart, BestLen),
+    ipv6_longest_zero_run(T, Idx + 1, 0, 0, NextBestStart, NextBestLen);
+ipv6_longest_zero_run([], _Idx, CurStart, CurLen, BestStart, BestLen) ->
+    ipv6_best_run(CurStart, CurLen, BestStart, BestLen).
+
+%% @private
+ipv6_best_run(CurStart, CurLen, _BestStart, BestLen) when CurLen > BestLen ->
+    {CurStart, CurLen};
+ipv6_best_run(_CurStart, _CurLen, BestStart, BestLen) ->
+    {BestStart, BestLen}.
+
+%% @private
+ipv6_join([]) -> "";
+ipv6_join([G]) -> ipv6_hex(G);
+ipv6_join([G | T]) -> ipv6_hex(G) ++ ":" ++ ipv6_join(T).
+
+%% @private
+ipv6_hex(G) ->
+    string:to_lower(integer_to_list(G, 16)).
 
 %%-----------------------------------------------------------------------------
 %% @param   Address a string representation of an IPv4 address

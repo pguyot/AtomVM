@@ -116,6 +116,7 @@
     system_time/0,
     system_time/1,
     statistics/1,
+    convert_time_unit/3,
     group_leader/0,
     group_leader/2,
     process_flag/2,
@@ -702,6 +703,33 @@ statistics(Item) when Item =:= wall_clock orelse Item =:= runtime ->
     Last = persistent_term:get(Key, Now),
     persistent_term:put(Key, Now),
     {Now, Now - Last}.
+
+%%-----------------------------------------------------------------------------
+%% @param   Time the time value to convert
+%% @param   FromUnit the unit of `Time'
+%% @param   ToUnit the unit to convert to
+%% @returns `Time' converted from `FromUnit' to `ToUnit'
+%% @doc     Convert a time value between time units, truncating towards negative
+%%          infinity as in OTP. AtomVM's `native' time unit is the nanosecond.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec convert_time_unit(Time :: integer(), FromUnit :: time_unit(), ToUnit :: time_unit()) ->
+    integer().
+convert_time_unit(Time, FromUnit, ToUnit) ->
+    FU = time_unit_to_hz(FromUnit),
+    TU = time_unit_to_hz(ToUnit),
+    case Time >= 0 of
+        true -> (Time * TU) div FU;
+        false -> (Time * TU - FU + 1) div FU
+    end.
+
+time_unit_to_hz(second) -> 1;
+time_unit_to_hz(millisecond) -> 1000;
+time_unit_to_hz(microsecond) -> 1000000;
+time_unit_to_hz(nanosecond) -> 1000000000;
+time_unit_to_hz(native) -> 1000000000;
+time_unit_to_hz(perf_counter) -> 1000000000;
+time_unit_to_hz(Hz) when erlang:is_integer(Hz) andalso Hz > 0 -> Hz.
 
 %%-----------------------------------------------------------------------------
 %% @returns the process directory
