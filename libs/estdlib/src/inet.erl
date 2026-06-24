@@ -20,7 +20,7 @@
 
 -module(inet).
 
--export([port/1, close/1, sockname/1, peername/1, getaddr/2, gethostname/0]).
+-export([port/1, close/1, sockname/1, peername/1, getaddr/2, gethostname/0, getifaddrs/0]).
 -export([ntoa/1, parse_address/1, parse_ipv4_address/1, parse_ipv4strict_address/1]).
 
 -include("inet-priv.hrl").
@@ -159,6 +159,20 @@ getaddr(_Name, _Family) ->
 -spec gethostname() -> {ok, string()}.
 gethostname() ->
     net:gethostname().
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, IfAddrs}' a list of `{Ifname, Opts}' interface tuples
+%% @doc     Return the network interfaces and their addresses.
+%%
+%%          This is the `inet' interface; it delegates to
+%%          {@link net:getifaddrs/0}. Each interface is `{Ifname, Opts}' where
+%%          `Opts' begins with `{flags, Flags}' followed by `{addr, Addr}' and
+%%          `{netmask, Mask}' pairs.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec getifaddrs() -> {ok, [{string(), [{atom(), term()}]}]} | {error, any()}.
+getifaddrs() ->
+    net:getifaddrs().
 
 %%-----------------------------------------------------------------------------
 %% @param   IpAddress an IPv4 address tuple
