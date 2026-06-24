@@ -77,11 +77,24 @@ boot([<<"-s">>, StartupModule]) when is_atom(StartupModule) ->
             % A release boot script is embedded: it is the sole kernel and
             % application starter (it brings up kernel through the application
             % controller), so we do not start kernel ourselves here.
-            boot_script(BootData);
+            boot_script(BootData),
+            % Like OTP's init, stay alive after the boot script has run so the
+            % applications it started (and their supervision trees) keep
+            % running. Otherwise the boot process would return and the VM would
+            % terminate even though the system came up.
+            loop();
         undefined ->
             % No boot script: start the kernel application and the start module.
             {ok, _KernelPid} = kernel:start(boot, []),
             StartupModule:start()
+    end.
+
+%% @private
+%% Stay alive indefinitely after a boot script has started the system, mirroring
+%% OTP's init process which never returns.
+loop() ->
+    receive
+        _ -> loop()
     end.
 
 %%-----------------------------------------------------------------------------
