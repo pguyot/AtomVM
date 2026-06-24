@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application:load/1` can now load an application by name, reading its specification from an
   `<App>.app.bin` resource (a `term_to_binary` encoded `{application, Name, Keys}`) in the AVM
   pack; `application:ensure_all_started/1,2` loads applications this way as needed
+- Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
+  port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
+  images whose root filesystem does not ship libsodium
 
 ### Changed
 - Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
