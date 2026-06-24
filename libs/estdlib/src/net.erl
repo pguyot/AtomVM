@@ -20,7 +20,7 @@
 
 -module(net).
 
--export([getaddrinfo/1, getaddrinfo/2, gethostname/0]).
+-export([getaddrinfo/1, getaddrinfo/2, gethostname/0, getifaddrs/0]).
 
 %% nif call (so we can use guards at the API)
 -export([getaddrinfo_nif/2]).
@@ -86,4 +86,17 @@ getaddrinfo_nif(_Host, _Service) ->
 %%-----------------------------------------------------------------------------
 -spec gethostname() -> {ok, string()} | {error, any()}.
 gethostname() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, IfAddrs}' where `IfAddrs' is a list of `{Ifname, Opts}' tuples
+%% @doc     Return the network interfaces and their addresses.
+%%
+%%          Each interface is `{Ifname, Opts}' where `Opts' is a list that
+%%          starts with `{flags, Flags}' and is followed by `{addr, Addr}' /
+%%          `{netmask, Mask}' pairs for each IPv4 or IPv6 address.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec getifaddrs() -> {ok, [{string(), [{atom(), term()}]}]} | {error, any()}.
+getifaddrs() ->
     erlang:nif_error(undefined).

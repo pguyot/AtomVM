@@ -25,6 +25,7 @@
 test() ->
     ok = test_getaddr(),
     ok = test_gethostname(),
+    ok = test_getifaddrs(),
     ok = test_ntoa(),
     ok = test_parse_address(),
     ok = test_parse_ipv4_address(),
@@ -50,6 +51,24 @@ test_gethostname() ->
     {ok, Hostname} = inet:gethostname(),
     true = is_list(Hostname),
     true = length(Hostname) > 0,
+    ok.
+
+test_getifaddrs() ->
+    {ok, IfAddrs} = inet:getifaddrs(),
+    true = is_list(IfAddrs),
+    %% Every entry is {Name, Opts} with a string name and an option list.
+    true = lists:all(
+        fun({Name, Opts}) -> is_list(Name) andalso is_list(Opts) end,
+        IfAddrs
+    ),
+    %% The loopback address must be present.
+    Addrs = [A || {_Name, Opts} <- IfAddrs, {addr, A} <- Opts],
+    true = lists:member({127, 0, 0, 1}, Addrs),
+    %% Each interface advertises its flags.
+    true = lists:all(
+        fun({_Name, Opts}) -> lists:keymember(flags, 1, Opts) end,
+        IfAddrs
+    ),
     ok.
 
 test_ntoa() ->
