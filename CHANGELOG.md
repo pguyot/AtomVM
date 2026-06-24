@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `digital_read/1`
 - Added `string:to_integer/1`
 - Added `lists:mapfoldr/3`
+- Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
+  port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
+  images whose root filesystem does not ship libsodium
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
