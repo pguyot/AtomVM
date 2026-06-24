@@ -24,6 +24,7 @@
 
 test() ->
     ok = test_getaddr(),
+    ok = test_gethostname(),
     ok = test_ntoa(),
     ok = test_parse_address(),
     ok = test_parse_ipv4_address(),
@@ -43,6 +44,12 @@ test_getaddr() ->
     {error, einval} = inet:getaddr({foo, bar}, inet),
     {error, einval} = inet:getaddr(<<"localhost">>, inet),
     {error, _} = inet:getaddr("localhost.invalid", inet),
+    ok.
+
+test_gethostname() ->
+    {ok, Hostname} = inet:gethostname(),
+    true = is_list(Hostname),
+    true = length(Hostname) > 0,
     ok.
 
 test_ntoa() ->

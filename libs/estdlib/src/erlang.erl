@@ -113,6 +113,7 @@
     open_port/2,
     system_time/0,
     system_time/1,
+    statistics/1,
     group_leader/0,
     group_leader/2,
     process_flag/2,
@@ -629,6 +630,27 @@ monotonic_time() ->
 -spec monotonic_time(Unit :: time_unit()) -> integer().
 monotonic_time(_Unit) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Item `wall_clock' or `runtime'
+%% @returns `{Total, SinceLastCall}' in milliseconds
+%% @doc     Return system statistics.
+%%
+%%          Only `wall_clock' and `runtime' are supported. `Total' is the
+%%          monotonic time (which, on most platforms, is measured since system
+%%          boot), and `SinceLastCall' is the time elapsed since the previous
+%%          call with the same item. AtomVM does not track CPU time separately,
+%%          so `runtime' returns the same wall-clock figures.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec statistics(Item :: wall_clock | runtime) ->
+    {Total :: non_neg_integer(), SinceLastCall :: non_neg_integer()}.
+statistics(Item) when Item =:= wall_clock orelse Item =:= runtime ->
+    Now = erlang:monotonic_time(millisecond),
+    Key = {?MODULE, statistics, Item},
+    Last = persistent_term:get(Key, Now),
+    persistent_term:put(Key, Now),
+    {Now, Now - Last}.
 
 %%-----------------------------------------------------------------------------
 %% @returns the process directory

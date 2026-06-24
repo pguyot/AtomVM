@@ -20,7 +20,7 @@
 
 -module(inet).
 
--export([port/1, close/1, sockname/1, peername/1, getaddr/2]).
+-export([port/1, close/1, sockname/1, peername/1, getaddr/2, gethostname/0]).
 -export([ntoa/1, parse_address/1, parse_ipv4_address/1, parse_ipv4strict_address/1]).
 
 -include("inet-priv.hrl").
@@ -147,6 +147,18 @@ getaddr(Name, Family) when is_list(Name) ->
     end;
 getaddr(_Name, _Family) ->
     {error, einval}.
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, Hostname}' where `Hostname' is the local host name as a string
+%% @doc     Return the local host name.
+%%
+%%          This is the `inet' interface to the host name; it delegates to
+%%          {@link net:gethostname/0}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec gethostname() -> {ok, string()}.
+gethostname() ->
+    net:gethostname().
 
 %%-----------------------------------------------------------------------------
 %% @param   IpAddress an IPv4 address tuple
