@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GPIO interface via `atomvm:posix_*`, with `set_pin_mode/2`, `digital_write/2` and
   `digital_read/1`
 - Added `string:to_integer/1`
+- Added `lists:mapfoldr/3`
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type
