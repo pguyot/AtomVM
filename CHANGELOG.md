@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `erlang:statistics/1` for `wall_clock` and `runtime`
 - Added `net:getifaddrs/0` and `inet:getifaddrs/0` to the generic_unix port, returning network
   interfaces with their flags and IPv4/IPv6 addresses and netmasks
+- Added `calendar:seconds_to_time/1` and `calendar:seconds_to_daystime/1`
+- Added `erlang:convert_time_unit/3`
+- `inet:ntoa/1` now formats IPv6 addresses (8-tuples), with RFC 5952 zero compression
 - Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
   port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
   images whose root filesystem does not ship libsodium

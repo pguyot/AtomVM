@@ -42,6 +42,8 @@
     datetime_to_gregorian_seconds/1,
     day_of_the_week/1,
     day_of_the_week/3,
+    seconds_to_time/1,
+    seconds_to_daystime/1,
     system_time_to_universal_time/2
 ]).
 
@@ -127,6 +129,37 @@ datetime_to_gregorian_seconds({Date, {Hour, Minute, Second}}) when
 ->
     DateSeconds = date_to_gregorian_days(Date) * 24 * 60 * 60,
     DateSeconds + Hour * 60 * 60 + Minute * 60 + Second.
+
+%%-----------------------------------------------------------------------------
+%% @param   Seconds a number of seconds within a day (0..86399)
+%% @returns the corresponding `{Hour, Minute, Second}' time tuple
+%% @doc     Convert a number of seconds since midnight to a time tuple.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec seconds_to_time(Seconds :: non_neg_integer()) -> time().
+seconds_to_time(Seconds) when
+    is_integer(Seconds) andalso Seconds >= 0 andalso Seconds < 86400
+->
+    Hour = Seconds div 3600,
+    Minute = (Seconds rem 3600) div 60,
+    Second = Seconds rem 60,
+    {Hour, Minute, Second}.
+
+%%-----------------------------------------------------------------------------
+%% @param   Seconds a number of seconds
+%% @returns `{Days, {Hour, Minute, Second}}'
+%% @doc     Convert a number of seconds to days plus a time of day.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec seconds_to_daystime(Seconds :: integer()) ->
+    {Days :: integer(), Time :: time()}.
+seconds_to_daystime(Seconds) when is_integer(Seconds) ->
+    Days0 = Seconds div 86400,
+    Rest = Seconds rem 86400,
+    case Rest < 0 of
+        true -> {Days0 - 1, seconds_to_time(Rest + 86400)};
+        false -> {Days0, seconds_to_time(Rest)}
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @equiv day_of_the_week(Y, M, D)
