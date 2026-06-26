@@ -79,7 +79,9 @@ do_join(Left, Right) ->
 %%          Trailing separators are ignored.
 %% @end
 %%-----------------------------------------------------------------------------
--spec split(Name :: string()) -> [string()].
+-spec split(Name :: string() | binary()) -> [string()] | [binary()].
+split(Name) when is_binary(Name) ->
+    [list_to_binary(C) || C <- split(binary_to_list(Name))];
 split([]) ->
     [];
 split([$/ | Rest]) ->
@@ -144,6 +146,11 @@ strip_trailing_slash([]) -> [];
 strip_trailing_slash([$/]) -> [];
 strip_trailing_slash([C | Rest]) -> [C | strip_trailing_slash(Rest)].
 
+%% @private
+%% Coerce a path argument to a character list for the list-based internals.
+to_list_path(Path) when is_binary(Path) -> binary_to_list(Path);
+to_list_path(Path) -> Path.
+
 %%-----------------------------------------------------------------------------
 %% @param   Name1 first path component
 %% @param   Name2 second path component
@@ -163,7 +170,9 @@ join(Name1, Name2) ->
 %% @doc     Return the directory part of a file name, "." if there is none.
 %% @end
 %%-----------------------------------------------------------------------------
--spec dirname(Name :: string()) -> string().
+-spec dirname(Name :: string() | binary()) -> string() | binary().
+dirname(Name) when is_binary(Name) ->
+    list_to_binary(dirname(binary_to_list(Name)));
 dirname(Name) ->
     %% Drop the last component (the characters after the last slash, which
     %% may be empty for names with a trailing slash), then the separating
@@ -191,7 +200,9 @@ drop_component([_ | Rest]) -> drop_component(Rest).
 %%          trailing slash (further ones make the last component empty).
 %% @end
 %%-----------------------------------------------------------------------------
--spec basename(Name :: string()) -> string().
+-spec basename(Name :: string() | binary()) -> string() | binary().
+basename(Name) when is_binary(Name) ->
+    list_to_binary(basename(binary_to_list(Name)));
 basename(Name) ->
     basename(Name, []).
 
@@ -203,7 +214,9 @@ basename(Name) ->
 %%          base name ends with it.
 %% @end
 %%-----------------------------------------------------------------------------
--spec basename(Name :: string(), Ext :: string()) -> string().
+-spec basename(Name :: string() | binary(), Ext :: string() | binary()) -> string() | binary().
+basename(Name, Ext) when is_binary(Name); is_binary(Ext) ->
+    list_to_binary(basename(to_list_path(Name), to_list_path(Ext)));
 basename(Name, Ext) ->
     basename(Name, Ext, []).
 
@@ -230,7 +243,9 @@ basename([], _Ext, Tail) ->
 %%          last component has no dot.
 %% @end
 %%-----------------------------------------------------------------------------
--spec extension(Name :: string()) -> string().
+-spec extension(Name :: string() | binary()) -> string() | binary().
+extension(Name) when is_binary(Name) ->
+    list_to_binary(extension(binary_to_list(Name)));
 extension(Name) ->
     case extension_split(Name) of
         {_Root, Ext} -> Ext
@@ -242,7 +257,9 @@ extension(Name) ->
 %% @doc     Remove the extension of the last path component, if any.
 %% @end
 %%-----------------------------------------------------------------------------
--spec rootname(Name :: string()) -> string().
+-spec rootname(Name :: string() | binary()) -> string() | binary().
+rootname(Name) when is_binary(Name) ->
+    list_to_binary(rootname(binary_to_list(Name)));
 rootname(Name) ->
     case leading_dot_only(Name) of
         true ->
@@ -268,7 +285,9 @@ leading_dot_only(_) ->
 %% @doc     Remove Ext from Name when it is its extension.
 %% @end
 %%-----------------------------------------------------------------------------
--spec rootname(Name :: string(), Ext :: string()) -> string().
+-spec rootname(Name :: string() | binary(), Ext :: string() | binary()) -> string() | binary().
+rootname(Name, Ext) when is_binary(Name); is_binary(Ext) ->
+    list_to_binary(rootname(to_list_path(Name), to_list_path(Ext)));
 rootname(Name, Ext) ->
     strip_root_suffix(Name, Ext, [], Name).
 
