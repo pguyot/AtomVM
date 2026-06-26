@@ -39,11 +39,13 @@
     write_file/3,
     write/2,
     read_file_info/1,
+    read_file_info/2,
     list_dir/1,
     make_dir/1,
     path_open/3,
     delete/1,
     rename/2,
+    change_mode/2,
     format_error/1
 ]).
 
@@ -509,40 +511,72 @@ read_file_info(IoDevice) when is_pid(IoDevice) ->
             CurErr
     end;
 read_file_info(Filename) ->
+    read_file_info(Filename, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to stat
+%% @param   Opts options; only `{time, posix | universal | local}' is honored
+%%          (`local' is treated as `universal' since AtomVM has no timezone db)
+%% @returns `{ok, FileInfo}' or `{error, Reason}'
+%% @doc     Return information about a file as a `#file_info{}' record, with the
+%% time fields in the requested format. Elixir's `File.dir?'/`File.mkdir_p' call
+%% this with `[{time, posix}]'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_file_info(File :: iodata(), Opts :: list()) -> {ok, tuple()} | {error, any()}.
+read_file_info(Filename, Opts) ->
+    TimeFmt = proplists:get_value(time, Opts, universal),
     case atomvm:posix_stat(Filename) of
         {ok, Stat} ->
-            #{
-                st_dev := Dev,
-                st_ino := Ino,
-                st_mode := Mode,
-                st_nlink := NLink,
-                st_uid := Uid,
-                st_gid := Gid,
-                st_size := Size,
-                st_atime_s := ATime,
-                st_mtime_s := MTime,
-                st_ctime_s := CTime
-            } = Stat,
-            Type =
-                case Mode band 16#F000 of
-                    16#4000 -> directory;
-                    16#8000 -> regular;
-                    16#A000 -> symlink;
-                    _ -> other
-                end,
-            %% #file_info{size, type, access, atime, mtime, ctime, mode,
-            %%            links, major_device, minor_device, inode, uid, gid}
-            Info =
-                {file_info, Size, Type, read_write, to_datetime(ATime), to_datetime(MTime),
-                    to_datetime(CTime), Mode, NLink, Dev, 0, Ino, Uid, Gid},
-            {ok, Info};
+            {ok, file_info_from_stat(Stat, TimeFmt)};
         {error, _} = Error ->
             Error
     end.
 
 %% @private
-to_datetime(PosixSeconds) ->
+file_info_from_stat(Stat, TimeFmt) ->
+    #{
+        st_dev := Dev,
+        st_ino := Ino,
+        st_mode := Mode,
+        st_nlink := NLink,
+        st_uid := Uid,
+        st_gid := Gid,
+        st_size := Size,
+        st_atime_s := ATime,
+        st_mtime_s := MTime,
+        st_ctime_s := CTime
+    } = Stat,
+    Type =
+        case Mode band 16#F000 of
+            16#4000 -> directory;
+            16#8000 -> regular;
+            16#A000 -> symlink;
+            _ -> other
+        end,
+    %% #file_info{size, type, access, atime, mtime, ctime, mode,
+    %%            links, major_device, minor_device, inode, uid, gid}
+    {file_info, Size, Type, read_write, format_time(ATime, TimeFmt), format_time(MTime, TimeFmt),
+        format_time(CTime, TimeFmt), Mode, NLink, Dev, 0, Ino, Uid, Gid}.
+
+%% @private
+format_time(PosixSeconds, posix) ->
+    PosixSeconds;
+format_time(PosixSeconds, _Universal) ->
     calendar:system_time_to_universal_time(PosixSeconds, second).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file
+%% @param   Mode the desired permission bits (ignored)
+%% @returns `ok'
+%% @doc     Change file permissions. AtomVM has no `chmod' syscall wrapper, so
+%% this is a best-effort no-op that reports success — provided for compatibility
+%% with code (e.g. Elixir's `File.chmod') that expects the function to exist.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec change_mode(Filename :: iodata(), Mode :: non_neg_integer()) -> ok | {error, any()}.
+change_mode(_Filename, _Mode) ->
+    ok.
 
 %%-----------------------------------------------------------------------------
 %% @param   Dirname name of the directory to list
