@@ -95,7 +95,9 @@ struct Context
 
     // Following fields offsets are also hard-coded in jit backends
     term x[MAX_REG + 1];
-    term cp;
+    // Continuation pointer: 64-bit wide, so on 32-bit term platforms it spans
+    // two stack slots and can hold a full Module pointer plus a code offset.
+    cp_t cp;
     avm_float_t *fr;
     term bs;
     size_t bs_offset;

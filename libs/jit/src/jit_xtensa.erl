@@ -60,6 +60,9 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module/1,
+    get_cp_module/1,
+    get_cp_offset/1,
     get_module_atom_index/2,
     and_/3,
     or_/3,
@@ -210,9 +213,10 @@
 -define(Y_REGS, {?CTX_REG, 16#28}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 -define(CP, {?CTX_REG, 16#70}).
--define(FP_REGS, {?CTX_REG, 16#74}).
--define(BS, {?CTX_REG, 16#78}).
--define(BS_OFFSET, {?CTX_REG, 16#7C}).
+-define(CP_MODULE, {?CTX_REG, 16#74}).
+-define(FP_REGS, {?CTX_REG, 16#78}).
+-define(BS, {?CTX_REG, 16#7C}).
+-define(BS_OFFSET, {?CTX_REG, 16#80}).
 -define(JITSTATE_REG, a3).
 -define(JITSTATE_MODULE_OFFSET, 0).
 -define(JITSTATE_CONTINUATION_OFFSET, 16#4).
@@ -3054,10 +3058,15 @@ move_to_cp(
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
     AvailT = Avail band (bnot reg_bit(Reg)),
+    %% cp is two words: store y[Y] (offset << 2) at ?CP and y[Y+1] (Module*)
+    %% at ?CP_MODULE.
     I1 = ldr_y_reg(Reg, Y, AvailT),
     {BaseReg, Off} = ?CP,
     I2 = jit_xtensa_asm:s32i(Reg, BaseReg, Off),
-    Code = <<I1/binary, I2/binary>>,
+    I3 = ldr_y_reg(Reg, Y + 1, AvailT),
+    {BaseRegM, OffM} = ?CP_MODULE,
+    I4 = jit_xtensa_asm:s32i(Reg, BaseRegM, OffM),
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     Regs2 =
@@ -3161,6 +3170,72 @@ get_module_index(
     Code = <<I1/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, module_index),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, RegBit)
+        },
+        Reg
+    }.
+
+%% @doc Load the current module pointer (jit_state->module) into a fresh
+%% register. Like get_module_index without the final module->index load, and
+%% without caching the result.
+-spec get_module(state()) -> {state(), xtensa_register()}.
+get_module(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    % Load module from jit_state (which is in a3)
+    I1 = jit_xtensa_asm:l32i(Reg, ?JITSTATE_REG, ?JITSTATE_MODULE_OFFSET),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, RegBit)
+        },
+        Reg
+    }.
+
+%% @doc Load the Module pointer stored in ctx->cp (?CP_MODULE) into a register.
+-spec get_cp_module(state()) -> {state(), xtensa_register()}.
+get_cp_module(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    {BaseReg, Off} = ?CP_MODULE,
+    I = jit_xtensa_asm:l32i(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, RegBit)
+        },
+        Reg
+    }.
+
+%% @doc Load the offset word (offset << 2) stored in ctx->cp (?CP) into a register.
+-spec get_cp_offset(state()) -> {state(), xtensa_register()}.
+get_cp_offset(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    {BaseReg, Off} = ?CP,
+    I = jit_xtensa_asm:l32i(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{
             stream = Stream1,
@@ -4089,33 +4164,32 @@ call_primitive_with_cp(State0, Primitive, Args) ->
     rewrite_cp_offset(State2, RewriteOffset, TempReg).
 
 -spec set_cp(state()) -> {state(), non_neg_integer(), xtensa_register()}.
-set_cp(#state{regs = Regs0} = State0) ->
-    Avail = jit_regs:available_regs(Regs0),
-    TempReg = first_avail(Avail),
-    TempBit = reg_bit(TempReg),
-    %% Reserve TempReg for the offset BEFORE get_module_index consumes available registers.
-    State1 = State0#state{
-        regs = jit_regs:alloc_reg(Regs0, TempBit)
-    },
-    {State2, Reg} = get_module_index(State1),
-    #state{stream_module = StreamModule, stream = Stream0} = State2,
-
-    Offset = StreamModule:offset(Stream0),
-    I1 = jit_xtensa_asm:slli(Reg, Reg, 24),
-    %% Reserve 15 bytes for offset load (li generates 3..21 bytes, patched by rewrite_cp_offset).
-    I2 =
+set_cp(State0) ->
+    %% cp is two words: store the Module pointer (jit_state->module) at
+    %% ?CP_MODULE, and the return offset << 2 at ?CP (patched by
+    %% rewrite_cp_offset below).
+    {#state{stream_module = StreamModule, stream = Stream0} = State1, ModReg} =
+        get_module(State0),
+    {BaseRegM, OffM} = ?CP_MODULE,
+    IModStore = jit_xtensa_asm:s32i(ModReg, BaseRegM, OffM),
+    Stream1 = StreamModule:append(Stream0, IModStore),
+    State2 = free_native_register(State1#state{stream = Stream1}, ModReg),
+    %% Get a temporary register to hold the offset value
+    TempReg = first_avail(jit_regs:available_regs(State2#state.regs)),
+    Offset = StreamModule:offset(Stream1),
+    %% Reserve 15 bytes for offset load (li generates 3..21 bytes, patched by
+    %% rewrite_cp_offset). The placeholder is loaded into TempReg, which is then
+    %% stored to ?CP.
+    I1 =
         <<16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF,
             16#FF, 16#FF>>,
-    MOVOffset = Offset + byte_size(I1),
-    I4 = jit_xtensa_asm:or_(Reg, Reg, TempReg),
+    MOVOffset = Offset,
     {BaseReg, Off} = ?CP,
-    I5 = jit_xtensa_asm:s32i(Reg, BaseReg, Off),
-    Code = <<I1/binary, I2/binary, I4/binary, I5/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    State3 = State2#state{stream = Stream1},
-    State4 = free_native_register(State3, Reg),
-    State5 = free_native_register(State4, TempReg),
-    {State5, MOVOffset, TempReg}.
+    I2 = jit_xtensa_asm:s32i(TempReg, BaseReg, Off),
+    Code = <<I1/binary, I2/binary>>,
+    Stream2 = StreamModule:append(Stream1, Code),
+    State3 = State2#state{stream = Stream2},
+    {State3, MOVOffset, TempReg}.
 
 -spec rewrite_cp_offset(state(), non_neg_integer(), xtensa_register()) -> state().
 rewrite_cp_offset(
