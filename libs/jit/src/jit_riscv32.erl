@@ -59,6 +59,9 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_module/1,
+    get_cp_module/1,
+    get_cp_offset/1,
     get_module_atom_index/2,
     and_/3,
     or_/3,
@@ -220,9 +223,10 @@
 -define(Y_REGS, {?CTX_REG, 16#28}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 -define(CP, {?CTX_REG, 16#70}).
--define(FP_REGS, {?CTX_REG, 16#74}).
--define(BS, {?CTX_REG, 16#78}).
--define(BS_OFFSET, {?CTX_REG, 16#7C}).
+-define(CP_MODULE, {?CTX_REG, 16#74}).
+-define(FP_REGS, {?CTX_REG, 16#78}).
+-define(BS, {?CTX_REG, 16#7C}).
+-define(BS_OFFSET, {?CTX_REG, 16#80}).
 -define(JITSTATE_REG, a1).
 -define(RA_REG, ra).
 -define(JITSTATE_MODULE_OFFSET, 0).
@@ -387,6 +391,61 @@ get_module_atom_index(
         },
         Reg
     }.
+
+%% @doc Load the current module pointer (jit_state->module) into a fresh
+%% register. This is the Module* itself (unlike get_module_index/1 which then
+%% dereferences module->module_index). Used by set_cp to store the Module*
+%% half of the two-word (32-bit) cp, and by the 32-bit OP_RETURN fast path.
+-spec get_module(state()) -> {state(), riscv32_register()}.
+get_module(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    %% Reg = jit_state->module (jit_state is in a1)
+    I = ?LOAD_WORD(Reg, ?JITSTATE_REG, ?JITSTATE_MODULE_OFFSET),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs2 = jit_regs:alloc_reg(Regs1, RegBit),
+    {State#state{stream = Stream1, regs = Regs2}, Reg}.
+
+%% @doc Load the Module* half of the saved cp (ctx->cp high word, ?CP_MODULE)
+%% into a fresh register. 32-bit only: cp spans two words.
+-spec get_cp_module(state()) -> {state(), riscv32_register()}.
+get_cp_module(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    {BaseReg, Off} = ?CP_MODULE,
+    I = ?LOAD_WORD(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs2 = jit_regs:alloc_reg(Regs1, RegBit),
+    {State#state{stream = Stream1, regs = Regs2}, Reg}.
+
+%% @doc Load the offset half of the saved cp (ctx->cp low word, ?CP) into a
+%% fresh register. The value is offset << 2 (TERM_PRIMARY_CP tag); the caller
+%% shifts it right by 2. 32-bit only.
+-spec get_cp_offset(state()) -> {state(), riscv32_register()}.
+get_cp_offset(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    RegBit = reg_bit(Reg),
+    {BaseReg, Off} = ?CP,
+    I = ?LOAD_WORD(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs2 = jit_regs:alloc_reg(Regs1, RegBit),
+    {State#state{stream = Stream1, regs = Regs2}, Reg}.
 
 % ILP32: 64-bit arguments require double-word alignment (even register number)
 parameter_regs0_avm_int64_t(T, [a0, a1 | Rest], Acc) ->

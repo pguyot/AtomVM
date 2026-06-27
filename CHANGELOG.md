@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a JIT crash (`EXC_BAD_ACCESS`/SIGBUS) on Apple Silicon
 - Fixed the ESP32 event poller re-blocking after running a listener, which could delay a process
   readied by a driver (e.g. an active-mode socket message) until the next event or timer tick
+- Fixed a bug where AtomVM could only have 256 loaded modules
 - Fixed `put_map_exact` writing the new key into a keys tuple shared with other maps
 - Fixed a process that exited before ever being scheduled staying in the scheduler's process list
 - `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now encode and decode terms

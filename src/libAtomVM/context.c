@@ -576,8 +576,8 @@ void context_process_code_server_resume_signal(Context *ctx)
 #endif
 #endif
     // Fix CP to OP_INT_CALL_END
-    if (ctx->cp == module_address(module->module_index, 0)) {
-        ctx->cp = module_address(module->module_index, module->end_instruction_ii);
+    if (ctx->cp == make_cp(module, 0)) {
+        ctx->cp = make_cp(module, module->end_instruction_ii);
     }
 #endif
     context_update_flags(ctx, ~Trap, NoFlags);
@@ -1423,7 +1423,10 @@ COLD_FUNC void context_dump(Context *ctx)
             Module *cp_mod;
             int label;
             size_t offset;
-            module_cp_to_label_offset(*ct, &cp_mod, &label, &offset, NULL, ctx->global);
+            // A saved cp spans CP_SIZE_IN_TERMS slots (2 on 32-bit: offset then
+            // Module*). Reconstruct it from all its slots and skip the extra one.
+            module_cp_to_label_offset(load_cp(ct), &cp_mod, &label, &offset, NULL, ctx->global);
+            ct += CP_SIZE_IN_TERMS - 1;
             // Cast offset to unsigned as some embedded libc implementations do not support %zu
             fprintf(stderr, "#CP<module: %i, label: %i, offset: %u>\n", cp_mod->module_index, label, (unsigned) offset);
 
