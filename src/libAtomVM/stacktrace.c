@@ -163,7 +163,10 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
             Module *cp_mod;
             size_t mod_offset;
 
-            module_cp_to_label_offset(*ct, &cp_mod, NULL, NULL, &mod_offset, ctx->global);
+            // A saved cp spans CP_SIZE_IN_TERMS slots (2 on 32-bit: offset then
+            // Module*). Both are CP-tagged; reconstruct it and skip the extra slot.
+            module_cp_to_label_offset(load_cp(ct), &cp_mod, NULL, NULL, &mod_offset, ctx->global);
+            ct += CP_SIZE_IN_TERMS - 1;
             // TODO: investigate
             // mod_offset is currently never equal to cp_mod->end_instruction_ii with native code
             if (mod_offset != cp_mod->end_instruction_ii && !(prev_mod == cp_mod && mod_offset == prev_mod_offset)) {
@@ -298,7 +301,8 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
             Module *cp_mod;
             size_t mod_offset;
 
-            module_cp_to_label_offset(*ct, &cp_mod, NULL, NULL, &mod_offset, ctx->global);
+            module_cp_to_label_offset(load_cp(ct), &cp_mod, NULL, NULL, &mod_offset, ctx->global);
+            ct += CP_SIZE_IN_TERMS - 1;
             if (mod_offset != cp_mod->end_instruction_ii && !(prev_mod == cp_mod && mod_offset == prev_mod_offset)) {
 
                 prev_mod = cp_mod;
@@ -428,9 +432,10 @@ term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
         size_t mod_index_tuple_arity = term_get_tuple_arity(mod_index_tuple);
         assert((mod_index_tuple_arity == 2) || (mod_index_tuple_arity == 5));
 
-        term cp = module_address(
+        cp_t cp = make_cp_from_index(
             term_to_int(term_get_tuple_element(mod_index_tuple, 0)),
-            term_to_int(term_get_tuple_element(mod_index_tuple, 1)));
+            term_to_int(term_get_tuple_element(mod_index_tuple, 1)),
+            ctx->global);
 
         Module *cp_mod;
         int label;
