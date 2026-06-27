@@ -396,7 +396,10 @@ move_to_cp_test() ->
     Dump = <<
         "   0:	0a22e2        	l32i	a14, a2, 40\n"
         "   3:	002ef2        	l32i	a15, a14, 0\n"
-        "   6:	1c62f2        	s32i	a15, a2, 112"
+        "   6:	1c62f2        	s32i	a15, a2, 112\n"
+        "   9:	0a22e2        	l32i	a14, a2, 40\n"
+        "   c:	012ef2        	l32i	a15, a14, 4\n"
+        "   f:	1d62f2        	s32i	a15, a2, 116"
     >>,
     ?assertStream(xtensa, Dump, Stream).
 
