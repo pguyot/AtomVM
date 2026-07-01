@@ -68,16 +68,25 @@ def atomvm_cmd(build, avm, lib):
             str(ATOMVM_ROOT / build / "libs" / lib)]
 
 
-AOT_AVM = "benchmark-aot-aarch64/benchmark-aarch64.avm"
+TARGET = os.environ.get("TARGET", "aarch64")
+AOT_AVM = f"benchmark-aot-{TARGET}/benchmark-{TARGET}.avm"
+AOT_LIB = f"atomvmlib-{TARGET}.avm"
 PLAIN_AVM = str(ATOMVM_ROOT / "build.emu" / "benchmark-plain.avm")
 
 # Order: slowest-expected first so the table reads emu -> JIT -> reference.
 CONFIGS = [
     ("emu noSMP", atomvm_cmd("build.emu.nosmp", PLAIN_AVM, "atomvmlib.avm")),
     ("emu SMP",   atomvm_cmd("build.emu",       PLAIN_AVM, "atomvmlib.avm")),
-    ("JIT noSMP", atomvm_cmd("build.nosmp",     AOT_AVM,   "atomvmlib-aarch64.avm")),
-    ("JIT SMP",   atomvm_cmd("build.release",   AOT_AVM,   "atomvmlib-aarch64.avm")),
+    ("JIT noSMP", atomvm_cmd("build.nosmp",     AOT_AVM,   AOT_LIB)),
+    ("JIT SMP",   atomvm_cmd("build.release",   AOT_AVM,   AOT_LIB)),
 ]
+
+# ONLY="emu SMP,JIT SMP" selects a subset (also honoured by the interleave
+# driver, which imports CONFIGS from this module).
+_ONLY = os.environ.get("ONLY")
+if _ONLY:
+    _want = [s.strip() for s in _ONLY.split(",")]
+    CONFIGS = [c for c in CONFIGS if c[0] in _want]
 
 BEAM_CMD = [ERL, "-pa", str(EBIN), "-noshell", "-s", "benchmark", "start",
             "-s", "init", "stop"]
