@@ -163,6 +163,10 @@ struct GlobalContext
     // destruction, which is what makes the returned Context safe to use.
     struct ProcessesIndexShard processes_index_shards[PROCESSES_INDEX_SHARDS];
     struct SyncList registered_processes;
+    // Bumped (under the registered_processes write lock) whenever a name is
+    // registered or unregistered, so per-context name lookup caches can be
+    // validated with a single atomic load instead of taking the read lock.
+    uint32_t ATOMIC registered_processes_version;
     struct SyncList listeners;
     struct SyncList resource_types;
     struct SyncList select_events;

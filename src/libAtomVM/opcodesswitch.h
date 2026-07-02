@@ -34,6 +34,7 @@
 #include "intn.h"
 #include "jit.h"
 #include "mailbox.h"
+#include "native_call.h"
 #include "nifs.h"
 #include "scheduler.h"
 #include "stacktrace.h"
@@ -1406,59 +1407,6 @@ static term make_fun(Context *ctx, const Module *mod, int fun_index, term argv[]
     return ((term) boxed_func) | TERM_PRIMARY_BOXED;
 }
 
-static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index_t function_name, int arity,
-    term *return_value)
-{
-    char mfa[MAX_MFA_NAME_LEN];
-    atom_table_write_mfa(ctx->global->atom_table, mfa, sizeof(mfa), module_name, function_name, arity);
-    const struct ExportedFunction *exported_bif = bif_registry_get_handler(mfa);
-    if (exported_bif) {
-        if (exported_bif->type == GCBIFFunctionType) {
-            const struct GCBif *gcbif = EXPORTED_FUNCTION_TO_GCBIF(exported_bif);
-            switch (arity) {
-                case 1: {
-                    *return_value = gcbif->gcbif1_ptr(ctx, 0, 0, ctx->x[0]);
-                    return true;
-                }
-                case 2: {
-                    *return_value = gcbif->gcbif2_ptr(ctx, 0, 0, ctx->x[0], ctx->x[1]);
-                    return true;
-                }
-                case 3: {
-                    *return_value = gcbif->gcbif3_ptr(ctx, 0, 0, ctx->x[0], ctx->x[1], ctx->x[2]);
-                    return true;
-                }
-            }
-        } else {
-            const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(exported_bif);
-            switch (arity) {
-                case 0: {
-                    *return_value = bif->bif0_ptr(ctx);
-                    return true;
-                }
-                case 1: {
-                    *return_value = bif->bif1_ptr(ctx, 0, ctx->x[0]);
-                    return true;
-                }
-                case 2: {
-                    *return_value = bif->bif2_ptr(ctx, 0, ctx->x[0], ctx->x[1]);
-                    return true;
-                }
-            }
-        }
-    }
-
-    struct Nif *nif = (struct Nif *) nifs_get(mfa);
-    if (nif) {
-        ctx->nif_call_arity = arity;
-        *return_value = nif->nif_ptr(ctx, arity, ctx->x);
-        ctx->nif_call_arity = 0;
-        return true;
-    }
-
-    return false;
-}
-
 #ifdef ENABLE_ADVANCED_TRACE
     static void print_function_args(const Context *ctx, int arity)
     {
@@ -1689,6 +1637,9 @@ HOT_FUNC int scheduler_entry_point(GlobalContext *glb)
     ModuleNativeEntryPoint native_pc;
 #endif
     int remaining_reductions;
+    // This scheduler's registered-name and apply/3 caches (see
+    // native_call.h); zero-initialized means empty.
+    struct SchedulerCaches scheduler_caches = { 0 };
 
     Context *ctx = scheduler_run(glb);
 
@@ -1760,6 +1711,7 @@ schedule_in:
             jit_state.continuation = (NativeContinuation) 0;
             jit_state.module = mod;
             jit_state.remaining_reductions = remaining_reductions;
+            jit_state.caches = &scheduler_caches;
             // __asm__ volatile("int $0x03");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
             jit_state.code_base = (const void *) mod->native_code;
@@ -2412,7 +2364,7 @@ schedule_in:
                     x_regs[0] = return_value;
                 } else {
                     if (term_is_atom(recipient_term)) {
-                        recipient_term = globalcontext_get_registered_process(ctx->global, term_to_atom_index(recipient_term));
+                        recipient_term = get_registered_process_cached(ctx->global, &scheduler_caches, term_to_atom_index(recipient_term));
                         if (UNLIKELY(recipient_term == UNDEFINED_ATOM)) {
                             RAISE_ERROR(BADARG_ATOM);
                         }
@@ -4615,26 +4567,23 @@ schedule_in:
 
                 TRACE_APPLY(ctx, "apply", module_name, function_name, arity);
 
-                term native_return;
-                if (maybe_call_native(ctx, module_name, function_name, arity, &native_return)) {
+                const struct ExportedFunction *native;
+                Module *target_module;
+                int target_label;
+                enum ApplyResolution resolution = apply_resolve_cached(ctx, &scheduler_caches,
+                    module_name, function_name, arity, &native, &target_module, &target_label);
+                if (resolution == ApplyResolvedNative) {
+                    term native_return = native_call_invoke(ctx, native, arity);
                     PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC(native_return, orig_pc);
                     x_regs[0] = native_return;
 
-                } else {
-                    Module *target_module = globalcontext_get_module(ctx->global, term_to_atom_index(module));
-                    if (IS_NULL_PTR(target_module)) {
-                        pc = orig_pc;
-                        SET_ERROR(UNDEF_ATOM);
-                        HANDLE_ERROR();
-                    }
-                    int target_label = module_search_exported_function(target_module, function_name, arity);
-                    if (target_label == 0) {
-                        pc = orig_pc;
-                        SET_ERROR(UNDEF_ATOM);
-                        HANDLE_ERROR();
-                    }
+                } else if (resolution == ApplyResolvedModule) {
                     ctx->cp = make_cp(mod, pc - code);
                     JUMP_TO_LABEL(target_module, target_label);
+                } else {
+                    pc = orig_pc;
+                    SET_ERROR(UNDEF_ATOM);
+                    HANDLE_ERROR();
                 }
                 break;
             }
@@ -4666,24 +4615,22 @@ schedule_in:
 
                 TRACE_APPLY(ctx, "apply_last", module_name, function_name, arity);
 
-                term native_return;
-                if (maybe_call_native(ctx, module_name, function_name, arity, &native_return)) {
+                const struct ExportedFunction *native;
+                Module *target_module;
+                int target_label;
+                enum ApplyResolution resolution = apply_resolve_cached(ctx, &scheduler_caches,
+                    module_name, function_name, arity, &native, &target_module, &target_label);
+                if (resolution == ApplyResolvedNative) {
+                    term native_return = native_call_invoke(ctx, native, arity);
                     PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(native_return);
                     x_regs[0] = native_return;
                     DO_RETURN();
 
-                } else {
-                    Module *target_module = globalcontext_get_module(ctx->global, term_to_atom_index(module));
-                    if (IS_NULL_PTR(target_module)) {
-                        SET_ERROR(UNDEF_ATOM);
-                        HANDLE_ERROR();
-                    }
-                    int target_label = module_search_exported_function(target_module, function_name, arity);
-                    if (target_label == 0) {
-                        SET_ERROR(UNDEF_ATOM);
-                        HANDLE_ERROR();
-                    }
+                } else if (resolution == ApplyResolvedModule) {
                     JUMP_TO_LABEL(target_module, target_label);
+                } else {
+                    SET_ERROR(UNDEF_ATOM);
+                    HANDLE_ERROR();
                 }
                 break;
             }
