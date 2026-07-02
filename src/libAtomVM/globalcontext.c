@@ -88,6 +88,14 @@ GlobalContext *globalcontext_new(void)
     synclist_init(&glb->avmpack_data);
     synclist_init(&glb->refc_binaries);
     synclist_init(&glb->processes_table);
+    glb->processes_index_capacity = 64;
+    glb->processes_index_count = 0;
+    glb->processes_index_deleted = 0;
+    glb->processes_index = calloc(glb->processes_index_capacity, sizeof(struct ProcessesIndexEntry));
+    if (IS_NULL_PTR(glb->processes_index)) {
+        free(glb);
+        return NULL;
+    }
     synclist_init(&glb->registered_processes);
     synclist_init(&glb->listeners);
     synclist_init(&glb->resource_types);
@@ -130,6 +138,7 @@ GlobalContext *globalcontext_new(void)
 #ifndef AVM_NO_SMP
     smp_spinlock_init(&glb->timer_spinlock);
 #endif
+    glb->poller_wake_deadline = 0;
 
     glb->ref_ticks = 0;
 #if !defined(AVM_NO_SMP) && ATOMIC_LLONG_LOCK_FREE != 2
@@ -336,62 +345,120 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
     synclist_destroy(&glb->dist_connections);
     synclist_destroy(&glb->registered_processes);
     synclist_destroy(&glb->processes_table);
+    free(glb->processes_index);
 
     free(glb);
 }
 
-Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id)
+// Hash index over processes_table. Mutations require the processes_table
+// write lock, lookups at least the read lock.
+static inline size_t processes_index_slot(const GlobalContext *glb, int32_t process_id, size_t probe)
 {
-    struct ListHead *item;
-    Context *p = NULL;
+    // Knuth multiplicative hash, linear probing.
+    return (((uint32_t) process_id) * 2654435761u + probe) & (glb->processes_index_capacity - 1);
+}
 
-    struct ListHead *processes_table_list = synclist_nolock(&glb->processes_table);
-    LIST_FOR_EACH (item, processes_table_list) {
-        p = GET_LIST_ENTRY(item, Context, processes_table_head);
-
-        if (p->process_id == process_id) {
-            return p;
+static Context *processes_index_get(GlobalContext *glb, int32_t process_id)
+{
+    for (size_t probe = 0;; probe++) {
+        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+        if (entry->process_id == process_id) {
+            return entry->context;
+        }
+        if (entry->process_id == 0) {
+            return NULL;
         }
     }
+}
 
-    return NULL;
+static void processes_index_insert_entry(GlobalContext *glb, int32_t process_id, Context *ctx)
+{
+    for (size_t probe = 0;; probe++) {
+        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+        if (entry->process_id == 0 || entry->process_id == -1) {
+            if (entry->process_id == -1) {
+                glb->processes_index_deleted--;
+            }
+            entry->process_id = process_id;
+            entry->context = ctx;
+            glb->processes_index_count++;
+            return;
+        }
+    }
+}
+
+static void processes_index_insert(GlobalContext *glb, Context *ctx)
+{
+    // Grow (or rebuild, purging tombstones) at 3/4 occupancy so linear
+    // probing stays short and the empty-slot probe terminator always exists.
+    if ((glb->processes_index_count + glb->processes_index_deleted + 1) * 4
+        > glb->processes_index_capacity * 3) {
+        int old_capacity = glb->processes_index_capacity;
+        struct ProcessesIndexEntry *old_entries = glb->processes_index;
+        int new_capacity = (glb->processes_index_count + 1) * 4 > old_capacity * 3
+            ? old_capacity * 2
+            : old_capacity;
+        struct ProcessesIndexEntry *new_entries = calloc(new_capacity, sizeof(struct ProcessesIndexEntry));
+        if (IS_NULL_PTR(new_entries)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
+        glb->processes_index = new_entries;
+        glb->processes_index_capacity = new_capacity;
+        glb->processes_index_count = 0;
+        glb->processes_index_deleted = 0;
+        for (int i = 0; i < old_capacity; i++) {
+            if (old_entries[i].process_id > 0) {
+                processes_index_insert_entry(glb, old_entries[i].process_id, old_entries[i].context);
+            }
+        }
+        free(old_entries);
+    }
+    processes_index_insert_entry(glb, ctx->process_id, ctx);
+}
+
+void globalcontext_processes_index_remove(GlobalContext *glb, int32_t process_id)
+{
+    for (size_t probe = 0;; probe++) {
+        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+        if (entry->process_id == process_id) {
+            entry->process_id = -1;
+            entry->context = NULL;
+            glb->processes_index_count--;
+            glb->processes_index_deleted++;
+            return;
+        }
+        if (entry->process_id == 0) {
+            return;
+        }
+    }
+}
+
+Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id)
+{
+    return processes_index_get(glb, process_id);
 }
 
 Context *globalcontext_get_process_lock(GlobalContext *glb, int32_t process_id)
 {
-    struct ListHead *item;
-    Context *p = NULL;
-
-    struct ListHead *processes_table_list = synclist_rdlock(&glb->processes_table);
-    LIST_FOR_EACH (item, processes_table_list) {
-        p = GET_LIST_ENTRY(item, Context, processes_table_head);
-
-        if (p->process_id == process_id) {
-            return p;
-        }
+    (void) synclist_rdlock(&glb->processes_table);
+    Context *p = processes_index_get(glb, process_id);
+    if (p == NULL) {
+        synclist_unlock(&glb->processes_table);
     }
-    synclist_unlock(&glb->processes_table);
-
-    return NULL;
+    return p;
 }
 
 #if !defined(AVM_NO_SMP) && defined(AVM_TASK_DRIVER_ENABLED)
 static bool globalcontext_get_process_trylock(GlobalContext *glb, int32_t process_id, Context **output)
 {
-    struct ListHead *item;
-    Context *p = NULL;
-
     struct ListHead *processes_table_list = synclist_tryrdlock(&glb->processes_table);
     if (processes_table_list == NULL) {
         return false;
     }
-    LIST_FOR_EACH (item, processes_table_list) {
-        p = GET_LIST_ENTRY(item, Context, processes_table_head);
-
-        if (p->process_id == process_id) {
-            *output = p;
-            break;
-        }
+    Context *p = processes_index_get(glb, process_id);
+    if (p != NULL) {
+        *output = p;
     }
 
     return true;
@@ -594,7 +661,10 @@ void globalcontext_init_process(GlobalContext *glb, Context *ctx)
     ctx->process_id = ++glb->last_process_id;
     list_append(&glb->waiting_processes, &ctx->processes_list_head);
     SMP_SPINLOCK_UNLOCK(&glb->processes_spinlock);
-    synclist_append(&glb->processes_table, &ctx->processes_table_head);
+    struct ListHead *processes_table_list = synclist_wrlock(&glb->processes_table);
+    list_insert(&ctx->processes_table_head, processes_table_list->prev, processes_table_list);
+    processes_index_insert(glb, ctx);
+    synclist_unlock(&glb->processes_table);
 }
 
 bool globalcontext_register_process(GlobalContext *glb, int atom_index, term local_pid_or_port)

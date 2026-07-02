@@ -37,19 +37,25 @@ static void scheduler_make_ready_from_task(Context *ctx);
 
 static int update_timer_list(GlobalContext *global)
 {
+    // Called with timer_spinlock held; poller_wake_deadline is written here
+    // and read by scheduler_set_timeout under the same lock.
     struct TimerList *tw = &global->timer_list;
     if (timer_list_is_empty(tw)) {
         // Do not fetch the current date if there is no timer
+        global->poller_wake_deadline = UINT64_MAX;
         return -1;
     }
     uint64_t native_now = sys_monotonic_time_u64();
     timer_list_next(tw, native_now, scheduler_timeout_callback);
     if (tw->next_timer == 0) {
+        global->poller_wake_deadline = UINT64_MAX;
         return -1;
     }
     if (native_now >= tw->next_timer) {
+        global->poller_wake_deadline = 0;
         return 0;
     }
+    global->poller_wake_deadline = tw->next_timer;
     uint64_t wait_timeout = tw->next_timer - native_now;
     uint64_t wait_timeout_ms = sys_monotonic_time_u64_to_ms(wait_timeout);
     if (wait_timeout_ms > INT_MAX) {
@@ -521,20 +527,28 @@ void scheduler_set_timeout(Context *ctx, avm_int64_t timeout)
 
     SMP_SPINLOCK_LOCK(&glb->timer_spinlock);
     timer_list_insert(tw, twi);
+    // The poller only needs to be woken up to recompute its poll timeout if
+    // this timer expires before the date it planned to wake at anyway.
+    // Without this filter every receive-with-timeout kicks the poller with a
+    // sys_signal (a syscall) and wakes it (kernel round-trip plus
+    // schedulers_mutex contention), which dominates messaging benchmarks.
+    bool poller_needs_wake = expiry < glb->poller_wake_deadline;
     SMP_SPINLOCK_UNLOCK(&glb->timer_spinlock);
 
+    if (poller_needs_wake) {
 #ifndef AVM_NO_SMP
-    if (SMP_MUTEX_TRYLOCK(glb->schedulers_mutex)) {
-        if (glb->waiting_scheduler) {
+        if (SMP_MUTEX_TRYLOCK(glb->schedulers_mutex)) {
+            if (glb->waiting_scheduler) {
+                sys_signal(glb);
+            }
+            SMP_MUTEX_UNLOCK(glb->schedulers_mutex);
+        } else {
             sys_signal(glb);
         }
-        SMP_MUTEX_UNLOCK(glb->schedulers_mutex);
-    } else {
-        sys_signal(glb);
-    }
 #elif defined(AVM_TASK_DRIVER_ENABLED)
-    sys_signal(glb);
+        sys_signal(glb);
 #endif
+    }
 }
 
 void scheduler_cancel_timeout(Context *ctx)

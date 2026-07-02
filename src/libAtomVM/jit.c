@@ -1156,7 +1156,15 @@ static bool jit_send(Context *ctx, JITState *jit_state)
             return false;
         }
         int local_process_id = term_to_local_process_id(recipient_term);
-        globalcontext_send_message(ctx->global, local_process_id, ctx->x[1]);
+        if (local_process_id == ctx->process_id && !ctx->native_handler) {
+            // Send to self: no process-table lookup and no wakeup is needed,
+            // the message is visible to this process's own upcoming receive
+            // (enqueue happens-before on the same thread). Skipping
+            // scheduler_make_ready also avoids one spurious reschedule.
+            mailbox_send_no_signal(ctx, ctx->x[1]);
+        } else {
+            globalcontext_send_message(ctx->global, local_process_id, ctx->x[1]);
+        }
         ctx->x[0] = ctx->x[1];
     } else if (UNLIKELY(!term_is_reference(recipient_term))) {
         set_error(ctx, jit_state, 0, BADARG_ATOM);
