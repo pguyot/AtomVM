@@ -97,11 +97,14 @@ struct ProcessesIndexEntry
 
 // Number of independently locked shards of the processes index. Sends from
 // concurrently running schedulers only contend when their target pids hash
-// to the same shard.
+// to the same shard. Overridable so small SMP targets (e.g. two-core MCUs)
+// can trade lookup concurrency for a few KB of RAM.
+#ifndef PROCESSES_INDEX_SHARDS
 #ifndef AVM_NO_SMP
 #define PROCESSES_INDEX_SHARDS 16
 #else
 #define PROCESSES_INDEX_SHARDS 1
+#endif
 #endif
 
 struct ProcessesIndexShard
