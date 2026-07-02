@@ -184,7 +184,9 @@ void context_destroy(Context *ctx)
     UNUSED(processes_table_list);
 
     list_remove(&ctx->processes_table_head);
-    globalcontext_processes_index_remove(ctx->global, ctx->process_id);
+    // Takes the shard write lock: from here to the matching unlock no other
+    // thread can look this process up to send to its mailbox.
+    globalcontext_processes_index_lock_remove(ctx->global, ctx->process_id);
 
     // Ensure process is not registered
     globalcontext_maybe_unregister_process_id(ctx->global, ctx->process_id);
@@ -275,6 +277,7 @@ void context_destroy(Context *ctx)
     // and is no longer registered either.
     struct Monitor *remaining_monitors = context_monitors_handle_terminate(ctx);
 
+    globalcontext_processes_index_unlock(ctx->global, ctx->process_id);
     synclist_unlock(&ctx->global->processes_table);
 
     // Eventually call distribution and resource monitors handlers after the processes table was unlocked
