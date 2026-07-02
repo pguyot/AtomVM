@@ -380,7 +380,7 @@ move_imported_gcbif_to_native_register_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	91040007 	add	x7, x0, #0x100\n"
+            "   0:	9103e007 	add	x7, x0, #0xf8\n"
             "   4:	f94000e8 	ldr	x8, [x7]\n"
             "   8:	eb07011f 	cmp	x8, x7\n"
             "   c:	54000120 	b.eq	0x30\n"
@@ -407,7 +407,7 @@ move_float_to_fp_reg_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump = <<
         "   0:	d2e80207 	mov	x7, #0x4010000000000000\n"
-        "   4:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   4:	f9400c28 	ldr	x8, [x1, #24]\n"
         "   8:	f9000507 	str	x7, [x8, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
@@ -2237,7 +2237,7 @@ move_to_vm_register_test_() ->
                     Dump = <<
                         "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
                         "   4:	f94004e7 	ldr	x7, [x7, #8]\n"
-                        "   8:	f9407408 	ldr	x8, [x0, #232]\n"
+                        "   8:	f9400c28 	ldr	x8, [x1, #24]\n"
                         "   c:	f9000d07 	str	x7, [x8, #24]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
@@ -2807,7 +2807,7 @@ float_op_fadd_test() ->
     ?assertEqual(r7, Reg),
     Stream = ?BACKEND:stream(State1),
     Dump = <<
-        "   0:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   0:	f9400c28 	ldr	x8, [x1, #24]\n"
         "   4:	fd400500 	ldr	d0, [x8, #8]\n"
         "   8:	fd400901 	ldr	d1, [x8, #16]\n"
         "   c:	1e612800 	fadd	d0, d0, d1\n"
@@ -2826,7 +2826,7 @@ float_op_fmul_test() ->
     ?assertEqual(r7, Reg),
     Stream = ?BACKEND:stream(State1),
     Dump = <<
-        "   0:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   0:	f9400c28 	ldr	x8, [x1, #24]\n"
         "   4:	fd400500 	ldr	d0, [x8, #8]\n"
         "   8:	fd400901 	ldr	d1, [x8, #16]\n"
         "   c:	1e610800 	fmul	d0, d0, d1\n"
@@ -2857,11 +2857,8 @@ float_conv_int_test() ->
     State2 = ?BACKEND:float_conv_int(State1, IntReg, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        %% move_to_native_register loads x_reg[0] into x7 (the untagged int is
-        %% the caller's responsibility; here we just feed the loaded register)
         "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
-        %% float_conv_int: load fr base, convert, store to fr[1]
-        "   4:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   4:	f9400c28 	ldr	x8, [x1, #24]\n"
         "   8:	9e6200e0 	scvtf	d0, x7\n"
         "   c:	fd000500 	str	d0, [x8, #8]"
     >>,
@@ -2873,13 +2870,10 @@ float_conv_float_test() ->
     State2 = ?BACKEND:float_conv_float(State1, {free, BoxedReg}, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        %% move_to_native_register loads the boxed-float term x_reg[0] into x7
         "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
-        %% float_conv_float: untag boxed ptr, load double from boxed_ptr[1],
-        %% load fr base, store to fr[1]
         "   4:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
         "   8:	fd4004e0 	ldr	d0, [x7, #8]\n"
-        "   c:	f9407408 	ldr	x8, [x0, #232]\n"
+        "   c:	f9400c28 	ldr	x8, [x1, #24]\n"
         "  10:	fd000500 	str	d0, [x8, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
