@@ -165,19 +165,19 @@ _Static_assert(offsetof(Context, e) == 0x50, "ctx->e is 0x50 in jit/src/jit_{aar
 _Static_assert(offsetof(Context, heap.heap_ptr) == 0x18, "ctx->heap.heap_ptr is 0x18 in jit/src/jit_x86_64.erl (read_avail_heap_memory)");
 _Static_assert(offsetof(Context, x) == 0x58, "ctx->x is 0x58 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, cp) == 0xE0, "ctx->cp is 0xE0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
-_Static_assert(offsetof(Context, fr) == 0xE8, "ctx->fr is 0xE8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
-_Static_assert(offsetof(Context, bs) == 0xF0, "ctx->bs is 0xF0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
-_Static_assert(offsetof(Context, bs_offset) == 0xF8, "ctx->bs_offset is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(Context, bs) == 0xE8, "ctx->bs is 0xE8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(Context, bs_offset) == 0xF0, "ctx->bs_offset is 0xF0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 
 _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, continuation) == 0x8, "jit_state->continuation is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x10, "jit_state->remaining_reductions is 0x10 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(JITState, fr) == 0x18, "jit_state->fr is 0x18 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 
 // Offsets for inlining the imported-BIF resolution at gc_bif call sites.
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
-_Static_assert(offsetof(Context, extended_x_regs) == 0x100, "ctx->extended_x_regs is 0x100 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(struct Bif, bif0_ptr) == 0x8, "bif->bif0_ptr is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(struct Bif, base) == 0x0, "bif->base is 0x0 (EXPORTED_FUNCTION_TO_BIF is identity)");
 #elif JIT_ARCH_TARGET == JIT_ARCH_ARMV6M || JIT_ARCH_TARGET == JIT_ARCH_ARM32 || JIT_ARCH_TARGET == JIT_ARCH_RISCV32 || JIT_ARCH_TARGET == JIT_ARCH_WASM32 || JIT_ARCH_TARGET == JIT_ARCH_XTENSA
@@ -187,17 +187,17 @@ _Static_assert(offsetof(Context, x) == 0x2C, "ctx->x is 0x2C in 32-bit backends"
 // and spans two stack slots. ?CP_OFFSET=0x70, ?CP_MODULE=0x74 in the backends.
 _Static_assert(offsetof(Context, cp) == 0x70, "ctx->cp is 0x70 in 32-bit backends");
 _Static_assert(sizeof(((Context *) 0)->cp) == 8, "ctx->cp is 8 bytes (cp_t) on all backends");
-_Static_assert(offsetof(Context, fr) == 0x78, "ctx->fr is 0x78 in 32-bit backends");
-_Static_assert(offsetof(Context, bs) == 0x7C, "ctx->bs is 0x7C in 32-bit backends");
-_Static_assert(offsetof(Context, bs_offset) == 0x80, "ctx->bs_offset is 0x80 in 32-bit backends");
+_Static_assert(offsetof(Context, bs) == 0x78, "ctx->bs is 0x78 in 32-bit backends");
+_Static_assert(offsetof(Context, bs_offset) == 0x7C, "ctx->bs_offset is 0x7C in 32-bit backends");
 
 _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in 32-bit backends");
 _Static_assert(offsetof(JITState, continuation) == 0x4, "jit_state->continuation is 0x4 in 32-bit backends");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->remaining_reductions is 0x8 in 32-bit backends");
+_Static_assert(offsetof(JITState, fr) == 0xC, "jit_state->fr is 0xC in 32-bit backends");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
-_Static_assert(offsetof(JITState, code_base) == 0xC, "jit_state->code_base is 0xC in jit/src/jit_xtensa.erl");
+_Static_assert(offsetof(JITState, code_base) == 0x10, "jit_state->code_base is 0x10 in jit/src/jit_xtensa.erl");
 #endif
 
 #else
@@ -1548,102 +1548,113 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
     return ctx;
 }
 
-static term jit_term_from_float(Context *ctx, int freg)
+static void jit_ensure_fpregs(JITState *jit_state)
 {
-    TRACE("jit_term_from_float: freg=%d -- float = %f\n", freg, ctx->fr[freg]);
-    return term_from_float(ctx->fr[freg], &ctx->heap);
+    if (UNLIKELY(jit_state->fr == NULL)) {
+        jit_state->fr = (avm_float_t *) malloc(sizeof(avm_float_t) * MAX_REG);
+        if (UNLIKELY(jit_state->fr == NULL)) {
+            fprintf(stderr, "Could not allocate FP registers\n");
+            AVM_ABORT();
+        }
+    }
 }
 
-static void jit_term_conv_to_float(Context *ctx, term t, int freg)
+static term jit_term_from_float(Context *ctx, JITState *jit_state, int freg)
+{
+    TRACE("jit_term_from_float: freg=%d -- float = %f\n", freg, jit_state->fr[freg]);
+    return term_from_float(jit_state->fr[freg], &ctx->heap);
+}
+
+static void jit_term_conv_to_float(JITState *jit_state, term t, int freg)
 {
     TRACE("jit_term_conv_to_float: t=%p freg=%d\n", (void *) t, freg);
-    ctx->fr[freg] = term_conv_to_float(t);
+    jit_state->fr[freg] = term_conv_to_float(t);
 }
 
-static bool jit_fadd(Context *ctx, int freg1, int freg2, int freg3)
+static bool jit_fadd(JITState *jit_state, int freg1, int freg2, int freg3)
 {
-    TRACE("jit_fadd: freg1=%d [%f] freg2=%d [%f] freg3=%d\n", freg1, ctx->fr[freg1], freg2, ctx->fr[freg2], freg3);
+    TRACE("jit_fadd: freg1=%d [%f] freg2=%d [%f] freg3=%d\n", freg1, jit_state->fr[freg1], freg2, jit_state->fr[freg2], freg3);
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
 #pragma STDC FENV_ACCESS ON
     feclearexcept(FE_OVERFLOW);
 #endif
-    ctx->fr[freg3] = ctx->fr[freg1] + ctx->fr[freg2];
+    jit_state->fr[freg3] = jit_state->fr[freg1] + jit_state->fr[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
     if (fetestexcept(FE_OVERFLOW)) {
         return false;
     }
 #else
-    if (!isfinite(ctx->fr[freg3])) {
+    if (!isfinite(jit_state->fr[freg3])) {
         return false;
     }
 #endif
     return true;
 }
 
-static bool jit_fsub(Context *ctx, int freg1, int freg2, int freg3)
+static bool jit_fsub(JITState *jit_state, int freg1, int freg2, int freg3)
 {
     TRACE("jit_fsub: freg1=%d freg2=%d freg3=%d\n", freg1, freg2, freg3);
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
 #pragma STDC FENV_ACCESS ON
     feclearexcept(FE_OVERFLOW);
 #endif
-    ctx->fr[freg3] = ctx->fr[freg1] - ctx->fr[freg2];
+    jit_state->fr[freg3] = jit_state->fr[freg1] - jit_state->fr[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
     if (fetestexcept(FE_OVERFLOW)) {
         return false;
     }
 #else
-    if (!isfinite(ctx->fr[freg3])) {
+    if (!isfinite(jit_state->fr[freg3])) {
         return false;
     }
 #endif
     return true;
 }
 
-static bool jit_fmul(Context *ctx, int freg1, int freg2, int freg3)
+static bool jit_fmul(JITState *jit_state, int freg1, int freg2, int freg3)
 {
     TRACE("jit_fmul: freg1=%d freg2=%d freg3=%d\n", freg1, freg2, freg3);
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
 #pragma STDC FENV_ACCESS ON
     feclearexcept(FE_OVERFLOW);
 #endif
-    ctx->fr[freg3] = ctx->fr[freg1] * ctx->fr[freg2];
+    jit_state->fr[freg3] = jit_state->fr[freg1] * jit_state->fr[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
     if (fetestexcept(FE_OVERFLOW)) {
         return false;
     }
 #else
-    if (!isfinite(ctx->fr[freg3])) {
+    if (!isfinite(jit_state->fr[freg3])) {
         return false;
     }
 #endif
     return true;
 }
 
-static bool jit_fdiv(Context *ctx, int freg1, int freg2, int freg3)
+static bool jit_fdiv(JITState *jit_state, int freg1, int freg2, int freg3)
 {
     TRACE("jit_fdiv: freg1=%d freg2=%d freg3=%d\n", freg1, freg2, freg3);
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
 #pragma STDC FENV_ACCESS ON
     feclearexcept(FE_OVERFLOW | FE_DIVBYZERO);
 #endif
-    ctx->fr[freg3] = ctx->fr[freg1] / ctx->fr[freg2];
+    jit_state->fr[freg3] = jit_state->fr[freg1] / jit_state->fr[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
     if (fetestexcept(FE_OVERFLOW | FE_DIVBYZERO)) {
         return false;
     }
 #else
-    if (!isfinite(ctx->fr[freg3])) {
+    if (!isfinite(jit_state->fr[freg3])) {
         return false;
     }
 #endif
     return true;
 }
 
-static void jit_fnegate(Context *ctx, int freg1, int freg2)
+static void jit_fnegate(JITState *jit_state, int freg1, int freg2)
 {
     TRACE("jit_fnegate: freg1=%d freg2=%d\n", freg1, freg2);
-    ctx->fr[freg2] = -ctx->fr[freg1];
+    jit_state->fr[freg2] = -jit_state->fr[freg1];
 }
 
 static bool jit_catch_end(Context *ctx, JITState *jit_state)
@@ -2535,7 +2546,7 @@ const ModuleNativeInterface module_native_interface = {
     jit_wait_timeout_trap_handler,
     jit_call_fun,
     context_get_flags,
-    context_ensure_fpregs,
+    jit_ensure_fpregs,
     jit_term_from_float,
     term_is_number,
     jit_term_conv_to_float,

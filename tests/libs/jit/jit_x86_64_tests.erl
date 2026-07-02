@@ -1937,8 +1937,8 @@ move_to_vm_register_test_() ->
                     Dump = <<
                         "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
                         "   4:	48 8b 40 08          	mov    0x8(%rax),%rax\n"
-                        "   8:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-                        "   f:	49 89 43 18          	mov    %rax,0x18(%r11)"
+                        "   8:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+                        "   c:	49 89 43 18          	mov    %rax,0x18(%r11)"
                     >>,
                     ?assertStream(x86_64, Dump, Stream)
                 end)
@@ -2289,17 +2289,17 @@ float_op_fadd_test() ->
     ?assertEqual(rax, Reg),
     Stream = ?BACKEND:stream(State1),
     Dump = <<
-        "   0:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-        "   7:	f2 41 0f 10 43 08    	movsd  0x8(%r11),%xmm0\n"
-        "   d:	f2 41 0f 10 4b 10    	movsd  0x10(%r11),%xmm1\n"
-        "  13:	f2 0f 58 c1          	addsd  %xmm1,%xmm0\n"
-        "  17:	f2 41 0f 11 43 18    	movsd  %xmm0,0x18(%r11)\n"
-        "  1d:	66 48 0f 7e c0       	movq   %xmm0,%rax\n"
-        "  22:	49 bb 00 00 00 00 00 	movabs $0x7ff0000000000000,%r11\n"
-        "  29:	00 f0 7f \n"
-        "  2c:	4c 21 d8             	and    %r11,%rax\n"
-        "  2f:	4c 31 d8             	xor    %r11,%rax\n"
-        "  32:	0f 95 c0             	setne  %al"
+        "   0:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+        "   4:	f2 41 0f 10 43 08    	movsd  0x8(%r11),%xmm0\n"
+        "   a:	f2 41 0f 10 4b 10    	movsd  0x10(%r11),%xmm1\n"
+        "  10:	f2 0f 58 c1          	addsd  %xmm1,%xmm0\n"
+        "  14:	f2 41 0f 11 43 18    	movsd  %xmm0,0x18(%r11)\n"
+        "  1a:	66 48 0f 7e c0       	movq   %xmm0,%rax\n"
+        "  1f:	49 bb 00 00 00 00 00 	movabs $0x7ff0000000000000,%r11\n"
+        "  26:	00 f0 7f \n"
+        "  29:	4c 21 d8             	and    %r11,%rax\n"
+        "  2c:	4c 31 d8             	xor    %r11,%rax\n"
+        "  2f:	0f 95 c0             	setne  %al"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2309,17 +2309,17 @@ float_op_fdiv_test() ->
     ?assertEqual(rax, Reg),
     Stream = ?BACKEND:stream(State1),
     Dump = <<
-        "   0:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-        "   7:	f2 41 0f 10 43 08    	movsd  0x8(%r11),%xmm0\n"
-        "   d:	f2 41 0f 10 4b 10    	movsd  0x10(%r11),%xmm1\n"
-        "  13:	f2 0f 5e c1          	divsd  %xmm1,%xmm0\n"
-        "  17:	f2 41 0f 11 43 18    	movsd  %xmm0,0x18(%r11)\n"
-        "  1d:	66 48 0f 7e c0       	movq   %xmm0,%rax\n"
-        "  22:	49 bb 00 00 00 00 00 	movabs $0x7ff0000000000000,%r11\n"
-        "  29:	00 f0 7f \n"
-        "  2c:	4c 21 d8             	and    %r11,%rax\n"
-        "  2f:	4c 31 d8             	xor    %r11,%rax\n"
-        "  32:	0f 95 c0             	setne  %al"
+        "   0:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+        "   4:	f2 41 0f 10 43 08    	movsd  0x8(%r11),%xmm0\n"
+        "   a:	f2 41 0f 10 4b 10    	movsd  0x10(%r11),%xmm1\n"
+        "  10:	f2 0f 5e c1          	divsd  %xmm1,%xmm0\n"
+        "  14:	f2 41 0f 11 43 18    	movsd  %xmm0,0x18(%r11)\n"
+        "  1a:	66 48 0f 7e c0       	movq   %xmm0,%rax\n"
+        "  1f:	49 bb 00 00 00 00 00 	movabs $0x7ff0000000000000,%r11\n"
+        "  26:	00 f0 7f \n"
+        "  29:	4c 21 d8             	and    %r11,%rax\n"
+        "  2c:	4c 31 d8             	xor    %r11,%rax\n"
+        "  2f:	0f 95 c0             	setne  %al"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2341,13 +2341,10 @@ float_conv_int_test() ->
     State2 = ?BACKEND:float_conv_int(State1, IntReg, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        %% move_to_native_register loads x_reg[0] into rax (the untagged int is
-        %% the caller's responsibility; here we just feed the loaded register)
         "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-        %% float_conv_int: load fr base, convert, store to fr[1]
-        "   4:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-        "   b:	f2 48 0f 2a c0       	cvtsi2sd %rax,%xmm0\n"
-        "  10:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
+        "   4:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+        "   8:	f2 48 0f 2a c0       	cvtsi2sd %rax,%xmm0\n"
+        "   d:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2357,14 +2354,11 @@ float_conv_float_test() ->
     State2 = ?BACKEND:float_conv_float(State1, {free, BoxedReg}, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        %% move_to_native_register loads the boxed-float term x_reg[0] into rax
         "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-        %% float_conv_float: untag boxed ptr, load double from boxed_ptr[1],
-        %% load fr base, store to fr[1]
         "   4:	48 83 e0 fc          	and    $0xfffffffffffffffc,%rax\n"
         "   8:	f2 0f 10 40 08       	movsd  0x8(%rax),%xmm0\n"
-        "   d:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-        "  14:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
+        "   d:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+        "  11:	f2 41 0f 11 43 08    	movsd  %xmm0,0x8(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2396,9 +2390,9 @@ move_float_to_fp_reg_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump = <<
         "   0:	48 b8 00 00 00 00 00 	movabs $0x4010000000000000,%rax\n"
-        "   7:	00 10 40\n"
-        "   a:	4c 8b 9f e8 00 00 00 	mov    0xe8(%rdi),%r11\n"
-        "  11:	49 89 43 08          	mov    %rax,0x8(%r11)"
+        "   7:	00 10 40 \n"
+        "   a:	4c 8b 5e 18          	mov    0x18(%rsi),%r11\n"
+        "   e:	49 89 43 08          	mov    %rax,0x8(%r11)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2411,7 +2405,7 @@ move_imported_gcbif_to_native_register_test() ->
     {State1, rax} = ?BACKEND:move_imported_gcbif_to_native_register(State0, 2, 5),
     Stream = ?BACKEND:stream(State1),
     Dump = <<
-        "   0:	48 8d 87 00 01 00 00 	lea    0x100(%rdi),%rax\n"
+        "   0:	48 8d 87 f8 00 00 00 	lea    0xf8(%rdi),%rax\n"
         "   7:	4c 8b 18             	mov    (%rax),%r11\n"
         "   a:	49 39 c3             	cmp    %rax,%r11\n"
         "   d:	74 11                	je     0x20\n"
