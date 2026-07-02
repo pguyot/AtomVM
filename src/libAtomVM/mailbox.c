@@ -272,6 +272,17 @@ void mailbox_send(Context *c, term t)
     mailbox_post_message(c, msg);
 }
 
+void mailbox_send_no_signal(Context *c, term t)
+{
+    MailboxMessage *msg = mailbox_message_create_from_term(NormalMessage, t);
+#if !defined(AVM_NO_SMP) || defined(AVM_TASK_DRIVER_ENABLED)
+    mailbox_enqueue_message(c, msg);
+#else
+    msg->next = c->mailbox.outer_first;
+    c->mailbox.outer_first = msg;
+#endif
+}
+
 void mailbox_send_term_signal(Context *c, enum MessageType type, term t)
 {
     MailboxMessage *signal = mailbox_message_create_from_term(type, t);

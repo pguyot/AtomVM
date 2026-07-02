@@ -91,6 +91,12 @@ struct RefcBinaryQueueItem
     struct RefcBinary *refc;
 };
 
+struct ProcessesIndexEntry
+{
+    int32_t process_id; // 0 = empty slot, -1 = tombstone
+    struct Context *context;
+};
+
 typedef enum run_result_t
 {
     RUN_SUCCESS = 0,
@@ -117,6 +123,14 @@ struct GlobalContext
 #endif
     struct SyncList refc_binaries;
     struct SyncList processes_table;
+    // Open-addressing hash index over processes_table (process id ->
+    // Context) so pid lookups on the send path are O(1) instead of scanning
+    // the list. Mutated under the processes_table write lock; lookups
+    // require holding at least the read lock (same contract as the list).
+    struct ProcessesIndexEntry *processes_index;
+    int processes_index_capacity; // power of two
+    int processes_index_count; // live entries
+    int processes_index_deleted; // tombstones
     struct SyncList registered_processes;
     struct SyncList listeners;
     struct SyncList resource_types;
@@ -149,6 +163,14 @@ struct GlobalContext
 #ifndef AVM_NO_SMP
     SpinLock timer_spinlock;
 #endif
+    // Monotonic date (native units) the polling scheduler will wake at by
+    // itself: the next timer expiry it saw, or UINT64_MAX when it has no
+    // timer, or 0 when it is actively scheduling. Written by the poller in
+    // update_timer_list and read by scheduler_set_timeout, both under
+    // timer_spinlock: a new timer only needs to signal the poller when it
+    // expires strictly before this date. This keeps receive-with-timeout
+    // from waking the poller on every receive.
+    uint64_t poller_wake_deadline;
 
 #if !defined(AVM_NO_SMP) && ATOMIC_LLONG_LOCK_FREE == 2
     unsigned long long ATOMIC ref_ticks;
@@ -230,6 +252,16 @@ void globalcontext_destroy(GlobalContext *glb);
  * @returns a Context * with the requested local process id or NULL if not found.
  */
 Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id);
+
+/**
+ * @brief Remove a process from the processes hash index.
+ *
+ * @details Must be called with the processes_table write lock held, right
+ * where the context is removed from the processes table list.
+ * @param glb the global context (that owns the process table).
+ * @param process_id the local process id being removed.
+ */
+void globalcontext_processes_index_remove(GlobalContext *glb, int32_t process_id);
 
 /**
  * @brief Gets a Context from the process table, acquiring a lock on the process
