@@ -265,6 +265,18 @@ MailboxMessage *mailbox_process_outer_list(Context *ctx);
 void mailbox_send(Context *c, term t);
 
 /**
+ * @brief Send a message to a process without signaling the scheduler.
+ *
+ * @details Only valid when the sender can guarantee the recipient does not
+ * need to be woken up, i.e. when a process sends a message to itself while
+ * running: the enqueue happens-before its own next receive.
+ *
+ * @param c the process being executed, owned by this thread.
+ * @param t the message term that will be copied to the mailbox.
+ */
+void mailbox_send_no_signal(Context *c, term t);
+
+/**
  * @brief Sends a term-based signal to a certain mailbox.
  *
  * @param c the process context.
