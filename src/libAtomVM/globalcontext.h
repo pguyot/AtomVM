@@ -107,9 +107,21 @@ struct ProcessesIndexEntry
 #endif
 #endif
 
+// Shard locks are plain word-sized atomic read-write locks where C11
+// atomics are lock-free and a sleeping wait is not required (pid lookups
+// are a few loads; the only long write hold is context teardown, and
+// spinners yield). Platforms without lock-free atomics (e.g. armv6m, where
+// every CAS is a critical section) keep the platform RWLock.
+#if !defined(AVM_NO_SMP) && defined(HAVE_ATOMIC) && (defined(__unix__) || defined(__APPLE__))
+#define PROCESSES_INDEX_LIGHT_LOCK
+#endif
+
 struct ProcessesIndexShard
 {
-#ifndef AVM_NO_SMP
+#ifdef PROCESSES_INDEX_LIGHT_LOCK
+    // bit 31: writer holds; bit 30: writer waiting; bits 0-29: reader count
+    uint32_t ATOMIC lock_state;
+#elif !defined(AVM_NO_SMP)
     RWLock *lock;
 #endif
     struct ProcessesIndexEntry *entries;

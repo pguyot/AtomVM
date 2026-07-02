@@ -24,6 +24,10 @@
 #include "dist_nifs.h"
 #include "globalcontext.h"
 
+#ifdef PROCESSES_INDEX_LIGHT_LOCK
+#include <sched.h>
+#endif
+
 #include "atom_table.h"
 #include "avmpack.h"
 #include "context.h"
@@ -90,7 +94,9 @@ GlobalContext *globalcontext_new(void)
     synclist_init(&glb->processes_table);
     for (int i = 0; i < PROCESSES_INDEX_SHARDS; i++) {
         struct ProcessesIndexShard *shard = &glb->processes_index_shards[i];
-#ifndef AVM_NO_SMP
+#ifdef PROCESSES_INDEX_LIGHT_LOCK
+        shard->lock_state = 0;
+#elif !defined(AVM_NO_SMP)
         shard->lock = smp_rwlock_create();
 #endif
         shard->capacity = 16;
@@ -352,7 +358,7 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
     synclist_destroy(&glb->registered_processes);
     synclist_destroy(&glb->processes_table);
     for (int i = 0; i < PROCESSES_INDEX_SHARDS; i++) {
-#ifndef AVM_NO_SMP
+#if !defined(PROCESSES_INDEX_LIGHT_LOCK) && !defined(AVM_NO_SMP)
         smp_rwlock_destroy(glb->processes_index_shards[i].lock);
 #endif
         free(glb->processes_index_shards[i].entries);
@@ -363,6 +369,107 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
 
 // Sharded hash index over processes_table; see the field documentation in
 // globalcontext.h for the locking rules.
+
+#ifdef PROCESSES_INDEX_LIGHT_LOCK
+
+#define PROCESSES_INDEX_LOCK_WRITER 0x80000000u
+#define PROCESSES_INDEX_LOCK_WRITER_WAITING 0x40000000u
+#define PROCESSES_INDEX_LOCK_WRITER_BITS \
+    (PROCESSES_INDEX_LOCK_WRITER | PROCESSES_INDEX_LOCK_WRITER_WAITING)
+
+static inline void processes_index_lock_pause(unsigned int *spins)
+{
+    if (++(*spins) > 64) {
+        sched_yield();
+    }
+}
+
+static inline void processes_index_shard_rdlock(struct ProcessesIndexShard *shard)
+{
+    // Optimistic fetch_add: one uncontended RMW, and concurrent readers
+    // never fail each other (unlike a CAS loop). On writer conflict, back
+    // out and wait.
+    unsigned int spins = 0;
+    for (;;) {
+        uint32_t state = atomic_fetch_add(&shard->lock_state, 1);
+        if (!(state & PROCESSES_INDEX_LOCK_WRITER_BITS)) {
+            return;
+        }
+        atomic_fetch_sub(&shard->lock_state, 1);
+        do {
+            processes_index_lock_pause(&spins);
+        } while (shard->lock_state & PROCESSES_INDEX_LOCK_WRITER_BITS);
+    }
+}
+
+static inline bool processes_index_shard_tryrdlock(struct ProcessesIndexShard *shard)
+{
+    for (;;) {
+        uint32_t state = shard->lock_state;
+        if (state & PROCESSES_INDEX_LOCK_WRITER_BITS) {
+            return false;
+        }
+        if (atomic_compare_exchange_weak(&shard->lock_state, &state, state + 1)) {
+            return true;
+        }
+    }
+}
+
+static inline void processes_index_shard_rdunlock(struct ProcessesIndexShard *shard)
+{
+    atomic_fetch_sub(&shard->lock_state, 1);
+}
+
+static inline void processes_index_shard_wrlock(struct ProcessesIndexShard *shard)
+{
+    // Writers (globalcontext_init_process, context teardown) always hold
+    // the processes_table write lock, so no two shard writers can race:
+    // setting the waiting bit needs no loop, and it cannot be lost. The bit
+    // stops new readers, so the writer cannot starve under a stream of
+    // senders (readers use fetch_add and would otherwise always win a CAS
+    // race against the writer).
+    atomic_fetch_or(&shard->lock_state, PROCESSES_INDEX_LOCK_WRITER_WAITING);
+    // Wait for readers to drain, then swap waiting for held. The CAS only
+    // fails while a reader transiently overshoots with its optimistic
+    // fetch_add before backing out.
+    unsigned int spins = 0;
+    for (;;) {
+        uint32_t state = PROCESSES_INDEX_LOCK_WRITER_WAITING;
+        if (atomic_compare_exchange_weak(&shard->lock_state, &state,
+                PROCESSES_INDEX_LOCK_WRITER)) {
+            return;
+        }
+        processes_index_lock_pause(&spins);
+    }
+}
+
+static inline void processes_index_shard_wrunlock(struct ProcessesIndexShard *shard)
+{
+    // Clear only the writer bits: a reader may have transiently incremented
+    // the count with its optimistic fetch_add (it will back out after
+    // seeing the writer bit in the value it read); a plain store of 0 would
+    // erase that increment and the back-out would underflow the state.
+    atomic_fetch_and(&shard->lock_state, ~PROCESSES_INDEX_LOCK_WRITER_BITS);
+}
+
+#elif !defined(AVM_NO_SMP)
+
+#define processes_index_shard_rdlock(shard) smp_rwlock_rdlock((shard)->lock)
+#define processes_index_shard_tryrdlock(shard) smp_rwlock_tryrdlock((shard)->lock)
+#define processes_index_shard_rdunlock(shard) smp_rwlock_unlock((shard)->lock)
+#define processes_index_shard_wrlock(shard) smp_rwlock_wrlock((shard)->lock)
+#define processes_index_shard_wrunlock(shard) smp_rwlock_unlock((shard)->lock)
+
+#else
+
+#define processes_index_shard_rdlock(shard)
+#define processes_index_shard_tryrdlock(shard) true
+#define processes_index_shard_rdunlock(shard)
+#define processes_index_shard_wrlock(shard)
+#define processes_index_shard_wrunlock(shard)
+
+#endif
+
 static inline uint32_t processes_index_hash(int32_t process_id)
 {
     // Knuth multiplicative hash.
@@ -439,7 +546,7 @@ static void processes_index_insert(struct ProcessesIndexShard *shard, Context *c
 void globalcontext_processes_index_lock_remove(GlobalContext *glb, int32_t process_id)
 {
     struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
-    SMP_RWLOCK_WRLOCK(shard->lock);
+    processes_index_shard_wrlock(shard);
     uint32_t hash = processes_index_hash(process_id);
     for (uint32_t probe = 0;; probe++) {
         struct ProcessesIndexEntry *entry = &shard->entries[(hash + probe) & (shard->capacity - 1)];
@@ -460,7 +567,7 @@ void globalcontext_processes_index_unlock(GlobalContext *glb, int32_t process_id
 {
     struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
     UNUSED(shard);
-    SMP_RWLOCK_UNLOCK(shard->lock);
+    processes_index_shard_wrunlock(shard);
 }
 
 Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id)
@@ -471,10 +578,10 @@ Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id
 Context *globalcontext_get_process_lock(GlobalContext *glb, int32_t process_id)
 {
     struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
-    SMP_RWLOCK_RDLOCK(shard->lock);
+    processes_index_shard_rdlock(shard);
     Context *p = processes_index_get(shard, process_id);
     if (p == NULL) {
-        SMP_RWLOCK_UNLOCK(shard->lock);
+        processes_index_shard_rdunlock(shard);
     }
     return p;
 }
@@ -483,7 +590,7 @@ Context *globalcontext_get_process_lock(GlobalContext *glb, int32_t process_id)
 static bool globalcontext_get_process_trylock(GlobalContext *glb, int32_t process_id, Context **output)
 {
     struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
-    if (!SMP_RWLOCK_TRYRDLOCK(shard->lock)) {
+    if (!processes_index_shard_tryrdlock(shard)) {
         return false;
     }
     Context *p = processes_index_get(shard, process_id);
@@ -500,7 +607,7 @@ void globalcontext_get_process_unlock(GlobalContext *glb, Context *c)
     if (c) {
         struct ProcessesIndexShard *shard = processes_index_shard(glb, c->process_id);
         UNUSED(shard);
-        SMP_RWLOCK_UNLOCK(shard->lock);
+        processes_index_shard_rdunlock(shard);
     }
 }
 
@@ -696,9 +803,9 @@ void globalcontext_init_process(GlobalContext *glb, Context *ctx)
     struct ListHead *processes_table_list = synclist_wrlock(&glb->processes_table);
     list_insert(&ctx->processes_table_head, processes_table_list->prev, processes_table_list);
     struct ProcessesIndexShard *shard = processes_index_shard(glb, ctx->process_id);
-    SMP_RWLOCK_WRLOCK(shard->lock);
+    processes_index_shard_wrlock(shard);
     processes_index_insert(shard, ctx);
-    SMP_RWLOCK_UNLOCK(shard->lock);
+    processes_index_shard_wrunlock(shard);
     synclist_unlock(&glb->processes_table);
 }
 
