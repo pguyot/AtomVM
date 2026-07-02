@@ -38,6 +38,63 @@ extern "C" {
 typedef struct RWLock RWLock;
 #endif
 
+#ifdef SMP_ATOMIC_RWLOCK
+
+struct SyncList
+{
+    struct AtomicRWLock lock;
+    struct ListHead head;
+};
+
+// The lock operations use C11 atomics and are C-only; C++ translation
+// units (NIF components) only get the struct layout.
+#ifndef __cplusplus
+
+static inline void synclist_init(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_init(&synclist->lock);
+    list_init(&synclist->head);
+}
+
+static inline void synclist_destroy(struct SyncList *synclist)
+{
+    (void) synclist;
+}
+
+static inline struct ListHead *synclist_rdlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_rdlock(&synclist->lock);
+    return &synclist->head;
+}
+
+static inline struct ListHead *synclist_tryrdlock(struct SyncList *synclist)
+{
+    if (smp_atomic_rwlock_tryrdlock(&synclist->lock)) {
+        return &synclist->head;
+    }
+    return NULL;
+}
+
+static inline struct ListHead *synclist_wrlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_wrlock(&synclist->lock);
+    return &synclist->head;
+}
+
+static inline struct ListHead *synclist_nolock(struct SyncList *synclist)
+{
+    return &synclist->head;
+}
+
+static inline void synclist_unlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_unlock(&synclist->lock);
+}
+
+#endif // !defined(__cplusplus)
+
+#else
+
 struct SyncList
 {
     RWLock *lock;
@@ -85,6 +142,12 @@ static inline void synclist_unlock(struct SyncList *synclist)
     smp_rwlock_unlock(synclist->lock);
 }
 
+#endif
+
+// These call the lock operations, which are C-only in the atomic-rwlock
+// configuration (see above).
+#if !(defined(SMP_ATOMIC_RWLOCK) && defined(__cplusplus))
+
 static inline void synclist_prepend(struct SyncList *synclist, struct ListHead *new_item)
 {
     struct ListHead *head = synclist_wrlock(synclist);
@@ -114,6 +177,8 @@ static inline bool synclist_is_empty(struct SyncList *synclist)
     synclist_unlock(synclist);
     return result;
 }
+
+#endif // !(SMP_ATOMIC_RWLOCK && __cplusplus)
 
 #ifdef __cplusplus
 }
