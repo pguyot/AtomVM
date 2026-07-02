@@ -38,6 +38,57 @@ extern "C" {
 typedef struct RWLock RWLock;
 #endif
 
+#ifdef SMP_ATOMIC_RWLOCK
+
+struct SyncList
+{
+    struct AtomicRWLock lock;
+    struct ListHead head;
+};
+
+static inline void synclist_init(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_init(&synclist->lock);
+    list_init(&synclist->head);
+}
+
+static inline void synclist_destroy(struct SyncList *synclist)
+{
+    (void) synclist;
+}
+
+static inline struct ListHead *synclist_rdlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_rdlock(&synclist->lock);
+    return &synclist->head;
+}
+
+static inline struct ListHead *synclist_tryrdlock(struct SyncList *synclist)
+{
+    if (smp_atomic_rwlock_tryrdlock(&synclist->lock)) {
+        return &synclist->head;
+    }
+    return NULL;
+}
+
+static inline struct ListHead *synclist_wrlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_wrlock(&synclist->lock);
+    return &synclist->head;
+}
+
+static inline struct ListHead *synclist_nolock(struct SyncList *synclist)
+{
+    return &synclist->head;
+}
+
+static inline void synclist_unlock(struct SyncList *synclist)
+{
+    smp_atomic_rwlock_unlock(&synclist->lock);
+}
+
+#else
+
 struct SyncList
 {
     RWLock *lock;
@@ -84,6 +135,8 @@ static inline void synclist_unlock(struct SyncList *synclist)
 {
     smp_rwlock_unlock(synclist->lock);
 }
+
+#endif
 
 static inline void synclist_prepend(struct SyncList *synclist, struct ListHead *new_item)
 {

@@ -41,6 +41,7 @@
 #ifndef AVM_NO_SMP
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef HAVE_PLATFORM_SMP_H
 #include "platform_smp.h"
@@ -263,6 +264,116 @@ static inline bool smp_spinlock_trylock(SpinLock *lock)
 static inline void smp_spinlock_unlock(SpinLock *lock)
 {
     lock->lock = 0;
+}
+
+#endif
+
+// Word-sized atomic read-write lock, for read-mostly structures with short
+// write holds. Available where C11 atomics are lock-free and a yield
+// primitive exists; other configurations keep the (typically pthread)
+// RWLock. Compared to a pthread rwlock it is embeddable (no allocation),
+// readers cost one uncontended RMW and never fail each other, and waiters
+// spin then yield instead of sleeping in the kernel, so it must not be used
+// when write holds can be long.
+//
+// Like macOS pthread rwlocks it is writer-preferring: read-locking a lock
+// this thread already read-holds deadlocks if a writer is waiting.
+#if defined(HAVE_ATOMIC) && !defined(AVM_NO_SMP) && !defined(__cplusplus) \
+    && defined(SMP_SPIN_YIELD)
+#define SMP_ATOMIC_RWLOCK
+
+#define SMP_ATOMIC_RWLOCK_WRITER 0x80000000u
+#define SMP_ATOMIC_RWLOCK_WRITER_WAITING 0x40000000u
+#define SMP_ATOMIC_RWLOCK_WRITER_BITS \
+    (SMP_ATOMIC_RWLOCK_WRITER | SMP_ATOMIC_RWLOCK_WRITER_WAITING)
+
+struct AtomicRWLock
+{
+    // bit 31: writer holds; bit 30: writer waiting; bits 0-29: reader count
+    uint32_t ATOMIC state;
+    // serializes writers so claiming the waiting bit is race free
+    atomic_flag writer_flag;
+};
+
+static inline void smp_atomic_rwlock_init(struct AtomicRWLock *lock)
+{
+    lock->state = 0;
+    atomic_flag_clear(&lock->writer_flag);
+}
+
+static inline void smp_atomic_rwlock_pause(unsigned int *spins)
+{
+    if (++(*spins) >= SMP_SPIN_YIELD_INTERVAL) {
+        *spins = 0;
+        SMP_SPIN_YIELD();
+    }
+}
+
+static inline void smp_atomic_rwlock_rdlock(struct AtomicRWLock *lock)
+{
+    // Optimistic fetch_add: one uncontended RMW, and concurrent readers
+    // never fail each other (unlike a CAS loop). On writer conflict, back
+    // out and wait.
+    unsigned int spins = 0;
+    for (;;) {
+        uint32_t state = atomic_fetch_add(&lock->state, 1);
+        if (!(state & SMP_ATOMIC_RWLOCK_WRITER_BITS)) {
+            return;
+        }
+        atomic_fetch_sub(&lock->state, 1);
+        do {
+            smp_atomic_rwlock_pause(&spins);
+        } while (lock->state & SMP_ATOMIC_RWLOCK_WRITER_BITS);
+    }
+}
+
+static inline bool smp_atomic_rwlock_tryrdlock(struct AtomicRWLock *lock)
+{
+    uint32_t state = atomic_fetch_add(&lock->state, 1);
+    if (!(state & SMP_ATOMIC_RWLOCK_WRITER_BITS)) {
+        return true;
+    }
+    atomic_fetch_sub(&lock->state, 1);
+    return false;
+}
+
+static inline void smp_atomic_rwlock_wrlock(struct AtomicRWLock *lock)
+{
+    // Serialize writers first, then stop new readers with the waiting bit.
+    // The waiting bit is set with fetch_or, which cannot lose against the
+    // readers' fetch_add stream (a CAS could starve indefinitely).
+    unsigned int spins = 0;
+    while (atomic_flag_test_and_set(&lock->writer_flag)) {
+        smp_atomic_rwlock_pause(&spins);
+    }
+    atomic_fetch_or(&lock->state, SMP_ATOMIC_RWLOCK_WRITER_WAITING);
+    // Wait for readers to drain, then swap waiting for held. The CAS only
+    // fails while a reader transiently overshoots with its optimistic
+    // fetch_add before backing out.
+    spins = 0;
+    for (;;) {
+        uint32_t state = SMP_ATOMIC_RWLOCK_WRITER_WAITING;
+        if (atomic_compare_exchange_weak(&lock->state, &state,
+                SMP_ATOMIC_RWLOCK_WRITER)) {
+            return;
+        }
+        smp_atomic_rwlock_pause(&spins);
+    }
+}
+
+static inline void smp_atomic_rwlock_unlock(struct AtomicRWLock *lock)
+{
+    if (atomic_load(&lock->state) & SMP_ATOMIC_RWLOCK_WRITER) {
+        // We are the writer: clear only the writer bits. A reader may have
+        // transiently incremented the count with its optimistic fetch_add
+        // (it will back out after seeing the writer bit in the value it
+        // read); a plain store of 0 would erase that increment and the
+        // back-out would underflow the state.
+        atomic_fetch_and(&lock->state, ~SMP_ATOMIC_RWLOCK_WRITER_BITS);
+        atomic_flag_clear(&lock->writer_flag);
+    } else {
+        atomic_fetch_sub(&lock->state, 1);
+    }
 }
 
 #endif
