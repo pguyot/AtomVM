@@ -228,9 +228,9 @@
 -define(Y_REGS, {?CTX_REG, 16#50}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * 8)}).
 -define(CP, {?CTX_REG, 16#E0}).
--define(FP_REGS, {?CTX_REG, 16#E8}).
--define(BS, {?CTX_REG, 16#F0}).
--define(BS_OFFSET, {?CTX_REG, 16#F8}).
+-define(FP_REGS, {?JITSTATE_REG, 16#18}).
+-define(BS, {?CTX_REG, 16#E8}).
+-define(BS_OFFSET, {?CTX_REG, 16#F0}).
 % JITSTATE is in a1 register (no prolog needed)
 -define(JITSTATE_REG, a1).
 % Return address register

@@ -1421,6 +1421,7 @@ static term large_integer_to_term(Context *ctx, int num_bytes, const uint8_t **e
 }
 
 
+
 #ifdef ENABLE_ADVANCED_TRACE
     static void print_function_args(const Context *ctx, int arity)
     {
@@ -1643,6 +1644,19 @@ int context_execute_loop(Context *ctx, Module *mod, const char *function_name, i
     return scheduler_entry_point(ctx->global);
 }
 
+// Lazily allocate this scheduler's FP register bank (see JITState.fr in
+// jit.h: fr registers are dead at schedule-out points, so all processes of
+// a scheduler share one bank, and a VM with no float code never allocates
+// one).
+#define ENSURE_FPREGS()                                                        \
+    if (UNLIKELY(fr_bank == NULL)) {                                           \
+        fr_bank = (avm_float_t *) malloc(sizeof(avm_float_t) * MAX_REG);       \
+        if (UNLIKELY(fr_bank == NULL)) {                                       \
+            fprintf(stderr, "Could not allocate FP registers\n");              \
+            AVM_ABORT();                                                       \
+        }                                                                      \
+    }
+
 HOT_FUNC int scheduler_entry_point(GlobalContext *glb)
 {
     const uint8_t *code;
@@ -1656,6 +1670,9 @@ HOT_FUNC int scheduler_entry_point(GlobalContext *glb)
     ModuleNativeEntryPoint native_pc;
 #endif
     int remaining_reductions;
+    // This scheduler's FP register bank, lazily allocated by ENSURE_FPREGS or
+    // by the jit ensure_fpregs primitive (through jit_state.fr).
+    avm_float_t *fr_bank = NULL;
     // This scheduler's registered-name and apply/3 caches (see
     // native_call.h); zero-initialized means empty.
     struct SchedulerCaches scheduler_caches = { 0 };
@@ -1666,6 +1683,8 @@ HOT_FUNC int scheduler_entry_point(GlobalContext *glb)
 schedule_in:
     TRACE("scheduling in, ctx = %p\n", (void *) ctx);
     if (ctx == NULL) {
+        // This scheduler exits.
+        free(fr_bank);
         return 0;
     }
     x_regs = ctx->x;
@@ -1730,6 +1749,7 @@ schedule_in:
             jit_state.continuation = (NativeContinuation) 0;
             jit_state.module = mod;
             jit_state.remaining_reductions = remaining_reductions;
+            jit_state.fr = fr_bank;
             jit_state.caches = &scheduler_caches;
             // __asm__ volatile("int $0x03");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
@@ -1739,6 +1759,7 @@ schedule_in:
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
             TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
             remaining_reductions = jit_state.remaining_reductions;
+            fr_bank = jit_state.fr;
             if (UNLIKELY(new_ctx != ctx)) {
                 ctx = new_ctx;
                 goto schedule_in;
@@ -5245,7 +5266,7 @@ schedule_in:
                     DECODE_DEST_REGISTER(dreg, pc);
                     TRACE("fmove/2 fp%i, %c%i\n", freg, T_DEST_REG(dreg));
                     // Space should be available on heap as compiler added an allocate opcode
-                    term float_value = term_from_float(ctx->fr[freg], &ctx->heap);
+                    term float_value = term_from_float(fr_bank[freg], &ctx->heap);
                     WRITE_REGISTER(dreg, float_value);
                 } else {
                     term src_value;
@@ -5253,8 +5274,8 @@ schedule_in:
                     int freg;
                     DECODE_FP_REGISTER(freg, pc);
                     TRACE("fmove/2 %" TERM_X_FMT ", fp%i\n", src_value, freg);
-                    context_ensure_fpregs(ctx);
-                    ctx->fr[freg] = term_to_float(src_value);
+                    ENSURE_FPREGS();
+                    fr_bank[freg] = term_to_float(src_value);
                 }
                 break;
             }
@@ -5266,7 +5287,7 @@ schedule_in:
                 DECODE_FP_REGISTER(freg, pc);
 
                 TRACE("fconv/2 %" TERM_X_FMT ", fp%i\n", src_value, freg);
-                context_ensure_fpregs(ctx);
+                ENSURE_FPREGS();
                 if (UNLIKELY(!term_is_number(src_value))) {
                     RAISE_ERROR(BADARITH_ATOM);
                 }
@@ -5274,7 +5295,7 @@ schedule_in:
                 if (UNLIKELY(!isfinite(converted))) {
                     RAISE_ERROR(BADARITH_ATOM);
                 }
-                ctx->fr[freg] = converted;
+                fr_bank[freg] = converted;
 
                 break;
             }
@@ -5293,7 +5314,7 @@ schedule_in:
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 feclearexcept(FE_OVERFLOW);
 #endif
-                ctx->fr[freg3] = ctx->fr[freg1] + ctx->fr[freg2];
+                fr_bank[freg3] = fr_bank[freg1] + fr_bank[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 if (fetestexcept(FE_OVERFLOW)) {
                     if (fail_label) {
@@ -5305,7 +5326,7 @@ schedule_in:
                     }
                 }
 #else
-                if (!isfinite(ctx->fr[freg3])) {
+                if (!isfinite(fr_bank[freg3])) {
                     if (fail_label) {
                         pc = mod->labels[fail_label];
                     } else {
@@ -5331,7 +5352,7 @@ schedule_in:
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 feclearexcept(FE_OVERFLOW);
 #endif
-                ctx->fr[freg3] = ctx->fr[freg1] - ctx->fr[freg2];
+                fr_bank[freg3] = fr_bank[freg1] - fr_bank[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 if (fetestexcept(FE_OVERFLOW)) {
                     if (fail_label) {
@@ -5343,7 +5364,7 @@ schedule_in:
                     }
                 }
 #else
-                if (!isfinite(ctx->fr[freg3])) {
+                if (!isfinite(fr_bank[freg3])) {
                     if (fail_label) {
                         pc = mod->labels[fail_label];
                     } else {
@@ -5369,7 +5390,7 @@ schedule_in:
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 feclearexcept(FE_OVERFLOW);
 #endif
-                ctx->fr[freg3] = ctx->fr[freg1] * ctx->fr[freg2];
+                fr_bank[freg3] = fr_bank[freg1] * fr_bank[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 if (fetestexcept(FE_OVERFLOW)) {
                     if (fail_label) {
@@ -5381,7 +5402,7 @@ schedule_in:
                     }
                 }
 #else
-                if (!isfinite(ctx->fr[freg3])) {
+                if (!isfinite(fr_bank[freg3])) {
                     if (fail_label) {
                         pc = mod->labels[fail_label];
                     } else {
@@ -5407,7 +5428,7 @@ schedule_in:
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 feclearexcept(FE_OVERFLOW | FE_DIVBYZERO);
 #endif
-                ctx->fr[freg3] = ctx->fr[freg1] / ctx->fr[freg2];
+                fr_bank[freg3] = fr_bank[freg1] / fr_bank[freg2];
 #ifdef HAVE_PRAGMA_STDC_FENV_ACCESS
                 if (fetestexcept(FE_OVERFLOW | FE_DIVBYZERO)) {
                     if (fail_label) {
@@ -5419,7 +5440,7 @@ schedule_in:
                     }
                 }
 #else
-                if (!isfinite(ctx->fr[freg3])) {
+                if (!isfinite(fr_bank[freg3])) {
                     if (fail_label) {
                         pc = mod->labels[fail_label];
                     } else {
@@ -5438,8 +5459,8 @@ schedule_in:
                 DECODE_FP_REGISTER(freg1, pc);
                 DECODE_FP_REGISTER(freg2, pc);
                 TRACE("fnegate/2 fp%i, fp%i\n", freg1, freg2);
-                context_ensure_fpregs(ctx);
-                ctx->fr[freg2] = -ctx->fr[freg1];
+                ENSURE_FPREGS();
+                fr_bank[freg2] = -fr_bank[freg1];
 
                 break;
             }

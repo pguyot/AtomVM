@@ -943,9 +943,9 @@ set_bs_test() ->
     Dump =
         <<
             "   0:	e590b02c 	ldr	fp, [r0, #44]	@ 0x2c\n"
-            "   4:	e580b07c 	str	fp, [r0, #124]	@ 0x7c\n"
+            "   4:	e580b078 	str	fp, [r0, #120]	@ 0x78\n"
             "   8:	e3a0a000 	mov	sl, #0\n"
-            "   c:	e580a080 	str	sl, [r0, #128]	@ 0x80"
+            "   c:	e580a07c 	str	sl, [r0, #124]	@ 0x7c"
         >>,
     ?assertStream(arm32, Dump, Stream).
 

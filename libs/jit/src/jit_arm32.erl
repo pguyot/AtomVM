@@ -197,9 +197,10 @@
 % ?CP holds the low word (offset << 2), ?CP_MODULE holds the high word (Module*).
 -define(CP, {?CTX_REG, 16#70}).
 -define(CP_MODULE, {?CTX_REG, 16#74}).
--define(FP_REGS, {?CTX_REG, 16#78}).
--define(BS, {?CTX_REG, 16#7C}).
--define(BS_OFFSET, {?CTX_REG, 16#80}).
+%% fr bank lives in jit_state (jit_state->fr, loaded via the stack slot).
+-define(JITSTATE_FR_OFFSET, 16#C).
+-define(BS, {?CTX_REG, 16#78}).
+-define(BS_OFFSET, {?CTX_REG, 16#7C}).
 % JITSTATE is on stack, accessed via stack offset
 % These macros now expect a register that contains the jit_state pointer
 -define(JITSTATE_MODULE(Reg), {Reg, 0}).
@@ -2176,7 +2177,10 @@ move_to_vm_register_emit(
     Avail = jit_regs:available_regs(Regs0),
     Temp1 = first_avail(Avail),
     Temp2 = first_avail(Avail band (bnot reg_bit(Temp1))),
-    I1 = jit_arm32_asm:ldr(al, Temp1, ?FP_REGS),
+    I1 = <<
+        (jit_arm32_asm:ldr(al, Temp1, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:ldr(al, Temp1, {Temp1, ?JITSTATE_FR_OFFSET}))/binary
+    >>,
     I2 = jit_arm32_asm:ldr(al, Temp2, {Reg, 4}),
     case Variant band ?JIT_VARIANT_FLOAT32 of
         0 ->
@@ -2773,7 +2777,10 @@ move_to_native_register_emit(
     RegB = first_avail(Avail1),
     BitB = reg_bit(RegB),
     AvailT = Avail1 band (bnot BitB),
-    I1 = jit_arm32_asm:ldr(al, RegB, ?FP_REGS),
+    I1 = <<
+        (jit_arm32_asm:ldr(al, RegB, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:ldr(al, RegB, {RegB, ?JITSTATE_FR_OFFSET}))/binary
+    >>,
     I2 = jit_arm32_asm:ldr(al, RegA, {RegB, F * 8}),
     I3 = jit_arm32_asm:ldr(al, RegB, {RegB, F * 8 + 4}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
@@ -2838,7 +2845,10 @@ move_to_native_register(
     {fp_reg, F},
     {fp, RegA, RegB}
 ) ->
-    I1 = jit_arm32_asm:ldr(al, RegB, ?FP_REGS),
+    I1 = <<
+        (jit_arm32_asm:ldr(al, RegB, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:ldr(al, RegB, {RegB, ?JITSTATE_FR_OFFSET}))/binary
+    >>,
     I2 = jit_arm32_asm:ldr(al, RegA, {RegB, F * 8}),
     I3 = jit_arm32_asm:ldr(al, RegB, {RegB, F * 8 + 4}),
     Code = <<I1/binary, I2/binary, I3/binary>>,
