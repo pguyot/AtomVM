@@ -150,6 +150,8 @@ typedef uintptr_t NativeContinuation;
 typedef ModuleNativeEntryPoint NativeContinuation;
 #endif
 
+struct SchedulerCaches;
+
 struct JITState
 {
     Module *module;
@@ -162,6 +164,11 @@ struct JITState
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
     const void *code_base;
 #endif
+    // The executing scheduler's caches (registered-name sends, apply/3
+    // resolution), living on the scheduler loop's stack. Only used by C
+    // primitives, never by generated code, so its offset is not part of the
+    // native code ABI.
+    struct SchedulerCaches *caches;
 };
 
 // Remember to keep this struct in sync with libs/jit/src/primitives.hrl
