@@ -1098,7 +1098,7 @@ first_pass(<<?OP_FMOVE, ?COMPACT_EXTENDED_FP_REGISTER, Rest0/binary>>, MMod, MSt
                 erlang:function_exported(MMod, term_from_float_inline, 2)
         of
             true -> MMod:term_from_float_inline(MSt1, FPRegIndex);
-            false -> MMod:call_primitive(MSt1, ?PRIM_TERM_FROM_FLOAT, [ctx, FPRegIndex])
+            false -> MMod:call_primitive(MSt1, ?PRIM_TERM_FROM_FLOAT, [ctx, jit_state, FPRegIndex])
         end,
     MSt3 = MMod:move_to_vm_register(MSt2, ResultReg, Dest),
     MSt4 = MMod:free_native_registers(MSt3, [ResultReg, Dest]),
@@ -1133,7 +1133,7 @@ first_pass(
                 {MSt1, SrcValue, Rest2} = decode_compact_term_module_literal(
                     LiteralIndex, MMod, MSt0, Rest2
                 ),
-                {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+                {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_ENSURE_FPREGS, [jit_state]),
                 MSt3 = MMod:free_native_registers(MSt2, [ResultReg]),
                 {MSt3b, Reg} = MMod:move_to_native_register(MSt3, SrcValue),
                 {MSt3c, Reg} = MMod:and_(MSt3b, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
@@ -1146,7 +1146,7 @@ first_pass(<<?OP_FMOVE, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
     {FPReg, Rest2} = decode_fp_register(Rest1),
     ?TRACE("OP_FMOVE ~p, ~p\n", [SrcValue, FPReg]),
-    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_ENSURE_FPREGS, [jit_state]),
     MSt3 = MMod:free_native_registers(MSt2, [ResultReg]),
     {MSt4, Reg} = MMod:move_to_native_register(MSt3, SrcValue),
     {MSt5, Reg} = MMod:and_(MSt4, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
@@ -1186,7 +1186,7 @@ first_pass(<<?OP_FNEGATE, Rest0/binary>>, MMod, MSt0, State0) ->
     {{fp_reg, FPRegIndex2}, Rest3} = decode_fp_register(Rest2),
     ?TRACE("OP_FNEGATE ~p, ~p, ~p\n", [_Label, {fp_reg, FPRegIndex1}, {fp_reg, FPRegIndex2}]),
     {MSt1, Reg} = MMod:call_primitive(MSt0, ?PRIM_FNEGATE, [
-        ctx, FPRegIndex1, FPRegIndex2
+        jit_state, FPRegIndex1, FPRegIndex2
     ]),
     MSt2 = MMod:free_native_registers(MSt1, [Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
@@ -6695,7 +6695,7 @@ op_fconv_int_inline(MMod, MSt0, Term, FPRegIndex) ->
         %% Boxed integer / bignum: fall back to the C conversion.
         fun(BSt0) ->
             {BSt1, ConvReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_CONV_TO_FLOAT, [
-                ctx, Reg, FPRegIndex
+                jit_state, Reg, FPRegIndex
             ]),
             MMod:free_native_registers(BSt1, [ConvReg])
         end,
@@ -6732,7 +6732,7 @@ op_fconv_number_inline(MMod, MSt0, Term, FPRegIndex) ->
                 fun(CSt0) ->
                     CSt1 = MMod:or_(CSt0, PtrReg, ?TERM_PRIMARY_BOXED),
                     {CSt2, ConvReg} = MMod:call_primitive(CSt1, ?PRIM_TERM_CONV_TO_FLOAT, [
-                        ctx, {free, PtrReg}, FPRegIndex
+                        jit_state, {free, PtrReg}, FPRegIndex
                     ]),
                     MMod:free_native_registers(CSt2, [ConvReg])
                 end,
@@ -6752,8 +6752,9 @@ op_fconv_number_inline(MMod, MSt0, Term, FPRegIndex) ->
     ),
     MSt3.
 
-%% Ensure the fp register array is allocated. context_ensure_fpregs only does
-%% a lazy malloc on the first call, so on FPU backends test ctx->fr inline and
+%% Ensure the fp register array is allocated. The ensure_fpregs primitive only
+%% does a lazy malloc on the first call, so on FPU backends test jit_state->fr
+%% inline and
 %% make the C call (with its register spill) only when the array has not been
 %% allocated yet; in the steady state (the array already exists) this is just a
 %% load + branch. Backends without inline FP support call the primitive
@@ -6763,11 +6764,11 @@ ensure_fpregs(MMod, MSt0) ->
         true ->
             {MSt1, FpRegsPtr} = MMod:read_fp_regs_ptr(MSt0),
             MMod:if_block(MSt1, {{free, FpRegsPtr}, '==', 0}, fun(BSt0) ->
-                {BSt1, EnsureReg} = MMod:call_primitive(BSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+                {BSt1, EnsureReg} = MMod:call_primitive(BSt0, ?PRIM_ENSURE_FPREGS, [jit_state]),
                 MMod:free_native_registers(BSt1, [EnsureReg])
             end);
         false ->
-            {MSt1, EnsureReg} = MMod:call_primitive(MSt0, ?PRIM_CONTEXT_ENSURE_FPREGS, [ctx]),
+            {MSt1, EnsureReg} = MMod:call_primitive(MSt0, ?PRIM_ENSURE_FPREGS, [jit_state]),
             MMod:free_native_registers(MSt1, [EnsureReg])
     end.
 
@@ -6777,7 +6778,7 @@ op_fconv_number(MMod, MSt0, Term, FPRegIndex) ->
     {MSt1, Reg} = MMod:move_to_native_register(MSt0, Term),
     MSt2 = ensure_fpregs(MMod, MSt1),
     {MSt3, ConvReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_CONV_TO_FLOAT, [
-        ctx, {free, Reg}, FPRegIndex
+        jit_state, {free, Reg}, FPRegIndex
     ]),
     MMod:free_native_registers(MSt3, [ConvReg]).
 
@@ -6793,7 +6794,7 @@ op_fconv_guarded(MMod, MSt0, SrcValue, FPRegIndex) ->
     end),
     MSt4 = ensure_fpregs(MMod, MSt3),
     {MSt5, ConvReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_CONV_TO_FLOAT, [
-        ctx, {free, Reg}, FPRegIndex
+        jit_state, {free, Reg}, FPRegIndex
     ]),
     MMod:free_native_registers(MSt5, [ConvReg]).
 
@@ -6818,7 +6819,7 @@ first_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
                 MMod:float_op(MSt0, Primitive, FPRegIndex1, FPRegIndex2, FPRegIndex3);
             false ->
                 MMod:call_primitive(MSt0, Primitive, [
-                    ctx, FPRegIndex1, FPRegIndex2, FPRegIndex3
+                    jit_state, FPRegIndex1, FPRegIndex2, FPRegIndex3
                 ])
         end,
     MSt2 = MMod:if_block(MSt1, {'(bool)', {free, Reg}, '==', false}, fun(BlockSt) ->

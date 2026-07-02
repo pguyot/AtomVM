@@ -145,9 +145,9 @@
 %% 0x70 = offset << 2 (?CTX_CP_OFFSET), high word at 0x74 = Module* (?CTX_CP_MODULE_OFFSET).
 -define(CTX_CP_OFFSET, 16#70).
 -define(CTX_CP_MODULE_OFFSET, 16#74).
--define(CTX_FR_OFFSET, 16#78).
--define(CTX_BS_OFFSET, 16#7C).
--define(CTX_BS_OFFSET_OFFSET, 16#80).
+-define(JITSTATE_FR_OFFSET, 16#C).
+-define(CTX_BS_OFFSET, 16#78).
+-define(CTX_BS_OFFSET_OFFSET, 16#7C).
 
 %% JITState struct offsets
 -define(JITSTATE_MODULE_OFFSET, 16#0).
@@ -807,13 +807,13 @@ move_to_vm_register(State0, Value, {y_reg, N}) ->
     State2 = emit(State1, Code),
     free_native_register(State2, TempLocal);
 move_to_vm_register(State0, {free, {ptr, Reg, WordOffset}}, {fp_reg, N}) ->
-    %% Store boxed float data to ctx->fr[N] (8 bytes per double)
+    %% Store boxed float data to jit_state->fr[N] (8 bytes per double)
     DataOffset = WordOffset * 4,
     {State1, FpRegsLocal} = alloc_local(State0),
     Code = <<
-        %% Load ctx->fr pointer
-        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
-        (jit_wasm32_asm:i32_load(2, ?CTX_FR_OFFSET))/binary,
+        %% Load jit_state->fr pointer
+        (jit_wasm32_asm:local_get(?JITSTATE_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?JITSTATE_FR_OFFSET))/binary,
         (jit_wasm32_asm:local_set(FpRegsLocal))/binary,
         %% Copy first 4 bytes of the double
         (jit_wasm32_asm:local_get(FpRegsLocal))/binary,
@@ -1873,7 +1873,7 @@ primitive_returns_void(?PRIM_TIMEOUT) -> true;
 primitive_returns_void(?PRIM_MAILBOX_NEXT) -> true;
 primitive_returns_void(?PRIM_CANCEL_TIMEOUT) -> true;
 primitive_returns_void(?PRIM_CLEAR_TIMEOUT_FLAG) -> true;
-primitive_returns_void(?PRIM_CONTEXT_ENSURE_FPREGS) -> true;
+primitive_returns_void(?PRIM_ENSURE_FPREGS) -> true;
 primitive_returns_void(?PRIM_TERM_CONV_TO_FLOAT) -> true;
 primitive_returns_void(?PRIM_FNEGATE) -> true;
 primitive_returns_void(?PRIM_BITSTRING_COPY_MODULE_STR) -> true;

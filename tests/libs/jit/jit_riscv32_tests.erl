@@ -2756,7 +2756,7 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
                         "   0:	02c52f83          	lw	t6,44(a0)\n"
-                        "   4:	07852f03          	lw	t5,120(a0)\n"
+                        "   4:	00c5af03          	lw	t5,12(a1)\n"
                         "   8:	004fae83          	lw	t4,4(t6)\n"
                         "   c:	01df2c23          	sw	t4,24(t5)\n"
                         "  10:	008fae83          	lw	t4,8(t6)\n"
