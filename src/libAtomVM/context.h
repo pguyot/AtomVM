@@ -98,7 +98,6 @@ struct Context
     // Continuation pointer: 64-bit wide, so on 32-bit term platforms it spans
     // two stack slots and can hold a full Module pointer plus a code offset.
     cp_t cp;
-    avm_float_t *fr;
     term bs;
     size_t bs_offset;
     // End of hard-coded section
@@ -107,6 +106,11 @@ struct Context
     struct ListHead processes_list_head;
     struct ListHead processes_table_head;
     int32_t process_id;
+    // Arity of the NIF call in progress (0 outside NIF calls): x[0..arity)
+    // are made GC roots so a NIF-triggered collection does not free terms
+    // the NIF still references through argv. (Placed here to fill the
+    // padding hole before the 64-bit aligned timer list item.)
+    int nif_call_arity;
 
     struct TimerListItem timer_list_head;
 
@@ -116,11 +120,6 @@ struct Context
     size_t max_heap_size;
     enum HeapGrowthStrategy heap_growth_strategy;
     size_t fullsweep_after;
-
-    // Arity of the NIF call in progress (0 outside NIF calls): x[0..arity)
-    // are made GC roots so a NIF-triggered collection does not free terms
-    // the NIF still references through argv.
-    int nif_call_arity;
 
     // Remembered set for the generational GC: old-generation cells that
     // hold young-generation pointers (created when an old-region scan
@@ -289,21 +288,6 @@ Context *context_new(GlobalContext *glb);
  * @param c the context that will be destroyed.
  */
 void context_destroy(Context *c);
-
-/**
- * @brief Ensure we have FP registers, allocating them if necessary.
- * @param c context fo allocate FP registers for
- */
-static inline void context_ensure_fpregs(Context *c)
-{
-    if (UNLIKELY(c->fr == NULL)) {
-        c->fr = (avm_float_t *) malloc(sizeof(avm_float_t) * MAX_REG);
-        if (UNLIKELY(c->fr == NULL)) {
-            fprintf(stderr, "Could not allocate FP registers\n");
-            AVM_ABORT();
-        }
-    }
-}
 
 /**
  * @brief Starts executing a function

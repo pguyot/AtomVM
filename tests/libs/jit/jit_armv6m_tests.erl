@@ -3263,11 +3263,12 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
                         "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
-                        "   2:	6f86      	ldr	r6, [r0, #120]	@ 0x78\n"
-                        "   4:	687d      	ldr	r5, [r7, #4]\n"
-                        "   6:	61b5      	str	r5, [r6, #24]\n"
-                        "   8:	68bd      	ldr	r5, [r7, #8]\n"
-                        "   a:	61f5      	str	r5, [r6, #28]"
+                        "   2:	9e00      	ldr	r6, [sp, #0]\n"
+                        "   4:	68f6      	ldr	r6, [r6, #12]\n"
+                        "   6:	687d      	ldr	r5, [r7, #4]\n"
+                        "   8:	61b5      	str	r5, [r6, #24]\n"
+                        "   a:	68bd      	ldr	r5, [r7, #8]\n"
+                        "   c:	61f5      	str	r5, [r6, #28]"
                     >>,
                     ?assertStream(arm, Dump, Stream)
                 end),

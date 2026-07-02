@@ -195,16 +195,16 @@
 % ctx->e is 0x50
 % ctx->x is 0x58
 % ctx->cp is 0xE0
-% ctx->fr is 0xE8
-% ctx->bs is 0xF0
-% ctx->bs_offset is 0xF8
+% ctx->bs is 0xE8
+% ctx->bs_offset is 0xF0
+% jit_state->fr is 0x18
 -define(CTX_REG, rdi).
 -define(JITSTATE_REG, rsi).
 -define(NATIVE_INTERFACE_REG, rdx).
 -define(Y_REGS, {16#50, ?CTX_REG}).
 -define(X_REG(N), {16#58 + (N * ?WORD_SIZE), ?CTX_REG}).
 -define(CP, {16#E0, ?CTX_REG}).
--define(FP_REGS, {16#E8, ?CTX_REG}).
+-define(FP_REGS, {16#18, ?JITSTATE_REG}).
 -define(HEAP_PTR, {16#18, ?CTX_REG}).
 -define(FP_REG_OFFSET(State, F),
     (F *
@@ -213,8 +213,8 @@
             _ -> 4
         end)
 ).
--define(BS, {16#F0, ?CTX_REG}).
--define(BS_OFFSET, {16#F8, ?CTX_REG}).
+-define(BS, {16#E8, ?CTX_REG}).
+-define(BS_OFFSET, {16#F0, ?CTX_REG}).
 -define(JITSTATE_MODULE, {0, ?JITSTATE_REG}).
 -define(JITSTATE_CONTINUATION, {16#8, ?JITSTATE_REG}).
 -define(JITSTATE_REMAINING_REDUCTIONS, {16#10, ?JITSTATE_REG}).
@@ -224,7 +224,7 @@
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
--define(CTX_EXTENDED_X_REGS, 16#100).
+-define(CTX_EXTENDED_X_REGS, 16#F8).
 % struct Bif { struct ExportedFunction base; union { BifImpl0 bif0_ptr; ... }; }
 % base is at offset 0, so EXPORTED_FUNCTION_TO_BIF(f) == f and bif0_ptr is here.
 -define(BIF_BIF0_PTR, 16#8).
@@ -3107,7 +3107,7 @@ float_op(
         end,
     CheckReg = first_avail(Avail0),
     BaseReg = first_avail(Avail0 band (bnot reg_bit(CheckReg))),
-    %% Load the fp register array pointer (ctx->fr), compute the operation in
+    %% Load the fp register array pointer (jit_state->fr), compute the operation in
     %% xmm0, store it back to fr[F3], then test the result's exponent bits: a
     %% value is non-finite (inf/nan) iff all exponent bits are set. The caller's
     %% badarith test reads CheckReg as a one-byte boolean (testb), so collapse
@@ -3283,9 +3283,9 @@ read_avail_heap_memory(
         Reg
     }.
 
-%% Load the fp register array pointer (ctx->fr) into a freshly allocated
+%% Load the fp register array pointer (jit_state->fr) into a freshly allocated
 %% register and return it, so the caller can test it for NULL and only call
-%% context_ensure_fpregs (the malloc) when it has not been allocated yet.
+%% the ensure_fpregs primitive (the malloc) when it has not been allocated yet.
 -spec read_fp_regs_ptr(state()) -> {state(), x86_64_register()}.
 read_fp_regs_ptr(
     #state{
