@@ -184,6 +184,7 @@ void context_destroy(Context *ctx)
     UNUSED(processes_table_list);
 
     list_remove(&ctx->processes_table_head);
+    globalcontext_processes_index_remove(ctx->global, ctx->process_id);
 
     // Ensure process is not registered
     globalcontext_maybe_unregister_process_id(ctx->global, ctx->process_id);
