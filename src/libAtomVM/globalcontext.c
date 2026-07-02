@@ -88,13 +88,19 @@ GlobalContext *globalcontext_new(void)
     synclist_init(&glb->avmpack_data);
     synclist_init(&glb->refc_binaries);
     synclist_init(&glb->processes_table);
-    glb->processes_index_capacity = 64;
-    glb->processes_index_count = 0;
-    glb->processes_index_deleted = 0;
-    glb->processes_index = calloc(glb->processes_index_capacity, sizeof(struct ProcessesIndexEntry));
-    if (IS_NULL_PTR(glb->processes_index)) {
-        free(glb);
-        return NULL;
+    for (int i = 0; i < PROCESSES_INDEX_SHARDS; i++) {
+        struct ProcessesIndexShard *shard = &glb->processes_index_shards[i];
+#ifndef AVM_NO_SMP
+        shard->lock = smp_rwlock_create();
+#endif
+        shard->capacity = 16;
+        shard->count = 0;
+        shard->deleted = 0;
+        shard->entries = calloc(shard->capacity, sizeof(struct ProcessesIndexEntry));
+        if (IS_NULL_PTR(shard->entries)) {
+            fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
+            AVM_ABORT();
+        }
     }
     synclist_init(&glb->registered_processes);
     synclist_init(&glb->listeners);
@@ -345,23 +351,35 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
     synclist_destroy(&glb->dist_connections);
     synclist_destroy(&glb->registered_processes);
     synclist_destroy(&glb->processes_table);
-    free(glb->processes_index);
+    for (int i = 0; i < PROCESSES_INDEX_SHARDS; i++) {
+#ifndef AVM_NO_SMP
+        smp_rwlock_destroy(glb->processes_index_shards[i].lock);
+#endif
+        free(glb->processes_index_shards[i].entries);
+    }
 
     free(glb);
 }
 
-// Hash index over processes_table. Mutations require the processes_table
-// write lock, lookups at least the read lock.
-static inline size_t processes_index_slot(const GlobalContext *glb, int32_t process_id, size_t probe)
+// Sharded hash index over processes_table; see the field documentation in
+// globalcontext.h for the locking rules.
+static inline uint32_t processes_index_hash(int32_t process_id)
 {
-    // Knuth multiplicative hash, linear probing.
-    return (((uint32_t) process_id) * 2654435761u + probe) & (glb->processes_index_capacity - 1);
+    // Knuth multiplicative hash.
+    return ((uint32_t) process_id) * 2654435761u;
 }
 
-static Context *processes_index_get(GlobalContext *glb, int32_t process_id)
+static inline struct ProcessesIndexShard *processes_index_shard(GlobalContext *glb, int32_t process_id)
 {
-    for (size_t probe = 0;; probe++) {
-        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+    // Top bits pick the shard, slots use the low bits of the same hash.
+    return &glb->processes_index_shards[(processes_index_hash(process_id) >> 28) % PROCESSES_INDEX_SHARDS];
+}
+
+static Context *processes_index_get(const struct ProcessesIndexShard *shard, int32_t process_id)
+{
+    uint32_t hash = processes_index_hash(process_id);
+    for (uint32_t probe = 0;; probe++) {
+        const struct ProcessesIndexEntry *entry = &shard->entries[(hash + probe) & (shard->capacity - 1)];
         if (entry->process_id == process_id) {
             return entry->context;
         }
@@ -371,31 +389,32 @@ static Context *processes_index_get(GlobalContext *glb, int32_t process_id)
     }
 }
 
-static void processes_index_insert_entry(GlobalContext *glb, int32_t process_id, Context *ctx)
+static void processes_index_insert_entry(struct ProcessesIndexShard *shard, int32_t process_id, Context *ctx)
 {
-    for (size_t probe = 0;; probe++) {
-        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+    uint32_t hash = processes_index_hash(process_id);
+    for (uint32_t probe = 0;; probe++) {
+        struct ProcessesIndexEntry *entry = &shard->entries[(hash + probe) & (shard->capacity - 1)];
         if (entry->process_id == 0 || entry->process_id == -1) {
             if (entry->process_id == -1) {
-                glb->processes_index_deleted--;
+                shard->deleted--;
             }
             entry->process_id = process_id;
             entry->context = ctx;
-            glb->processes_index_count++;
+            shard->count++;
             return;
         }
     }
 }
 
-static void processes_index_insert(GlobalContext *glb, Context *ctx)
+// Called with the shard write lock held.
+static void processes_index_insert(struct ProcessesIndexShard *shard, Context *ctx)
 {
     // Grow (or rebuild, purging tombstones) at 3/4 occupancy so linear
     // probing stays short and the empty-slot probe terminator always exists.
-    if ((glb->processes_index_count + glb->processes_index_deleted + 1) * 4
-        > glb->processes_index_capacity * 3) {
-        int old_capacity = glb->processes_index_capacity;
-        struct ProcessesIndexEntry *old_entries = glb->processes_index;
-        int new_capacity = (glb->processes_index_count + 1) * 4 > old_capacity * 3
+    if ((shard->count + shard->deleted + 1) * 4 > shard->capacity * 3) {
+        int old_capacity = shard->capacity;
+        struct ProcessesIndexEntry *old_entries = shard->entries;
+        int new_capacity = (shard->count + 1) * 4 > old_capacity * 3
             ? old_capacity * 2
             : old_capacity;
         struct ProcessesIndexEntry *new_entries = calloc(new_capacity, sizeof(struct ProcessesIndexEntry));
@@ -403,29 +422,32 @@ static void processes_index_insert(GlobalContext *glb, Context *ctx)
             fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
             AVM_ABORT();
         }
-        glb->processes_index = new_entries;
-        glb->processes_index_capacity = new_capacity;
-        glb->processes_index_count = 0;
-        glb->processes_index_deleted = 0;
+        shard->entries = new_entries;
+        shard->capacity = new_capacity;
+        shard->count = 0;
+        shard->deleted = 0;
         for (int i = 0; i < old_capacity; i++) {
             if (old_entries[i].process_id > 0) {
-                processes_index_insert_entry(glb, old_entries[i].process_id, old_entries[i].context);
+                processes_index_insert_entry(shard, old_entries[i].process_id, old_entries[i].context);
             }
         }
         free(old_entries);
     }
-    processes_index_insert_entry(glb, ctx->process_id, ctx);
+    processes_index_insert_entry(shard, ctx->process_id, ctx);
 }
 
-void globalcontext_processes_index_remove(GlobalContext *glb, int32_t process_id)
+void globalcontext_processes_index_lock_remove(GlobalContext *glb, int32_t process_id)
 {
-    for (size_t probe = 0;; probe++) {
-        struct ProcessesIndexEntry *entry = &glb->processes_index[processes_index_slot(glb, process_id, probe)];
+    struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
+    SMP_RWLOCK_WRLOCK(shard->lock);
+    uint32_t hash = processes_index_hash(process_id);
+    for (uint32_t probe = 0;; probe++) {
+        struct ProcessesIndexEntry *entry = &shard->entries[(hash + probe) & (shard->capacity - 1)];
         if (entry->process_id == process_id) {
             entry->process_id = -1;
             entry->context = NULL;
-            glb->processes_index_count--;
-            glb->processes_index_deleted++;
+            shard->count--;
+            shard->deleted++;
             return;
         }
         if (entry->process_id == 0) {
@@ -434,17 +456,25 @@ void globalcontext_processes_index_remove(GlobalContext *glb, int32_t process_id
     }
 }
 
+void globalcontext_processes_index_unlock(GlobalContext *glb, int32_t process_id)
+{
+    struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
+    UNUSED(shard);
+    SMP_RWLOCK_UNLOCK(shard->lock);
+}
+
 Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id)
 {
-    return processes_index_get(glb, process_id);
+    return processes_index_get(processes_index_shard(glb, process_id), process_id);
 }
 
 Context *globalcontext_get_process_lock(GlobalContext *glb, int32_t process_id)
 {
-    (void) synclist_rdlock(&glb->processes_table);
-    Context *p = processes_index_get(glb, process_id);
+    struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
+    SMP_RWLOCK_RDLOCK(shard->lock);
+    Context *p = processes_index_get(shard, process_id);
     if (p == NULL) {
-        synclist_unlock(&glb->processes_table);
+        SMP_RWLOCK_UNLOCK(shard->lock);
     }
     return p;
 }
@@ -452,11 +482,11 @@ Context *globalcontext_get_process_lock(GlobalContext *glb, int32_t process_id)
 #if !defined(AVM_NO_SMP) && defined(AVM_TASK_DRIVER_ENABLED)
 static bool globalcontext_get_process_trylock(GlobalContext *glb, int32_t process_id, Context **output)
 {
-    struct ListHead *processes_table_list = synclist_tryrdlock(&glb->processes_table);
-    if (processes_table_list == NULL) {
+    struct ProcessesIndexShard *shard = processes_index_shard(glb, process_id);
+    if (!SMP_RWLOCK_TRYRDLOCK(shard->lock)) {
         return false;
     }
-    Context *p = processes_index_get(glb, process_id);
+    Context *p = processes_index_get(shard, process_id);
     if (p != NULL) {
         *output = p;
     }
@@ -468,7 +498,9 @@ static bool globalcontext_get_process_trylock(GlobalContext *glb, int32_t proces
 void globalcontext_get_process_unlock(GlobalContext *glb, Context *c)
 {
     if (c) {
-        synclist_unlock(&glb->processes_table);
+        struct ProcessesIndexShard *shard = processes_index_shard(glb, c->process_id);
+        UNUSED(shard);
+        SMP_RWLOCK_UNLOCK(shard->lock);
     }
 }
 
@@ -649,7 +681,10 @@ void globalcontext_init_process(GlobalContext *glb, Context *ctx)
     SMP_SPINLOCK_UNLOCK(&glb->processes_spinlock);
     struct ListHead *processes_table_list = synclist_wrlock(&glb->processes_table);
     list_insert(&ctx->processes_table_head, processes_table_list->prev, processes_table_list);
-    processes_index_insert(glb, ctx);
+    struct ProcessesIndexShard *shard = processes_index_shard(glb, ctx->process_id);
+    SMP_RWLOCK_WRLOCK(shard->lock);
+    processes_index_insert(shard, ctx);
+    SMP_RWLOCK_UNLOCK(shard->lock);
     synclist_unlock(&glb->processes_table);
 }
 

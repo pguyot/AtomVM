@@ -97,6 +97,26 @@ struct ProcessesIndexEntry
     struct Context *context;
 };
 
+// Number of independently locked shards of the processes index. Sends from
+// concurrently running schedulers only contend when their target pids hash
+// to the same shard.
+#ifndef AVM_NO_SMP
+#define PROCESSES_INDEX_SHARDS 16
+#else
+#define PROCESSES_INDEX_SHARDS 1
+#endif
+
+struct ProcessesIndexShard
+{
+#ifndef AVM_NO_SMP
+    RWLock *lock;
+#endif
+    struct ProcessesIndexEntry *entries;
+    int capacity; // power of two
+    int count; // live entries
+    int deleted; // tombstones
+};
+
 typedef enum run_result_t
 {
     RUN_SUCCESS = 0,
@@ -125,12 +145,16 @@ struct GlobalContext
     struct SyncList processes_table;
     // Open-addressing hash index over processes_table (process id ->
     // Context) so pid lookups on the send path are O(1) instead of scanning
-    // the list. Mutated under the processes_table write lock; lookups
-    // require holding at least the read lock (same contract as the list).
-    struct ProcessesIndexEntry *processes_index;
-    int processes_index_capacity; // power of two
-    int processes_index_count; // live entries
-    int processes_index_deleted; // tombstones
+    // the list, sharded so concurrent sends do not contend on a single
+    // lock. Lock order: processes_table lock, then shard lock. Shard tables
+    // are only mutated with both the processes_table write lock and the
+    // shard write lock held, so they can be probed either holding a shard
+    // read lock (globalcontext_get_process_lock, the hot path) or holding
+    // the processes_table lock (globalcontext_get_process_nolock).
+    // Destroying a context holds its shard write lock across teardown: a
+    // sender that holds the shard read lock therefore blocks context
+    // destruction, which is what makes the returned Context safe to use.
+    struct ProcessesIndexShard processes_index_shards[PROCESSES_INDEX_SHARDS];
     struct SyncList registered_processes;
     struct SyncList listeners;
     struct SyncList resource_types;
@@ -254,14 +278,27 @@ void globalcontext_destroy(GlobalContext *glb);
 Context *globalcontext_get_process_nolock(GlobalContext *glb, int32_t process_id);
 
 /**
- * @brief Remove a process from the processes hash index.
+ * @brief Remove a process from the processes hash index, keeping its shard
+ * write locked.
  *
  * @details Must be called with the processes_table write lock held, right
- * where the context is removed from the processes table list.
+ * where the context is removed from the processes table list. On return the
+ * shard write lock is held, excluding any sender that could look the
+ * process up: release it with globalcontext_processes_index_unlock once the
+ * context may no longer be accessed by others.
  * @param glb the global context (that owns the process table).
  * @param process_id the local process id being removed.
  */
-void globalcontext_processes_index_remove(GlobalContext *glb, int32_t process_id);
+void globalcontext_processes_index_lock_remove(GlobalContext *glb, int32_t process_id);
+
+/**
+ * @brief Release the shard write lock taken by
+ * globalcontext_processes_index_lock_remove.
+ *
+ * @param glb the global context (that owns the process table).
+ * @param process_id the local process id that was removed.
+ */
+void globalcontext_processes_index_unlock(GlobalContext *glb, int32_t process_id);
 
 /**
  * @brief Gets a Context from the process table, acquiring a lock on the process
