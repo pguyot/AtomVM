@@ -82,8 +82,6 @@ Context *context_new(GlobalContext *glb)
     context_clean_registers(ctx, 0);
     list_init(&ctx->extended_x_regs);
 
-    ctx->fr = NULL;
-
     ctx->min_heap_size = 0;
     ctx->max_heap_size = 0;
 #ifdef AVM_DEFAULT_HEAP_GROWTH_FIBONACCI
@@ -315,7 +313,6 @@ void context_destroy(Context *ctx)
     mailbox_destroy(&ctx->mailbox, &ctx->heap);
 
     destroy_extended_registers(ctx, 0);
-    free(ctx->fr);
 
     memory_destroy_heap(&ctx->heap, ctx->global);
 

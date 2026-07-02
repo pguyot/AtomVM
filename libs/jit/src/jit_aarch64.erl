@@ -216,7 +216,7 @@
 -define(Y_REGS, {?CTX_REG, 16#50}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * ?WORD_SIZE)}).
 -define(CP, {?CTX_REG, 16#E0}).
--define(FP_REGS, {?CTX_REG, 16#E8}).
+-define(FP_REGS, {?JITSTATE_REG, 16#18}).
 -define(FP_REG_OFFSET(State, F),
     (F *
         case (State)#state.variant band ?JIT_VARIANT_FLOAT32 of
@@ -224,8 +224,8 @@
             _ -> 4
         end)
 ).
--define(BS, {?CTX_REG, 16#F0}).
--define(BS_OFFSET, {?CTX_REG, 16#F8}).
+-define(BS, {?CTX_REG, 16#E8}).
+-define(BS_OFFSET, {?CTX_REG, 16#F0}).
 -define(JITSTATE_MODULE, {?JITSTATE_REG, 0}).
 -define(JITSTATE_CONTINUATION, {?JITSTATE_REG, 16#8}).
 -define(JITSTATE_REDUCTIONCOUNT, {?JITSTATE_REG, 16#10}).
@@ -236,7 +236,7 @@
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
--define(CTX_EXTENDED_X_REGS, 16#100).
+-define(CTX_EXTENDED_X_REGS, 16#F8).
 % struct Bif { struct ExportedFunction base; union { BifImpl0 bif0_ptr; ... }; }
 % base is at offset 0, so EXPORTED_FUNCTION_TO_BIF(f) == f and bif0_ptr is here.
 -define(BIF_BIF0_PTR, 16#8).
@@ -3091,7 +3091,7 @@ float_op(
         end,
     CheckReg = first_avail(Avail0),
     Temp = first_avail(Avail0 band (bnot reg_bit(CheckReg))),
-    %% Load the fp register array pointer (ctx->fr), compute the operation in
+    %% Load the fp register array pointer (jit_state->fr), compute the operation in
     %% d0, store it back to fr[F3], then test the result's exponent bits: a
     %% value is non-finite (inf/nan) iff all exponent bits are set. cset turns
     %% that into the clean 0/1 boolean the caller's badarith test expects.
@@ -3196,9 +3196,9 @@ move_float_to_fp_reg(
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BitsReg), BaseReg),
     State0#state{stream = Stream1, regs = Regs1}.
 
-%% Load the fp register array pointer (ctx->fr) into a freshly allocated
+%% Load the fp register array pointer (jit_state->fr) into a freshly allocated
 %% register and return it, so the caller can test it for NULL and only call
-%% context_ensure_fpregs (the malloc) when it has not been allocated yet.
+%% the ensure_fpregs primitive (the malloc) when it has not been allocated yet.
 -spec read_fp_regs_ptr(state()) -> {state(), aarch64_register()}.
 read_fp_regs_ptr(
     #state{
