@@ -30,6 +30,7 @@
 #include "defaultatoms.h"
 #include "dist_nifs.h"
 #include "module.h"
+#include "native_call.h"
 #include "nifs.h"
 #include "refc_binary.h"
 #include "scheduler.h"
@@ -1147,7 +1148,7 @@ static bool jit_send(Context *ctx, JITState *jit_state)
         ctx->x[0] = return_value;
     } else {
         if (term_is_atom(recipient_term)) {
-            recipient_term = globalcontext_get_registered_process(ctx->global, term_to_atom_index(recipient_term));
+            recipient_term = get_registered_process_cached(ctx->global, jit_state->caches, term_to_atom_index(recipient_term));
             if (UNLIKELY(recipient_term == UNDEFINED_ATOM)) {
                 set_error(ctx, jit_state, 0, BADARG_ATOM);
                 return false;
@@ -1449,59 +1450,6 @@ static Context *jit_wait_timeout_trap_handler(Context *ctx, JITState *jit_state,
     // Messages available, jump to loop_rec to scan them.
     jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, label);
     return ctx;
-}
-
-static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index_t function_name, int arity,
-    term *return_value)
-{
-    char mfa[MAX_MFA_NAME_LEN];
-    atom_table_write_mfa(ctx->global->atom_table, mfa, sizeof(mfa), module_name, function_name, arity);
-    const struct ExportedFunction *exported_bif = bif_registry_get_handler(mfa);
-    if (exported_bif) {
-        if (exported_bif->type == GCBIFFunctionType) {
-            const struct GCBif *gcbif = EXPORTED_FUNCTION_TO_GCBIF(exported_bif);
-            switch (arity) {
-                case 1: {
-                    *return_value = gcbif->gcbif1_ptr(ctx, 0, 0, ctx->x[0]);
-                    return true;
-                }
-                case 2: {
-                    *return_value = gcbif->gcbif2_ptr(ctx, 0, 0, ctx->x[0], ctx->x[1]);
-                    return true;
-                }
-                case 3: {
-                    *return_value = gcbif->gcbif3_ptr(ctx, 0, 0, ctx->x[0], ctx->x[1], ctx->x[2]);
-                    return true;
-                }
-            }
-        } else {
-            const struct Bif *bif = EXPORTED_FUNCTION_TO_BIF(exported_bif);
-            switch (arity) {
-                case 0: {
-                    *return_value = bif->bif0_ptr(ctx);
-                    return true;
-                }
-                case 1: {
-                    *return_value = bif->bif1_ptr(ctx, 0, ctx->x[0]);
-                    return true;
-                }
-                case 2: {
-                    *return_value = bif->bif2_ptr(ctx, 0, ctx->x[0], ctx->x[1]);
-                    return true;
-                }
-            }
-        }
-    }
-
-    struct Nif *nif = (struct Nif *) nifs_get(mfa);
-    if (nif) {
-        ctx->nif_call_arity = arity;
-        *return_value = nif->nif_ptr(ctx, arity, ctx->x);
-        ctx->nif_call_arity = 0;
-        return true;
-    }
-
-    return false;
 }
 
 #define MAXI(A, B) ((A > B) ? (A) : (B))
@@ -2074,36 +2022,28 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
     atom_index_t module_name = term_to_atom_index(module);
     atom_index_t function_name = term_to_atom_index(function);
 
-    term native_return;
-    if (maybe_call_native(ctx, module_name, function_name, arity, &native_return)) {
-        PROCESS_MAYBE_TRAP_RETURN_VALUE(native_return, offset);
-        ctx->x[0] = native_return;
-        if (ctx->heap.root->next) {
-            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                return jit_raise_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+    const struct ExportedFunction *native;
+    Module *target_module;
+    int target_label;
+    switch (apply_resolve_cached(ctx, jit_state->caches, module_name, function_name, arity, &native, &target_module, &target_label)) {
+        case ApplyResolvedNative: {
+            term native_return = native_call_invoke(ctx, native, arity);
+            PROCESS_MAYBE_TRAP_RETURN_VALUE(native_return, offset);
+            ctx->x[0] = native_return;
+            if (ctx->heap.root->next) {
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                    return jit_raise_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+                }
             }
+            return jit_return(ctx, jit_state);
         }
-        return jit_return(ctx, jit_state);
-    } else {
-        Module *target_module = globalcontext_get_module(ctx->global, module_name);
-        if (IS_NULL_PTR(target_module)) {
-            set_error(ctx, jit_state, 0, UNDEF_ATOM);
-            return jit_handle_error(ctx, jit_state, 0);
-        }
-        int target_label = module_search_exported_function(target_module, function_name, arity);
-        if (target_label == 0) {
-            set_error(ctx, jit_state, 0, UNDEF_ATOM);
-            return jit_handle_error(ctx, jit_state, 0);
-        }
-        if (target_module->native_code) {
-            // catch label is in native code.
-            jit_state->module = target_module;
-            jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
-        } else {
-            // Native case
-            // jit_state->module = target_module;
-            // jit_state->continuation = jit_state->module->labels[target_label];
-
+        case ApplyResolvedModule: {
+            if (target_module->native_code) {
+                // catch label is in native code.
+                jit_state->module = target_module;
+                jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
+                return ctx;
+            }
             // JIT case
             if (UNLIKELY(jit_trap_and_load(ctx, target_module, target_label) != TRAP_AND_LOAD_OK)) {
                 set_error(ctx, jit_state, 0, UNDEF_ATOM);
@@ -2111,7 +2051,10 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
             }
             return scheduler_wait(ctx);
         }
-        return ctx;
+        default: {
+            set_error(ctx, jit_state, 0, UNDEF_ATOM);
+            return jit_handle_error(ctx, jit_state, 0);
+        }
     }
 }
 
