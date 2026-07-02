@@ -105,6 +105,8 @@ GlobalContext *globalcontext_new(void)
         }
     }
     synclist_init(&glb->registered_processes);
+    // Start at 1 so a zero-initialized per-context cache never matches.
+    glb->registered_processes_version = 1;
     synclist_init(&glb->listeners);
     synclist_init(&glb->resource_types);
     synclist_init(&glb->select_events);
@@ -752,6 +754,7 @@ bool globalcontext_register_process(GlobalContext *glb, int atom_index, term loc
     registered_process->local_pid_or_port = local_pid_or_port;
 
     list_append(registered_processes_list, &registered_process->registered_processes_list_head);
+    glb->registered_processes_version++;
     synclist_unlock(&glb->registered_processes);
 
     return true;
@@ -766,6 +769,7 @@ bool globalcontext_unregister_process(GlobalContext *glb, int atom_index)
         if (registered_process->atom_index == atom_index) {
             list_remove(item);
             free(registered_process);
+            glb->registered_processes_version++;
             synclist_unlock(&glb->registered_processes);
             return true;
         }
@@ -786,6 +790,7 @@ void globalcontext_maybe_unregister_process_id(GlobalContext *glb, int target_pr
         if (term_to_local_process_id(registered_process->local_pid_or_port) == target_process_id) {
             list_remove(item);
             free(registered_process);
+            glb->registered_processes_version++;
         }
     }
     synclist_unlock(&glb->registered_processes);
