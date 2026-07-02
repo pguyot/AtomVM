@@ -50,6 +50,7 @@ set(HEADER_FILES
     mailbox.h
     memory.h
     module.h
+    native_call.h
     opcodes.def
     opcodesswitch.h
     overflow_helpers.h
