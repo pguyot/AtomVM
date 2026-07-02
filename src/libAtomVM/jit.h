@@ -161,6 +161,13 @@ struct JITState
         const void *continuation_pc;
     };
     int remaining_reductions;
+    // FP register bank. Seeded by the scheduler loop from its own lazily
+    // allocated bank: fr registers are dead at every schedule-out point (the
+    // compiler boxes floats across calls and receives), so all processes
+    // executed by a scheduler share one bank. NULL until the first float
+    // instruction this scheduler executes; a VM with no float code never
+    // allocates a bank.
+    avm_float_t *fr;
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
     const void *code_base;
 #endif
@@ -211,15 +218,15 @@ struct ModuleNativeInterface
     Context *(*wait_timeout_trap_handler)(Context *ctx, JITState *jit_state, int label);
     Context *(*call_fun)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
     int (*context_get_flags)(Context *ctx, int mask);
-    void (*context_ensure_fpregs)(Context *ctx);
-    term (*term_from_float)(Context *ctx, int fpreg);
+    void (*ensure_fpregs)(JITState *jit_state);
+    term (*term_from_float)(Context *ctx, JITState *jit_state, int fpreg);
     bool (*term_is_number)(term t);
-    void (*term_conv_to_float)(Context *ctx, term t, int fpreg);
-    bool (*fadd)(Context *ctx, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fsub)(Context *ctx, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fmul)(Context *ctx, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fdiv)(Context *ctx, int fpreg_1, int fpreg_2, int fpreg_3);
-    void (*fnegate)(Context *ctx, int fpreg_1, int fpreg_2);
+    void (*term_conv_to_float)(JITState *jit_state, term t, int fpreg);
+    bool (*fadd)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fsub)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fmul)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fdiv)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
+    void (*fnegate)(JITState *jit_state, int fpreg_1, int fpreg_2);
     bool (*catch_end)(Context *ctx, JITState *jit_state);
     bool (*memory_ensure_free_with_roots)(Context *ctx, JITState *jit_state, int sz, int live, int flags);
     term (*term_alloc_bin_match_state)(Context *ctx, term src, int slots);
@@ -284,7 +291,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 1
+#define JIT_FORMAT_VERSION 2
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2

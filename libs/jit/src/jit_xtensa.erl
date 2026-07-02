@@ -213,14 +213,14 @@
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 -define(CP, {?CTX_REG, 16#70}).
 -define(CP_MODULE, {?CTX_REG, 16#74}).
--define(FP_REGS, {?CTX_REG, 16#78}).
--define(BS, {?CTX_REG, 16#7C}).
--define(BS_OFFSET, {?CTX_REG, 16#80}).
+-define(FP_REGS, {?JITSTATE_REG, 16#C}).
+-define(BS, {?CTX_REG, 16#78}).
+-define(BS_OFFSET, {?CTX_REG, 16#7C}).
 -define(JITSTATE_REG, a3).
 -define(JITSTATE_MODULE_OFFSET, 0).
 -define(JITSTATE_CONTINUATION_OFFSET, 16#4).
 -define(JITSTATE_REDUCTIONCOUNT_OFFSET, 16#8).
--define(JITSTATE_CODE_BASE_OFFSET, 16#C).
+-define(JITSTATE_CODE_BASE_OFFSET, 16#10).
 % module->local_atoms_to_global_table byte offset (see _Static_assert in jit.c).
 -define(MODULE_LOCAL_ATOMS_TABLE_OFFSET, 16#6C).
 
