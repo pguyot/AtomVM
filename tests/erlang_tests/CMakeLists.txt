@@ -609,6 +609,7 @@ compile_erlang(spawn_opt_monitor_error)
 compile_erlang(link_kill_parent)
 compile_erlang(link_throw)
 compile_erlang(unlink_error)
+compile_erlang(link_noproc)
 compile_erlang(trap_exit_flag)
 compile_erlang(test_process_flag_fullsweep_after)
 compile_erlang(test_exit1)
@@ -1195,6 +1196,7 @@ set(erlang_test_beams
     link_kill_parent.beam
     link_throw.beam
     unlink_error.beam
+    link_noproc.beam
     trap_exit_flag.beam
     test_process_flag_fullsweep_after.beam
     test_exit1.beam
