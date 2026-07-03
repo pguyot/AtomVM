@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   real `load/1`, `unload/1`, `start/1,2`, `ensure_all_started/1,2`, `stop/1`,
   `which_applications/0`, `get_key/2`, `get_env/2,3`, `set_env/3`, `unset_env/2` and
   `get_all_env/1`
+- Added support for `rest_for_one` and `simple_one_for_one` supervisor restart strategies
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
