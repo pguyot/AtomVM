@@ -85,6 +85,8 @@
     heap_bump_alloc/2,
     jump_table_range_check/4,
     jump_table_dispatch/1,
+    shift_right_arith_reg/3,
+    shift_left_reg/3,
     read_avail_heap_memory/1,
     read_heap_fragments/1,
     read_shrink_probe_mismatch/1,
@@ -3314,6 +3316,24 @@ jump_table_dispatch(#state{stream_module = StreamModule, stream = Stream0} = Sta
     State0#state{
         stream = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>)
     }.
+
+%% In-place variable shifts (amount in a register, callers bound-check it:
+%% the hardware takes the amount mod 64).
+-spec shift_right_arith_reg(state(), aarch64_register(), aarch64_register()) -> state().
+shift_right_arith_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, ShiftReg
+) ->
+    I1 = jit_aarch64_asm:asrv(Reg, Reg, ShiftReg),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = StreamModule:append(Stream0, I1), regs = Regs1}.
+
+-spec shift_left_reg(state(), aarch64_register(), aarch64_register()) -> state().
+shift_left_reg(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, ShiftReg
+) ->
+    I1 = jit_aarch64_asm:lslv(Reg, Reg, ShiftReg),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = StreamModule:append(Stream0, I1), regs = Regs1}.
 
 %% Bump-allocate NWords terms from the context heap, returning a freshly
 %% allocated register holding the pointer to the first allocated word. The
