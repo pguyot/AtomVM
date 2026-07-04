@@ -3360,6 +3360,30 @@ pending_filter_label(#state{pending_x = P, live_masks = Masks} = State, Label) -
         pending_x = maps:filter(fun(X, _) -> Mask band (1 bsl X) =:= 0 end, P)
     }.
 
+%% Window end at a label: pendings that survived every branch filter and
+%% whose register is not in the label's live-in mask are fully dead — nop
+%% their stores. Registers in the mask keep their stores. Either way the
+%% tracking window ends here.
+pending_flush_label(#state{live_masks = undefined} = State, _Label) ->
+    State;
+pending_flush_label(#state{pending_x = P} = State, _Label) when map_size(P) =:= 0 ->
+    State;
+pending_flush_label(
+    #state{pending_x = P, live_masks = Masks, stream_module = SM} = State, Label
+) ->
+    Mask = maps:get(Label, Masks, -1),
+    Stream1 = maps:fold(
+        fun(X, {Off, _D}, StAcc) ->
+            case Mask band (1 bsl X) of
+                0 -> SM:replace(StAcc, Off, jit_aarch64_asm:nop());
+                _ -> StAcc
+            end
+        end,
+        State#state.stream,
+        P
+    ),
+    State#state{stream = Stream1, pending_x = #{}}.
+
 pending_enter_cond(#state{cond_depth = D} = State) ->
     State#state{cond_depth = D + 1}.
 
@@ -3646,15 +3670,17 @@ call_only_or_schedule_next(
     #state{} = StateP,
     Label
 ) ->
-    %% Control transfers into the callee, which reads its argument x
-    %% registers from the context: pending stores must persist.
+    %% Control transfers into the callee, which reads exactly the x
+    %% registers in its entry label's live-in mask (its arguments): other
+    %% pending stores survive the call — the callee neither reads nor
+    %% roots them (they are beyond its Live counts).
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         branches = Branches,
         labels = Labels,
         regs = Regs0
-    } = State0 = pending_clear_all(StateP),
+    } = State0 = pending_filter_label(StateP, Label),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     % Load reduction count
@@ -3883,7 +3909,7 @@ reg_bit(r17) -> ?REG_BIT_R17.
 add_label(#state{} = StateP, Label) ->
     #state{stream_module = StreamModule, stream = Stream, regs = Regs0} =
         State =
-        pending_clear_all(StateP),
+        pending_flush_label(StateP, Label),
     Offset = StreamModule:offset(Stream),
     Regs1 = jit_regs:invalidate_all(Regs0),
     add_label(State#state{regs = Regs1}, Label, Offset).
