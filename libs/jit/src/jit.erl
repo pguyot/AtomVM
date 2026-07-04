@@ -186,7 +186,16 @@ compile(
                     #{}
             end
     },
-    MSt1 = MMod:jump_table(MSt0, LabelsCount),
+    %% Backends with the deferred x-register store elision get the
+    %% per-label live-in masks from the pass-A analysis; a store to a dead
+    %% x register can then be dropped when its value is only consumed from
+    %% the register cache (see jit_liveness).
+    MSt0b =
+        case erlang:function_exported(MMod, set_live_masks, 2) of
+            true -> MMod:set_live_masks(MSt0, jit_liveness:label_read_masks(Opcodes));
+            false -> MSt0
+        end,
+    MSt1 = MMod:jump_table(MSt0b, LabelsCount),
     {State1, MSt2} = first_pass(Opcodes, MMod, MSt1, State0),
     MSt3 = second_pass(MMod, MSt2, State1),
     MSt4 = MMod:flush(MSt3),
