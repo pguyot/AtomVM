@@ -892,7 +892,12 @@ first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
                     erlang:function_exported(MMod, allocate_frame_fast, 2) andalso N >= 6
                 of
                     true ->
-                        {op_select_val_int_tree(MMod, MSt1, SrcValue, Entries), RestAfter};
+                        {
+                            op_select_val_int_dispatch(
+                                MMod, MSt1, SrcValue, Entries, DefaultLabel
+                            ),
+                            RestAfter
+                        };
                     false ->
                         op_select_val_inline_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
                 end;
@@ -6115,12 +6120,47 @@ scan_int_compact_term(
 scan_int_compact_term(_) ->
     nomatch.
 
+%% Dense value sets become a computed-branch jump table (range check +
+%% indexed br into a row of b instructions, O(1) like BeamAsm); sparse ones
+%% a balanced binary-search tree.
+op_select_val_int_dispatch(MMod, MSt0, SrcValue, Entries, DefaultLabel) ->
+    Sorted = lists:keysort(1, Entries),
+    [{MinTagged, _} | _] = Sorted,
+    {MaxTagged, _} = lists:last(Sorted),
+    N = length(Sorted),
+    Span = (MaxTagged - MinTagged) div 16 + 1,
+    case
+        erlang:function_exported(MMod, jump_table_dispatch, 1) andalso
+            N >= 8 andalso
+            %% Sorted by unsigned word, so a small MaxTagged implies all
+            %% values are non-negative and the range is contiguous.
+            MaxTagged =< 16#FFFFFF andalso
+            Span =< 2 * N andalso Span =< 256
+    of
+        true ->
+            {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+            MSt2 = MMod:jump_table_range_check(MSt1, SrcReg, MinTagged, (Span - 1) * 16),
+            MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
+            MSt4 = MMod:jump_table_dispatch(MSt3),
+            LabelMap = maps:from_list(Sorted),
+            MSt5 = lists:foldl(
+                fun(I, AccMSt) ->
+                    Slot = maps:get(MinTagged + I * 16, LabelMap, DefaultLabel),
+                    MMod:jump_to_label(AccMSt, Slot)
+                end,
+                MSt4,
+                lists:seq(0, Span - 1)
+            ),
+            MMod:free_native_registers(MSt5, [SrcReg]);
+        false ->
+            op_select_val_int_tree(MMod, MSt0, SrcValue, Sorted)
+    end.
+
 %% Emit a balanced binary-search dispatch over sorted (unsigned tagged word,
 %% label) entries: each node is one equality exit plus an unsigned
 %% above/below split; small partitions degrade to a short linear chain.
-op_select_val_int_tree(MMod, MSt0, SrcValue, Entries) ->
+op_select_val_int_tree(MMod, MSt0, SrcValue, Sorted) ->
     {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
-    Sorted = lists:keysort(1, Entries),
     MSt2 = emit_select_val_tree(MMod, MSt1, SrcReg, Sorted),
     MMod:free_native_registers(MSt2, [SrcReg]).
 
