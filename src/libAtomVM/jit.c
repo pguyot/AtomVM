@@ -1638,6 +1638,14 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
     return jit_direct_continuation(ctx, jit_state, result);
 }
 
+// OP_RETURN cross-module direct dispatch: resolve cp once in C, then let
+// the call site branch straight to the caller's native code.
+static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
+{
+    Context *result = jit_return(ctx, jit_state);
+    return jit_direct_continuation(ctx, jit_state, result);
+}
+
 // OP_CALL_EXT/OP_CALL_EXT_ONLY/OP_CALL_EXT_LAST direct dispatch: same
 // contract as call_fun_direct.
 static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
@@ -2711,7 +2719,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_term_get_map_assoc,
     jit_term_get_map_assoc_miss,
     jit_call_fun_direct,
-    jit_call_ext_direct
+    jit_call_ext_direct,
+    jit_return_direct
 };
 
 #endif
