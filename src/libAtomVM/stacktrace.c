@@ -147,15 +147,10 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
     }
 
     unsigned int num_frames = 0;
-    unsigned int num_aux_terms = 0;
-    size_t filename_lens = 0;
     Module *prev_mod = NULL;
     size_t prev_mod_offset = (size_t) -1;
     term *ct = ctx->e;
     term *stack_base = context_stack_base(ctx);
-
-    const void **locations = NULL;
-    size_t num_locations = 0;
 
     while (ct != stack_base) {
         if (term_is_cp(*ct)) {
@@ -173,17 +168,6 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
                 ++num_frames;
                 prev_mod = cp_mod;
                 prev_mod_offset = mod_offset;
-                if (module_has_line_chunk(cp_mod)) {
-                    uint32_t line;
-                    const uint8_t *filename;
-                    size_t filename_len;
-                    if (LIKELY(module_find_line(cp_mod, (unsigned int) mod_offset, &line, &filename_len, &filename))) {
-                        if (!location_sets_append(ctx->global, cp_mod, filename, filename_len, &filename_lens, &locations, &num_locations)) {
-                            return UNDEFINED_ATOM;
-                        }
-                        num_aux_terms++;
-                    }
-                }
             }
         } else if (term_is_catch_label(*ct)) {
             int module_index;
@@ -196,36 +180,12 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
                 ++num_frames;
                 prev_mod = cl_mod;
                 prev_mod_offset = mod_offset;
-                if (module_has_line_chunk(cl_mod)) {
-                    uint32_t line;
-                    const uint8_t *filename;
-                    size_t filename_len;
-                    if (LIKELY(module_find_line(cl_mod, (unsigned int) mod_offset, &line, &filename_len, &filename))) {
-                        if (!location_sets_append(ctx->global, cl_mod, filename, filename_len, &filename_lens, &locations, &num_locations)) {
-                            return UNDEFINED_ATOM;
-                        }
-                        num_aux_terms++;
-                    }
-                }
             }
         }
         ct++;
     }
 
     num_frames++;
-    if (module_has_line_chunk(mod)) {
-        uint32_t line;
-        const uint8_t *filename;
-        size_t filename_len;
-        if (LIKELY(module_find_line(mod, current_offset, &line, &filename_len, &filename))) {
-            if (!location_sets_append(ctx->global, mod, filename, filename_len, &filename_lens, &locations, &num_locations)) {
-                return UNDEFINED_ATOM;
-            }
-            num_aux_terms++;
-        }
-    }
-
-    free(locations);
 
     // there is an additional x register available as a temporary storage, we'll use it
     // we'll backup the exception_reason in it
@@ -336,11 +296,15 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
         ct++;
     }
 
+    // Sizing of the built stacktrace (aux terms, filename lengths, module
+    // count) is deferred to stacktrace_build: most raises are caught and
+    // discarded without ever materializing the trace, so the per-frame
+    // line-table searches would be wasted work here.
     term stack_info = term_alloc_tuple(6, &ctx->heap);
     term_put_tuple_element(stack_info, 0, term_from_int(num_frames));
-    term_put_tuple_element(stack_info, 1, term_from_int(num_aux_terms));
-    term_put_tuple_element(stack_info, 2, term_from_int(filename_lens));
-    term_put_tuple_element(stack_info, 3, term_from_int(num_locations));
+    term_put_tuple_element(stack_info, 1, term_from_int(0));
+    term_put_tuple_element(stack_info, 2, term_from_int(0));
+    term_put_tuple_element(stack_info, 3, term_from_int(0));
     term_put_tuple_element(stack_info, 4, raw_stacktrace);
     term_put_tuple_element(stack_info, 5, exception_class);
 
@@ -393,9 +357,6 @@ term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
     }
 
     int num_frames = term_to_int(term_get_tuple_element(*stack_info, 0));
-    int num_aux_terms = term_to_int(term_get_tuple_element(*stack_info, 1));
-    int filename_lens = term_to_int(term_get_tuple_element(*stack_info, 2));
-    int num_mods = term_to_int(term_get_tuple_element(*stack_info, 3));
 
     // Pre-built stacktrace from erlang:raise/3: element 4 already holds
     // the built list, num_frames == 0. Return the list directly.
@@ -405,6 +366,43 @@ term stacktrace_build(Context *ctx, term *stack_info, uint32_t live)
             return raw_stacktrace;
         }
     }
+
+    // Deferred sizing (see stacktrace_create_raw_mfa): resolve line info
+    // once over the raw frame list, which create_raw snapshotted, to size
+    // the aux terms, filename characters and unique location set.
+    int num_aux_terms = 0;
+    size_t filename_lens = 0;
+    const void **locations = NULL;
+    size_t num_locations = 0;
+    {
+        term el = term_get_tuple_element(*stack_info, 4);
+        while (!term_is_nil(el)) {
+            term mod_index_tuple = term_get_list_head(el);
+            cp_t cp = make_cp_from_index(
+                term_to_int(term_get_tuple_element(mod_index_tuple, 0)),
+                term_to_int(term_get_tuple_element(mod_index_tuple, 1)),
+                ctx->global);
+            Module *cp_mod;
+            size_t mod_offset;
+            module_cp_to_label_offset(cp, &cp_mod, NULL, NULL, &mod_offset, ctx->global);
+            if (module_has_line_chunk(cp_mod)) {
+                uint32_t line;
+                const uint8_t *filename;
+                size_t filename_len;
+                if (LIKELY(module_find_line(
+                        cp_mod, (unsigned int) mod_offset, &line, &filename_len, &filename))) {
+                    if (!location_sets_append(ctx->global, cp_mod, filename, filename_len,
+                            &filename_lens, &locations, &num_locations)) {
+                        return UNDEFINED_ATOM;
+                    }
+                    num_aux_terms++;
+                }
+            }
+            el = term_get_list_tail(el);
+        }
+    }
+    free(locations);
+    size_t num_mods = num_locations;
 
     struct ModulePathPair *module_paths = malloc(num_mods * sizeof(struct ModulePathPair));
     if (IS_NULL_PTR(module_paths)) {
