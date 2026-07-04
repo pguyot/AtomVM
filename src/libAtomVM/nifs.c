@@ -8395,6 +8395,20 @@ static term nif_lists_member(Context *ctx, int argc, term argv[])
     term elem = argv[0];
     term list = argv[1];
 
+    if ((elem & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        // An immediate is =:= only to itself (boxed integers are
+        // normalized), so the whole scan is a word-equality loop.
+        while (term_is_nonempty_list(list)) {
+            const term *list_ptr = term_get_list_ptr(list);
+            if (list_ptr[LIST_HEAD_INDEX] == elem) {
+                return TRUE_ATOM;
+            }
+            list = list_ptr[LIST_TAIL_INDEX];
+        }
+        VALIDATE_VALUE(list, term_is_nil);
+        return FALSE_ATOM;
+    }
+
     while (term_is_nonempty_list(list)) {
         term head = term_get_list_head(list);
 
@@ -8691,13 +8705,21 @@ static term nif_lists_keyfind(Context *ctx, int argc, term argv[])
 
         term nth_element = term_get_tuple_element(tuple, n_pos - 1);
 
-        TermCompareResult cmp_result = term_compare(nth_element, key, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
+        if ((key & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+            // Immediate key: =:= is word equality (an immediate is only
+            // equal to itself; boxed integers are normalized).
+            if (nth_element == key) {
+                return tuple;
+            }
+        } else {
+            TermCompareResult cmp_result = term_compare(nth_element, key, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), ctx->global);
 
-        if (cmp_result == TermEquals) {
-            return tuple;
-        }
-        if (UNLIKELY(cmp_result == TermCompareMemoryAllocFail)) {
-            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            if (cmp_result == TermEquals) {
+                return tuple;
+            }
+            if (UNLIKELY(cmp_result == TermCompareMemoryAllocFail)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
         }
 
         tuple_list = term_get_list_tail(tuple_list);
