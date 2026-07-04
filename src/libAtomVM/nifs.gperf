@@ -256,6 +256,7 @@ lists:flatten/1, &lists_flatten_nif
 lists:keyfind/3, &lists_keyfind_nif
 lists:keymember/3, &lists_keymember_nif
 lists:member/2, &lists_member_nif
+lists:seq/2, &lists_seq_nif
 lists:sort/1, &lists_sort_nif
 lists:usort/1, &lists_usort_nif
 lists:keysort/2, &lists_keysort_nif
