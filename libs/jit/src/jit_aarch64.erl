@@ -83,6 +83,8 @@
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     heap_bump_alloc/2,
+    jump_table_range_check/4,
+    jump_table_dispatch/1,
     read_avail_heap_memory/1,
     read_heap_fragments/1,
     read_shrink_probe_mismatch/1,
@@ -3284,6 +3286,33 @@ read_fp_regs_ptr(
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)},
         Reg
+    }.
+
+%% First half of a dense select_val jump table: IP0 = Src - MinTagged; when
+%% (unsigned) above Bound the next (4-byte) instruction runs — the caller
+%% emits the branch to the default label there — otherwise it is skipped
+%% and execution continues at jump_table_dispatch.
+-spec jump_table_range_check(state(), aarch64_register(), non_neg_integer(), 0..4095) -> state().
+jump_table_range_check(
+    #state{stream_module = StreamModule} = State0, SrcReg, MinTagged, Bound
+) ->
+    State1 = op_imm(State0, sub, ?IP0_REG, SrcReg, MinTagged),
+    I2 = jit_aarch64_asm:cmp(?IP0_REG, Bound),
+    I3 = jit_aarch64_asm:bcc(ls, 8),
+    State1#state{stream = StreamModule:append(State1#state.stream, <<I2/binary, I3/binary>>)}.
+
+%% Second half: computed branch into the table of 4-byte b instructions the
+%% caller emits right after this. IP0 holds the tagged difference (a small
+%% int delta is value * 16); each table slot is 4 bytes, so the byte offset
+%% is IP0 >> 2.
+-spec jump_table_dispatch(state()) -> state().
+jump_table_dispatch(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
+    I1 = jit_aarch64_asm:lsr(?IP0_REG, ?IP0_REG, 2),
+    I2 = jit_aarch64_asm:adr(r17, 12),
+    I3 = jit_aarch64_asm:add(r17, r17, ?IP0_REG),
+    I4 = jit_aarch64_asm:br(r17),
+    State0#state{
+        stream = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>)
     }.
 
 %% Bump-allocate NWords terms from the context heap, returning a freshly
