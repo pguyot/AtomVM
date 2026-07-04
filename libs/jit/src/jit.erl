@@ -520,12 +520,20 @@ first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = St
                     end
                 )
         end,
-    % Different module: use existing slow path
+    % Different module: resolve through the return primitive; backends with
+    % direct dispatch branch straight to the caller's native code instead of
+    % round-tripping through the scheduler loop.
     TailCacheKey = {call_primitive_last, ?PRIM_RETURN},
     case tail_cache_find(TailCacheKey, TC) of
         false ->
             Offset = MMod:offset(MSt5),
-            MSt6 = MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state]),
+            MSt6 =
+                case erlang:function_exported(MMod, call_primitive_direct, 3) of
+                    true ->
+                        MMod:call_primitive_direct(MSt5, ?PRIM_RETURN_DIRECT, [ctx, jit_state]);
+                    false ->
+                        MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state])
+                end,
             State1 = State0#state{tail_cache = tail_cache_store(TailCacheKey, Offset, TC)};
         {TailCacheKey, Offset} ->
             MSt6 = MMod:jump_to_offset(MSt5, Offset),
