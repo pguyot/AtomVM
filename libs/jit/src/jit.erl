@@ -897,9 +897,7 @@ first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Rest4} =
         case scan_select_val_int_entries(Rest3, N, MMod, []) of
             {ok, Entries, RestAfter} ->
-                case
-                    erlang:function_exported(MMod, allocate_frame_fast, 2) andalso N >= 6
-                of
+                case erlang:function_exported(MMod, allocate_frame_fast, 2) andalso N >= 6 of
                     true ->
                         {
                             op_select_val_int_dispatch(
@@ -4399,6 +4397,11 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
     end;
+% Runtime small-integer fast path for bsl/bsr by a runtime amount.
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
+    Op =:= 'bsl' orelse Op =:= 'bsr'
+->
+    op_gc_bif2_shift_reg_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
 % Default case
 op_gc_bif2(
     MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
@@ -5317,8 +5320,134 @@ op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
     end;
-op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, _Op, Arg1, Arg2, Dest) ->
-    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest).
+op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    op_gc_bif2_shift_reg_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest).
+
+%% Runtime shift amount: tag-check both operands and bound the amount to
+%% [0, 59] inline (larger/negative amounts and bignums go to the BIF), then
+%% a variable hardware shift. bsr cannot overflow; bsl shift-back checks.
+op_gc_bif2_shift_reg_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    case
+        erlang:function_exported(MMod, shift_right_arith_reg, 3) andalso
+            MMod:word_size() =:= 8 andalso
+            addsub_fastpath_reloadable(Arg1) andalso
+            addsub_fastpath_reloadable(Arg2)
+    of
+        true ->
+            op_gc_bif2_shift_reg_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
+        false ->
+            op_gc_bif2_default(
+                MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
+            )
+    end.
+
+op_gc_bif2_shift_reg_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    UArg2 = unwrap_typed(Arg2),
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    %% Unalias (`B bsl B`), as in the addsub runtime path.
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
+        op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
+    end,
+    MMod:if_else_block(
+        MSt2,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(ASt0) ->
+            MMod:if_else_block(
+                ASt0,
+                {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                Fallback,
+                fun(BSt0) ->
+                    op_gc_bif2_shift_reg_runtime2(
+                        MMod, BSt0, Op, R1, R2, Dest, Fallback
+                    )
+                end
+            )
+        end
+    ).
+
+op_gc_bif2_shift_reg_runtime2(MMod, BSt0, Op, R1, R2, Dest, Fallback) ->
+    %% The hardware shift needs a small-int amount in [0, 59]: as a tagged
+    %% word, R2 - tag(0) must be (unsigned) at most tag(59) - tag(0)
+    %% (negative amounts wrap huge and fail the compare). A bsr by a larger
+    %% non-negative amount saturates to 0 / -1 inline; everything else
+    %% (negative amounts, bsl overflow range) goes to the BIF.
+    {BSt1, SCheck} = MMod:copy_to_native_register(BSt0, R2),
+    BSt2 = MMod:sub(BSt1, SCheck, ?TERM_INTEGER_TAG),
+    MMod:if_else_block(
+        BSt2,
+        {SCheck, '(uint)>', 59 * 16},
+        fun(OSt0) ->
+            case Op of
+                'bsr' ->
+                    MMod:if_else_block(
+                        OSt0,
+                        {{free, SCheck}, '<', 0},
+                        Fallback,
+                        fun(SSt0) ->
+                            {SSt1, Res0} = MMod:copy_to_native_register(SSt0, R1),
+                            {SSt2, Res} = MMod:shift_right_arith(SSt1, {free, Res0}, 63),
+                            SSt3 = MMod:shift_left(SSt2, Res, 4),
+                            SSt4 = MMod:or_(SSt3, Res, ?TERM_INTEGER_TAG),
+                            SSt5 = MMod:free_native_registers(SSt4, [R1, R2]),
+                            SSt6 = MMod:move_to_vm_register(SSt5, Res, Dest),
+                            MMod:free_native_registers(SSt6, [Res, Dest])
+                        end
+                    );
+                'bsl' ->
+                    OSt1 = MMod:free_native_registers(OSt0, [SCheck]),
+                    Fallback(OSt1)
+            end
+        end,
+        fun(CSt00) ->
+            CSt0 = MMod:free_native_registers(CSt00, [SCheck]),
+            %% SReg = untagged amount (+4 to also strip/retag R1's
+            %% tag bits in the same shift).
+            {CSt1, SCopy} = MMod:copy_to_native_register(CSt0, R2),
+            {CSt2, SReg} = MMod:shift_right_arith(CSt1, {free, SCopy}, 4),
+            CSt3 = MMod:add(CSt2, SReg, 4),
+            case Op of
+                'bsr' ->
+                    {CSt4, Res} = MMod:copy_to_native_register(CSt3, R1),
+                    CSt5 = MMod:shift_right_arith_reg(CSt4, Res, SReg),
+                    CSt6 = MMod:shift_left(CSt5, Res, 4),
+                    CSt7 = MMod:or_(CSt6, Res, ?TERM_INTEGER_TAG),
+                    CSt8 = MMod:free_native_registers(CSt7, [SReg, R1, R2]),
+                    CSt9 = MMod:move_to_vm_register(CSt8, Res, Dest),
+                    MMod:free_native_registers(CSt9, [Res, Dest]);
+                'bsl' ->
+                    {CSt4, A0} = MMod:copy_to_native_register(CSt3, R1),
+                    {CSt5, A} = MMod:shift_right_arith(CSt4, {free, A0}, 4),
+                    {CSt6, V} = MMod:copy_to_native_register(CSt5, A),
+                    CSt7 = MMod:shift_left_reg(CSt6, V, SReg),
+                    {CSt8, Chk0} = MMod:copy_to_native_register(CSt7, V),
+                    CSt9 = MMod:shift_right_arith_reg(CSt8, Chk0, SReg),
+                    CSt10 = MMod:free_native_registers(CSt9, [SReg]),
+                    MMod:if_else_block(
+                        CSt10,
+                        {{free, Chk0}, '==', {free, A}},
+                        fun(NSt0) ->
+                            NSt1 = MMod:or_(NSt0, V, ?TERM_INTEGER_TAG),
+                            NSt2 = MMod:free_native_registers(NSt1, [R1, R2]),
+                            NSt3 = MMod:move_to_vm_register(NSt2, V, Dest),
+                            MMod:free_native_registers(NSt3, [V, Dest])
+                        end,
+                        fun(NSt0) ->
+                            NSt1 = MMod:free_native_registers(NSt0, [V]),
+                            Fallback(NSt1)
+                        end
+                    )
+            end
+        end
+    ).
 
 %% Runtime tag-checked shift by a literal amount. bsr of a small int always
 %% stays small, so after the tag check it is asr/lsl/orr in place. bsl needs
