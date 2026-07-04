@@ -50,6 +50,8 @@
     ldr/3,
     lsl/3,
     lsr/3,
+    asrv/3,
+    lslv/3,
     mov/2,
     movk/3,
     movz/3,
@@ -1234,6 +1236,25 @@ lsr(Rd, Rn, Shift) when is_atom(Rd), is_atom(Rn), is_integer(Shift), Shift >= 0,
     <<
         (16#D340FC00 bor ((Shift band 16#3F) bsl 16) bor (RnNum bsl 5) bor RdNum):32/little
     >>.
+
+%% Variable arithmetic shift right: ASRV Rd, Rn, Rm (shift amount = Rm mod 64,
+%% so callers must bound-check the amount).
+-spec asrv(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+asrv(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    %% AArch64 ASRV: 10011010110mmmmm001010nnnnnddddd
+    <<(16#9AC02800 bor (RmNum bsl 16) bor (RnNum bsl 5) bor RdNum):32/little>>.
+
+%% Variable logical shift left: LSLV Rd, Rn, Rm (shift amount = Rm mod 64).
+-spec lslv(aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+lslv(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
+    RdNum = reg_to_num(Rd),
+    RnNum = reg_to_num(Rn),
+    RmNum = reg_to_num(Rm),
+    %% AArch64 LSLV: 10011010110mmmmm001000nnnnnddddd
+    <<(16#9AC02000 bor (RmNum bsl 16) bor (RnNum bsl 5) bor RdNum):32/little>>.
 
 %% Emit a return instruction
 -spec ret() -> binary().
