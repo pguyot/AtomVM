@@ -133,6 +133,19 @@ _Static_assert(RefcBinaryIsConst == 1, "REFC_BINARY_IS_CONST is 1 in libs/jit/sr
 _Static_assert(RefcBinaryIsResourceManaged == 2,
     "REFC_BINARY_IS_RESOURCE_MANAGED is 2 in libs/jit/src/term.hrl");
 
+// The inline allocate/deallocate/test_heap/put_list fast paths in the 64-bit
+// backends read these Context fields at hard-coded offsets.
+#if TERM_BYTES == 8
+_Static_assert(offsetof(Context, heap.root) == 0x8,
+    "heap fragments root is at ctx+0x8 in 64-bit jit backends");
+_Static_assert(offsetof(Context, heap.heap_ptr) == 0x18,
+    "heap_ptr is at ctx+0x18 in 64-bit jit backends");
+_Static_assert(offsetof(Context, heap.heap_end) == 0x20,
+    "heap_end is at ctx+0x20 in 64-bit jit backends");
+_Static_assert(offsetof(Context, shrink_probe_heap_end) == 0x1A0,
+    "shrink_probe_heap_end is at ctx+0x1A0 in 64-bit jit backends");
+#endif
+
 // Verify matching atom index in default_atoms.hrl
 _Static_assert(OK_ATOM_INDEX == 2, "OK_ATOM_INDEX is 2 in libs/jit/src/default_atoms.hrl ");
 _Static_assert(ERROR_ATOM_INDEX == 3, "ERROR_ATOM_INDEX is 3 in libs/jit/src/default_atoms.hrl ");
