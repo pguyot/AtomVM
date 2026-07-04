@@ -37,6 +37,8 @@
     call_primitive/3,
     call_primitive_last/3,
     call_primitive_with_cp/3,
+    call_primitive_with_cp_direct/3,
+    call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
     jump_to_continuation/2,
@@ -3533,6 +3535,52 @@ call_primitive_with_cp(State0, Primitive, Args) ->
     {State1, RewriteOffset, RewriteSize} = set_cp(State0),
     State2 = call_primitive_last(State1, Primitive, Args),
     rewrite_cp_offset(State2, RewriteOffset, RewriteSize).
+
+%% Call a resolving primitive that returns either the callee's native entry
+%% point with bit 0 set — branch to it directly, skipping the scheduler-loop
+%% round trip — or a Context * (bit 0 clear) to return to the scheduler loop
+%% (the saved lr still points there; primitives preserve it). cp is set to
+%% the instruction after the dispatch sequence, like call_primitive_with_cp.
+-spec call_primitive_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
+call_primitive_with_cp_direct(State0, Primitive, Args) ->
+    {State1, RewriteOffset, RewriteSize} = set_cp(State0),
+    {State2, ResultReg} = call_primitive(State1, Primitive, Args),
+    #state{stream_module = StreamModule, stream = Stream2} = State2,
+    %% Dispatch on the primitive's tagged result:
+    %%   bit 0 clear: Context * — return to the scheduler loop
+    %%   value 3 (STAY): the continuation is this site's cp target — fall
+    %%     through (skips the callee's cp->native-pc resolution entirely)
+    %%   bit 0 set: tagged native entry — branch to it
+    I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
+    I2 = jit_aarch64_asm:mov(r0, ResultReg),
+    I3 = jit_aarch64_asm:ret(),
+    I4 = jit_aarch64_asm:tbnz(ResultReg, 1, 12),
+    I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
+    I6 = jit_aarch64_asm:br(ResultReg),
+    Stream3 = StreamModule:append(
+        Stream2, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    State3 = free_native_register(State2#state{stream = Stream3}, ResultReg),
+    rewrite_cp_offset(State3, RewriteOffset, RewriteSize).
+
+%% Tail-position variant of call_primitive_with_cp_direct: no cp is set (the
+%% callee returns to the caller's caller), but the branch-or-return dispatch
+%% on the primitive's tagged result is the same. Code after this is
+%% unreachable from this site.
+-spec call_primitive_direct(state(), non_neg_integer(), [arg()]) -> state().
+call_primitive_direct(State0, Primitive, Args) ->
+    {State1, ResultReg} = call_primitive(State0, Primitive, Args),
+    #state{stream_module = StreamModule, stream = Stream1} = State1,
+    I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
+    I2 = jit_aarch64_asm:mov(r0, ResultReg),
+    I3 = jit_aarch64_asm:ret(),
+    I4 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 1),
+    I5 = jit_aarch64_asm:br(ResultReg),
+    Stream2 = StreamModule:append(
+        Stream1, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+    ),
+    State2 = free_native_register(State1#state{stream = Stream2}, ResultReg),
+    State2#state{regs = jit_regs:invalidate_all(State2#state.regs)}.
 
 %% @private
 -spec set_cp(state()) -> {state(), non_neg_integer(), 4 | 8}.

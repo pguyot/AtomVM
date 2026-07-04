@@ -300,6 +300,8 @@ static term nif_lists_flatten(Context *ctx, int argc, term argv[]);
 static term nif_lists_keyfind(Context *ctx, int argc, term argv[]);
 static term nif_lists_keymember(Context *ctx, int argc, term argv[]);
 static term nif_lists_member(Context *ctx, int argc, term argv[]);
+static term nif_lists_delete(Context *ctx, int argc, term argv[]);
+static term nif_lists_seq(Context *ctx, int argc, term argv[]);
 static term nif_lists_sort(Context *ctx, int argc, term argv[]);
 static term nif_lists_usort(Context *ctx, int argc, term argv[]);
 static term nif_lists_keysort(Context *ctx, int argc, term argv[]);
@@ -1031,6 +1033,14 @@ static const struct Nif erlang_lists_subtract_nif = {
 static const struct Nif lists_flatten_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_lists_flatten
+};
+static const struct Nif lists_delete_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_delete
+};
+static const struct Nif lists_seq_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_seq
 };
 static const struct Nif lists_sort_nif = {
     .base.type = NIFFunctionType,
@@ -8255,6 +8265,93 @@ static term nif_lists_member(Context *ctx, int argc, term argv[])
     VALIDATE_VALUE(list, term_is_nil);
 
     return FALSE_ATOM;
+}
+
+// lists:delete/2 -- remove the first element =:= to Elem. The estdlib
+// version accumulates a reversed prefix and re-reverses it; this finds the
+// match position in one walk, then copies just the prefix cells in a single
+// allocation, sharing the tail.
+static term nif_lists_delete(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+    term elem = argv[0];
+    VALIDATE_VALUE(argv[1], term_is_list);
+
+    avm_int_t index = 0;
+    bool found = false;
+    term l = argv[1];
+    while (term_is_nonempty_list(l)) {
+        TermCompareResult c = term_compare(term_get_list_head(l), elem,
+            (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), glb);
+        if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        if (c == TermEquals) {
+            found = true;
+            break;
+        }
+        index++;
+        l = term_get_list_tail(l);
+    }
+    if (!found) {
+        if (UNLIKELY(!term_is_nil(l))) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        return argv[1];
+    }
+
+    if (context_avail_free_memory(ctx) < (size_t) index * CONS_SIZE
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, index * CONS_SIZE, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    // Copy the prefix cells; the cell holding the match is dropped and its
+    // tail shared. Build backwards from a small walk of the prefix.
+    term src = argv[1];
+    term *heads = malloc(sizeof(term) * (size_t) index);
+    if (UNLIKELY(IS_NULL_PTR(heads) && index > 0)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    for (avm_int_t i = 0; i < index; i++) {
+        heads[i] = term_get_list_head(src);
+        src = term_get_list_tail(src);
+    }
+    term result = term_get_list_tail(src);
+    for (avm_int_t i = index - 1; i >= 0; i--) {
+        result = term_list_prepend(heads[i], result, &ctx->heap);
+    }
+    free(heads);
+    return result;
+}
+
+// lists:seq/2 -- one allocation instead of the estdlib recursion.
+static term nif_lists_seq(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_any_integer);
+    VALIDATE_VALUE(argv[1], term_is_any_integer);
+    if (UNLIKELY(!term_is_integer(argv[0]) || !term_is_integer(argv[1]))) {
+        // Bignum bounds: fall back to badarg (the estdlib version would
+        // recurse for an absurd number of cells anyway).
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    avm_int_t from = term_to_int(argv[0]);
+    avm_int_t to = term_to_int(argv[1]);
+    if (UNLIKELY(to < from - 1)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    avm_int_t len = to - from + 1;
+
+    if (context_avail_free_memory(ctx) < (size_t) len * CONS_SIZE
+        && UNLIKELY(memory_ensure_free_opt(ctx, len * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term result = term_nil();
+    for (avm_int_t v = to; v >= from; v--) {
+        result = term_list_prepend(term_from_int(v), result, &ctx->heap);
+    }
+    return result;
 }
 
 // Stable bottom-up merge sort of a[0..n) in Erlang arithmetic term order

@@ -748,7 +748,14 @@ enum TrapAndLoadResult jit_trap_and_load(Context *ctx, Module *mod, uint32_t lab
     return TRAP_AND_LOAD_OK;
 }
 
-static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
+// JIT_NATIVE_STAY: sentinel result for the *_direct call sites meaning "the
+// continuation is this call site's own fall-through (its cp target): just
+// continue inline". Bits 0 and 1 set so the native dispatch sequence can
+// distinguish it from Context * results (8-aligned) and tagged code
+// pointers (4-aligned | 1).
+#define JIT_NATIVE_STAY ((Context *) 3)
+
+static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words, bool allow_stay)
 {
     TRACE("jit_call_ext: arity=%d index=%d n_words=%d\n", arity, index, n_words);
     const struct ExportedFunction *func = module_resolve_function(jit_state->module, index, ctx->global);
@@ -803,6 +810,9 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
                 return 0;
             }
 
+            if (allow_stay && n_words == CALL_EXT_NO_DEALLOC_MFA) {
+                return JIT_NATIVE_STAY;
+            }
             return jit_return(ctx, jit_state);
         }
         case ModuleFunction: {
@@ -893,6 +903,9 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
             PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value, offset);
             ctx->x[0] = return_value;
 
+            if (allow_stay && n_words == CALL_EXT_NO_DEALLOC_MFA) {
+                return JIT_NATIVE_STAY;
+            }
             return jit_return(ctx, jit_state);
         }
         case GCBIFFunctionType: {
@@ -923,6 +936,9 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
             PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value, offset);
             ctx->x[0] = return_value;
 
+            if (allow_stay && n_words == CALL_EXT_NO_DEALLOC_MFA) {
+                return JIT_NATIVE_STAY;
+            }
             return jit_return(ctx, jit_state);
         }
         default: {
@@ -930,6 +946,11 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
         }
     }
     return ctx;
+}
+
+static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
+{
+    return jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, false);
 }
 
 static term jit_module_get_atom_term_by_id(JITState *jit_state, int atom_index)
@@ -1560,6 +1581,73 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
         return scheduler_wait(ctx);
     }
     return ctx;
+}
+
+// Shared tail for the *_direct primitives: after a resolving primitive
+// returned ctx with a continuation, decide whether the call site can branch
+// to the continuation directly (bit 0 set) instead of returning to the
+// scheduler loop. Mirrors the dispatcher's own checks: same context, a
+// continuation was set, reductions remain, and the target module is native.
+// An emulated target sets continuation_pc instead of continuation and its
+// module has native_code == NULL, so the native_code check both routes it
+// through the dispatcher and guards against a stale .continuation left by
+// an earlier direct call.
+static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_state, Context *result)
+{
+#ifndef JIT_JUMPTABLE_IS_DATA
+    if (LIKELY(result == ctx
+            && jit_state->continuation != NULL
+            && jit_state->remaining_reductions > 0
+            && jit_state->module->native_code != NULL)) {
+        return ((uintptr_t) jit_state->continuation) | 1;
+    }
+#endif
+    return (uintptr_t) result;
+}
+
+// OP_CALL_FUN fast path: resolve a local fun and return its native entry
+// point tagged with bit 0 set, so the call site branches to it directly and
+// skips the scheduler-loop round trip (exit native frame, dispatcher reads
+// continuation, re-enters native). Anything else — exported funs, arity
+// mismatch, frozen vars beyond MAX_REG, target not native-loaded — falls
+// back to jit_call_fun, whose ctx-with-continuation results (NIF returns,
+// exported native functions) still continue directly when safe.
+static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count)
+{
+#ifndef JIT_JUMPTABLE_IS_DATA
+    const term *boxed_value = term_to_const_term_ptr(fun);
+    term index_or_function = boxed_value[2];
+    if (LIKELY(term_is_integer(index_or_function) && !term_is_atom(boxed_value[1]))) {
+        Module *fun_module = (Module *) boxed_value[1];
+        uint32_t label;
+        uint32_t fun_arity_and_freeze;
+        uint32_t n_freeze;
+        module_get_fun(fun_module, term_to_int(index_or_function), &label, &fun_arity_and_freeze, &n_freeze);
+        uint32_t fun_arity = fun_arity_and_freeze - n_freeze;
+        if (LIKELY(args_count == fun_arity && fun_arity_and_freeze <= MAX_REG
+                && fun_module->native_code != NULL)) {
+            for (uint32_t i = 0; i < n_freeze; i++) {
+                ctx->x[fun_arity + i] = boxed_value[i + 3];
+            }
+            jit_state->module = fun_module;
+            uintptr_t target = (uintptr_t) JIT_CONTINUATION_FOR_LABEL(fun_module, label);
+            return target | 1;
+        }
+    }
+#endif
+    Context *result = jit_call_fun(ctx, jit_state, offset, fun, args_count);
+    return jit_direct_continuation(ctx, jit_state, result);
+}
+
+// OP_CALL_EXT/OP_CALL_EXT_ONLY/OP_CALL_EXT_LAST direct dispatch: same
+// contract as call_fun_direct.
+static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
+{
+    Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true);
+    if (result == JIT_NATIVE_STAY) {
+        return (uintptr_t) JIT_NATIVE_STAY;
+    }
+    return jit_direct_continuation(ctx, jit_state, result);
 }
 
 static void jit_ensure_fpregs(JITState *jit_state)
@@ -2574,7 +2662,9 @@ const ModuleNativeInterface module_native_interface = {
     jit_put_map_heap_need,
     jit_map_get_value,
     jit_term_get_map_assoc,
-    jit_term_get_map_assoc_miss
+    jit_term_get_map_assoc_miss,
+    jit_call_fun_direct,
+    jit_call_ext_direct
 };
 
 #endif

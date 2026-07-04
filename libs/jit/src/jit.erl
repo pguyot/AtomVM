@@ -346,9 +346,7 @@ first_pass(<<?OP_CALL_EXT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_CALL_EXT ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
     State1 = record_continuation_line(MMod, MSt1, State0),
-    MSt2 = MMod:call_primitive_with_cp(MSt1, ?PRIM_CALL_EXT, [
-        ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC_MFA
-    ]),
+    MSt2 = call_ext_with_cp(MMod, MSt1, Arity, Index, ?CALL_EXT_NO_DEALLOC_MFA),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State1);
 % 8
@@ -360,9 +358,7 @@ first_pass(<<?OP_CALL_EXT_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_CALL_EXT_LAST ~p, ~p, ~p\n", [Arity, Index, NWords]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
     State1 = record_continuation_line(MMod, MSt1, State0),
-    MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [
-        ctx, jit_state, offset, Arity, Index, NWords
-    ]),
+    MSt2 = call_ext_last(MMod, MSt1, Arity, Index, NWords),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest3, MMod, MSt2, State1);
 % 9
@@ -1095,9 +1091,19 @@ first_pass(<<?OP_CALL_FUN, Rest0/binary>>, MMod, MSt0, State0) ->
     State1a = record_continuation_line(MMod, MSt1, State0),
     {MSt2, FuncReg} = read_any_xreg(ArgsCount, MMod, MSt1),
     {MSt3, Reg} = verify_is_function(FuncReg, MMod, MSt2),
-    MSt4 = MMod:call_primitive_with_cp(MSt3, ?PRIM_CALL_FUN, [
-        ctx, jit_state, offset, {free, Reg}, ArgsCount
-    ]),
+    MSt4 =
+        case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
+            true ->
+                %% Local funs branch straight to the callee's native entry
+                %% instead of bouncing through the scheduler loop.
+                MMod:call_primitive_with_cp_direct(MSt3, ?PRIM_CALL_FUN_DIRECT, [
+                    ctx, jit_state, offset, {free, Reg}, ArgsCount
+                ]);
+            false ->
+                MMod:call_primitive_with_cp(MSt3, ?PRIM_CALL_FUN, [
+                    ctx, jit_state, offset, {free, Reg}, ArgsCount
+                ])
+        end,
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
     first_pass(Rest1, MMod, MSt4, State1a);
 % 77
@@ -1117,9 +1123,7 @@ first_pass(<<?OP_CALL_EXT_ONLY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_CALL_EXT_ONLY ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
     State1 = record_continuation_line(MMod, MSt1, State0),
-    MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [
-        ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC
-    ]),
+    MSt2 = call_ext_last(MMod, MSt1, Arity, Index, ?CALL_EXT_NO_DEALLOC),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State1);
 % 96
@@ -4910,6 +4914,33 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
     end;
 op_test_heap(MMod, MSt0, HeapNeed, Live) ->
     op_test_heap_call(MMod, MSt0, HeapNeed, Live).
+
+%% External calls: backends with the *_direct dispatch branch straight to
+%% the resolved continuation (BIF/NIF returns and cross-module targets)
+%% instead of round-tripping through the scheduler loop.
+call_ext_with_cp(MMod, MSt0, Arity, Index, NWords) ->
+    case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
+        true ->
+            MMod:call_primitive_with_cp_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+                ctx, jit_state, offset, Arity, Index, NWords
+            ]);
+        false ->
+            MMod:call_primitive_with_cp(MSt0, ?PRIM_CALL_EXT, [
+                ctx, jit_state, offset, Arity, Index, NWords
+            ])
+    end.
+
+call_ext_last(MMod, MSt0, Arity, Index, NWords) ->
+    case erlang:function_exported(MMod, call_primitive_direct, 3) of
+        true ->
+            MMod:call_primitive_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+                ctx, jit_state, offset, Arity, Index, NWords
+            ]);
+        false ->
+            MMod:call_primitive_last(MSt0, ?PRIM_CALL_EXT, [
+                ctx, jit_state, offset, Arity, Index, NWords
+            ])
+    end.
 
 op_test_heap_call(MMod, MSt0, HeapNeed, Live) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TEST_HEAP, [
