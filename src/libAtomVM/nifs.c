@@ -301,6 +301,7 @@ static term nif_lists_flatten(Context *ctx, int argc, term argv[]);
 static term nif_lists_keyfind(Context *ctx, int argc, term argv[]);
 static term nif_lists_keymember(Context *ctx, int argc, term argv[]);
 static term nif_lists_member(Context *ctx, int argc, term argv[]);
+static term nif_lists_seq(Context *ctx, int argc, term argv[]);
 static term nif_lists_sort(Context *ctx, int argc, term argv[]);
 static term nif_lists_usort(Context *ctx, int argc, term argv[]);
 static term nif_lists_keysort(Context *ctx, int argc, term argv[]);
@@ -1037,6 +1038,10 @@ static const struct Nif erlang_lists_subtract_nif = {
 static const struct Nif lists_flatten_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_lists_flatten
+};
+static const struct Nif lists_seq_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_seq
 };
 static const struct Nif lists_sort_nif = {
     .base.type = NIFFunctionType,
@@ -8409,6 +8414,35 @@ static term nif_lists_member(Context *ctx, int argc, term argv[])
     VALIDATE_VALUE(list, term_is_nil);
 
     return FALSE_ATOM;
+}
+
+// lists:seq/2 -- one allocation instead of the estdlib recursion.
+static term nif_lists_seq(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_any_integer);
+    VALIDATE_VALUE(argv[1], term_is_any_integer);
+    if (UNLIKELY(!term_is_integer(argv[0]) || !term_is_integer(argv[1]))) {
+        // Bignum bounds: fall back to badarg (the estdlib version would
+        // recurse for an absurd number of cells anyway).
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    avm_int_t from = term_to_int(argv[0]);
+    avm_int_t to = term_to_int(argv[1]);
+    if (UNLIKELY(to < from - 1)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    avm_int_t len = to - from + 1;
+
+    if (context_avail_free_memory(ctx) < (size_t) len * CONS_SIZE
+        && UNLIKELY(memory_ensure_free_opt(ctx, len * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term result = term_nil();
+    for (avm_int_t v = to; v >= from; v--) {
+        result = term_list_prepend(term_from_int(v), result, &ctx->heap);
+    }
+    return result;
 }
 
 // Stable bottom-up merge sort of a[0..n) in Erlang arithmetic term order

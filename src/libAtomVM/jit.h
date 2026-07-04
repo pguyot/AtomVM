@@ -282,6 +282,11 @@ struct ModuleNativeInterface
     term (*map_get_value)(Context *ctx, term map, int pos);
     term (*term_get_map_assoc)(Context *ctx, term map, term key);
     int (*term_get_map_assoc_miss)(Context *ctx, term map, term key);
+    // OP_CALL_FUN direct dispatch: returns the fun's native entry point with
+    // bit 0 set (branch to it), or a Context * with bit 0 clear (return to
+    // the scheduler loop with it).
+    uintptr_t (*call_fun_direct)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
+    uintptr_t (*call_ext_direct)(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words);
 };
 
 extern const ModuleNativeInterface module_native_interface;
