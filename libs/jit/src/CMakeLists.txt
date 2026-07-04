@@ -24,6 +24,7 @@ include(BuildErlang)
 
 set(ERLANG_MODULES
     jit
+    jit_liveness
     jit_precompile
     jit_regs
     jit_stream_binary
@@ -59,6 +60,7 @@ file(GLOB JIT_HRL_HEADERS CONFIGURE_DEPENDS
 
 set(JIT_PRECOMPILED_MODULES
     jit
+    jit_liveness
     jit_regs
     jit_stream_binary
     jit_stream_flash
