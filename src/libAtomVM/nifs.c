@@ -300,6 +300,10 @@ static term nif_lists_flatten(Context *ctx, int argc, term argv[]);
 static term nif_lists_keyfind(Context *ctx, int argc, term argv[]);
 static term nif_lists_keymember(Context *ctx, int argc, term argv[]);
 static term nif_lists_member(Context *ctx, int argc, term argv[]);
+static term nif_lists_sort(Context *ctx, int argc, term argv[]);
+static term nif_lists_usort(Context *ctx, int argc, term argv[]);
+static term nif_lists_keysort(Context *ctx, int argc, term argv[]);
+static term nif_lists_ukeysort(Context *ctx, int argc, term argv[]);
 static term nif_maps_from_keys(Context *ctx, int argc, term argv[]);
 static term nif_maps_from_list(Context *ctx, int argc, term argv[]);
 static term nif_maps_merge(Context *ctx, int argc, term argv[]);
@@ -1025,6 +1029,22 @@ static const struct Nif erlang_lists_subtract_nif = {
 static const struct Nif lists_flatten_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_lists_flatten
+};
+static const struct Nif lists_sort_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_sort
+};
+static const struct Nif lists_usort_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_usort
+};
+static const struct Nif lists_keysort_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_keysort
+};
+static const struct Nif lists_ukeysort_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_lists_ukeysort
 };
 static const struct Nif lists_member_nif = {
     .base.type = NIFFunctionType,
@@ -2568,20 +2588,35 @@ static term nif_erlang_list_to_float_1(Context *ctx, int argc, term argv[])
 
 static term nif_erlang_binary_to_list_1(Context *ctx, int argc, term argv[])
 {
-    UNUSED(argc);
-
     term value = argv[0];
     VALIDATE_VALUE(value, term_is_binary);
 
     int bin_size = term_binary_size(value);
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, bin_size * 2, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    int start = 0;
+    int stop = bin_size - 1;
+    if (argc == 3) {
+        // binary_to_list(Binary, Start, Stop): 1-based inclusive range,
+        // 1 =< Start =< Stop =< byte_size(Binary).
+        VALIDATE_VALUE(argv[1], term_is_integer);
+        VALIDATE_VALUE(argv[2], term_is_integer);
+        avm_int_t s = term_to_int(argv[1]);
+        avm_int_t e = term_to_int(argv[2]);
+        if (UNLIKELY(s < 1 || e < s || e > bin_size)) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        start = (int) s - 1;
+        stop = (int) e - 1;
+    }
+    int len = stop - start + 1;
+
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, len * 2, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
     const uint8_t *bin_data = (const uint8_t *) term_binary_data(value);
 
     term prev = term_nil();
-    for (int i = bin_size - 1; i >= 0; i--) {
+    for (int i = stop; i >= start; i--) {
         prev = term_list_prepend(term_from_int11(bin_data[i]), prev, &ctx->heap);
     }
 
@@ -8060,6 +8095,211 @@ static term nif_lists_member(Context *ctx, int argc, term argv[])
     VALIDATE_VALUE(list, term_is_nil);
 
     return FALSE_ATOM;
+}
+
+// Stable bottom-up merge sort of a[0..n) in Erlang arithmetic term order
+// (ties keep the left run, so equal elements stay in original order, matching
+// lists:sort/1 semantics). keypos > 0 sorts {.., Key, ..} tuples by element
+// keypos (1-based, lists:keysort/2); every element is a tuple of arity >=
+// keypos, validated by the caller. Ping-pongs between a and tmp; the sorted
+// result always ends in a. Returns 0, or -1 on a term_compare alloc failure.
+static int sort_term_array(term *a, term *tmp, size_t n, int keypos, GlobalContext *glb)
+{
+    term *src = a;
+    term *dst = tmp;
+    for (size_t width = 1; width < n; width *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * width) {
+            size_t mid = (lo + width < n) ? lo + width : n;
+            size_t hi = (lo + 2 * width < n) ? lo + 2 * width : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                term x = src[i];
+                term y = src[j];
+                if (keypos > 0) {
+                    x = term_get_tuple_element(x, keypos - 1);
+                    y = term_get_tuple_element(y, keypos - 1);
+                }
+                TermCompareResult c = term_compare(x, y, TermCompareNoOpts, glb);
+                if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                    return -1;
+                }
+                if (c == TermGreaterThan) {
+                    dst[k++] = src[j++];
+                } else {
+                    dst[k++] = src[i++];
+                }
+            }
+            while (i < mid) {
+                dst[k++] = src[i++];
+            }
+            while (j < hi) {
+                dst[k++] = src[j++];
+            }
+        }
+        term *swap = src;
+        src = dst;
+        dst = swap;
+    }
+    if (src != a) {
+        memcpy(a, src, n * sizeof(term));
+    }
+    return 0;
+}
+
+// Shared worker for lists:sort/1, usort/1, keysort/2 and ukeysort/2. The
+// estdlib versions are recursive Erlang merge sorts paying a split traversal
+// plus a reversed-accumulator reverse at every merge level; this gathers the
+// elements once, sorts a C array and does a single result allocation. BEAM
+// has run-detecting Erlang sorts over C-BIF comparisons; sorting entirely in
+// C beats it. keypos = 0 sorts whole terms, > 0 sorts tuples by that element.
+static term lists_sort_common(Context *ctx, term list, int keypos, bool uniq)
+{
+    GlobalContext *glb = ctx->global;
+    // sort/1 and usort/1 (keypos == 0) raise function_clause for a non-list
+    // argument, matching BEAM and the estdlib guards these NIFs shadow.
+    // keysort/ukeysort (keypos > 0) keep badarg.
+    term list_error = keypos == 0 ? FUNCTION_CLAUSE_ATOM : BADARG_ATOM;
+    if (UNLIKELY(!term_is_list(list))) {
+        RAISE_ERROR(list_error);
+    }
+
+    int proper;
+    avm_int_t len = term_list_length(list, &proper);
+    if (UNLIKELY(!proper)) {
+        RAISE_ERROR(list_error);
+    }
+    if (len < 2) {
+        // [] and [X] are returned as-is (no tuple check for keysort, per OTP).
+        return list;
+    }
+
+    term *a = malloc(sizeof(term) * (size_t) len);
+    term *tmp = malloc(sizeof(term) * (size_t) len);
+    if (UNLIKELY(IS_NULL_PTR(a) || IS_NULL_PTR(tmp))) {
+        free(a);
+        free(tmp);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    // Gather, validating keysort tuples, and detect already-sorted input
+    // (common for compiler workloads) to return it unchanged with no
+    // allocation. A run of == elements only stays "sorted" for plain sorts;
+    // the u* variants must still dedup it.
+    bool sorted = true;
+    bool has_dup = false;
+    term l = list;
+    for (avm_int_t i = 0; i < len; i++) {
+        term e = term_get_list_head(l);
+        if (keypos > 0 && UNLIKELY(!term_is_tuple(e) || term_get_tuple_arity(e) < keypos)) {
+            free(a);
+            free(tmp);
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        a[i] = e;
+        if (sorted && i > 0) {
+            term x = a[i - 1];
+            term y = e;
+            if (keypos > 0) {
+                x = term_get_tuple_element(x, keypos - 1);
+                y = term_get_tuple_element(y, keypos - 1);
+            }
+            TermCompareResult c = term_compare(x, y, TermCompareNoOpts, glb);
+            if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                free(a);
+                free(tmp);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            if (c == TermGreaterThan) {
+                sorted = false;
+            } else if (c == TermEquals) {
+                has_dup = true;
+            }
+        }
+        l = term_get_list_tail(l);
+    }
+
+    if (sorted && !(uniq && has_dup)) {
+        free(a);
+        free(tmp);
+        return list;
+    }
+
+    if (!sorted && UNLIKELY(sort_term_array(a, tmp, (size_t) len, keypos, glb) < 0)) {
+        free(a);
+        free(tmp);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    free(tmp);
+
+    avm_int_t u = len;
+    if (uniq) {
+        // Drop == neighbors, keeping the first of each run (the earliest
+        // original element, since the sort is stable). keysort dedups by key.
+        u = 1;
+        for (avm_int_t i = 1; i < len; i++) {
+            term x = a[u - 1];
+            term y = a[i];
+            if (keypos > 0) {
+                x = term_get_tuple_element(x, keypos - 1);
+                y = term_get_tuple_element(y, keypos - 1);
+            }
+            TermCompareResult c = term_compare(x, y, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), glb);
+            if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                free(a);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            if (c != TermEquals) {
+                a[u++] = a[i];
+            }
+        }
+    }
+
+    if (context_avail_free_memory(ctx) < (size_t) u * CONS_SIZE
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, (size_t) u * CONS_SIZE, (size_t) u, a, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        free(a);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term result = term_nil();
+    for (avm_int_t i = u - 1; i >= 0; i--) {
+        result = term_list_prepend(a[i], result, &ctx->heap);
+    }
+    free(a);
+    return result;
+}
+
+static term nif_lists_sort(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return lists_sort_common(ctx, argv[0], 0, false);
+}
+
+static term nif_lists_usort(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return lists_sort_common(ctx, argv[0], 0, true);
+}
+
+static term nif_lists_keysort(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_integer);
+    avm_int_t keypos = term_to_int(argv[0]);
+    if (UNLIKELY(keypos < 1 || keypos > INT_MAX)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    return lists_sort_common(ctx, argv[1], (int) keypos, false);
+}
+
+static term nif_lists_ukeysort(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_integer);
+    avm_int_t keypos = term_to_int(argv[0]);
+    if (UNLIKELY(keypos < 1 || keypos > INT_MAX)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    return lists_sort_common(ctx, argv[1], (int) keypos, true);
 }
 
 static term nif_lists_keymember(Context *ctx, int argc, term argv[])
