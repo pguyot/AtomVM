@@ -304,6 +304,8 @@ op_scan(<<?OP_GC_BIF2, Rest0/binary>>) ->
 op_scan(<<Op, Rest0/binary>>) when
     Op =:= ?OP_IS_LT;
     Op =:= ?OP_IS_GE;
+    Op =:= ?OP_IS_EQUAL;
+    Op =:= ?OP_IS_NOT_EQUAL;
     Op =:= ?OP_IS_EQ_EXACT;
     Op =:= ?OP_IS_NOT_EQ_EXACT
 ->
@@ -323,6 +325,7 @@ op_scan(<<Op, Rest0/binary>>) when
     Op =:= ?OP_IS_TUPLE;
     Op =:= ?OP_IS_MAP;
     Op =:= ?OP_IS_BOOLEAN;
+    Op =:= ?OP_IS_BITSTR;
     Op =:= ?OP_IS_FUNCTION
 ->
     test_op(Rest0, 1);
@@ -530,6 +533,179 @@ op_scan(<<?OP_APPLY_LAST, Rest0/binary>>) ->
     {Arity, Rest1} = decode_value(Rest0),
     {_N, Rest2} = decode_value(Rest1),
     {terminator, {lt, Arity + 2}, [], Rest2};
+op_scan(<<?OP_RAW_RAISE, Rest/binary>>) ->
+    %% raw_raise: no operands; reads class/reason/stacktrace from x0..x2.
+    {terminator, [0, 1, 2], [], Rest};
+op_scan(<<?OP_BUILD_STACKTRACE, Rest/binary>>) ->
+    %% No operands: consumes the raw stacktrace in x0, writes x0.
+    {plain, [0], [0], Rest};
+op_scan(<<?OP_BIF3, Rest0/binary>>) ->
+    {FailLabel, Rest1} = decode_value(Rest0),
+    {_Bif, Rest2} = decode_value(Rest1),
+    case scan_ops(Rest2, [read, read, read, write]) of
+        {plain, R, W, Rest3} -> branch_or_plain(FailLabel, R, W, Rest3);
+        unknown -> unknown
+    end;
+%% Bitstring ops (subset sufficient for compiler/stdlib coverage).
+op_scan(<<?OP_BS_START_MATCH3, Rest0/binary>>) ->
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read]) of
+        {plain, R, _, Rest2} ->
+            {Live, Rest3} = decode_value(Rest2),
+            case scan_ops(Rest3, [write]) of
+                {plain, _, W, Rest4} ->
+                    {branch, R, [{ge, Live} | W], [Fail], Rest4};
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_BS_START_MATCH4, Rest0/binary>>) ->
+    case skip_operand(Rest0) of
+        {FailOp, Rest1} ->
+            {Live, Rest2} = decode_value(Rest1),
+            case scan_ops(Rest2, [read, write]) of
+                {plain, R, W, Rest3} ->
+                    Labels =
+                        case FailOp of
+                            {label, L} -> [L];
+                            _ -> []
+                        end,
+                    {branch, R, [{ge, Live} | W], Labels, Rest3};
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_BS_INIT_WRITABLE, Rest/binary>>) ->
+    {plain, [0], [0], Rest};
+op_scan(<<?OP_BS_CREATE_BIN, Rest0/binary>>) ->
+    {Fail, Rest1} = decode_value(Rest0),
+    case skip_alloc_list(Rest1) of
+        {ok, Rest2} ->
+            {Live, Rest3} = decode_value(Rest2),
+            {_Unit, Rest4} = decode_value(Rest3),
+            case scan_ops(Rest4, [write]) of
+                {plain, _, W, Rest5} ->
+                    case skip_ext_list(Rest5) of
+                        {Ops, Rest6} ->
+                            %% Segments: type atom, seg, unit, flags, Src,
+                            %% Size — any x operand among them is a read.
+                            R = reads_of(Ops),
+                            case Fail of
+                                0 -> {plain, R, [{ge, Live} | W], Rest6};
+                                _ -> {branch, R, [{ge, Live} | W], [Fail], Rest6}
+                            end;
+                        unknown ->
+                            unknown
+                    end;
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<Op, Rest0/binary>>) when Op =:= ?OP_BS_GET_POSITION; Op =:= ?OP_BS_GET_TAIL ->
+    case scan_ops(Rest0, [read, write]) of
+        {plain, R, W, Rest1} ->
+            {Live, Rest2} = decode_value(Rest1),
+            {plain, R, [{ge, Live} | W], Rest2};
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_BS_SET_POSITION, Rest0/binary>>) ->
+    scan_ops(Rest0, [read, read]);
+op_scan(<<Op, Rest0/binary>>) when
+    Op =:= ?OP_BS_GET_INTEGER2; Op =:= ?OP_BS_GET_FLOAT2; Op =:= ?OP_BS_GET_BINARY2
+->
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read]) of
+        {plain, R1, _, Rest2} ->
+            {Live, Rest3} = decode_value(Rest2),
+            case scan_ops(Rest3, [read]) of
+                {plain, R2, _, Rest4} ->
+                    {_Unit, Rest5} = decode_value(Rest4),
+                    {_Flags, Rest6} = decode_value(Rest5),
+                    case scan_ops(Rest6, [write]) of
+                        {plain, _, W, Rest7} ->
+                            {branch, R1 ++ R2, [{ge, Live} | W], [Fail], Rest7};
+                        unknown ->
+                            unknown
+                    end;
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_BS_MATCH, Rest0/binary>>) ->
+    %% bs_match Fail Ms {commands...}: the command list mixes atoms,
+    %% literals and registers; every x operand is conservatively a read
+    %% (missing a write only overstates liveness).
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read]) of
+        {plain, R, _, Rest2} ->
+            case skip_ext_list(Rest2) of
+                {Ops, Rest3} -> {branch, R ++ reads_of(Ops), [], [Fail], Rest3};
+                unknown -> unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<Op, Rest0/binary>>) when
+    Op =:= ?OP_BS_GET_UTF8;
+    Op =:= ?OP_BS_GET_UTF16;
+    Op =:= ?OP_BS_GET_UTF32
+->
+    %% Fail, Src, live/flags (skipped), Dest.
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read, skip, skip, write]) of
+        {plain, R, W, Rest2} -> {branch, R, W, [Fail], Rest2};
+        unknown -> unknown
+    end;
+op_scan(<<Op, Rest0/binary>>) when Op =:= ?OP_BS_SKIP_UTF8; Op =:= ?OP_BS_SKIP_UTF16 ->
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read, skip, skip]) of
+        {plain, R, _W, Rest2} -> {branch, R, [], [Fail], Rest2};
+        unknown -> unknown
+    end;
+op_scan(<<?OP_BS_SKIP_BITS2, Rest0/binary>>) ->
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read, read]) of
+        {plain, R, _W, Rest2} ->
+            {_Unit, Rest3} = decode_value(Rest2),
+            {_Flags, Rest4} = decode_value(Rest3),
+            {branch, R, [], [Fail], Rest4};
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_BS_MATCH_STRING, Rest0/binary>>) ->
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read]) of
+        {plain, R, _W, Rest2} ->
+            {_Bits, Rest3} = decode_value(Rest2),
+            {_Off, Rest4} = decode_value(Rest3),
+            {branch, R, [], [Fail], Rest4};
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_GC_BIF3, Rest0/binary>>) ->
+    {FailLabel, Rest1} = decode_value(Rest0),
+    {Live, Rest2} = decode_value(Rest1),
+    {_Bif, Rest3} = decode_value(Rest2),
+    case scan_ops(Rest3, [read, read, read, write]) of
+        {plain, R, W, Rest4} ->
+            case FailLabel of
+                0 -> {plain, R, [{ge, Live} | W], Rest4};
+                _ -> {branch, R, [{ge, Live} | W], [FailLabel], Rest4}
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_IS_ANY_NATIVE_RECORD, Rest0/binary>>) ->
+    test_op(Rest0, 1);
 %% Receive/message ops.
 op_scan(<<?OP_SEND, Rest/binary>>) ->
     %% send: like a call of arity 2 (reads x0, x1; clobbers x registers).

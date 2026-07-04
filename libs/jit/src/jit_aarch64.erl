@@ -599,13 +599,16 @@ call_primitive(
 %%-----------------------------------------------------------------------------
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_last(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0
-    } = State0,
+    #state{} = StateP,
     Primitive,
     Args
 ) ->
+    %% Tail call into C: argument setup below reads x registers from the
+    %% context (set_args), so pending stores must persist.
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0
+    } = State0 = pending_clear_all(StateP),
     % We need a register for the function pointer that should not be used as a parameter
     % Since we're not returning, we can use all scratch registers except
     % registers used for parameters
