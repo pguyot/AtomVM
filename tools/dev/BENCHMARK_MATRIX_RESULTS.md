@@ -3,6 +3,18 @@
  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 -->
 
+# Benchmark matrix results — 2026-07-05 update (BEAM vs JIT SMP only)
+
+With the x-register liveness analysis (jit_liveness pass A) and deferred
+write-back elision (pass B) on top of the 2026-07-04 batch:
+
+- **benchmark app compute: BEAM 83.1 ms vs JIT SMP 79.8 ms — 1.04x,
+  AtomVM BEATS BEAM.** Wall including startup 111 vs 343 ms (3.1x).
+- **erlc stdlib+kernel (185 files): overall 1.08x (kernel 1.41x, stdlib
+  0.89x).** The stdlib deficit remains unicode_util + erl_parse
+  (ordered-map term_compare volume).
+- **estone: ~1.58 M vs ~2.63 M (0.60x).**
+
 # Benchmark matrix results — 2026-07-04 update (BEAM vs JIT SMP only)
 
 After the 2026-07-04 optimization batch (sort/delete/seq NIFs, aarch64
