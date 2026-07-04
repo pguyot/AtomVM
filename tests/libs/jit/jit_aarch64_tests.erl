@@ -1144,8 +1144,8 @@ if_block_test_() ->
                     Dump = <<
                         "   0:	f9402c07 	ldr	x7, [x0, #88]\n"
                         "   4:	f9403008 	ldr	x8, [x0, #96]\n"
-                        "   8:	92400ce7 	and	x7, x7, #0xf\n"
-                        "   c:	f1003cff 	cmp	x7, #0xf\n"
+                        "   8:	92400cf0 	and	x16, x7, #0xf\n"
+                        "   c:	f1003e1f 	cmp	x16, #0xf\n"
                         "  10:	54000040 	b.eq	0x18  // b.none\n"
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
@@ -1491,9 +1491,9 @@ is_integer_test() ->
         "  24:	14000048 	b	0x144\n"
         "  28:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
         "  2c:	f94000e7 	ldr	x7, [x7]\n"
-        "  30:	d2800768 	mov	x8, #0x3b                  	// #59\n"
-        "  34:	8a0800e7 	and	x7, x7, x8\n"
-        "  38:	f10020ff 	cmp	x7, #0x8\n"
+        "  30:	d2800770 	mov	x16, #0x3b                  	// #59\n"
+        "  34:	8a1000f0 	and	x16, x7, x16\n"
+        "  38:	f100221f 	cmp	x16, #0x8\n"
         "  3c:	54000040 	b.eq	0x44  // b.none\n"
         "  40:	14000041 	b	0x144"
     >>,
@@ -1551,8 +1551,8 @@ is_number_test() ->
         "  34:	8a0800e8 	and	x8, x7, x8\n"
         "  38:	f100211f 	cmp	x8, #0x8\n"
         "  3c:	540000a0 	b.eq	0x50  // b.none\n"
-        "  40:	924014e7 	and	x7, x7, #0x3f\n"
-        "  44:	f10060ff 	cmp	x7, #0x18\n"
+        "  40:	924014f0 	and	x16, x7, #0x3f\n"
+        "  44:	f100621f 	cmp	x16, #0x18\n"
         "  48:	54000040 	b.eq	0x50  // b.none\n"
         "  4c:	14000041 	b	0x150"
     >>,
