@@ -65,7 +65,6 @@ builtin_in_both() ->
 emulated_in_both() ->
     false = ib(lists, foldl, 3),
     false = ib(lists, map, 2),
-    false = ib(lists, seq, 2),
     false = ib(proplists, get_value, 2),
     ok.
 
@@ -82,16 +81,21 @@ known_divergences(Machine) ->
     Md5 = ib(erlang, md5, 1),
     %% maps:get/2: a native BIF on BEAM, emulated in Erlang on AtomVM.
     MapsGet = ib(maps, get, 2),
+    %% lists:seq/2: a native NIF in AtomVM, an Erlang function in the lists
+    %% module on BEAM.
+    ListsSeq = ib(lists, seq, 2),
     case Machine of
         "BEAM" ->
             false = AtomToBinary1,
             true = Md5,
             true = MapsGet,
+            false = ListsSeq,
             ok;
         _ ->
             true = AtomToBinary1,
             false = Md5,
             false = MapsGet,
+            true = ListsSeq,
             ok
     end.
 
