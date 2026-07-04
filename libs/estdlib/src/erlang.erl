@@ -90,6 +90,7 @@
     binary_to_integer/1,
     binary_to_integer/2,
     binary_to_list/1,
+    binary_to_list/3,
     bitstring_to_list/1,
     atom_to_binary/1,
     atom_to_binary/2,
@@ -1304,6 +1305,19 @@ binary_to_integer(_Binary, _Base) ->
 %%-----------------------------------------------------------------------------
 -spec binary_to_list(Binary :: binary()) -> [byte()].
 binary_to_list(_Binary) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary  Binary to convert to list
+%% @param   Start   1-based position of the first byte
+%% @param   Stop    1-based position of the last byte
+%% @returns a list of the bytes of Binary from position Start to Stop
+%% @doc     Convert part of a binary to a list of bytes.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec binary_to_list(Binary :: binary(), Start :: pos_integer(), Stop :: pos_integer()) ->
+    [byte()].
+binary_to_list(_Binary, _Start, _Stop) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
