@@ -3,6 +3,32 @@
  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 -->
 
+# Benchmark matrix results — 2026-07-04 update (BEAM vs JIT SMP only)
+
+After the 2026-07-04 optimization batch (sort/delete/seq NIFs, aarch64
+inline allocate/test_heap/deallocate/put_list, select_val binary tree +
+dense jump tables, runtime bsl/bsr fast paths, literal adds/subs,
+direct-dispatch call_fun/call_ext, LTO on build.release, and the `B + B`
+aliasing miscompile fix), measured with the interleaved drivers:
+
+- **benchmark app compute: BEAM 84.7 ms vs JIT SMP 85.9 ms (0.99x — parity;
+  runs oscillate 0.97–1.01x).** AtomVM now beats BEAM on pingpong (23 vs
+  37 ms), prng, sudoku_solution (0.55 vs 0.84 ms) and list_test (13.3 vs
+  14.1 ms); sudoku_puzzle is the only remaining loss (31.3 vs 17.4 ms).
+  Median wall including startup: 117 ms vs 347 ms (3.0x in AtomVM's favor).
+- **erlc (OTP-29 stdlib+kernel, 185 common files): overall 1.03x — AtomVM
+  beats BEAM erlc on the corpus.** kernel 1.36x, stdlib 0.86x; 139 of 185
+  files individually faster than BEAM. The stdlib deficit is concentrated
+  in unicode_util (0.37x) and erl_parse (0.53x) — the ordered-map
+  term_compare wall.
+- **estone (ported to `atomvm_benchmark/src/estone.erl`, port_io and ets
+  excluded on both VMs): BEAM ≈ 2.63 M vs AtomVM ≈ 1.48 M ESTONES (0.56x).**
+  The formula (w²·31e6/µs) is dominated by sub-millisecond micros: pattern
+  644 k vs 1 252 k, int_arith 73 k vs 253 k, bif_dispatch 181 k vs 335 k.
+  AtomVM beats BEAM on the generic-server micro.
+
+Previous full-matrix run below for reference.
+
 # Benchmark matrix results — 2026-06-15
 
 Host: macOS aarch64 (Apple Silicon). All AtomVM builds `-O2` (RelWithDebInfo).
