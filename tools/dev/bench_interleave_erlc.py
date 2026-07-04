@@ -13,7 +13,8 @@ produced a .beam. Reports per-app and overall sum + mean-per-file + speed-up vs
 BEAM.
 
 Env: OTP (default ~/otp), MATRIX_DIR (default ~/atomvm_erlc/_build/matrix),
-RUNS (default 5), TIMEOUT (default 120), APPS (default the four)."""
+RUNS (default 5), TIMEOUT (default 120), APPS (default the four),
+PER_FILE=1 to print a per-file line (medians + vs-BEAM ratio per config)."""
 
 import os
 import glob
@@ -29,6 +30,7 @@ RUNS = int(os.environ.get("RUNS", "5"))
 TIMEOUT = int(os.environ.get("TIMEOUT", "120"))
 APPS = os.environ.get("APPS", "stdlib kernel sasl crypto").split()
 BEAM_ERLC = os.environ.get("BEAM_ERLC", "/opt/local/bin/erlc")
+PER_FILE = os.environ.get("PER_FILE") == "1"
 
 COMPILERS = [
     ("BEAM", BEAM_ERLC),
@@ -100,6 +102,12 @@ def main():
             for lab in LABELS:
                 asum[lab] += res[lab]
                 totals[lab] += res[lab]
+            if PER_FILE:
+                cells = "  ".join(
+                    f"{lab}={res[lab]*1000:7.1f}ms({res['BEAM']/res[lab]:4.2f}x)"
+                    for lab in LABELS if lab != "BEAM"
+                )
+                print(f"  {src.name:<28} BEAM={res['BEAM']*1000:7.1f}ms  {cells}", flush=True)
         per_app[app] = (an, asum)
         b = asum["BEAM"]
         print(f"\n## {app}  ({an} files)")
