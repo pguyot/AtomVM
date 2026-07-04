@@ -80,6 +80,11 @@
     float_conv_float/3,
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
+    heap_bump_alloc/2,
+    read_avail_heap_memory/1,
+    read_heap_fragments/1,
+    read_shrink_probe_mismatch/1,
+    allocate_frame_fast/2,
     shift_right_arith/3,
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
@@ -214,6 +219,7 @@
 -define(JITSTATE_REG, r1).
 -define(NATIVE_INTERFACE_REG, r2).
 -define(Y_REGS, {?CTX_REG, 16#50}).
+-define(HEAP_PTR, {?CTX_REG, 16#18}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * ?WORD_SIZE)}).
 -define(CP, {?CTX_REG, 16#E0}).
 -define(FP_REGS, {?JITSTATE_REG, 16#18}).
@@ -936,6 +942,27 @@ if_block_cond(
     State1 = if_block_free_reg(RegOrTuple, State0),
     State2 = State1#state{stream = Stream1},
     {State2, le, byte_size(I1)};
+%% Unsigned above: jump over the block when Reg <= Val (unsigned). Used for
+%% two-sided corridor checks folded into one compare via unsigned wrap.
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '(uint)>', Val}
+) when is_integer(Val) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_aarch64_asm:cmp(Reg, Val),
+    I2 = jit_aarch64_asm:bcc(ls, 0),
+    Code = <<
+        I1/binary,
+        I2/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    State2 = State1#state{stream = Stream1},
+    {State2, ls, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', Val}
@@ -1234,12 +1261,16 @@ if_block_cond(
     } = State0,
     {{free, Reg} = RegTuple, '&', Mask, '!=', Val}
 ) when ?IS_GPR(Reg) ->
-    % AND with mask
+    %% Mask into the scratch register rather than clobbering Reg in place:
+    %% Reg frequently caches a VM register's value (tag tests right after a
+    %% load), and keeping it intact lets the next read of that VM register
+    %% hit the jit_regs contents cache instead of reloading from the
+    %% context. Freeing below retains the contents.
     OffsetBefore = StreamModule:offset(Stream0),
-    {State1, Reg} = and_(State0, RegTuple, Mask),
+    State1 = op_imm(State0, and_, ?IP0_REG, Reg, Mask),
     Stream1 = State1#state.stream,
     % Compare with value
-    I2 = jit_aarch64_asm:cmp(Reg, Val),
+    I2 = jit_aarch64_asm:cmp(?IP0_REG, Val),
     Stream2 = StreamModule:append(Stream1, I2),
     OffsetAfter = StreamModule:offset(Stream2),
     I3 = jit_aarch64_asm:bcc(eq, 0),
@@ -2861,10 +2892,17 @@ sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
 %% overflow), testable with the `overflow_set' if-condition.
 %% @end
 %%-----------------------------------------------------------------------------
--spec add_overflow(state(), aarch64_register(), aarch64_register()) -> state().
+-spec add_overflow(state(), aarch64_register(), aarch64_register() | 0..4095) -> state().
 add_overflow(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
 ) when is_atom(Val) ->
+    I1 = jit_aarch64_asm:adds(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
+add_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_integer(Val), Val >= 0, Val =< 4095 ->
     I1 = jit_aarch64_asm:adds(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
@@ -2875,10 +2913,17 @@ add_overflow(
 %% add_overflow/3.
 %% @end
 %%-----------------------------------------------------------------------------
--spec sub_overflow(state(), aarch64_register(), aarch64_register()) -> state().
+-spec sub_overflow(state(), aarch64_register(), aarch64_register() | 0..4095) -> state().
 sub_overflow(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
 ) when is_atom(Val) ->
+    I1 = jit_aarch64_asm:subs(Reg, Reg, Val),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1};
+sub_overflow(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
+) when is_integer(Val), Val >= 0, Val =< 4095 ->
     I1 = jit_aarch64_asm:subs(Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
@@ -3217,6 +3262,138 @@ read_fp_regs_ptr(
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)},
         Reg
     }.
+
+%% Bump-allocate NWords terms from the context heap, returning a freshly
+%% allocated register holding the pointer to the first allocated word. The
+%% space is already reserved by the preceding test_heap/allocate (BEAM
+%% bytecode guarantees it), so this is memory_heap_alloc inlined: no bounds
+%% check, just a heap_ptr load/add/store.
+-spec heap_bump_alloc(state(), pos_integer()) -> {state(), aarch64_register()}.
+heap_bump_alloc(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    NWords
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
+    I1 = jit_aarch64_asm:ldr(Reg, ?HEAP_PTR),
+    I2 = jit_aarch64_asm:add(Tmp, Reg, NWords * ?WORD_SIZE),
+    I3 = jit_aarch64_asm:str(Tmp, ?HEAP_PTR),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% Available heap memory in bytes (ctx->e - ctx->heap.heap_ptr), in a freshly
+%% allocated register, for inline allocate/test_heap room checks.
+-spec read_avail_heap_memory(state()) -> {state(), aarch64_register()}.
+read_avail_heap_memory(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
+    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
+    I2 = jit_aarch64_asm:ldr(Tmp, ?HEAP_PTR),
+    I3 = jit_aarch64_asm:sub(Reg, Reg, Tmp),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% Load ctx->heap.root->next into a freshly allocated register, so deallocate
+%% can test for pending heap fragments inline and only call the primitive
+%% (which compacts them) when there are any.
+-spec read_heap_fragments(state()) -> {state(), aarch64_register()}.
+read_heap_fragments(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    I1 = jit_aarch64_asm:ldr(Reg, {?CTX_REG, 16#8}),
+    I2 = jit_aarch64_asm:ldr(Reg, {Reg, 0}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% ctx->heap.root->next | (ctx->heap.heap_end ^ ctx->shrink_probe_heap_end),
+%% in a freshly allocated register: zero exactly when no heap fragments are
+%% pending and the shrink probe already ran for this root block, i.e. when a
+%% test_heap whose free space exceeds the shrink corridor can skip the
+%% primitive call entirely (mirrors the probe short-circuit in jit_test_heap).
+-spec read_shrink_probe_mismatch(state()) -> {state(), aarch64_register()}.
+read_shrink_probe_mismatch(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp1 = first_avail(Available band (bnot reg_bit(Reg))),
+    Tmp2 = first_avail(Available band (bnot (reg_bit(Reg) bor reg_bit(Tmp1)))),
+    I1 = jit_aarch64_asm:ldr(Reg, {?CTX_REG, 16#8}),
+    I2 = jit_aarch64_asm:ldr(Reg, {Reg, 0}),
+    I3 = jit_aarch64_asm:ldr(Tmp1, {?CTX_REG, 16#20}),
+    I4 = jit_aarch64_asm:ldr(Tmp2, {?CTX_REG, 16#1A0}),
+    I5 = jit_aarch64_asm:eor(Tmp1, Tmp1, Tmp2),
+    I6 = jit_aarch64_asm:orr(Reg, Reg, Tmp1),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp1), Tmp2
+    ),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% Push a stack frame, the fast path of the allocate opcode once the room
+%% check passed: e -= (StackNeed + 1) words; e[StackNeed] = ctx->cp. The
+%% 64-bit cp occupies a single stack slot.
+-spec allocate_frame_fast(state(), non_neg_integer()) -> state().
+allocate_frame_fast(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    StackNeed
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
+    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
+    I2 = jit_aarch64_asm:sub(Reg, Reg, (StackNeed + 1) * ?WORD_SIZE),
+    I3 = jit_aarch64_asm:str(Reg, ?Y_REGS),
+    I4 = jit_aarch64_asm:ldr(Tmp, ?CP),
+    I5 = jit_aarch64_asm:str(Tmp, {Reg, StackNeed * ?WORD_SIZE}),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Decrement the reduction count and schedule the next process if it

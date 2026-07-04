@@ -421,10 +421,7 @@ first_pass(<<?OP_ALLOCATE, Rest0/binary>>, MMod, MSt0, State0) ->
     {StackNeed, Rest1} = decode_literal(Rest0),
     {Live, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_ALLOCATE ~p, ~p\n", [StackNeed, Live]),
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_ALLOCATE, [
-        ctx, jit_state, StackNeed, 0, Live
-    ]),
-    MSt2 = handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1),
+    MSt2 = op_allocate(MMod, MSt0, StackNeed, 0, Live),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State0);
 % 13
@@ -434,10 +431,7 @@ first_pass(<<?OP_ALLOCATE_HEAP, Rest0/binary>>, MMod, MSt0, State0) ->
     {HeapNeed, Rest2} = decode_allocator_list(MMod, Rest1),
     {Live, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_ALLOCATE_HEAP ~p, ~p, ~p\n", [StackNeed, HeapNeed, Live]),
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_ALLOCATE, [
-        ctx, jit_state, StackNeed, HeapNeed, Live
-    ]),
-    MSt2 = handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1),
+    MSt2 = op_allocate(MMod, MSt0, StackNeed, HeapNeed, Live),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest3, MMod, MSt2, State0);
 % 16
@@ -454,10 +448,34 @@ first_pass(<<?OP_DEALLOCATE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {NWords, Rest1} = decode_literal(Rest0),
     ?TRACE("OP_DEALLOCATE ~p\n", [NWords]),
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_DEALLOCATE, [
-        ctx, jit_state, NWords
-    ]),
-    MSt2 = handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1),
+    %% Popping the frame is a cp reload + sp bump (the exact move_to_cp +
+    %% increment_sp pair OP_CALL_LAST uses); the primitive is only needed
+    %% when heap fragments are pending, to compact them.
+    MSt2 =
+        case erlang:function_exported(MMod, read_heap_fragments, 1) of
+            true ->
+                {MSt1a, FragReg} = MMod:read_heap_fragments(MSt0),
+                CpSize = 8 div MMod:word_size(),
+                MMod:if_else_block(
+                    MSt1a,
+                    {{free, FragReg}, '==', 0},
+                    fun(BSt0) ->
+                        BSt1 = MMod:move_to_cp(BSt0, {y_reg, NWords}),
+                        MMod:increment_sp(BSt1, NWords + CpSize)
+                    end,
+                    fun(BSt0) ->
+                        {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_DEALLOCATE, [
+                            ctx, jit_state, NWords
+                        ]),
+                        handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, BSt1)
+                    end
+                );
+            false ->
+                {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_DEALLOCATE, [
+                    ctx, jit_state, NWords
+                ]),
+                handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1)
+        end,
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest1, MMod, MSt2, State0);
 % 19
@@ -864,12 +882,27 @@ first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     {DefaultLabel, Rest2} = decode_label(Rest1),
     {ListSize, Rest3} = decode_extended_list_header(Rest2),
     ?TRACE("OP_SELECT_VAL ~p, ~p", [SrcValue, DefaultLabel]),
-    %% Load SrcValue once into a native register so we can reuse it across
-    %% all comparisons (only valid when we use the inline cmp; the primitive
-    %% path frees its args).
-    {MSt2, Rest4} = op_select_val_loop(
-        MMod, MSt1, SrcValue, Rest3, ListSize div 2, State0
-    ),
+    %% When every case value is a static small-integer immediate, the tagged
+    %% compare is type-safe for ANY source (a boxed term's word never equals
+    %% an immediate), so no per-entry PRIM_TERM_COMPARE call is needed even
+    %% for untyped sources. For large lists, backends with the '(uint)>'
+    %% condition get a binary-search tree over the unsigned tagged words
+    %% (log2(N) compares, mirroring BeamAsm) instead of a linear chain.
+    N = ListSize div 2,
+    {MSt2, Rest4} =
+        case scan_select_val_int_entries(Rest3, N, MMod, []) of
+            {ok, Entries, RestAfter} ->
+                case
+                    erlang:function_exported(MMod, allocate_frame_fast, 2) andalso N >= 6
+                of
+                    true ->
+                        {op_select_val_int_tree(MMod, MSt1, SrcValue, Entries), RestAfter};
+                    false ->
+                        op_select_val_inline_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
+                end;
+            nomatch ->
+                op_select_val_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
+        end,
     ?TRACE("\n", []),
     MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
@@ -1000,12 +1033,28 @@ first_pass(<<?OP_PUT_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Tail, Rest2} = decode_compact_term(Rest1, MMod, MSt1, State0),
     {MSt3, Dest, Rest3} = decode_dest(Rest2, MMod, MSt2),
     ?TRACE("OP_PUT_LIST ~p, ~p, ~p\n", [Head, Tail, Dest]),
-    {MSt4, ResultReg} = MMod:call_primitive(MSt3, ?PRIM_PUT_LIST, [
-        ctx, {free, Head}, {free, Tail}
-    ]),
-    MSt5 = MMod:move_to_vm_register(MSt4, ResultReg, Dest),
-    MSt6 = MMod:free_native_registers(MSt5, [ResultReg]),
-    MSt7 = MMod:free_native_registers(MSt6, [Dest]),
+    MSt7 =
+        case erlang:function_exported(MMod, heap_bump_alloc, 2) of
+            true ->
+                %% The cons space is reserved by the preceding test_heap /
+                %% allocate_heap (BEAM bytecode guarantees it), so put_list
+                %% is a pure bump allocation plus two stores: inline it
+                %% instead of paying a primitive call per cons.
+                {MSt4, Ptr} = MMod:heap_bump_alloc(MSt3, 2),
+                MSt5a = MMod:move_to_array_element(MSt4, Tail, Ptr, ?LIST_TAIL_INDEX),
+                MSt5b = MMod:move_to_array_element(MSt5a, Head, Ptr, ?LIST_HEAD_INDEX),
+                MSt5c = MMod:free_native_registers(MSt5b, [Head, Tail]),
+                MSt5d = MMod:or_(MSt5c, Ptr, ?TERM_PRIMARY_LIST),
+                MSt6 = MMod:move_to_vm_register(MSt5d, Ptr, Dest),
+                MMod:free_native_registers(MSt6, [Ptr, Dest]);
+            false ->
+                {MSt4, ResultReg} = MMod:call_primitive(MSt3, ?PRIM_PUT_LIST, [
+                    ctx, {free, Head}, {free, Tail}
+                ]),
+                MSt5 = MMod:move_to_vm_register(MSt4, ResultReg, Dest),
+                MSt6 = MMod:free_native_registers(MSt5, [ResultReg]),
+                MMod:free_native_registers(MSt6, [Dest])
+        end,
     ?ASSERT_ALL_NATIVE_FREE(MSt7),
     first_pass(Rest3, MMod, MSt7, State0);
 % 72
@@ -4354,6 +4403,27 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
     end;
+% Runtime small-integer fast path for bsl/bsr by a small non-negative literal
+% shift, when the operand's type is not statically known. The tag check is
+% inline; bsr can never leave the small range so its body is 3 ALU ops, and
+% bsl gets a shift-back overflow check with the BIF as fallback.
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
+    (Op =:= 'bsl' orelse Op =:= 'bsr'),
+    is_integer(Arg2),
+    Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG,
+    (Arg2 bsr 4) >= 1,
+    (Arg2 bsr 4) =< 59
+->
+    case
+        erlang:function_exported(MMod, shift_right_arith, 3) andalso
+            MMod:word_size() =:= 8 andalso
+            addsub_fastpath_reloadable(Arg1)
+    of
+        true ->
+            op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
+    end;
 % Default case
 op_gc_bif2(
     MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
@@ -4373,7 +4443,33 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, Arg2, Des
 %% (aarch64/x86_64/arm32/armv6m) implement add_overflow/3; flagless backends
 %% (riscv/wasm/xtensa) implement add_overflow_check/3. Without either, or with
 %% non-reloadable operands, fall back to the plain BIF call.
+%% `Lit + X` is commutative: normalize to `X + Lit` so the literal fast
+%% path below applies (OTP only guarantees literal-second for is_eq_exact,
+%% not for gc_bifs — `1 + f(N)` compiles with the literal first).
+op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '+', Arg1, Arg2, Dest) when
+    is_integer(Arg1), not is_integer(Arg2)
+->
+    op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, '+', Arg2, Arg1, Dest);
 op_gc_bif2_addsub_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
+    LitImmediate =
+        is_integer(Arg2) andalso
+            (Arg2 band ?TERM_IMMED_TAG_MASK) =:= ?TERM_INTEGER_TAG andalso
+            abs(Arg2 - ?TERM_INTEGER_TAG) =< 4095 andalso
+            erlang:function_exported(MMod, allocate_frame_fast, 2),
+    case
+        LitImmediate andalso addsub_fastpath_reloadable(Arg1) andalso
+            erlang:function_exported(MMod, add_overflow, 3)
+    of
+        true ->
+            %% Literal operand: statically a small int (no tag check) whose
+            %% stripped value fits an immediate adds/subs — one flag-setting
+            %% ALU op instead of load+check+strip+reg-op.
+            op_gc_bif2_addsub_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
+        false ->
+            op_gc_bif2_addsub_fallback0(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest)
+    end.
+
+op_gc_bif2_addsub_fallback0(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
     Reloadable = addsub_fastpath_reloadable(Arg1) andalso addsub_fastpath_reloadable(Arg2),
     case Reloadable andalso erlang:function_exported(MMod, add_overflow, 3) of
         true ->
@@ -4459,7 +4555,16 @@ op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
-    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    %% When both operands are the same VM location (e.g. `B + B`), the second
+    %% move returns the same cached native register as the first; the in-place
+    %% tag-strip/arith below would then corrupt the shared register (producing
+    %% an untagged result). Compute on an unaliased copy instead.
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
     %% Free the loaded operand registers, then re-read the originals for the BIF.
     Fallback = fun(BSt0) ->
         BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
@@ -4510,6 +4615,47 @@ op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
         end
     ).
 
+%% Literal-operand variant of op_gc_bif2_addsub_runtime: Arg2 is a tagged
+%% small-int literal, so its tag check disappears and the tag-preserving
+%% delta (value * 16) folds into one immediate adds/subs on the tagged Arg1.
+op_gc_bif2_addsub_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2Tagged, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    Delta0 = Arg2Tagged - ?TERM_INTEGER_TAG,
+    {EffOp, Mag} =
+        case Op of
+            '+' when Delta0 >= 0 -> {add, Delta0};
+            '+' -> {sub, -Delta0};
+            '-' when Delta0 >= 0 -> {sub, Delta0};
+            '-' -> {add, -Delta0}
+        end,
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    Fallback = fun(BSt0) ->
+        BSt1 = MMod:free_native_registers(BSt0, [R1]),
+        op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest)
+    end,
+    MMod:if_else_block(
+        MSt1,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        Fallback,
+        fun(BSt0) ->
+            BSt1 =
+                case EffOp of
+                    add -> MMod:add_overflow(BSt0, R1, Mag);
+                    sub -> MMod:sub_overflow(BSt0, R1, Mag)
+                end,
+            MMod:if_else_block(
+                BSt1,
+                overflow_set,
+                %% Overflow: R1 clobbered; fallback re-reads the VM operand.
+                Fallback,
+                fun(NSt0) ->
+                    NSt1 = MMod:move_to_vm_register(NSt0, R1, Dest),
+                    MMod:free_native_registers(NSt1, [R1, Dest])
+                end
+            )
+        end
+    ).
+
 %% Flagless variant of op_gc_bif2_addsub_runtime for backends without hardware
 %% condition flags (riscv/wasm/xtensa). add_overflow_check/sub_overflow_check
 %% leave the result shifted into the value field of R1 (untagged) and return a
@@ -4519,7 +4665,16 @@ op_gc_bif2_addsub_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, D
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
-    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    %% When both operands are the same VM location (e.g. `B + B`), the second
+    %% move returns the same cached native register as the first; the in-place
+    %% tag-strip/arith below would then corrupt the shared register (producing
+    %% an untagged result). Compute on an unaliased copy instead.
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
     Fallback = fun(BSt0) ->
         BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
         op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
@@ -4565,7 +4720,16 @@ op_gc_bif2_mul_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
-    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    %% When both operands are the same VM location (e.g. `B + B`), the second
+    %% move returns the same cached native register as the first; the in-place
+    %% tag-strip/arith below would then corrupt the shared register (producing
+    %% an untagged result). Compute on an unaliased copy instead.
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
     Fallback = fun(BSt0) ->
         BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
         op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
@@ -4604,7 +4768,16 @@ op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
-    {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    %% When both operands are the same VM location (e.g. `B + B`), the second
+    %% move returns the same cached native register as the first; the in-place
+    %% tag-strip/arith below would then corrupt the shared register (producing
+    %% an untagged result). Compute on an unaliased copy instead.
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
     Fallback = fun(BSt0) ->
         BSt1 = MMod:free_native_registers(BSt0, [R1, R2]),
         op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, UArg2, Dest)
@@ -4690,10 +4863,96 @@ resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif) ->
 %% (hot and well-predicted) while the per-site inline check and duplicated
 %% slow-path call sites cost icache (pingpong +10-25%, total +3-4%, both for
 %% the corridor variant and a slimmed GC-direction-only variant). Keep the
-%% plain call.
+%% plain call there.
+%%
+%% On aarch64 (gated on read_avail_heap_memory + the '(uint)>' condition)
+%% the corridor check is folded into a single compare: with
+%% Diff = avail - need (unsigned), need <= avail <= 64 * need is exactly
+%% Diff <=(unsigned) 63 * need, so the fast path is 3 loads, a sub, a cmp
+%% and one predicted branch over the slow call.
+op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
+    %% Gate on allocate_frame_fast: the marker for backends that opt into
+    %% the inline allocation fast paths (x86_64 exports
+    %% read_avail_heap_memory but measured inline test_heap as a loss).
+    case
+        erlang:function_exported(MMod, allocate_frame_fast, 2) andalso
+            MMod:word_size() =:= 8
+    of
+        true ->
+            NeedBytes = HeapNeed * 8,
+            %% HEAP_NEED_GC_SHRINK_THRESHOLD_COEFF in memory.h
+            Bound = 63 * NeedBytes,
+            {MSt1, AvailReg} = MMod:read_avail_heap_memory(MSt0),
+            MSt2 = MMod:sub(MSt1, AvailReg, NeedBytes),
+            MSt3 = MMod:if_block(MSt2, {AvailReg, '(uint)>', Bound}, fun(BSt0) ->
+                %% Outside the corridor. Oversized heaps (the common miss:
+                %% avail > 64 * need after a growth spurt) can still skip
+                %% the call when the shrink probe already ran for this
+                %% root block; undersized ones (Diff negative, sign bit
+                %% set) must always call. Fold both into one test:
+                %% probe_mismatch | (Diff >> 63) is zero exactly when the
+                %% call can be skipped.
+                {BSt1, ProbeReg} = MMod:read_shrink_probe_mismatch(BSt0),
+                {BSt2, DiffCopy} = MMod:copy_to_native_register(BSt1, AvailReg),
+                {BSt3, SignReg} = MMod:shift_right_arith(BSt2, {free, DiffCopy}, 63),
+                BSt4 = MMod:or_(BSt3, ProbeReg, SignReg),
+                BSt5 = MMod:free_native_registers(BSt4, [SignReg]),
+                MMod:if_block(BSt5, {{free, ProbeReg}, '(uint)>', 0}, fun(CSt0) ->
+                    {CSt1, ResultReg} = MMod:call_primitive(CSt0, ?PRIM_TEST_HEAP, [
+                        ctx, jit_state, HeapNeed, Live
+                    ]),
+                    handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, CSt1)
+                end)
+            end),
+            MMod:free_native_registers(MSt3, [AvailReg]);
+        false ->
+            op_test_heap_call(MMod, MSt0, HeapNeed, Live)
+    end;
 op_test_heap(MMod, MSt0, HeapNeed, Live) ->
+    op_test_heap_call(MMod, MSt0, HeapNeed, Live).
+
+op_test_heap_call(MMod, MSt0, HeapNeed, Live) ->
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TEST_HEAP, [
         ctx, jit_state, HeapNeed, Live
+    ]),
+    handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1).
+
+%% OP_ALLOCATE / OP_ALLOCATE_HEAP. On aarch64 the room check and frame push
+%% are inlined; the primitive is only called when a GC is actually needed.
+%% The inline fast path intentionally skips the C version's eager
+%% heap-fragment compaction: with room available, deferring compaction to
+%% the next deallocate/test_heap slow path (which the GC accounts for
+%% anyway) is safe, and it keeps the check a single compare.
+op_allocate(MMod, MSt0, StackNeed, HeapNeed, Live) when is_integer(HeapNeed) ->
+    case
+        erlang:function_exported(MMod, allocate_frame_fast, 2) andalso
+            MMod:word_size() =:= 8 andalso StackNeed < 500
+    of
+        true ->
+            NeedBytes = (StackNeed + 1 + HeapNeed) * 8,
+            {MSt1, AvailReg} = MMod:read_avail_heap_memory(MSt0),
+            MMod:if_else_block(
+                MSt1,
+                {NeedBytes - 1, '<', {free, AvailReg}},
+                fun(BSt0) ->
+                    MMod:allocate_frame_fast(BSt0, StackNeed)
+                end,
+                fun(BSt0) ->
+                    {BSt1, ResultReg} = MMod:call_primitive(BSt0, ?PRIM_ALLOCATE, [
+                        ctx, jit_state, StackNeed, HeapNeed, Live
+                    ]),
+                    handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, BSt1)
+                end
+            );
+        false ->
+            op_allocate_call(MMod, MSt0, StackNeed, HeapNeed, Live)
+    end;
+op_allocate(MMod, MSt0, StackNeed, HeapNeed, Live) ->
+    op_allocate_call(MMod, MSt0, StackNeed, HeapNeed, Live).
+
+op_allocate_call(MMod, MSt0, StackNeed, HeapNeed, Live) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_ALLOCATE, [
+        ctx, jit_state, StackNeed, HeapNeed, Live
     ]),
     handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1).
 
@@ -5035,8 +5294,84 @@ op_gc_bif2_bsl(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
                     MMod:free_native_registers(MSt4, [Reg, Dest])
             end;
         false ->
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, 'bsl', Arg1, Arg2, Dest)
     end.
+
+%% Typed range could not prove the inline shift safe: try the runtime
+%% tag-checked fast path before the plain BIF call.
+op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) when
+    is_integer(Arg2),
+    Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG,
+    (Arg2 bsr 4) >= 1,
+    (Arg2 bsr 4) =< 59
+->
+    case
+        erlang:function_exported(MMod, shift_right_arith, 3) andalso
+            MMod:word_size() =:= 8 andalso
+            addsub_fastpath_reloadable(Arg1)
+    of
+        true ->
+            op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest)
+    end;
+op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, _Op, Arg1, Arg2, Dest) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, unwrap_typed(Arg1), Arg2, Dest).
+
+%% Runtime tag-checked shift by a literal amount. bsr of a small int always
+%% stays small, so after the tag check it is asr/lsl/orr in place. bsl needs
+%% an overflow check: a << S fits the small range iff shifting the tagged
+%% payload back down recovers the untagged value.
+op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2Tagged, Dest) ->
+    UArg1 = unwrap_typed(Arg1),
+    S = Arg2Tagged bsr 4,
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    MMod:if_else_block(
+        MSt1,
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+        fun(BSt0) ->
+            BSt1 = MMod:free_native_registers(BSt0, [R1]),
+            op_gc_bif2_default(MMod, BSt1, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest)
+        end,
+        fun(BSt0) ->
+            case Op of
+                'bsr' ->
+                    %% (R1 asr (S+4)) << 4 | tag; asr keeps the sign so
+                    %% negative operands are handled (unlike the
+                    %% range-typed inline path, which requires Min >= 0).
+                    {BSt1, Res} = MMod:shift_right_arith(BSt0, {free, R1}, S + 4),
+                    BSt2 = MMod:shift_left(BSt1, Res, 4),
+                    BSt3 = MMod:or_(BSt2, Res, ?TERM_INTEGER_TAG),
+                    BSt4 = MMod:move_to_vm_register(BSt3, Res, Dest),
+                    MMod:free_native_registers(BSt4, [Res, Dest]);
+                'bsl' ->
+                    %% A = untagged value; V = A << (S+4) is the shifted
+                    %% tagged payload; in range iff (V asr (S+4)) == A.
+                    {BSt1, A0} = MMod:copy_to_native_register(BSt0, R1),
+                    {BSt2, A} = MMod:shift_right_arith(BSt1, {free, A0}, 4),
+                    {BSt3, V} = MMod:copy_to_native_register(BSt2, A),
+                    BSt4 = MMod:shift_left(BSt3, V, S + 4),
+                    {BSt5, Chk0} = MMod:copy_to_native_register(BSt4, V),
+                    {BSt6, Chk} = MMod:shift_right_arith(BSt5, {free, Chk0}, S + 4),
+                    MMod:if_else_block(
+                        BSt6,
+                        {{free, Chk}, '==', {free, A}},
+                        fun(NSt0) ->
+                            NSt1 = MMod:or_(NSt0, V, ?TERM_INTEGER_TAG),
+                            NSt2 = MMod:free_native_registers(NSt1, [R1]),
+                            NSt3 = MMod:move_to_vm_register(NSt2, V, Dest),
+                            MMod:free_native_registers(NSt3, [V, Dest])
+                        end,
+                        fun(NSt0) ->
+                            NSt1 = MMod:free_native_registers(NSt0, [V, R1]),
+                            op_gc_bif2_default(
+                                MMod, NSt1, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest
+                            )
+                        end
+                    )
+            end
+        end
+    ).
 
 % Check if right shift can be inlined
 % Only safe for non-negative inputs (the generated native code uses logical
@@ -5083,7 +5418,7 @@ op_gc_bif2_bsr(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
                     MMod:free_native_registers(MSt5, [Reg, Dest])
             end;
         false ->
-            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+            op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, 'bsr', Arg1, Arg2, Dest)
     end.
 
 can_inline_div(Range1, Range2, MMod, MSt) ->
@@ -5480,22 +5815,13 @@ op_is_eq_exact(
         false ->
             op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
     end;
-op_is_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range1}}, Arg2) when
-    is_integer(Arg2)
-->
-    %% Arg1 typed small or bignum, Arg2 small int literal.
-    %% Same as op_is_equal's typed+literal case: check Arg1 is small int.
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
-    MSt2 = MMod:if_block(MSt1, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
-        BSt0
-    ) ->
-        MMod:jump_to_label(BSt0, Label)
-    end),
-    cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt2);
 %% No literal-first clause: OTP's beam_ssa_codegen always emits is_eq_exact
 %% with the literal as the second argument.
 op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
-    %% Plain immediate Arg2.
+    %% Immediate Arg2 (small int literal): a single tagged cmp is exact for
+    %% ANY Arg1, no type test needed — an immediate's low tag bits (1111)
+    %% can never appear in a boxed/list pointer word, and boxed integers
+    %% are normalized so a bignum is never =:= to a small literal.
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt1);
 op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
@@ -5632,28 +5958,10 @@ op_is_not_eq_exact(
         false ->
             op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
     end;
-op_is_not_eq_exact(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range1}}, Arg2) when
-    is_integer(Arg2)
-->
-    %% Arg1 typed integer, Arg2 small int literal.
-    %% is_not_eq_exact L, A, B: jump to L if A == B.
-    %% If Arg1 is bignum: A != B (different tags) → don't jump.
-    %% If Arg1 is small int: do tagged cmp; jump if equal.
-    %%
-    %% if_else_block: condition TRUE = bignum → block_true (no-op).
-    %%                condition FALSE = small int → block_false (cmp + maybe jump).
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
-    MMod:if_else_block(
-        MSt1,
-        {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
-        fun(BSt0) -> MMod:free_native_registers(BSt0, [Arg1Reg]) end,
-        fun(BSt0) ->
-            cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, BSt0)
-        end
-    );
 %% No literal-first clause: OTP's beam_ssa_codegen always emits is_ne_exact
 %% with the literal as the second argument.
 op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
+    %% Single tagged cmp is exact for any Arg1: see op_is_eq_exact.
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, MSt1);
 op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
@@ -5743,6 +6051,65 @@ op_select_val_default_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
 can_inline_select_val_src({typed, _, t_atom}) -> true;
 can_inline_select_val_src({typed, _, pid}) -> true;
 can_inline_select_val_src(_) -> false.
+
+%% Pure pre-scan of a select_val case list: succeeds iff every case value is
+%% a static small-integer literal (no code emission happens for those, so
+%% the scan can be discarded without corrupting backend state). Returns the
+%% entries as {TaggedWord, Label} with the tagged word canonicalized to the
+%% unsigned word representation, which is what the emitted unsigned cmp
+%% sees at runtime (negative values become large unsigned words).
+scan_select_val_int_entries(Rest, 0, _MMod, Acc) ->
+    {ok, lists:reverse(Acc), Rest};
+scan_select_val_int_entries(Bin, N, MMod, Acc) ->
+    {MinSafe, MaxSafe} = small_integer_bounds(MMod),
+    WordMask = (1 bsl (MMod:word_size() * 8)) - 1,
+    case scan_int_compact_term(Bin) of
+        {ok, Value, Rest1} when Value >= MinSafe, Value =< MaxSafe ->
+            {Label, Rest2} = decode_label(Rest1),
+            Tagged = term_from_int(Value) band WordMask,
+            scan_select_val_int_entries(Rest2, N - 1, MMod, [{Tagged, Label} | Acc]);
+        _ ->
+            nomatch
+    end.
+
+scan_int_compact_term(<<_:4, ?COMPACT_INTEGER:4, _/binary>> = Bin) ->
+    {Value, Rest} = decode_value64(Bin),
+    {ok, Value, Rest};
+scan_int_compact_term(<<Val:3, ?COMPACT_LARGE_INTEGER_11BITS:5, NextByte, Rest/binary>>) ->
+    {ok, (Val bsl 8) bor NextByte, Rest};
+scan_int_compact_term(
+    <<Size0:3, ?COMPACT_LARGE_INTEGER_NBITS:5, Value:(8 * (Size0 + 2))/signed, Rest/binary>>
+) when Size0 =/= 7 ->
+    {ok, Value, Rest};
+scan_int_compact_term(_) ->
+    nomatch.
+
+%% Emit a balanced binary-search dispatch over sorted (unsigned tagged word,
+%% label) entries: each node is one equality exit plus an unsigned
+%% above/below split; small partitions degrade to a short linear chain.
+op_select_val_int_tree(MMod, MSt0, SrcValue, Entries) ->
+    {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+    Sorted = lists:keysort(1, Entries),
+    MSt2 = emit_select_val_tree(MMod, MSt1, SrcReg, Sorted),
+    MMod:free_native_registers(MSt2, [SrcReg]).
+
+emit_select_val_tree(MMod, MSt0, SrcReg, Entries) when length(Entries) =< 4 ->
+    lists:foldl(
+        fun({Tagged, Label}, AccMSt) ->
+            cond_jump_to_label({SrcReg, '==', Tagged}, Label, MMod, AccMSt)
+        end,
+        MSt0,
+        Entries
+    );
+emit_select_val_tree(MMod, MSt0, SrcReg, Entries) ->
+    {Left, [{MidTagged, MidLabel} | Right]} = lists:split(length(Entries) div 2, Entries),
+    MSt1 = cond_jump_to_label({SrcReg, '==', MidTagged}, MidLabel, MMod, MSt0),
+    MMod:if_else_block(
+        MSt1,
+        {SrcReg, '(uint)>', MidTagged},
+        fun(BSt0) -> emit_select_val_tree(MMod, BSt0, SrcReg, Right) end,
+        fun(BSt0) -> emit_select_val_tree(MMod, BSt0, SrcReg, Left) end
+    ).
 
 %% bs_get_integer2: extraction through the C primitive, updating the match
 %% state offset and storing the result on success.
