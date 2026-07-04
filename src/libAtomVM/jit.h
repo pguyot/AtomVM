@@ -287,6 +287,7 @@ struct ModuleNativeInterface
     // the scheduler loop with it).
     uintptr_t (*call_fun_direct)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
     uintptr_t (*call_ext_direct)(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words);
+    uintptr_t (*return_direct)(Context *ctx, JITState *jit_state);
 };
 
 extern const ModuleNativeInterface module_native_interface;
