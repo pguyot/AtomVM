@@ -2208,33 +2208,39 @@ emit_pass(
     {Arity, Rest3} = decode_literal(Rest2),
     {AtomIndex, Rest4} = decode_atom(Rest3),
     ?TRACE("OP_IS_TAGGED_TUPLE ~p, ~p, ~p, ~p\n", [Label, Arg1, Arity, AtomIndex]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
-    ),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt5, TagReg0} = MMod:get_array_element(MSt4, Reg, 0),
-    MSt6 = cond_jump_to_label(
-        {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
-    ),
-    {MSt7, TagReg1} = MMod:shift_right(MSt6, {free, TagReg0}, 6),
-    MSt8 = cond_jump_to_label({TagReg1, '!=', Arity}, Label, MMod, MSt7),
-    MSt9 = MMod:free_native_registers(MSt8, [TagReg1]),
-    MSt10 = MMod:move_array_element(MSt9, Reg, 1, Reg),
-    {MSt11, AtomReg} =
-        case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
-            error ->
-                MMod:call_primitive(
-                    MSt10, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
-                );
-            {ok, Val} ->
-                {MSt10, Val}
-        end,
-    MSt12 = cond_jump_to_label({Reg, '!=', AtomReg}, Label, MMod, MSt11),
-    MSt13 = MMod:free_native_registers(MSt12, [Reg]),
-    MSt14 = MMod:free_native_registers(MSt13, [AtomReg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt14),
-    emit_pass(Rest4, MMod, MSt14, State0);
+    case try_fuse_tagged_tuple_ops(Rest4, Arg1, Label, Arity, AtomIndex, MMod, MSt1, State0) of
+        {fused, MStFused, RestFused} ->
+            ?ASSERT_ALL_NATIVE_FREE(MStFused),
+            emit_pass(RestFused, MMod, MStFused, State0);
+        not_fused ->
+            {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
+            MSt3 = cond_jump_to_label(
+                {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+            ),
+            {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+            {MSt5, TagReg0} = MMod:get_array_element(MSt4, Reg, 0),
+            MSt6 = cond_jump_to_label(
+                {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
+            ),
+            {MSt7, TagReg1} = MMod:shift_right(MSt6, {free, TagReg0}, 6),
+            MSt8 = cond_jump_to_label({TagReg1, '!=', Arity}, Label, MMod, MSt7),
+            MSt9 = MMod:free_native_registers(MSt8, [TagReg1]),
+            MSt10 = MMod:move_array_element(MSt9, Reg, 1, Reg),
+            {MSt11, AtomReg} =
+                case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
+                    error ->
+                        MMod:call_primitive(
+                            MSt10, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
+                        );
+                    {ok, Val} ->
+                        {MSt10, Val}
+                end,
+            MSt12 = cond_jump_to_label({Reg, '!=', AtomReg}, Label, MMod, MSt11),
+            MSt13 = MMod:free_native_registers(MSt12, [Reg]),
+            MSt14 = MMod:free_native_registers(MSt13, [AtomReg]),
+            ?ASSERT_ALL_NATIVE_FREE(MSt14),
+            emit_pass(Rest4, MMod, MSt14, State0)
+    end;
 % 160
 emit_pass(<<?OP_BUILD_STACKTRACE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -6895,6 +6901,75 @@ emit_fused_list_ops(IsNonemptyListLabel, Arg1, Elements, MMod, MSt0) ->
     MSt5 = MMod:free_native_registers(MSt4, [Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     MSt5.
+
+%% Fuse is_tagged_tuple + get_tuple_element* on the same register.
+%%
+%% BEAM's ops.tab defines an is_tuple + is_tagged_tuple fusion, but OTP already
+%% lowers record matches to a bare is_tagged_tuple (no preceding is_tuple), so
+%% that pattern never reaches AtomVM. What does follow is_tagged_tuple is the
+%% record field reads (get_tuple_element). is_tagged_tuple already loads and
+%% tag-strips the boxed pointer to validate the record; the following
+%% get_tuple_element ops otherwise reload the source and re-strip it. Fusing
+%% keeps the stripped pointer and reads the fields directly -- the same payoff
+%% as the is_tuple + test_arity + get_tuple_element fusion.
+try_fuse_tagged_tuple_ops(Rest0, Arg1, Label, Arity, AtomIndex, MMod, MSt0, State0) ->
+    SrcArg = unwrap_typed(Arg1),
+    case collect_get_tuple_elements(Rest0, SrcArg, MMod, MSt0, State0) of
+        {[], _Rest, _MSt} ->
+            not_fused;
+        {GetElements, Rest1, MSt1} ->
+            ?TRACE("FUSE: is_tagged_tuple ~p + get_tuple_element ~p\n", [Label, GetElements]),
+            MStFused = emit_fused_tagged_tuple_ops(
+                Label, Arg1, Arity, AtomIndex, GetElements, MMod, MSt1, State0
+            ),
+            {fused, MStFused, Rest1}
+    end.
+
+emit_fused_tagged_tuple_ops(
+    Label, Arg1, Arity, AtomIndex, GetElements, MMod, MSt0, #state{atom_resolver = AtomResolver}
+) ->
+    %% Resolve the expected record tag atom FIRST, before the tuple pointer is
+    %% live. For a user record the atom is resolved by a primitive call; doing
+    %% it now means nothing needs to be preserved across that call. (The unfused
+    %% path resolves it after loading the tag element, so it must spill the tag
+    %% element around the call; keeping the pointer live too, as an in-place
+    %% pointer-preserving fusion would, only adds another spill.)
+    {MSt1, AtomReg} =
+        case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
+            error ->
+                MMod:call_primitive(MSt0, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]);
+            {ok, Val} ->
+                {MSt0, Val}
+        end,
+    {MSt2, Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg1)),
+    MSt3 = cond_jump_to_label(
+        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    ),
+    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, TagReg0} = MMod:get_array_element(MSt4, Reg, 0),
+    MSt6 = cond_jump_to_label(
+        {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
+    ),
+    {MSt7, TagReg1} = MMod:shift_right(MSt6, {free, TagReg0}, 6),
+    MSt8 = cond_jump_to_label({TagReg1, '!=', Arity}, Label, MMod, MSt7),
+    MSt9 = MMod:free_native_registers(MSt8, [TagReg1]),
+    %% Read the record tag atom (tuple element 0, at word 1) into a SEPARATE
+    %% register so Reg keeps holding the stripped tuple pointer for the fields.
+    {MSt10, AtomElemReg} = MMod:get_array_element(MSt9, Reg, 1),
+    MSt11 = cond_jump_to_label({AtomElemReg, '!=', AtomReg}, Label, MMod, MSt10),
+    MSt12 = MMod:free_native_registers(MSt11, [AtomElemReg]),
+    MSt13 = MMod:free_native_registers(MSt12, [AtomReg]),
+    MSt14 = lists:foldl(
+        fun({Element, Dest}, AccMSt0) ->
+            AccMSt1 = MMod:move_array_element(AccMSt0, Reg, Element + 1, Dest),
+            MMod:free_native_registers(AccMSt1, [Dest])
+        end,
+        MSt13,
+        GetElements
+    ),
+    MSt15 = MMod:free_native_registers(MSt14, [Reg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt15),
+    MSt15.
 
 %% @doc verify_match_state and return the term_ptr for Reg.
 %% Actually, this means Reg isn't restored with OR ?TERM_PRIMARY_BOXED
