@@ -755,6 +755,30 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
         }
     }
 
+    // Cross-type pairs order by type index alone — no structural walk — with
+    // the one exception of mixed integer/float arithmetic comparison (non-
+    // exact, outside map keys), mirroring the general loop below. Maps with
+    // heterogeneous keys (the Erlang compiler's are full of integers mixed
+    // with tuples) make these calls hot: resolving them here skips the
+    // temp-stack setup entirely.
+    {
+        enum TermTypeIndex type_t = term_type_to_index(t);
+        enum TermTypeIndex type_other = term_type_to_index(other);
+        if (type_t != type_other) {
+            if (((type_t == TERM_TYPE_INDEX_FLOAT && type_other == TERM_TYPE_INDEX_INTEGER)
+                    || (type_t == TERM_TYPE_INDEX_INTEGER && type_other == TERM_TYPE_INDEX_FLOAT))
+                && ((opts & TermCompareExact) != TermCompareExact)) {
+                avm_float_t t_float = term_conv_to_float(t);
+                avm_float_t other_float = term_conv_to_float(other);
+                if (t_float == other_float) {
+                    return TermEquals;
+                }
+                return (t_float > other_float) ? TermGreaterThan : TermLessThan;
+            }
+            return (type_t > type_other) ? TermGreaterThan : TermLessThan;
+        }
+    }
+
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;
