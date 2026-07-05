@@ -55,6 +55,7 @@
     push/1,
     pop/1,
     bkpt/1,
+    nop/0,
     reg_to_num/1,
     encode_imm/1
 ]).
@@ -583,6 +584,12 @@ reglist_to_mask(RegList) ->
 
 %% BKPT #imm16 (always unconditional)
 %% Encoding: 1110 0001 0010 imm12[19:8] 0111 imm4[3:0]
+%% ARM NOP hint (ARMv6K+/ARMv7): a 4-byte no-op used to neutralize an elided
+%% store in place (jit_backend_pending).
+-spec nop() -> binary().
+nop() ->
+    <<16#00, 16#F0, 16#20, 16#E3>>.
+
 -spec bkpt(non_neg_integer()) -> binary().
 bkpt(Imm) when is_integer(Imm), Imm >= 0, Imm =< 16#FFFF ->
     Imm12 = (Imm bsr 4) band 16#FFF,
