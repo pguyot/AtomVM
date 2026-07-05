@@ -199,7 +199,22 @@
     %% cond depth}), and the current conditional-emission depth.
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
     pending_x = #{} :: #{non_neg_integer() => {non_neg_integer(), non_neg_integer()}},
-    cond_depth = 0 :: non_neg_integer()
+    cond_depth = 0 :: non_neg_integer(),
+    %% Loop-header register residency: labels that are direct call targets
+    %% (from jit_liveness pass A) get a cold-entry preload of their live-in
+    %% x registers; loop_entries records Label => {HotOffset, [{X, Reg}]}
+    %% so backward call_only sites can reconcile and enter past the loads.
+    call_targets = #{} :: #{integer() => true},
+    loop_entries = #{} :: #{integer() => {non_neg_integer(), [{non_neg_integer(), atom()}]}},
+    %% Hot-capable call_only blocks are shared across sites by jit.erl's
+    %% tail cache; the block entry offset maps to {Label, SharedOffset}
+    %% (start of the register-state-independent part) so jump_to_offset
+    %% can emit a site-specific reconciliation before entering the block.
+    recon_blocks = #{} :: #{non_neg_integer() => {integer(), non_neg_integer()}},
+    %% call_only blocks emitted before their target label existed branch to
+    %% the cold entry; when a later site would reuse one and the label has
+    %% since gained a hot entry, a fresh block is emitted instead.
+    cold_call_blocks = #{} :: #{non_neg_integer() => integer()}
 }).
 
 -type state() :: #state{}.
@@ -731,6 +746,27 @@ jump_to_label(
             }
     end.
 
+jump_to_offset(#state{cold_call_blocks = CB, loop_entries = LE} = StateP, TargetOffset) when
+    is_map_key(TargetOffset, CB) andalso is_map_key(map_get(TargetOffset, CB), LE)
+->
+    %% The shared block branches to the target label's cold entry, but the
+    %% label has a hot entry now: emit a fresh call_only block (site
+    %% reconciliation + reduction + hot branch) instead of reusing it.
+    call_only_or_schedule_next(StateP, map_get(TargetOffset, CB));
+jump_to_offset(#state{recon_blocks = RB} = StateP, TargetOffset) when
+    is_map_key(TargetOffset, RB)
+->
+    %% Entering a shared hot-capable call_only block: its register-state-
+    %% independent part starts at SharedOffset; emit this site's own
+    %% reconciliation of the loop-entry bindings first.
+    #{TargetOffset := {Label, SharedOffset}} = RB,
+    State0 = pending_filter_label(StateP, Label),
+    #state{loop_entries = #{Label := {_HotOffset, Bindings}}} = State0,
+    State1 = emit_backedge_recon(State0, Bindings),
+    #state{stream_module = StreamModule, stream = Stream1} = State1,
+    Rel = SharedOffset - StreamModule:offset(Stream1),
+    Stream2 = StreamModule:append(Stream1, jit_aarch64_asm:b(Rel)),
+    State1#state{stream = Stream2, regs = jit_regs:unreachable(State1#state.regs)};
 jump_to_offset(#state{} = StateP, TargetOffset) ->
     #state{stream_module = StreamModule, stream = Stream0} = State = pending_clear_all(StateP),
     Offset = StreamModule:offset(Stream0),
@@ -738,6 +774,32 @@ jump_to_offset(#state{} = StateP, TargetOffset) ->
     I1 = jit_aarch64_asm:b(Rel),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1, regs = jit_regs:unreachable(State#state.regs)}.
+
+%% Emit loads/moves so each loop-entry binding register holds its x value,
+%% using the current contents cache to elide loads that are already in
+%% place. Bindings are materialized in order; a register already consumed
+%% as a reconciliation target is not trusted as a move source.
+emit_backedge_recon(#state{stream_module = StreamModule, regs = Regs} = State, Bindings) ->
+    {Stream1, _Done} = lists:foldl(
+        fun({X, Reg}, {StAcc, Done}) ->
+            I =
+                case jit_regs:find_reg_with_contents(Regs, {x_reg, X}) of
+                    {ok, Reg} ->
+                        <<>>;
+                    {ok, Other} ->
+                        case lists:member(Other, Done) of
+                            false -> jit_aarch64_asm:mov(Reg, Other);
+                            true -> jit_aarch64_asm:ldr(Reg, ?X_REG(X))
+                        end;
+                    _ ->
+                        jit_aarch64_asm:ldr(Reg, ?X_REG(X))
+                end,
+            {StreamModule:append(StAcc, I), [Reg | Done]}
+        end,
+        {State#state.stream, []},
+        Bindings
+    ),
+    State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.
@@ -2538,8 +2600,11 @@ move_to_cp(
             I3 = jit_aarch64_asm:str(ValReg, ?CP),
             Code = <<I1/binary, I2/binary, I3/binary>>,
             Stream1 = StreamModule:append(Stream0, Code),
+            %% ValReg was free but may cache stale contents (a following
+            %% loop back-edge reconciliation reads the cache).
+            Regs0b = jit_regs:invalidate_reg(Regs0, ValReg),
             %% Reserve BaseReg with y_regs_base contents so it isn't reused.
-            Regs1 = jit_regs:set_contents(Regs0, BaseReg, y_regs_base),
+            Regs1 = jit_regs:set_contents(Regs0b, BaseReg, y_regs_base),
             State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, BaseBit)}
     end.
 
@@ -2679,8 +2744,11 @@ set_continuation_to_offset(
 -spec continuation_entry_point(#state{}) -> #state{}.
 continuation_entry_point(State) ->
     %% Execution can resume here from the scheduler loop: pending stores
-    %% made before this point must persist.
-    pending_clear_all(State).
+    %% made before this point must persist, and native registers are dead
+    %% on the resume path — cached contents must not be trusted past this
+    %% point (loop back-edge reconciliation reads the cache).
+    State1 = pending_clear_all(State),
+    State1#state{regs = jit_regs:invalidate_all(State1#state.regs)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Resolve the imported BIF function pointer for a gc_bif call site inline,
@@ -3333,9 +3401,11 @@ move_float_to_fp_reg(
 %% whose live-in mask (from jit_liveness) contains the register.
 %% Conditional bodies (if_block) only elide stores made at their own depth.
 %%-----------------------------------------------------------------------------
--spec set_live_masks(state(), #{non_neg_integer() => non_neg_integer()}) -> state().
-set_live_masks(State, Masks) ->
-    State#state{live_masks = Masks}.
+-spec set_live_masks(
+    state(), {#{non_neg_integer() => non_neg_integer()}, #{non_neg_integer() => true}}
+) -> state().
+set_live_masks(State, {Masks, CallTargets}) ->
+    State#state{live_masks = Masks, call_targets = CallTargets}.
 
 pending_clear_all(#state{pending_x = P} = State) when map_size(P) =:= 0 ->
     State;
@@ -3704,45 +3774,77 @@ call_only_or_schedule_next(
         branches = Branches,
         labels = Labels,
         regs = Regs0
-    } = State0 = pending_filter_label(StateP, Label),
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
+    } = StateF = pending_filter_label(StateP, Label),
+    %% Loop-header hot entry: emit a site-specific reconciliation of the
+    %% recorded bindings BEFORE the shared part of the block. jit.erl's
+    %% tail cache reuses this block for other call_only/call_last/jump
+    %% sites via jump_to_offset, which intercepts the entry offset (see
+    %% recon_blocks) and emits its own reconciliation — so everything
+    %% from SharedOffset on must not depend on this site's register state.
+    EntryOffset = StreamModule:offset(Stream0),
+    {TargetOffset, State0} =
+        case StateF#state.loop_entries of
+            #{Label := {HotOffset, Bindings}} ->
+                StateR = emit_backedge_recon(StateF, Bindings),
+                SharedOffset = StreamModule:offset(StateR#state.stream),
+                {HotOffset, StateR#state{
+                    recon_blocks = (StateR#state.recon_blocks)#{
+                        EntryOffset => {Label, SharedOffset}
+                    }
+                }};
+            _ ->
+                {maps:get(Label, Labels, unknown), StateF}
+        end,
+    %% On hot paths the reduction scratch must not clobber a reconciled
+    %% binding register (available_regs includes free-but-cached regs and
+    %% Temp is not invalidated below): use IP0 there.
+    Temp =
+        case StateF#state.loop_entries of
+            #{Label := _} -> ?IP0_REG;
+            _ -> first_avail(jit_regs:available_regs(Regs0))
+        end,
     % Load reduction count
     I1 = jit_aarch64_asm:ldr_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
     % Decrement reduction count
     I2 = jit_aarch64_asm:subs(Temp, Temp, 1),
     % Store back the decremented value
     I3 = jit_aarch64_asm:str_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    BNEOffset = StreamModule:offset(Stream1),
-
-    case Labels of
-        #{Label := LabelOffset} when
-            LabelOffset - BNEOffset >= -1048576 andalso LabelOffset - BNEOffset < 1048576
+    StreamR = StreamModule:append(
+        State0#state.stream, <<I1/binary, I2/binary, I3/binary>>
+    ),
+    BNEOffset = StreamModule:offset(StreamR),
+    case TargetOffset of
+        LabelOffset when
+            is_integer(LabelOffset) andalso
+                LabelOffset - BNEOffset >= -1048576 andalso LabelOffset - BNEOffset < 1048576
         ->
             % Label is already known and in bcc range, emit direct branch
             Rel = LabelOffset - BNEOffset,
             I4 = jit_aarch64_asm:bcc(ne, Rel),
-            Stream2 = StreamModule:append(Stream1, I4),
+            Stream2 = StreamModule:append(StreamR, I4),
             State1 = State0#state{stream = Stream2};
-        #{Label := LabelOffset} ->
+        LabelOffset when is_integer(LabelOffset) ->
             % Label is beyond bcc's ±1MB range: skip over an unconditional
             % branch (±128MB) with the inverted condition
             I4 = jit_aarch64_asm:bcc(eq, 8),
             I5 = jit_aarch64_asm:b(LabelOffset - (BNEOffset + 4)),
-            Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary>>),
+            Stream2 = StreamModule:append(StreamR, <<I4/binary, I5/binary>>),
             State1 = State0#state{stream = Stream2};
-        _ ->
+        unknown ->
             % Label not yet known: emit the far-capable pair so the patch
             % fits whatever the final distance is
             I4 = jit_aarch64_asm:bcc(eq, 8),
             I5 = jit_aarch64_asm:b(0),
             BrEntry = {BNEOffset + 4, b},
             ExistingBrs = maps:get(Label, Branches, []),
-            Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary>>),
+            Stream2 = StreamModule:append(StreamR, <<I4/binary, I5/binary>>),
             State1 = State0#state{
                 stream = Stream2,
-                branches = Branches#{Label => [BrEntry | ExistingBrs]}
+                branches = Branches#{Label => [BrEntry | ExistingBrs]},
+                %% Forward block: targets the cold entry even if the label
+                %% later gains a hot one — record so reuse sites can emit
+                %% a fresh hot block instead (see jump_to_offset).
+                cold_call_blocks = (State0#state.cold_call_blocks)#{EntryOffset => Label}
             }
     end,
     State2 = set_continuation_to_label(State1, Label),
@@ -3936,7 +4038,47 @@ add_label(#state{} = StateP, Label) ->
         pending_flush_label(StateP, Label),
     Offset = StreamModule:offset(Stream),
     Regs1 = jit_regs:invalidate_all(Regs0),
-    add_label(State#state{regs = Regs1}, Label, Offset).
+    State1 = add_label(State#state{regs = Regs1}, Label, Offset),
+    maybe_emit_loop_preload(State1, Label).
+
+%% Loop-header residency (cold entry): when a label is a direct call
+%% target (function entry / loop header, per pass A), its live-in set is
+%% small and no forward branch targets it, preload those x registers right
+%% after the label. The body then compiles against the cached bindings and
+%% backward call_only sites can reconcile and branch past the loads (hot
+%% entry). Yield resumes and jump-table entries use the label itself, so
+%% memory stays authoritative on every other path.
+maybe_emit_loop_preload(#state{live_masks = undefined} = State, _Label) ->
+    State;
+maybe_emit_loop_preload(
+    #state{live_masks = Masks, call_targets = CT, branches = Branches} = State0, Label
+) when is_integer(Label) ->
+    Mask = maps:get(Label, Masks, -1),
+    Eligible =
+        is_map_key(Label, CT) andalso
+            Mask > 0 andalso Mask < 16#10000 andalso
+            not maps:is_key(Label, Branches),
+    Xs = [X || X <- lists:seq(0, 15), Mask band (1 bsl X) =/= 0],
+    case Eligible andalso length(Xs) =< 3 of
+        true ->
+            {State1, RevBindings} = lists:foldl(
+                fun(X, {Acc0, Bs}) ->
+                    {Acc1, Reg} = move_to_native_register(Acc0, {x_reg, X}),
+                    {Acc1, [{X, Reg} | Bs]}
+                end,
+                {State0, []},
+                Xs
+            ),
+            Bindings = lists:reverse(RevBindings),
+            State2 = free_native_registers(State1, [Reg || {_X, Reg} <- Bindings]),
+            #state{stream_module = SM, stream = Stream1, loop_entries = LE} = State2,
+            HotOffset = SM:offset(Stream1),
+            State2#state{loop_entries = LE#{Label => {HotOffset, Bindings}}};
+        false ->
+            State0
+    end;
+maybe_emit_loop_preload(State, _Label) ->
+    State.
 
 %%-----------------------------------------------------------------------------
 %% @doc Add a label at a specific offset
