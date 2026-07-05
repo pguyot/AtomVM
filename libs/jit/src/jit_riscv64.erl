@@ -23,6 +23,8 @@
 -export([
     word_size/0,
     new/3,
+    set_live_masks/2,
+    supports_loop_residency/0,
     stream/1,
     offset/1,
     flush/1,
@@ -189,7 +191,15 @@
     labels :: #{integer() | reference() => integer()},
     variant :: non_neg_integer(),
     %% Register value tracking and native-register mask bookkeeping
-    regs :: jit_regs:regs()
+    regs :: jit_regs:regs(),
+    %% Write-through x-store elision (jit_backend_pending_impl.hrl): per-label
+    %% live-in masks (jit_liveness pass A), pending stores
+    %% (x index -> {stream offset, store width, cond depth}) and the current
+    %% conditional-emission depth.
+    live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
+    pending_x = #{} ::
+        #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
+    cond_depth = 0 :: non_neg_integer()
 }).
 
 -type state() :: #state{}.
