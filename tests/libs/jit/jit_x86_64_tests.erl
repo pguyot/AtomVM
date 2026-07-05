@@ -2367,18 +2367,32 @@ float_conv_float_test() ->
 %% opcode dispatch and register orchestration around the backend emit calls,
 %% as opposed to the per-op emission tests above which call ?BACKEND directly.
 %%
-%% Chunk: OP_LABEL 1 ; OP_MOVE x0 x1 ; OP_INT_CALL_END.
-%% Compact-term encodings: literal 1 = 16#10, {x_reg,0} = 16#03, {x_reg,1} = 16#13.
+%% Chunk: OP_LABEL 1 ; OP_MOVE x0 x1 ; OP_TEST_HEAP 2 2 ; OP_INT_CALL_END.
+%% The test_heap with Live = 2 keeps x1 observed (GC root walk), so the
+%% move must be emitted. Compact-term encodings: literal 1 = 16#10,
+%% literal 2 = 16#20, {x_reg,0} = 16#03, {x_reg,1} = 16#13.
 jit_move_x0_x1_test() ->
     Chunk =
         <<16:32, 0:32, ?OP_MOVE:32, 1:32, 1:32, ?OP_LABEL, 16#10, ?OP_MOVE, 16#03, 16#13,
-            ?OP_INT_CALL_END>>,
+            ?OP_TEST_HEAP, 16#20, 16#20, ?OP_INT_CALL_END>>,
     Code = jit_tests_common:compile_chunk(?BACKEND, Chunk),
     %% OP_MOVE x0,x1 emits: mov 0x58(%rdi),%rax ; mov %rax,0x60(%rdi)
     %%   48 8b 47 58   mov 0x58(%rdi),%rax   (load x[0])
     %%   48 89 47 60   mov %rax,0x60(%rdi)   (store x[1])
     ?assertMatch(
         {_, _},
+        binary:match(Code, <<16#48, 16#8B, 16#47, 16#58, 16#48, 16#89, 16#47, 16#60>>)
+    ).
+
+%% Same chunk without the test_heap: nothing observes x1 before int_call_end,
+%% so jit_liveness marks the move dead and jit.erl emits no code for it.
+jit_dead_move_skipped_test() ->
+    Chunk =
+        <<16:32, 0:32, ?OP_MOVE:32, 1:32, 1:32, ?OP_LABEL, 16#10, ?OP_MOVE, 16#03, 16#13,
+            ?OP_INT_CALL_END>>,
+    Code = jit_tests_common:compile_chunk(?BACKEND, Chunk),
+    ?assertEqual(
+        nomatch,
         binary:match(Code, <<16#48, 16#8B, 16#47, 16#58, 16#48, 16#89, 16#47, 16#60>>)
     ).
 
