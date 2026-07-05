@@ -1732,6 +1732,7 @@ schedule_in:
             jit_state.remaining_reductions = remaining_reductions;
             jit_state.fr = fr_bank;
             jit_state.caches = &scheduler_caches;
+            jit_state.cp_base = ((uintptr_t) (unsigned int) mod->module_index) << 24;
             // __asm__ volatile("int $0x03");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
             jit_state.code_base = (const void *) mod->native_code;
