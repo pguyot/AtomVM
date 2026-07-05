@@ -45,7 +45,7 @@
 %%     opcode without ever being wrong.
 -module(jit_liveness).
 
--export([label_read_masks/1, label_analysis/1, first_unknown/1]).
+-export([label_read_masks/1, label_analysis/1, analysis/1, first_unknown/1]).
 
 -include("opcodes.hrl").
 -include("compact_term.hrl").
@@ -55,7 +55,7 @@
 
 %%-----------------------------------------------------------------------------
 %% @doc Compute the per-label live-in x-register masks for a code chunk.
-%% Takes the code binary as consumed by jit:first_pass (after the header).
+%% Takes the code binary as consumed by jit:emit_pass (after the header).
 %% Returns a map #{Label => Mask}. Absent labels must be treated as ?ALL_X.
 %% @end
 %%-----------------------------------------------------------------------------
@@ -72,6 +72,24 @@ label_read_masks(Code) ->
 label_analysis(Code) ->
     {Blocks, CallTargets} = collect_blocks(Code, none, 0, 0, [], {#{}, #{}}),
     {fixpoint(Blocks, maps:map(fun(_L, {Gen, _Succs}) -> Gen end, Blocks)), CallTargets}.
+
+%% @doc Full analysis: label masks and call targets as label_analysis/1,
+%% plus the set of dead moves — byte offsets (of the opcode byte, relative
+%% to the code chunk after the header) of OP_MOVE ops with an x destination
+%% that is provably never observed (no dataflow read, no GC root walk, on
+%% any path) before being overwritten. The emitter can skip these entirely,
+%% on any backend: nothing can tell the store never happened.
+-spec analysis(binary()) ->
+    {
+        #{non_neg_integer() => non_neg_integer()},
+        #{non_neg_integer() => true},
+        #{non_neg_integer() => true}
+    }.
+analysis(Code) ->
+    {Blocks, CallTargets} = collect_blocks(Code, none, 0, 0, [], {#{}, #{}}),
+    Masks = fixpoint(Blocks, maps:map(fun(_L, {Gen, _Succs}) -> Gen end, Blocks)),
+    DeadMoves = scan2(Code, byte_size(Code), Masks, [], #{}),
+    {Masks, CallTargets, DeadMoves}.
 
 %% @doc Debug helper: returns {UnknownOpcodeByte, BytesRemaining} for the
 %% first opcode the scanner cannot skip, or 'complete'. Drives coverage.
@@ -146,6 +164,106 @@ skip_to_label(Bin, Acc) ->
 
 account(Reads, Writes, Gen, Kill) ->
     {Gen bor (mask_of(Reads) band bnot Kill), Kill bor mask_of(Writes)}.
+
+%%-----------------------------------------------------------------------------
+%% Dead-move scan (pass A, second walk). Re-walks the chunk with the final
+%% masks, collecting one block's ops at a time (newest first), then walks
+%% them backward maintaining the live set. A move whose x destination is
+%% not live right after the op is dead. Runs after fixpoint/2; on a chunk
+%% scan1 poisoned every mask is ?ALL_X, so only moves whose observation
+%% window is closed by a terminator inside a correctly-parsed prefix can
+%% still be found dead — which remains sound.
+%%-----------------------------------------------------------------------------
+scan2(<<>>, _CodeSize, Masks, BlockOps, Acc) ->
+    %% Ran out of bytes mid-block (no closing int_call_end): conservative.
+    flush_block(BlockOps, ?ALL_X, Masks, Acc);
+scan2(Bin, CodeSize, Masks, BlockOps, Acc) ->
+    Offset = CodeSize - byte_size(Bin),
+    case op_scan(Bin) of
+        {label, N, Rest} ->
+            %% Current block falls through into label N.
+            Acc1 = flush_block(BlockOps, mask_in(N, Masks), Masks, Acc),
+            scan2(Rest, CodeSize, Masks, [], Acc1);
+        {plain, Reads, Writes, Rest} ->
+            Op =
+                case {Bin, Writes} of
+                    {<<?OP_MOVE, _/binary>>, [DestX]} when DestX < 16 ->
+                        {move, Offset, DestX, Reads, Writes};
+                    _ ->
+                        {plain, Reads, Writes}
+                end,
+            scan2(Rest, CodeSize, Masks, [Op | BlockOps], Acc);
+        {branch, Reads, Writes, Labels, Rest} ->
+            scan2(Rest, CodeSize, Masks, [{branch, Reads, Writes, Labels} | BlockOps], Acc);
+        {terminator, Reads, Labels, Rest} ->
+            Acc1 = flush_block([{terminator, Reads, Labels} | BlockOps], 0, Masks, Acc),
+            scan2_skip(Rest, CodeSize, Masks, Acc1);
+        {call, Reads, Writes, Target, Tail, Rest} ->
+            case Tail of
+                false ->
+                    scan2(Rest, CodeSize, Masks, [{plain, Reads, Writes} | BlockOps], Acc);
+                true ->
+                    Acc1 = flush_block([{terminator, Reads, [Target]} | BlockOps], 0, Masks, Acc),
+                    scan2_skip(Rest, CodeSize, Masks, Acc1)
+            end;
+        unknown ->
+            %% Poisoned: drop the current (unfinished) block, keep blocks
+            %% already flushed — their windows were closed by terminators
+            %% or by (all-live) masks.
+            Acc
+    end.
+
+%% Unreachable stretch after a terminator: skip to the next label.
+scan2_skip(<<>>, _CodeSize, _Masks, Acc) ->
+    Acc;
+scan2_skip(Bin, CodeSize, Masks, Acc) ->
+    case op_scan(Bin) of
+        {label, _N, Rest} -> scan2(Rest, CodeSize, Masks, [], Acc);
+        {plain, _, _, Rest} -> scan2_skip(Rest, CodeSize, Masks, Acc);
+        {branch, _, _, _, Rest} -> scan2_skip(Rest, CodeSize, Masks, Acc);
+        {terminator, _, _, Rest} -> scan2_skip(Rest, CodeSize, Masks, Acc);
+        {call, _, _, _, _, Rest} -> scan2_skip(Rest, CodeSize, Masks, Acc);
+        unknown -> Acc
+    end.
+
+%% Backward walk over one block's ops (given newest first). Live0 is the
+%% live-out of the block: the fallthrough label's live-in mask, or 0 when
+%% the block ends with a terminator (which contributes its own reads and
+%% branch-target masks as it is processed first).
+flush_block([], _Live0, _Masks, Acc) ->
+    Acc;
+flush_block(Ops, Live0, Masks, Acc) ->
+    {_Live, Acc1} = lists:foldl(
+        fun(Op, {Live, A}) ->
+            case Op of
+                {move, Offset, DestX, Reads, Writes} ->
+                    A1 =
+                        case Live band ?X_BIT(DestX) of
+                            0 -> A#{Offset => true};
+                            _ -> A
+                        end,
+                    {(Live band bnot mask_of(Writes)) bor mask_of(Reads), A1};
+                {plain, Reads, Writes} ->
+                    {(Live band bnot mask_of(Writes)) bor mask_of(Reads), A};
+                {branch, Reads, Writes, Labels} ->
+                    Live1 =
+                        (Live band bnot mask_of(Writes)) bor mask_of(Reads) bor
+                            masks_union(Labels, Masks),
+                    {Live1, A};
+                {terminator, Reads, Labels} ->
+                    {mask_of(Reads) bor masks_union(Labels, Masks), A}
+            end
+        end,
+        {Live0, Acc},
+        Ops
+    ),
+    Acc1.
+
+mask_in(Label, Masks) ->
+    maps:get(Label, Masks, ?ALL_X).
+
+masks_union(Labels, Masks) ->
+    lists:foldl(fun(L, M) -> M bor mask_in(L, Masks) end, 0, Labels).
 
 mask_of(all) ->
     ?ALL_X;
@@ -233,6 +351,24 @@ op_scan(<<?OP_LINE, Rest0/binary>>) ->
         {ok, Rest1} -> {plain, [], [], Rest1};
         unknown -> unknown
     end;
+op_scan(<<?OP_NIF_START, Rest/binary>>) ->
+    {plain, [], [], Rest};
+op_scan(<<?OP_EXECUTABLE_LINE, Rest0/binary>>) ->
+    case skip_operands(Rest0, 2) of
+        {ok, Rest1} -> {plain, [], [], Rest1};
+        unknown -> unknown
+    end;
+op_scan(<<?OP_DEBUG_LINE, Rest0/binary>>) ->
+    %% debug_line Kind Location Index Live: the debugger may observe
+    %% x0..x[Live-1] at the stop point, so they must count as read here —
+    %% eliding a store the debugger would see is not acceptable.
+    case skip_operands(Rest0, 3) of
+        {ok, Rest1} ->
+            {Live, Rest2} = decode_value(Rest1),
+            {plain, {lt, Live}, [], Rest2};
+        unknown ->
+            unknown
+    end;
 op_scan(<<?OP_MOVE, Rest0/binary>>) ->
     scan_ops(Rest0, [read, write]);
 op_scan(<<?OP_SWAP, Rest0/binary>>) ->
@@ -281,17 +417,20 @@ op_scan(<<?OP_RETURN, Rest/binary>>) ->
 op_scan(<<?OP_JUMP, Rest0/binary>>) ->
     {L, Rest1} = decode_value(Rest0),
     {terminator, [], [L], Rest1};
-%% Allocation boundaries: x[i], i >= Live is dead here.
+%% Allocation boundaries: x[i], i >= Live is dead here, and the GC that may
+%% run walks (dereferences and updates) x[0..Live-1] as roots, so those
+%% count as READ — a store below Live must not be elided across this point
+%% even when no code ever reads it again (beam_validator's contract).
 op_scan(<<?OP_ALLOCATE, Rest0/binary>>) ->
     {_S, Rest1} = decode_value(Rest0),
     {Live, Rest2} = decode_value(Rest1),
-    {plain, [], {ge, Live}, Rest2};
+    {plain, {lt, Live}, {ge, Live}, Rest2};
 op_scan(<<?OP_ALLOCATE_HEAP, Rest0/binary>>) ->
     {_S, Rest1} = decode_value(Rest0),
     case skip_alloc_list(Rest1) of
         {ok, Rest2} ->
             {Live, Rest3} = decode_value(Rest2),
-            {plain, [], {ge, Live}, Rest3};
+            {plain, {lt, Live}, {ge, Live}, Rest3};
         unknown ->
             unknown
     end;
@@ -299,7 +438,7 @@ op_scan(<<?OP_TEST_HEAP, Rest0/binary>>) ->
     case skip_alloc_list(Rest0) of
         {ok, Rest1} ->
             {Live, Rest2} = decode_value(Rest1),
-            {plain, [], {ge, Live}, Rest2};
+            {plain, {lt, Live}, {ge, Live}, Rest2};
         unknown ->
             unknown
     end;
@@ -371,7 +510,9 @@ op_scan(<<Op, Rest0/binary>>) when Op =:= ?OP_PUT_MAP_ASSOC; Op =:= ?OP_PUT_MAP_
             {Live, Rest3} = decode_value(Rest2),
             case skip_ext_list(Rest3) of
                 {Ops, Rest4} ->
-                    branch_or_plain(FailLabel, R ++ reads_of(Ops), [{ge, Live} | W], Rest4);
+                    branch_or_plain(
+                        FailLabel, [{lt, Live} | R] ++ reads_of(Ops), [{ge, Live} | W], Rest4
+                    );
                 unknown ->
                     unknown
             end;
@@ -394,7 +535,9 @@ op_scan(<<?OP_PUT_TUPLE, Rest0/binary>>) ->
     scan_ops(Rest1, [write]);
 op_scan(<<?OP_PUT, Rest0/binary>>) ->
     scan_ops(Rest0, [read]);
-op_scan(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>) ->
+op_scan(<<Op, Rest0/binary>>) when
+    Op =:= ?OP_GET_MAP_ELEMENTS; Op =:= ?OP_GET_RECORD_ELEMENTS
+->
     {FailLabel, Rest1} = decode_value(Rest0),
     case skip_operand(Rest1) of
         {Src, Rest2} ->
@@ -579,7 +722,7 @@ op_scan(<<?OP_BS_START_MATCH3, Rest0/binary>>) ->
             {Live, Rest3} = decode_value(Rest2),
             case scan_ops(Rest3, [write]) of
                 {plain, _, W, Rest4} ->
-                    {branch, R, [{ge, Live} | W], [Fail], Rest4};
+                    {branch, [{lt, Live} | R], [{ge, Live} | W], [Fail], Rest4};
                 unknown ->
                     unknown
             end;
@@ -597,7 +740,7 @@ op_scan(<<?OP_BS_START_MATCH4, Rest0/binary>>) ->
                             {label, L} -> [L];
                             _ -> []
                         end,
-                    {branch, R, [{ge, Live} | W], Labels, Rest3};
+                    {branch, [{lt, Live} | R], [{ge, Live} | W], Labels, Rest3};
                 unknown ->
                     unknown
             end;
@@ -618,7 +761,7 @@ op_scan(<<?OP_BS_CREATE_BIN, Rest0/binary>>) ->
                         {Ops, Rest6} ->
                             %% Segments: type atom, seg, unit, flags, Src,
                             %% Size — any x operand among them is a read.
-                            R = reads_of(Ops),
+                            R = [{lt, Live} | reads_of(Ops)],
                             case Fail of
                                 0 -> {plain, R, [{ge, Live} | W], Rest6};
                                 _ -> {branch, R, [{ge, Live} | W], [Fail], Rest6}
@@ -636,7 +779,7 @@ op_scan(<<Op, Rest0/binary>>) when Op =:= ?OP_BS_GET_POSITION; Op =:= ?OP_BS_GET
     case scan_ops(Rest0, [read, write]) of
         {plain, R, W, Rest1} ->
             {Live, Rest2} = decode_value(Rest1),
-            {plain, R, [{ge, Live} | W], Rest2};
+            {plain, [{lt, Live} | R], [{ge, Live} | W], Rest2};
         unknown ->
             unknown
     end;
@@ -655,7 +798,7 @@ op_scan(<<Op, Rest0/binary>>) when
                     {_Flags, Rest6} = decode_value(Rest5),
                     case scan_ops(Rest6, [write]) of
                         {plain, _, W, Rest7} ->
-                            {branch, R1 ++ R2, [{ge, Live} | W], [Fail], Rest7};
+                            {branch, [{lt, Live} | R1] ++ R2, [{ge, Live} | W], [Fail], Rest7};
                         unknown ->
                             unknown
                     end;
@@ -690,7 +833,9 @@ op_scan(<<Op, Rest0/binary>>) when
         {plain, R, W, Rest2} -> {branch, R, W, [Fail], Rest2};
         unknown -> unknown
     end;
-op_scan(<<Op, Rest0/binary>>) when Op =:= ?OP_BS_SKIP_UTF8; Op =:= ?OP_BS_SKIP_UTF16 ->
+op_scan(<<Op, Rest0/binary>>) when
+    Op =:= ?OP_BS_SKIP_UTF8; Op =:= ?OP_BS_SKIP_UTF16; Op =:= ?OP_BS_SKIP_UTF32
+->
     {Fail, Rest1} = decode_value(Rest0),
     case scan_ops(Rest1, [read, skip, skip]) of
         {plain, R, _W, Rest2} -> {branch, R, [], [Fail], Rest2};
@@ -706,6 +851,9 @@ op_scan(<<?OP_BS_SKIP_BITS2, Rest0/binary>>) ->
         unknown ->
             unknown
     end;
+op_scan(<<?OP_BS_TEST_TAIL2, Rest0/binary>>) ->
+    %% Fail, Src, Bits literal.
+    test_op_extra_skips(Rest0, 1, 1);
 op_scan(<<?OP_BS_MATCH_STRING, Rest0/binary>>) ->
     {Fail, Rest1} = decode_value(Rest0),
     case scan_ops(Rest1, [read]) of
@@ -723,14 +871,44 @@ op_scan(<<?OP_GC_BIF3, Rest0/binary>>) ->
     case scan_ops(Rest3, [read, read, read, write]) of
         {plain, R, W, Rest4} ->
             case FailLabel of
-                0 -> {plain, R, [{ge, Live} | W], Rest4};
-                _ -> {branch, R, [{ge, Live} | W], [FailLabel], Rest4}
+                0 -> {plain, [{lt, Live} | R], [{ge, Live} | W], Rest4};
+                _ -> {branch, [{lt, Live} | R], [{ge, Live} | W], [FailLabel], Rest4}
             end;
         unknown ->
             unknown
     end;
 op_scan(<<?OP_IS_ANY_NATIVE_RECORD, Rest0/binary>>) ->
     test_op(Rest0, 1);
+op_scan(<<?OP_IS_NATIVE_RECORD, Rest0/binary>>) ->
+    %% Fail, Src, module atom, record name atom.
+    test_op_extra_skips(Rest0, 1, 2);
+op_scan(<<?OP_IS_RECORD_ACCESSIBLE, Rest0/binary>>) ->
+    %% Fail, Src, scope atom.
+    test_op_extra_skips(Rest0, 1, 1);
+op_scan(<<?OP_GET_RECORD_FIELD, Rest0/binary>>) ->
+    %% Fail, Src, record def id, field atom, Dest.
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read, read, skip, write]) of
+        {plain, R, W, Rest2} -> {branch, R, W, [Fail], Rest2};
+        unknown -> unknown
+    end;
+op_scan(<<?OP_PUT_RECORD, Rest0/binary>>) ->
+    %% Fail, record def id, Src, Dest, Live, [field atom, value...].
+    {Fail, Rest1} = decode_value(Rest0),
+    case scan_ops(Rest1, [read, read, write]) of
+        {plain, R, W, Rest2} ->
+            {Live, Rest3} = decode_value(Rest2),
+            case skip_ext_list(Rest3) of
+                {Ops, Rest4} ->
+                    branch_or_plain(
+                        Fail, [{lt, Live} | R] ++ reads_of(Ops), [{ge, Live} | W], Rest4
+                    );
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
 %% Receive/message ops.
 op_scan(<<?OP_SEND, Rest/binary>>) ->
     %% send: like a call of arity 2 (reads x0, x1; clobbers x registers).
@@ -826,11 +1004,12 @@ gc_bif(Rest0, NumArgs) ->
     Spec = lists:duplicate(NumArgs, read) ++ [write],
     case scan_ops(Rest3, Spec) of
         {plain, R, W, Rest4} ->
-            %% x[i], i >= Live is dead at the op; the destination write and
-            %% the Live kill both apply on the fallthrough path.
+            %% x[i], i >= Live is dead at the op; the GC walks x[0..Live-1]
+            %% (reads); the destination write and the Live kill both apply
+            %% on the fallthrough path.
             case FailLabel of
-                0 -> {plain, R, [{ge, Live} | W], Rest4};
-                _ -> {branch, R, [{ge, Live} | W], [FailLabel], Rest4}
+                0 -> {plain, [{lt, Live} | R], [{ge, Live} | W], Rest4};
+                _ -> {branch, [{lt, Live} | R], [{ge, Live} | W], [FailLabel], Rest4}
             end;
         unknown ->
             unknown
