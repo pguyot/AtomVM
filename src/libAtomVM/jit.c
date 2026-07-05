@@ -144,7 +144,19 @@ _Static_assert(offsetof(Context, heap.heap_end) == 0x20,
     "heap_end is at ctx+0x20 in 64-bit jit backends");
 _Static_assert(offsetof(Context, shrink_probe_heap_end) == 0x1A0,
     "shrink_probe_heap_end is at ctx+0x1A0 in 64-bit jit backends");
+#if JIT_ARCH_TARGET != JIT_ARCH_XTENSA
+_Static_assert(offsetof(struct JITState, cp_base) == 0x28,
+    "cp_base is at jit_state+0x28 in 64-bit jit backends");
 #endif
+#endif
+
+// Keep jit_state->cp_base in sync with jit_state->module wherever the
+// executing module changes; generated code builds cp values from it.
+static inline void jit_state_set_module(JITState *jit_state, Module *mod)
+{
+    jit_state->module = mod;
+    jit_state->cp_base = ((uintptr_t) (unsigned int) mod->module_index) << 24;
+}
 
 // Verify matching atom index in default_atoms.hrl
 _Static_assert(OK_ATOM_INDEX == 2, "OK_ATOM_INDEX is 2 in libs/jit/src/default_atoms.hrl ");
@@ -325,7 +337,7 @@ static Context *jit_return(Context *ctx, JITState *jit_state)
 #ifndef AVM_NO_EMU
     }
 #endif
-    jit_state->module = mod;
+    jit_state_set_module(jit_state, mod);
     return ctx;
 }
 
@@ -859,7 +871,7 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
 #endif
                 SMP_MODULE_UNLOCK(jit_state->module);
 
-                jit_state->module = jump->target;
+                jit_state_set_module(jit_state, jump->target);
                 jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jump->target, target_label);
             }
             break;
@@ -871,7 +883,7 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
             }
 
             const struct ModuleFunction *jump = EXPORTED_FUNCTION_TO_MODULE_FUNCTION(func);
-            jit_state->module = jump->target;
+            jit_state_set_module(jit_state, jump->target);
 #ifdef JIT_JUMPTABLE_IS_DATA
             jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jump->target, jump->label);
 #else
@@ -1565,7 +1577,7 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
     }
     if (fun_module->native_code) {
         // JIT case
-        jit_state->module = fun_module;
+        jit_state_set_module(jit_state, fun_module);
         jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, label);
     } else {
         // Native case
@@ -1628,7 +1640,7 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
             for (uint32_t i = 0; i < n_freeze; i++) {
                 ctx->x[fun_arity + i] = boxed_value[i + 3];
             }
-            jit_state->module = fun_module;
+            jit_state_set_module(jit_state, fun_module);
             uintptr_t target = (uintptr_t) JIT_CONTINUATION_FOR_LABEL(fun_module, label);
             return target | 1;
         }
@@ -2218,7 +2230,7 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
         case ApplyResolvedModule: {
             if (target_module->native_code) {
                 // catch label is in native code.
-                jit_state->module = target_module;
+                jit_state_set_module(jit_state, target_module);
                 jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
                 return ctx;
             }
