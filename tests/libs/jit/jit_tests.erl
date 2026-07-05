@@ -704,6 +704,199 @@ fuse_tuple_armv6m_test() ->
     ok.
 
 %%-----------------------------------------------------------------------------
+%% List-head fusion tests
+%%
+%% Test that is_nonempty_list + get_list/get_hd/get_tl on the same register are
+%% fused so the cons pointer is loaded and tag-stripped only once. In the
+%% unfused code the get_* op reloads the source register and re-strips the tag.
+%%
+%% The distinctive signature on x86_64: is_nonempty_list checks the LIST primary
+%% tag using a SCRATCH register (so the source survives), then the get_* op
+%% strips the tag of the same register and reads head/tail directly:
+%%   49 89 c3       mov  %rax,%r11       (tag test in scratch, source preserved)
+%%   41 80 e3 03    and  $0x3,%r11b
+%%   41 80 fb 01    cmp  $0x1,%r11b
+%%   ...
+%%   48 83 e0 fc    and  $-4,%rax        (strip tag of the SAME pointer)
+%%
+%% In unfused code the tag test is destructive (source is freed) and the get_*
+%% op reloads the source register:
+%%   24 03          and  $0x3,%al
+%%   80 f8 01       cmp  $0x1,%al
+%%   ...            mov  <src>,%rax      (reload)
+%%-----------------------------------------------------------------------------
+
+% is_nonempty_list + get_list (head and tail), adjacent -> fused
+% f([H|T]) -> g(H, T).
+-define(FUSE_LIST_GETLIST_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#09, 16#00, 16#00, 16#00, 16#04, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#38, 16#15, 16#03, 16#41, 16#03, 16#03, 16#13, 16#06, 16#20, 16#45, 16#01,
+        16#30, 16#02, 16#12, 16#32, 16#20, 16#01, 16#40, 16#40, 16#42, 16#03, 16#13, 16#01, 16#50,
+        16#02, 16#12, 16#52, 16#00, 16#01, 16#60, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01,
+        16#70, 16#02, 16#12, 16#52, 16#10, 16#01, 16#80, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03,
+        16#4E, 16#20, 16#10, 16#03>>
+).
+-define(FUSE_LIST_GETLIST_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#F9, 16#A0, 16#66, 16#6C, 16#5F, 16#67, 16#65, 16#74, 16#6C, 16#69,
+        16#73, 16#74, 16#10, 16#66, 16#10, 16#67, 16#20, 16#6F, 16#6B, 16#B0, 16#6D, 16#6F, 16#64,
+        16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61,
+        16#6E, 16#67, 16#F0, 16#67, 16#65, 16#74, 16#5F, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65,
+        16#5F, 16#69, 16#6E, 16#66, 16#6F>>
+).
+
+% is_nonempty_list + get_hd -> fused
+% f([H|_]) -> g(H).
+-define(FUSE_LIST_GETHD_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#09, 16#00, 16#00, 16#00, 16#04, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#38, 16#15, 16#03, 16#A2, 16#03, 16#03, 16#06, 16#10, 16#45, 16#01, 16#30,
+        16#02, 16#12, 16#32, 16#10, 16#01, 16#40, 16#40, 16#42, 16#03, 16#13, 16#01, 16#50, 16#02,
+        16#12, 16#52, 16#00, 16#01, 16#60, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01, 16#70,
+        16#02, 16#12, 16#52, 16#10, 16#01, 16#80, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03, 16#4E,
+        16#20, 16#10, 16#03>>
+).
+-define(FUSE_LIST_GETHD_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#F9, 16#80, 16#66, 16#6C, 16#5F, 16#67, 16#65, 16#74, 16#68, 16#64,
+        16#10, 16#66, 16#10, 16#67, 16#20, 16#6F, 16#6B, 16#B0, 16#6D, 16#6F, 16#64, 16#75, 16#6C,
+        16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E, 16#67,
+        16#F0, 16#67, 16#65, 16#74, 16#5F, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69,
+        16#6E, 16#66, 16#6F>>
+).
+
+% is_nonempty_list + get_tl -> fused
+% f([_|T]) -> g(T).
+-define(FUSE_LIST_GETTL_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#09, 16#00, 16#00, 16#00, 16#04, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#38, 16#15, 16#03, 16#A3, 16#03, 16#03, 16#06, 16#10, 16#45, 16#01, 16#30,
+        16#02, 16#12, 16#32, 16#10, 16#01, 16#40, 16#40, 16#42, 16#03, 16#13, 16#01, 16#50, 16#02,
+        16#12, 16#52, 16#00, 16#01, 16#60, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01, 16#70,
+        16#02, 16#12, 16#52, 16#10, 16#01, 16#80, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03, 16#4E,
+        16#20, 16#10, 16#03>>
+).
+-define(FUSE_LIST_GETTL_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#F9, 16#80, 16#66, 16#6C, 16#5F, 16#67, 16#65, 16#74, 16#74, 16#6C,
+        16#10, 16#66, 16#10, 16#67, 16#20, 16#6F, 16#6B, 16#B0, 16#6D, 16#6F, 16#64, 16#75, 16#6C,
+        16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E, 16#67,
+        16#F0, 16#67, 16#65, 16#74, 16#5F, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69,
+        16#6E, 16#66, 16#6F>>
+).
+
+% is_nonempty_list then allocate (for a tuple) then get_list -> NOT fused
+% f([H|T]) -> {H, T}.
+-define(FUSE_LIST_NOFUSE_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#07, 16#00, 16#00, 16#00, 16#03, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#38, 16#15, 16#03, 16#10, 16#30, 16#10, 16#41, 16#03, 16#13, 16#03, 16#A4,
+        16#03, 16#17, 16#20, 16#13, 16#03, 16#13, 16#01, 16#30, 16#02, 16#12, 16#32, 16#00, 16#01,
+        16#40, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01, 16#50, 16#02, 16#12, 16#32, 16#10,
+        16#01, 16#60, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03, 16#4E, 16#20, 16#10, 16#03>>
+).
+-define(FUSE_LIST_NOFUSE_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#FB, 16#90, 16#66, 16#6C, 16#5F, 16#6E, 16#6F, 16#66, 16#75, 16#73,
+        16#65, 16#10, 16#66, 16#B0, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E,
+        16#66, 16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E, 16#67, 16#F0, 16#67, 16#65, 16#74,
+        16#5F, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F>>
+).
+
+%% x86_64 fused tag test uses a scratch register (source preserved).
+-define(FUSE_LIST_X86_64_SCRATCH_TEST, <<16#41, 16#80, 16#e3, 16#03, 16#41, 16#80, 16#fb, 16#01>>).
+%% x86_64 unfused tag test is destructive (and $0x3,%al ; cmp $0x1,%al).
+-define(FUSE_LIST_X86_64_INPLACE_TEST, <<16#24, 16#03, 16#80, 16#f8, 16#01>>).
+
+fuse_list_get_list_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_LIST_GETLIST_CODE, ?FUSE_LIST_GETLIST_ATU8, <<>>
+    ),
+    % Fused: non-destructive tag test, source preserved for the strip
+    ?assertMatch({_, _}, binary:match(CompiledCode, ?FUSE_LIST_X86_64_SCRATCH_TEST)),
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_LIST_X86_64_INPLACE_TEST)),
+    % Both head (0x8(%rax)) and tail ((%rax)) read from the kept, stripped pointer
+    %   48 83 e0 fc    and  $-4,%rax
+    %   4c 8b 58 08    mov  0x8(%rax),%r11   (head)
+    %   4c 8b 18       mov  (%rax),%r11       (tail)
+    ?assertMatch(
+        {_, _},
+        binary:match(CompiledCode, <<16#48, 16#83, 16#e0, 16#fc, 16#4c, 16#8b, 16#58, 16#08>>)
+    ),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#4c, 16#8b, 16#18>>)),
+    ok.
+
+fuse_list_get_hd_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_LIST_GETHD_CODE, ?FUSE_LIST_GETHD_ATU8, <<>>
+    ),
+    ?assertMatch({_, _}, binary:match(CompiledCode, ?FUSE_LIST_X86_64_SCRATCH_TEST)),
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_LIST_X86_64_INPLACE_TEST)),
+    % Head read from the kept pointer: and $-4,%rax ; mov 0x8(%rax),%r11
+    ?assertMatch(
+        {_, _},
+        binary:match(CompiledCode, <<16#48, 16#83, 16#e0, 16#fc, 16#4c, 16#8b, 16#58, 16#08>>)
+    ),
+    ok.
+
+fuse_list_get_tl_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_LIST_GETTL_CODE, ?FUSE_LIST_GETTL_ATU8, <<>>
+    ),
+    ?assertMatch({_, _}, binary:match(CompiledCode, ?FUSE_LIST_X86_64_SCRATCH_TEST)),
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_LIST_X86_64_INPLACE_TEST)),
+    % Tail read from the kept pointer: and $-4,%rax ; mov (%rax),%r11
+    ?assertMatch(
+        {_, _}, binary:match(CompiledCode, <<16#48, 16#83, 16#e0, 16#fc, 16#4c, 16#8b, 16#18>>)
+    ),
+    ok.
+
+no_fuse_list_after_allocate_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_LIST_NOFUSE_CODE, ?FUSE_LIST_NOFUSE_ATU8, <<>>
+    ),
+    % An allocate for the result tuple sits between is_nonempty_list and
+    % get_list, so no fusion: the tag test is the destructive in-place form.
+    ?assertMatch({_, _}, binary:match(CompiledCode, ?FUSE_LIST_X86_64_INPLACE_TEST)),
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_LIST_X86_64_SCRATCH_TEST)),
+    ok.
+
+fuse_list_get_hd_aarch64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_aarch64, ?FUSE_LIST_GETHD_CODE, ?FUSE_LIST_GETHD_ATU8, <<>>
+    ),
+    % Fused: tag test into scratch x8 keeps x7 (the source) live, then x7 is
+    % stripped in place and the head loaded from it.
+    %   92 40 04 e8    and  x8, x7, #0x3
+    %   1f 05 00 f1    cmp  x8, #0x1
+    %   e7 f4 7e 92    and  x7, x7, #0xfffffffffffffffc
+    %   e8 04 40 f9    ldr  x8, [x7, #8]
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            CompiledCode,
+            <<16#e8, 16#04, 16#40, 16#92, 16#1f, 16#05, 16#00, 16#f1>>
+        )
+    ),
+    ?assertMatch(
+        {_, _},
+        binary:match(CompiledCode, <<16#e7, 16#f4, 16#7e, 16#92, 16#e8, 16#04, 16#40, 16#f9>>)
+    ),
+    ok.
+
+fuse_list_get_hd_armv6m_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_armv6m, ?FUSE_LIST_GETHD_CODE, ?FUSE_LIST_GETHD_ATU8, <<>>
+    ),
+    % Fused: tag test in a scratch (r6) keeps r7 (the source) live, then r7 is
+    % stripped with bics and the head loaded from it.
+    %   402e    ands  r6, r5
+    %   2e01    cmp   r6, #1
+    %   43b7    bics  r7, r6
+    ?assertMatch(
+        {_, _}, binary:match(CompiledCode, <<16#2e, 16#40, 16#01, 16#2e>>)
+    ),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#b7, 16#43>>)),
+    ok.
+
+%%-----------------------------------------------------------------------------
 %% Bit-syntax fixed-size fusion test (bs_match offset writeback)
 %%
 %% A fixed-field binary decoder (`<<A:8, B:8, C:16, D:32>>`) lowers to one

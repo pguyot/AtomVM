@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   images whose root filesystem does not ship libsodium
 
 ### Changed
+- JIT now fuses `is_nonempty_list` with an immediately following `get_list`/`get_hd`/`get_tl` on
+  the same register, keeping the untagged cons pointer instead of reloading and re-stripping the
+  source for the head/tail read (`[H|T]` clause heads)
 - JIT `bs_match` now commits the bit offset to the match state once, after the whole command
   sequence, instead of after every command; the intermediate writebacks were dead stores for
   fixed-size binary field reads (`<<A:8, B:16, C:32, ...>>`)
