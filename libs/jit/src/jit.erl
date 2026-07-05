@@ -2698,7 +2698,12 @@ emit_pass(<<?OP_BS_MATCH, Rest0/binary>>, MMod, MSt0, State0) ->
         Fail, MatchStateReg0, BSBinaryReg, BSOffsetReg, ListLen, Rest3, MMod, MSt7, State0
     ),
     ?TRACE("]\n", []),
-    MSt9 = MMod:free_native_registers(MSt8, [BSBinaryReg, NewBSOffsetReg, MatchStateReg2]),
+    %% Commit the final bit offset to match_state[2] once, after the whole
+    %% command sequence (the per-command writeback was hoisted out of the loop).
+    {MSt8a, MatchStatePtr} = MMod:and_(MSt8, MatchStateReg2, ?TERM_PRIMARY_CLEAR_MASK),
+    MSt8b = MMod:move_to_array_element(MSt8a, NewBSOffsetReg, MatchStatePtr, 2),
+    MSt8c = MMod:free_native_registers(MSt8b, [MatchStatePtr]),
+    MSt9 = MMod:free_native_registers(MSt8c, [BSBinaryReg, NewBSOffsetReg, MatchStateReg2]),
     ?ASSERT_ALL_NATIVE_FREE(MSt9),
     emit_pass(Rest4, MMod, MSt9, State0);
 % 183
@@ -3659,12 +3664,15 @@ emit_pass_bs_match(
             skip ->
                 emit_pass_bs_match_skip(MatchState, BSOffsetReg, J1, Rest1, MMod, MSt0)
         end,
-    % offset needs to be updated in the loop
-    {MSt2, MatchStateReg1} = MMod:and_(MSt1, NewMatchState, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt3 = MMod:move_to_array_element(MSt2, NewBSOffsetReg, MatchStateReg1, 2),
-    MSt4 = MMod:free_native_registers(MSt3, [MatchStateReg1]),
+    % The updated bit offset stays in NewBSOffsetReg (a register) across the
+    % whole command sequence; every sub-command reads it from there, never from
+    % the match state. Writing it back to match_state[2] after each command is
+    % therefore a dead store for fixed-size field reads -- the common shape in
+    % binary/protocol decoders (`<<A:8, B:16, C:32, ...>>`), which lower to one
+    % ensure command followed by a run of integer reads. Commit the offset once,
+    % after the loop, in the OP_BS_MATCH handler instead.
     emit_pass_bs_match(
-        Fail, NewMatchState, BSBinaryReg, NewBSOffsetReg, J2, Rest2, MMod, MSt4, State0
+        Fail, NewMatchState, BSBinaryReg, NewBSOffsetReg, J2, Rest2, MMod, MSt1, State0
     ).
 
 emit_pass_bs_match_ensure_at_least(
