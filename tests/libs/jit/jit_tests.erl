@@ -746,6 +746,106 @@ if_block_unsigned_less_than_test_() ->
 
 
 %%-----------------------------------------------------------------------------
+%% Tagged-tuple (record) fusion tests
+%%
+%% OTP lowers record matches to a bare is_tagged_tuple followed by
+%% get_tuple_element reads. is_tagged_tuple already loads and tag-strips the
+%% boxed pointer to validate the record; the following get_tuple_element ops
+%% otherwise reload the source and re-strip it. Fusing keeps the stripped
+%% pointer and reads the fields directly.
+%%
+%% The expected record tag atom is resolved FIRST (before the tuple pointer is
+%% loaded) so nothing needs to be preserved across the resolver call. On x86_64
+%% the fused form then keeps the stripped pointer in %r11 and reads the fields
+%% directly from it:
+%%   48 8b 42 18    mov  0x18(%rdx),%rax   (resolver primitive, resolved first)
+%%   ...            call, then load+check the pointer into %r11
+%%   4d 8b 53 08    mov  0x8(%r11),%r10    (tag atom into scratch, %r11 kept)
+%%   49 8b 43 10    mov  0x10(%r11),%rax   (field 1, no reload)
+%%
+%% Unfused, each get_tuple_element reloads and re-strips the source:
+%%   48 8b 47 58    mov  <src>,%rax
+%%   48 83 e0 fc    and  $-4,%rax
+%%-----------------------------------------------------------------------------
+
+% is_tagged_tuple + single get_tuple_element
+% f({tag, X}) -> X.
+-define(FUSE_TT_SINGLE_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#07, 16#00, 16#00, 16#00, 16#03, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#9F, 16#15, 16#03, 16#20, 16#32, 16#42, 16#03, 16#10, 16#03, 16#13, 16#01,
+        16#30, 16#02, 16#12, 16#42, 16#00, 16#01, 16#40, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00,
+        16#01, 16#50, 16#02, 16#12, 16#42, 16#10, 16#01, 16#60, 16#40, 16#03, 16#13, 16#40, 16#12,
+        16#03, 16#4E, 16#20, 16#10, 16#03>>
+).
+-define(FUSE_TT_SINGLE_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#FA, 16#A0, 16#65, 16#74, 16#74, 16#5F, 16#73, 16#69, 16#6E, 16#67,
+        16#6C, 16#65, 16#10, 16#66, 16#30, 16#74, 16#61, 16#67, 16#B0, 16#6D, 16#6F, 16#64, 16#75,
+        16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E,
+        16#67, 16#F0, 16#67, 16#65, 16#74, 16#5F, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F,
+        16#69, 16#6E, 16#66, 16#6F>>
+).
+
+% is_tagged_tuple + two get_tuple_element
+% f({point, X, Y}) -> g(X, Y).
+-define(FUSE_TT_MULTI_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B5, 16#00,
+        16#00, 16#00, 16#09, 16#00, 16#00, 16#00, 16#04, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#9F, 16#15, 16#03, 16#30, 16#32, 16#42, 16#03, 16#10, 16#13, 16#42, 16#03,
+        16#20, 16#03, 16#A9, 16#03, 16#13, 16#06, 16#20, 16#45, 16#01, 16#30, 16#02, 16#12, 16#42,
+        16#20, 16#01, 16#40, 16#40, 16#52, 16#03, 16#13, 16#01, 16#50, 16#02, 16#12, 16#62, 16#00,
+        16#01, 16#60, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01, 16#70, 16#02, 16#12, 16#62,
+        16#10, 16#01, 16#80, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03, 16#4E, 16#20, 16#10, 16#03>>
+).
+-define(FUSE_TT_MULTI_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#F8, 16#90, 16#65, 16#74, 16#74, 16#5F, 16#6D, 16#75, 16#6C, 16#74,
+        16#69, 16#10, 16#66, 16#50, 16#70, 16#6F, 16#69, 16#6E, 16#74, 16#10, 16#67, 16#20, 16#6F,
+        16#6B, 16#B0, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F,
+        16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E, 16#67, 16#F0, 16#67, 16#65, 16#74, 16#5F, 16#6D,
+        16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F>>
+).
+
+%% x86_64 unfused get_tuple_element reloads and re-strips the source (adjacent).
+-define(FUSE_TT_X86_64_RELOAD_STRIP, <<16#48, 16#8b, 16#47, 16#58, 16#48, 16#83, 16#e0, 16#fc>>).
+
+fuse_tagged_tuple_single_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_TT_SINGLE_CODE, ?FUSE_TT_SINGLE_ATU8, <<>>
+    ),
+    % No get_tuple_element reload+strip: the field reads from the kept pointer.
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_TT_X86_64_RELOAD_STRIP)),
+    % Tag atom read into scratch (%r11 kept), field 1 read from the kept pointer
+    %   4d 8b 53 08    mov  0x8(%r11),%r10
+    %   49 8b 43 10    mov  0x10(%r11),%rax
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#4d, 16#8b, 16#53, 16#08>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#49, 16#8b, 16#43, 16#10>>)),
+    ok.
+
+fuse_tagged_tuple_multi_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_TT_MULTI_CODE, ?FUSE_TT_MULTI_ATU8, <<>>
+    ),
+    ?assertEqual(nomatch, binary:match(CompiledCode, ?FUSE_TT_X86_64_RELOAD_STRIP)),
+    % Both fields read from the same kept pointer (word 2 and word 3)
+    %   49 8b 43 10    mov  0x10(%r11),%rax   (element 1)
+    %   49 8b 43 18    mov  0x18(%r11),%rax   (element 2)
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#49, 16#8b, 16#43, 16#10>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#49, 16#8b, 16#43, 16#18>>)),
+    ok.
+
+fuse_tagged_tuple_single_aarch64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_aarch64, ?FUSE_TT_SINGLE_CODE, ?FUSE_TT_SINGLE_ATU8, <<>>
+    ),
+    % Fused: tag atom read into scratch x9 keeps x8 (the pointer) live, then the
+    % field is read from x8 directly.
+    %   09 05 40 f9    ldr  x9, [x8, #8]     (tag atom into scratch)
+    %   07 09 40 f9    ldr  x7, [x8, #16]    (field read from kept pointer)
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#09, 16#05, 16#40, 16#f9>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#07, 16#09, 16#40, 16#f9>>)),
+    ok.
+
+%%-----------------------------------------------------------------------------
 %% Bit-syntax fixed-size fusion test (bs_match offset writeback)
 %%
 %% A fixed-field binary decoder (`<<A:8, B:8, C:16, D:32>>`) lowers to one

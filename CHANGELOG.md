@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT `bs_match` now commits the bit offset to the match state once, after the whole command
   sequence, instead of after every command; the intermediate writebacks were dead stores for
   fixed-size binary field reads (`<<A:8, B:16, C:32, ...>>`)
+- JIT now fuses `is_tagged_tuple` with the following `get_tuple_element` reads (record field
+  access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
+  per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
+  spilled across the resolver call
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
