@@ -45,7 +45,7 @@
 %%     opcode without ever being wrong.
 -module(jit_liveness).
 
--export([label_read_masks/1, first_unknown/1]).
+-export([label_read_masks/1, label_analysis/1, first_unknown/1]).
 
 -include("opcodes.hrl").
 -include("compact_term.hrl").
@@ -61,8 +61,17 @@
 %%-----------------------------------------------------------------------------
 -spec label_read_masks(binary()) -> #{non_neg_integer() => non_neg_integer()}.
 label_read_masks(Code) ->
-    Blocks = collect_blocks(Code, none, 0, 0, [], #{}),
-    fixpoint(Blocks, maps:map(fun(_L, {Gen, _Succs}) -> Gen end, Blocks)).
+    {Masks, _CallTargets} = label_analysis(Code),
+    Masks.
+
+%% @doc Like label_read_masks/1, but also returns the set of labels that are
+%% direct call targets (call/call_only/call_last) — function entries and
+%% loop headers, the only labels loop-residency preloading applies to.
+-spec label_analysis(binary()) ->
+    {#{non_neg_integer() => non_neg_integer()}, #{non_neg_integer() => true}}.
+label_analysis(Code) ->
+    {Blocks, CallTargets} = collect_blocks(Code, none, 0, 0, [], {#{}, #{}}),
+    {fixpoint(Blocks, maps:map(fun(_L, {Gen, _Succs}) -> Gen end, Blocks)), CallTargets}.
 
 %% @doc Debug helper: returns {UnknownOpcodeByte, BytesRemaining} for the
 %% first opcode the scanner cannot skip, or 'complete'. Drives coverage.
@@ -74,7 +83,8 @@ first_unknown(<<Op, _/binary>> = Bin) ->
         {label, _, Rest} -> first_unknown(Rest);
         {plain, _, _, Rest} -> first_unknown(Rest);
         {branch, _, _, _, Rest} -> first_unknown(Rest);
-        {terminator, _, _, Rest} -> first_unknown(Rest)
+        {terminator, _, _, Rest} -> first_unknown(Rest);
+        {call, _, _, _, _, Rest} -> first_unknown(Rest)
     end.
 
 %% Per-block state while scanning: Gen (read-before-written mask), Kill
@@ -101,6 +111,20 @@ collect_blocks(Bin, CurLabel, Gen, Kill, Succs, Acc) ->
             Ends = [{label, L, Kill} || L <- Labels] ++ [exit || Labels =:= []],
             Acc1 = close_block(CurLabel, Gen1, Ends ++ Succs, Acc),
             skip_to_label(Rest, Acc1);
+        {call, Reads, Writes, Target, Tail, Rest} ->
+            {BAcc, CT} = Acc,
+            Acc1 = {BAcc, CT#{Target => true}},
+            %% The callee's own block accounts its reads; from this block's
+            %% perspective a non-tail call clobbers, a tail call ends it.
+            case Tail of
+                false ->
+                    {Gen1, Kill1} = account(Reads, Writes, Gen, Kill),
+                    collect_blocks(Rest, CurLabel, Gen1, Kill1, Succs, Acc1);
+                true ->
+                    Gen1 = Gen bor (mask_of(Reads) band bnot Kill),
+                    Acc2 = close_block(CurLabel, Gen1, [{label, Target, Kill} | Succs], Acc1),
+                    skip_to_label(Rest, Acc2)
+            end;
         unknown ->
             Acc1 = close_block(CurLabel, Gen bor ?ALL_X, [exit | Succs], Acc),
             poison(Acc1)
@@ -116,6 +140,7 @@ skip_to_label(Bin, Acc) ->
         {plain, _, _, Rest} -> skip_to_label(Rest, Acc);
         {branch, _, _, _, Rest} -> skip_to_label(Rest, Acc);
         {terminator, _, _, Rest} -> skip_to_label(Rest, Acc);
+        {call, _, _, _, _, Rest} -> skip_to_label(Rest, Acc);
         unknown -> poison(Acc)
     end.
 
@@ -143,12 +168,12 @@ mask_of(Items) when is_list(Items) ->
 
 close_block(none, _Gen, _Succs, Acc) ->
     Acc;
-close_block(Label, Gen, Succs, Acc) ->
-    Acc#{Label => {Gen band ?ALL_X, Succs}}.
+close_block(Label, Gen, Succs, {BAcc, CT}) ->
+    {BAcc#{Label => {Gen band ?ALL_X, Succs}}, CT}.
 
 %% Unknown opcode encountered: every mask becomes ?ALL_X.
-poison(Acc) ->
-    maps:map(fun(_L, {_G, _S}) -> {?ALL_X, [exit]} end, Acc).
+poison({BAcc, CT}) ->
+    {maps:map(fun(_L, {_G, _S}) -> {?ALL_X, [exit]} end, BAcc), CT}.
 
 %% in(L) = Gen(L) | union over successors S of (in(S) & ~KillSnapshot(S)).
 %% Monotone and bounded (32 bits per label).
@@ -735,17 +760,17 @@ op_scan(<<?OP_WAIT_TIMEOUT, Rest0/binary>>) ->
 %% Calls: read x0..arity-1; non-tail calls clobber every x register.
 op_scan(<<?OP_CALL, Rest0/binary>>) ->
     {Arity, Rest1} = decode_value(Rest0),
-    {_Label, Rest2} = decode_value(Rest1),
-    {plain, {lt, Arity}, all, Rest2};
+    {Label, Rest2} = decode_value(Rest1),
+    {call, {lt, Arity}, all, Label, false, Rest2};
 op_scan(<<?OP_CALL_ONLY, Rest0/binary>>) ->
     {Arity, Rest1} = decode_value(Rest0),
-    {_Label, Rest2} = decode_value(Rest1),
-    {terminator, {lt, Arity}, [], Rest2};
+    {Label, Rest2} = decode_value(Rest1),
+    {call, {lt, Arity}, [], Label, true, Rest2};
 op_scan(<<?OP_CALL_LAST, Rest0/binary>>) ->
     {Arity, Rest1} = decode_value(Rest0),
-    {_Label, Rest2} = decode_value(Rest1),
+    {Label, Rest2} = decode_value(Rest1),
     {_N, Rest3} = decode_value(Rest2),
-    {terminator, {lt, Arity}, [], Rest3};
+    {call, {lt, Arity}, [], Label, true, Rest3};
 op_scan(<<?OP_CALL_EXT, Rest0/binary>>) ->
     {Arity, Rest1} = decode_value(Rest0),
     {_Index, Rest2} = decode_value(Rest1),
