@@ -3,7 +3,23 @@
  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 -->
 
-# Benchmark matrix results — 2026-07-05 update (BEAM vs JIT SMP only)
+# Benchmark matrix results — 2026-07-05 (second update): stdlib WON
+
+With loop-header register residency (6a4b2af03), JITState cp_base
+(c90d9d2e7) and — decisively — the select_val all-immediate word-compare
+(92e3565c1, which removed ~115M per-compile PRIM_TERM_COMPARE calls from
+atom-dispatch select_vals in the compiler's own code):
+
+- **erlc stdlib (84 files): BEAM 290.9 ms/file vs JIT SMP 284.4 ms/file —
+  1.02x, AtomVM BEATS BEAM.** unicode_util 5.40→4.68 s, erl_parse
+  3.45→3.04 s; every other file lifted by the compiler's own speedup.
+- **erlc kernel (101 files): 1.59x** (205.6 vs 129.5 ms/file).
+- **erlc overall (185 files): 1.22x** (244.4 vs 199.8 ms/file).
+- **benchmark app compute: 1.02x** (BEAM 81.1 ms vs JIT SMP 79.8 ms);
+  wall including startup 108 vs 341 ms (3.1x).
+- **estone: ~1.6 M vs 2.73 M (0.59x).** Remaining deficits: pattern
+  −565k (per-iteration instruction count vs BeamAsm), int_arith −168k
+  (non-tail call/return overhead), bif_dispatch −123k, links −54k.
 
 With the x-register liveness analysis (jit_liveness pass A) and deferred
 write-back elision (pass B) on top of the 2026-07-04 batch:
