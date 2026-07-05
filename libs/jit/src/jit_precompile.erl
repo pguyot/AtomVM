@@ -262,7 +262,7 @@ compile(Target, Dir, Dwarf, Path) ->
     catch
         error:function_clause:S ->
             case S of
-                [{jit, first_pass, [<<Opcode, _Rest/binary>> | _], _} | _] ->
+                [{jit, emit_pass, [<<Opcode, _Rest/binary>> | _], _} | _] ->
                     io:format("Unimplemented opcode ~p (~s)\n", [Opcode, Path]),
                     erlang:raise(error, function_clause, S);
                 _ ->

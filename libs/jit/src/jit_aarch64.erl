@@ -84,6 +84,7 @@
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     set_live_masks/2,
+    supports_loop_residency/0,
     heap_bump_alloc/2,
     jump_table_range_check/4,
     jump_table_dispatch/1,
@@ -3425,6 +3426,12 @@ move_float_to_fp_reg(
 ) -> state().
 set_live_masks(State, {Masks, CallTargets}) ->
     State#state{live_masks = Masks, call_targets = CallTargets}.
+
+%% This backend opens call_only blocks with loop-header register residency
+%% (site-specific reconciliation); jit.erl must not share whole op_call_last
+%% blocks across sites (see OP_CALL_LAST's HotCapable).
+-spec supports_loop_residency() -> boolean().
+supports_loop_residency() -> true.
 
 pending_clear_all(#state{pending_x = P} = State) when map_size(P) =:= 0 ->
     State;
