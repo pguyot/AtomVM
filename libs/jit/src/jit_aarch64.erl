@@ -63,6 +63,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     get_module_index/1,
+    get_cp_base/1,
     get_module_atom_index/2,
     move_imported_gcbif_to_native_register/3,
     and_/3,
@@ -264,6 +265,9 @@
 -define(JITSTATE_MODULE, {?JITSTATE_REG, 0}).
 -define(JITSTATE_CONTINUATION, {?JITSTATE_REG, 16#8}).
 -define(JITSTATE_REDUCTIONCOUNT, {?JITSTATE_REG, 16#10}).
+%% module_index << 24, maintained by jit_state_set_module in jit.c
+%% (_Static_assert pins the offset).
+-define(JITSTATE_CPBASE, {?JITSTATE_REG, 16#28}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 % module->local_atoms_to_global_table (see _Static_assert in jit.c).
@@ -2805,6 +2809,21 @@ move_imported_gcbif_to_native_register(
 %% @param State current backend state
 %% @return Tuple of {Updated backend state, Native register containing module index}
 %%-----------------------------------------------------------------------------
+%% @doc Load jit_state->cp_base (module_index << 24) into a fresh register.
+%% One load instead of get_module_index's dependent module->index chain;
+%% used by the intra-module return check.
+-spec get_cp_base(state()) -> {state(), aarch64_register()}.
+get_cp_base(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Bit = reg_bit(Reg),
+    I1 = jit_aarch64_asm:ldr(Reg, ?JITSTATE_CPBASE),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)}, Reg}.
+
 -spec get_module_index(state()) -> {state(), aarch64_register()}.
 get_module_index(
     #state{
@@ -3914,14 +3933,13 @@ call_primitive_direct(State0, Primitive, Args) ->
 
 %% @private
 -spec set_cp(state()) -> {state(), non_neg_integer(), 4 | 8}.
-set_cp(State0) ->
-    % get module index (dynamically)
-    {#state{stream_module = StreamModule, stream = Stream0} = State1, Reg} = get_module_index(
-        State0
-    ),
+set_cp(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
     Offset = StreamModule:offset(Stream0),
-    % build cp with module_index << 24
-    I1 = jit_aarch64_asm:lsl(Reg, Reg, 24),
+    % cp = jit_state->cp_base (module_index << 24) | (return offset << 2);
+    % the offset mov is rewritten once the return point is known.
+    I1 = jit_aarch64_asm:ldr(Reg, ?JITSTATE_CPBASE),
     if
         Offset >= 16250 ->
             I2 = jit_aarch64_asm:nop(),
@@ -3937,9 +3955,10 @@ set_cp(State0) ->
     I5 = jit_aarch64_asm:str(Reg, ?CP),
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    State2 = State1#state{stream = Stream1},
-    State3 = free_native_register(State2, Reg),
-    {State3, MOVOffset, RewriteSize}.
+    %% Reg was free but may cache stale contents; it now holds a transient
+    %% cp value.
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State0#state{stream = Stream1, regs = Regs1}, MOVOffset, RewriteSize}.
 
 %% @private
 -spec rewrite_cp_offset(state(), non_neg_integer(), 4 | 8) -> state().

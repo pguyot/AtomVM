@@ -176,6 +176,12 @@ struct JITState
     // primitives, never by generated code, so its offset is not part of the
     // native code ABI.
     struct SchedulerCaches *caches;
+    // module->module_index << 24, kept in sync with the module field (see
+    // jit_state_set_module in jit.c and the scheduler-loop initialization).
+    // Generated 64-bit code reads it to build and check cp values without
+    // the module->index dereference chain; its offset is part of the native
+    // code ABI (JITSTATE_CPBASE in jit_aarch64.erl).
+    uintptr_t cp_base;
 };
 
 // Remember to keep this struct in sync with libs/jit/src/primitives.hrl
