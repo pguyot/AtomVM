@@ -69,6 +69,7 @@
     popq/1,
     jmpq/1,
     retq/0,
+    nop/1,
     cmpb/2,
     xchgq/2,
     xorl/2,
@@ -846,6 +847,20 @@ jmpq({Reg}) ->
 
 retq() ->
     <<16#C3>>.
+
+%% Canonical multi-byte NOP of exactly N bytes (Intel SDM recommended forms,
+%% N =< 9). Widths larger than 9 are built from a 9-byte nop plus a shorter
+%% one. Used to neutralize an elided store in place (jit_backend_pending).
+nop(1) -> <<16#90>>;
+nop(2) -> <<16#66, 16#90>>;
+nop(3) -> <<16#0F, 16#1F, 16#00>>;
+nop(4) -> <<16#0F, 16#1F, 16#40, 16#00>>;
+nop(5) -> <<16#0F, 16#1F, 16#44, 16#00, 16#00>>;
+nop(6) -> <<16#66, 16#0F, 16#1F, 16#44, 16#00, 16#00>>;
+nop(7) -> <<16#0F, 16#1F, 16#80, 16#00, 16#00, 16#00, 16#00>>;
+nop(8) -> <<16#0F, 16#1F, 16#84, 16#00, 16#00, 16#00, 16#00, 16#00>>;
+nop(9) -> <<16#66, 16#0F, 16#1F, 16#84, 16#00, 16#00, 16#00, 16#00, 16#00>>;
+nop(N) when N > 9 -> <<(nop(9))/binary, (nop(N - 9))/binary>>.
 
 %% XCHG r64, r64: Exchange two 64-bit registers
 %% Encoding: REX.W + 87 /r
