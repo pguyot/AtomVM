@@ -10,11 +10,15 @@ directly, instead of being lost in the whole-app benchmark (where list-head
 matching, record access and fixed-field binary decoding are a small fraction of
 runtime).
 
-| op              | fusion | opcodes                                   | commit      |
-|-----------------|--------|-------------------------------------------|-------------|
-| `list_match`    | **D**  | `is_nonempty_list` + `get_list`           | `efc72f5e5` |
-| `record_access` | **E**  | `is_tagged_tuple` + `get_tuple_element`   | `5cf5b1d20` |
-| `bin_decode`    | **H**  | `bs_match` fixed 8/16/32-bit integer reads | `0ca81fb01` |
+| op              | fusion | opcodes                                   | commit      | status |
+|-----------------|--------|-------------------------------------------|-------------|--------|
+| `list_match`    | **D**  | `is_nonempty_list` + `get_list`           | `efc72f5e5` | reverted (`6a81daf7f`) |
+| `record_access` | **E**  | `is_tagged_tuple` + `get_tuple_element`   | `5cf5b1d20` | kept |
+| `bin_decode`    | **H**  | `bs_match` fixed 8/16/32-bit integer reads | `0ca81fb01` | kept |
+
+To isolate D or E against the code without them, build at `efc72f5e5^`
+(`0ca81fb01`, H only) as baseline. The fused commits still exist in history even
+though D's effect is reverted on the branch tip, so the recipe below is unchanged.
 
 ## Why this exists
 
@@ -28,10 +32,25 @@ On x86_64 (out-of-order, fast L1) an interleaved A/B showed:
 
 H is a clear win (it removes dead stores). D and E are neutral-to-negative on
 x86_64 because the "redundant" reload they eliminate is a cheap L1 hit that gets
-replaced by an equal-cost register operation. The open question is whether D
+replaced by an equal-cost register operation. The open question was whether D
 (and E) are net **wins on the in-order, cache-poorer MCU-class targets**
-(aarch64 Apple Silicon is a useful proxy; real Cortex-M/Xtensa/RISC-V more so),
+(aarch64 Apple Silicon is a partial proxy; real Cortex-M/Xtensa/RISC-V more so),
 which is what this harness is for.
+
+### aarch64 result (Apple Silicon, two interleaved N=41 runs)
+
+| op                  | aarch64 speedup |
+|---------------------|----------------:|
+| `list_match` (D)    | ~1.000x (neutral) |
+| `record_access` (E) | ~1.000x (neutral) |
+
+Apple Silicon is a big out-of-order core with excellent caches, so this
+confirms *no harm* on aarch64 but cannot confirm the MCU-class win that was D's
+rationale. Given D showed a −6% regression on x86_64, neutral on aarch64, and
+**no demonstrated win on any measured target**, it was reverted (`6a81daf7f`);
+E was kept (neutral everywhere, shrinks MCU code). If a real Cortex-M / Xtensa /
+RISC-V A/B later shows D winning, revert the revert — the fused commit is intact
+in history.
 
 ## Isolating one fusion
 
