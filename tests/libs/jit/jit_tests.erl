@@ -746,6 +746,63 @@ if_block_unsigned_less_than_test_() ->
 
 
 %%-----------------------------------------------------------------------------
+%% Bit-syntax fixed-size fusion test (bs_match offset writeback)
+%%
+%% A fixed-field binary decoder (`<<A:8, B:8, C:16, D:32>>`) lowers to one
+%% ensure command followed by a run of integer reads. The bit offset stays in a
+%% register across the whole command sequence and every sub-command reads it
+%% from there, so writing it back to match_state[2] after each command is a dead
+%% store. The offset is now committed once, after the command sequence, instead
+%% of after every command.
+%%
+%% On x86_64 the offset writeback is `mov %r9,0x10(%r11)` (store the offset to
+%% word 2 of the stripped match-state pointer). Without the fusion it appears
+%% once per command (5x: one ensure + four integer reads); with it, once.
+%%-----------------------------------------------------------------------------
+
+% f(<<A:8, B:8, C:16, D:32>>) -> {A, B, C, D}; f(_) -> error.
+-define(FUSE_BS_CODE,
+    <<16#00, 16#00, 16#00, 16#10, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#00, 16#B6, 16#00,
+        16#00, 16#00, 16#08, 16#00, 16#00, 16#00, 16#03, 16#01, 16#10, 16#02, 16#12, 16#22, 16#10,
+        16#01, 16#20, 16#A6, 16#35, 16#03, 16#10, 16#03, 16#B6, 16#35, 16#03, 16#17, 16#08, 16#1A,
+        16#32, 16#08, 16#40, 16#42, 16#10, 16#02, 16#80, 16#10, 16#13, 16#42, 16#20, 16#02, 16#80,
+        16#10, 16#23, 16#42, 16#30, 16#02, 16#08, 16#10, 16#10, 16#33, 16#42, 16#40, 16#02, 16#08,
+        16#20, 16#10, 16#43, 16#10, 16#50, 16#50, 16#A4, 16#03, 16#17, 16#40, 16#13, 16#23, 16#33,
+        16#43, 16#13, 16#01, 16#30, 16#40, 16#52, 16#03, 16#13, 16#01, 16#40, 16#02, 16#12, 16#62,
+        16#00, 16#01, 16#50, 16#40, 16#12, 16#03, 16#4E, 16#10, 16#00, 16#01, 16#60, 16#02, 16#12,
+        16#62, 16#10, 16#01, 16#70, 16#40, 16#03, 16#13, 16#40, 16#12, 16#03, 16#4E, 16#20, 16#10,
+        16#03>>
+).
+-define(FUSE_BS_ATU8,
+    <<16#FF, 16#FF, 16#FF, 16#F8, 16#30, 16#62, 16#73, 16#64, 16#30, 16#68, 16#64, 16#72, 16#E0,
+        16#65, 16#6E, 16#73, 16#75, 16#72, 16#65, 16#5F, 16#65, 16#78, 16#61, 16#63, 16#74, 16#6C,
+        16#79, 16#70, 16#69, 16#6E, 16#74, 16#65, 16#67, 16#65, 16#72, 16#50, 16#65, 16#72, 16#72,
+        16#6F, 16#72, 16#B0, 16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66,
+        16#6F, 16#60, 16#65, 16#72, 16#6C, 16#61, 16#6E, 16#67, 16#F0, 16#67, 16#65, 16#74, 16#5F,
+        16#6D, 16#6F, 16#64, 16#75, 16#6C, 16#65, 16#5F, 16#69, 16#6E, 16#66, 16#6F>>
+).
+-define(FUSE_BS_TYPE,
+    <<16#00, 16#00, 16#00, 16#04, 16#00, 16#00, 16#00, 16#01, 16#1F, 16#FF>>
+).
+
+count_matches(Bin, Pattern) ->
+    count_matches(Bin, Pattern, 0, 0).
+count_matches(Bin, Pattern, Start, Acc) ->
+    case binary:match(Bin, Pattern, [{scope, {Start, byte_size(Bin) - Start}}]) of
+        {Pos, Len} -> count_matches(Bin, Pattern, Pos + Len, Acc + 1);
+        nomatch -> Acc
+    end.
+
+fuse_bs_match_offset_writeback_x86_64_test() ->
+    CompiledCode = compile_stream_for_backend(
+        jit_x86_64, ?FUSE_BS_CODE, ?FUSE_BS_ATU8, ?FUSE_BS_TYPE
+    ),
+    % The offset writeback `mov %r9,0x10(%r11)` is committed once (after the
+    % whole command run) instead of after each of the 5 commands.
+    ?assertEqual(1, count_matches(CompiledCode, <<16#4d, 16#89, 16#4b, 16#10>>)),
+    ok.
+
+%%-----------------------------------------------------------------------------
 %% Typed integer optimization tests
 %%
 %% These tests verify that comparison and arithmetic operations on registers
