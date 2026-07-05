@@ -910,18 +910,12 @@ emit_pass(<<?OP_IS_NONEMPTY_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_NONEMPTY_LIST ~p, ~p\n", [Label, Arg1]),
-    case try_fuse_list_ops(Rest2, Arg1, Label, MMod, MSt1, State0) of
-        {fused, MStFused, RestFused} ->
-            ?ASSERT_ALL_NATIVE_FREE(MStFused),
-            emit_pass(RestFused, MMod, MStFused, State0);
-        not_fused ->
-            {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-            MSt3 = cond_jump_to_label(
-                {{free, Reg}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}, Label, MMod, MSt2
-            ),
-            ?ASSERT_ALL_NATIVE_FREE(MSt3),
-            emit_pass(Rest2, MMod, MSt3, State0)
-    end;
+    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
+    MSt3 = cond_jump_to_label(
+        {{free, Reg}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}, Label, MMod, MSt2
+    ),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    emit_pass(Rest2, MMod, MSt3, State0);
 % 57
 emit_pass(<<?OP_IS_TUPLE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -6816,91 +6810,6 @@ emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMo
     MSt9 = MMod:free_native_registers(MSt8, [Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt9),
     MSt9.
-
-%% Fuse is_nonempty_list + get_list/get_hd/get_tl on the same register.
-%% is_nonempty_list already checks the LIST primary tag and leaves the term in a
-%% register; the following get_* ops otherwise reload the source register and
-%% strip its tag again. Fusing keeps the untagged cons pointer and reads
-%% head/tail directly from it, removing the redundant reload and tag strip.
-try_fuse_list_ops(Rest0, Arg1, IsNonemptyListLabel, MMod, MSt0, State0) ->
-    SrcArg = unwrap_typed(Arg1),
-    case collect_get_list_elements(Rest0, SrcArg, MMod, MSt0, State0) of
-        {[], _Rest, _MSt} ->
-            not_fused;
-        {Elements, Rest1, MSt1} ->
-            ?TRACE("FUSE: is_nonempty_list ~p + get_* ~p\n", [IsNonemptyListLabel, Elements]),
-            MStFused = emit_fused_list_ops(IsNonemptyListLabel, Arg1, Elements, MMod, MSt1),
-            {fused, MStFused, Rest1}
-    end.
-
-%% Collect a run of get_list/get_hd/get_tl ops reading from SrcArg, returning
-%% the {WordIndex, Dest} reads to emit. Stops (and includes the current op) when
-%% a destination overwrites the source register: subsequent get_* ops would then
-%% read from the new value, not the original cons cell.
-collect_get_list_elements(<<?OP_GET_LIST, Rest0/binary>> = FullBin, SrcArg, MMod, MSt0, State0) ->
-    {MSt1, Source, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
-    {MSt2, HeadDest, Rest2} = decode_dest(Rest1, MMod, MSt1),
-    {MSt3, TailDest, Rest3} = decode_dest(Rest2, MMod, MSt2),
-    case Source =:= SrcArg of
-        true ->
-            ?TRACE("FUSE: + get_list ~p, ~p, ~p\n", [Source, HeadDest, TailDest]),
-            Elements = [{?LIST_HEAD_INDEX, HeadDest}, {?LIST_TAIL_INDEX, TailDest}],
-            continue_get_list_elements(
-                Elements, [HeadDest, TailDest], SrcArg, Rest3, MMod, MSt3, State0
-            );
-        false ->
-            {[], FullBin, MSt0}
-    end;
-collect_get_list_elements(<<?OP_GET_HD, Rest0/binary>> = FullBin, SrcArg, MMod, MSt0, State0) ->
-    collect_get_list_single(?LIST_HEAD_INDEX, Rest0, FullBin, SrcArg, MMod, MSt0, State0);
-collect_get_list_elements(<<?OP_GET_TL, Rest0/binary>> = FullBin, SrcArg, MMod, MSt0, State0) ->
-    collect_get_list_single(?LIST_TAIL_INDEX, Rest0, FullBin, SrcArg, MMod, MSt0, State0);
-collect_get_list_elements(Rest, _SrcArg, _MMod, MSt, _State0) ->
-    {[], Rest, MSt}.
-
-collect_get_list_single(Index, Rest0, FullBin, SrcArg, MMod, MSt0, State0) ->
-    {MSt1, Source, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
-    {MSt2, Dest, Rest2} = decode_dest(Rest1, MMod, MSt1),
-    case Source =:= SrcArg of
-        true ->
-            ?TRACE("FUSE: + get_hd/get_tl ~p, ~p, ~p\n", [Index, Source, Dest]),
-            continue_get_list_elements([{Index, Dest}], [Dest], SrcArg, Rest2, MMod, MSt2, State0);
-        false ->
-            {[], FullBin, MSt0}
-    end.
-
-continue_get_list_elements(Elements, Dests, SrcArg, Rest, MMod, MSt, State0) ->
-    case lists:member(SrcArg, Dests) of
-        true ->
-            {Elements, Rest, MSt};
-        false ->
-            {MoreElements, RestN, MStN} =
-                collect_get_list_elements(Rest, SrcArg, MMod, MSt, State0),
-            {Elements ++ MoreElements, RestN, MStN}
-    end.
-
-emit_fused_list_ops(IsNonemptyListLabel, Arg1, Elements, MMod, MSt0) ->
-    {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
-    %% Tag check without clobbering Reg (a scratch holds Reg & PRIMARY_MASK), so
-    %% the checked term survives for the tag strip below.
-    MSt2 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST},
-        IsNonemptyListLabel,
-        MMod,
-        MSt1
-    ),
-    {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt4 = lists:foldl(
-        fun({Index, Dest}, AccMSt0) ->
-            AccMSt1 = MMod:move_array_element(AccMSt0, Reg, Index, Dest),
-            MMod:free_native_registers(AccMSt1, [Dest])
-        end,
-        MSt3,
-        Elements
-    ),
-    MSt5 = MMod:free_native_registers(MSt4, [Reg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt5),
-    MSt5.
 
 %% Fuse is_tagged_tuple + get_tuple_element* on the same register.
 %%
