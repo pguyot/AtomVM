@@ -502,9 +502,23 @@ first_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = St
             8 ->
                 % 64-bit: cp packs (module_index << 24) | (offset << 2) in one word.
                 {MSt1, CpReg0} = MMod:move_to_native_register(MSt0, cp),
-                {MSt2, ModuleIndexReg} = MMod:get_module_index(MSt1),
+                {MSt2, ModuleIndexReg, CpShift} =
+                    case erlang:function_exported(MMod, get_cp_base, 1) of
+                        true ->
+                            % cp_base is module_index << 24: one load, then
+                            % compare against cp >> 24 << 24... shift the base
+                            % down instead so the cp extraction is shared.
+                            {MSt2a, BaseReg} = MMod:get_cp_base(MSt1),
+                            {MSt2b, BaseShifted} = MMod:shift_right(
+                                MSt2a, {free, BaseReg}, 24
+                            ),
+                            {MSt2b, BaseShifted, 24};
+                        false ->
+                            {MSt2a, IdxReg} = MMod:get_module_index(MSt1),
+                            {MSt2a, IdxReg, 24}
+                    end,
                 % Extract module index from cp (upper 8 bits: cp >> 24)
-                {MSt3, CpReg1} = MMod:shift_right(MSt2, CpReg0, 24),
+                {MSt3, CpReg1} = MMod:shift_right(MSt2, CpReg0, CpShift),
                 % Compare extracted module index with current module index
                 MSt4 = MMod:if_block(
                     MSt3,
@@ -6470,8 +6484,16 @@ term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
     ).
 
 term_from_catch_label(Dest, Label, MMod, MSt1) ->
-    {MSt2, Reg} = MMod:get_module_index(MSt1),
-    MSt3 = MMod:shift_left(MSt2, Reg, 24),
+    %% A catch term is (module_index << 24) | (label << imm2size) | CATCH:
+    %% backends with cp_base provide module_index << 24 in one load.
+    {MSt3, Reg} =
+        case erlang:function_exported(MMod, get_cp_base, 1) of
+            true ->
+                MMod:get_cp_base(MSt1);
+            false ->
+                {MSt2, Reg0} = MMod:get_module_index(MSt1),
+                {MMod:shift_left(MSt2, Reg0, 24), Reg0}
+        end,
     MSt4 = MMod:or_(MSt3, Reg, (Label bsl ?TERM_IMMED2_TAG_SIZE) bor ?TERM_IMMED2_CATCH),
     MSt5 = MMod:move_to_vm_register(MSt4, Reg, Dest),
     MMod:free_native_registers(MSt5, [Reg, Dest]).
