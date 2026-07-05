@@ -23,6 +23,8 @@
 -export([
     word_size/0,
     new/3,
+    set_live_masks/2,
+    supports_loop_residency/0,
     stream/1,
     offset/1,
     flush/1,
@@ -178,7 +180,15 @@
     jump_table_start :: non_neg_integer(),
     labels :: #{integer() | reference() => integer()},
     variant :: non_neg_integer(),
-    regs :: jit_regs:regs()
+    regs :: jit_regs:regs(),
+    %% Write-through x-store elision (jit_backend_pending_impl.hrl): per-label
+    %% live-in masks (jit_liveness pass A), pending stores
+    %% (x index -> {stream offset, store width, cond depth}) and the current
+    %% conditional-emission depth.
+    live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
+    pending_x = #{} ::
+        #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
+    cond_depth = 0 :: non_neg_integer()
 }).
 
 -type state() :: #state{}.
@@ -382,6 +392,23 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 -define(MASK_TO_LIST_REGS, [a15, a14, a13, a12, a11, a10, a9, a8, a7, a6, a5, a4, a3, a2, a1, a0]).
 -define(JITSTATE_ARG_REG, jit_state).
 -include("jit_backend_regs_impl.hrl").
+-include("jit_backend_pending_impl.hrl").
+
+%% Receive the per-label live-in x-register masks (jit_liveness pass A) and
+%% activate write-through store elision. No loop-header residency on xtensa.
+set_live_masks(State, {Masks, _CallTargets}) ->
+    State#state{live_masks = Masks}.
+
+supports_loop_residency() -> false.
+
+%% Xtensa RRI8 `s32i' x-store and the RRR `nop' are both a single 3-byte
+%% instruction (this backend does not use the 2-byte density encodings for
+%% x stores).
+pending_nop_bytes(3) -> jit_xtensa_asm:nop().
+
+%% The store is the last emitted 3-byte instruction.
+pending_note_store(#state{stream_module = SM, stream = St} = State, X) ->
+    pending_note_store(State, X, SM:offset(St) - 3).
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit the jump table at the beginning of the module. Branches will be
@@ -573,7 +600,11 @@ load_primitive_ptr(Primitive, TargetReg) ->
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> {state(), xtensa_register()}.
-call_primitive(
+call_primitive(StateP, Primitive, Args) ->
+    %% The callee reads ctx->x: any pending x store must stay.
+    call_primitive0(pending_clear_all(StateP), Primitive, Args).
+
+call_primitive0(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -621,7 +652,11 @@ call_primitive(
 %% @param Args arguments to pass to the primitive
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-call_primitive_last(
+call_primitive_last(StateP, Primitive, Args) ->
+    %% Control leaves through the primitive, which reads ctx->x.
+    call_primitive_last0(pending_clear_all(StateP), Primitive, Args).
+
+call_primitive_last0(
     #state{
         stream_module = StreamModule,
         stream = Stream0
@@ -718,7 +753,11 @@ return_if_not_equal_to_ctx(
 %% @param Label to jump to
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-jump_to_label(
+jump_to_label(StateP, Label) ->
+    %% Pendings the target may read from memory keep their store.
+    jump_to_label0(pending_filter_label(StateP, Label), Label).
+
+jump_to_label0(
     #state{stream_module = StreamModule, stream = Stream0, labels = Labels} = State0, Label
 ) ->
     LabelLookupResult =
@@ -731,7 +770,10 @@ jump_to_label(
     Stream1 = StreamModule:append(Stream0, CodeBlock),
     State1#state{stream = Stream1, regs = jit_regs:unreachable(State1#state.regs)}.
 
-jump_to_offset(#state{stream_module = StreamModule, stream = Stream0} = State, TargetOffset) ->
+jump_to_offset(StateP, TargetOffset) ->
+    %% Entering a shared (tail-cached) block that reads ctx->x: pendings stay.
+    #state{stream_module = StreamModule, stream = Stream0} =
+        State = pending_clear_all(StateP),
     Offset = StreamModule:offset(Stream0),
     CodeBlock = branch_to_offset_code(State, Offset, TargetOffset),
     Stream1 = StreamModule:append(Stream0, CodeBlock),
@@ -748,7 +790,10 @@ cond_jump_to_label(State, Cond, Label) ->
 %% @param {free, OffsetReg} register containing the offset value
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-jump_to_continuation(
+jump_to_continuation(StateP, {free, OffsetReg}) ->
+    jump_to_continuation0(pending_clear_all(StateP), {free, OffsetReg}).
+
+jump_to_continuation0(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -847,7 +892,7 @@ if_block(
         {[], State0},
         CondList
     ),
-    State2 = BlockFn(State1),
+    State2 = pending_exit_cond(BlockFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
     Stream3 = lists:foldl(
@@ -870,7 +915,7 @@ if_block(
 ) ->
     Offset = StreamModule:offset(Stream0),
     {State1, JumpDelta} = if_block_cond(State0, Cond),
-    State2 = BlockFn(State1),
+    State2 = pending_exit_cond(BlockFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
     %% Patch the J instruction in the trampoline to jump to the end of the block
@@ -904,7 +949,7 @@ if_else_block(
     Offset = StreamModule:offset(Stream0),
     {State1, JumpDelta} = if_block_cond(State0, Cond),
     JumpInstrOffset = Offset + JumpDelta,
-    State2 = BlockTrueFn(State1),
+    State2 = pending_exit_cond(BlockTrueFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
     %% Emit unconditional J to skip the else block (will be replaced, 3 bytes)
     ElseJumpOffset = StreamModule:offset(Stream2),
@@ -926,7 +971,7 @@ if_else_block(
             jit_regs:used_regs(State1#state.regs)
         )
     },
-    State3 = BlockFalseFn(StateElse),
+    State3 = pending_exit_cond(BlockFalseFn(pending_enter_cond(StateElse))),
     Stream5 = State3#state.stream,
     OffsetFinal = StreamModule:offset(Stream5),
     %% Patch the unconditional J to jump to the end (3 bytes)
@@ -1761,7 +1806,11 @@ supports_fp(_State) -> false.
 %%-----------------------------------------------------------------------------
 -spec call_func_ptr(state(), {free, xtensa_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), xtensa_register()}.
-call_func_ptr(
+call_func_ptr(StateP, FuncPtrTuple, Args) ->
+    %% The callee reads ctx->x: any pending x store must stay.
+    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args).
+
+call_func_ptr0(
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -2234,7 +2283,21 @@ set_registers_args1(State, Value, Reg, _StackOffset) when ?IS_SIGNED_OR_UNSIGNED
 %%-----------------------------------------------------------------------------
 -spec move_to_vm_register(state(), Src :: value() | vm_register(), Dest :: vm_register()) ->
     state().
-move_to_vm_register(#state{regs = Regs0} = State, Src, Dest) ->
+move_to_vm_register(#state{regs = Regs0} = State0, Src, Dest) ->
+    %% Pending-store bookkeeping (jit_backend_pending_impl.hrl): an x-register
+    %% source may be re-read from memory; an x-register destination supersedes
+    %% a same-depth pending store. The s32i to x[X] is always the last
+    %% instruction emitted.
+    StateA =
+        case Src of
+            {x_reg, SrcX} when is_integer(SrcX) -> pending_clear_x(State0, SrcX);
+            _ -> State0
+        end,
+    State =
+        case Dest of
+            {x_reg, DestX} when is_integer(DestX) -> pending_elide_prev(StateA, DestX);
+            _ -> StateA
+        end,
     VmLoc = vm_dest_to_contents(Dest),
     Regs1 =
         case VmLoc of
@@ -2242,12 +2305,17 @@ move_to_vm_register(#state{regs = Regs0} = State, Src, Dest) ->
             _ -> jit_regs:invalidate_vm_loc(Regs0, VmLoc)
         end,
     State1 = move_to_vm_register_emit(State#state{regs = Regs1}, Src, Dest),
+    State2 =
+        case Dest of
+            {x_reg, DestX2} when is_integer(DestX2) -> pending_note_store(State1, DestX2);
+            _ -> State1
+        end,
     case {Src, VmLoc} of
         {Reg, Contents} when is_atom(Reg), Contents =/= unknown ->
-            #state{regs = Regs2} = State1,
-            State1#state{regs = jit_regs:set_contents(Regs2, Reg, Contents)};
+            #state{regs = Regs2} = State2,
+            State2#state{regs = jit_regs:set_contents(Regs2, Reg, Contents)};
         _ ->
-            State1
+            State2
     end.
 
 % Native register to VM register
@@ -2458,20 +2526,21 @@ with_temp(#state{regs = Regs0} = State0, EmitFun, ContentsFun) ->
     vm_register() | xtensa_register()
 ) -> state().
 move_array_element(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    #state{stream_module = StreamModule, stream = _Stream0, regs = Regs0} = State0,
     Reg,
     Index,
     {x_reg, X}
 ) when X < ?MAX_REG andalso is_atom(Reg) andalso is_integer(Index) ->
+    State = pending_elide_prev(State0, X),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     I1 = jit_xtensa_asm:l32i(Temp, Reg, Index * 4),
     {BaseReg, Off} = ?X_REG(X),
     I2 = jit_xtensa_asm:s32i(Temp, BaseReg, Off),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Stream1 = StreamModule:append(State#state.stream, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
     Regs2 = jit_regs:set_contents(Regs1, Temp, {x_reg, X}),
-    State#state{stream = Stream1, regs = Regs2};
+    pending_note_store(State#state{stream = Stream1, regs = Regs2}, X);
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     Reg,
@@ -2528,25 +2597,31 @@ move_array_element(
 move_array_element(
     #state{
         stream_module = StreamModule,
-        stream = Stream0,
+        stream = _Stream0,
         regs = Regs0
-    } = State,
+    } = State0,
     Reg,
     {free, IndexReg},
     {x_reg, X}
 ) when X < ?MAX_REG andalso is_atom(IndexReg) ->
+    State = pending_elide_prev(State0, X),
     I1 = jit_xtensa_asm:slli(IndexReg, IndexReg, 2),
     I2 = jit_xtensa_asm:add(IndexReg, Reg, IndexReg),
     I3 = jit_xtensa_asm:l32i(IndexReg, IndexReg, 0),
     {BaseReg, Off} = ?X_REG(X),
     I4 = jit_xtensa_asm:s32i(IndexReg, BaseReg, Off),
     Bit = reg_bit(IndexReg),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
+    Stream1 = StreamModule:append(
+        State#state.stream, <<I1/binary, I2/binary, I3/binary, I4/binary>>
+    ),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
-    State#state{
-        stream = Stream1,
-        regs = jit_regs:free_reg(Regs1, Bit)
-    };
+    pending_note_store(
+        State#state{
+            stream = Stream1,
+            regs = jit_regs:free_reg(Regs1, Bit)
+        },
+        X
+    );
 move_array_element(
     #state{
         stream_module = StreamModule,
@@ -2843,16 +2918,18 @@ move_to_native_register_emit(
         Reg
     };
 move_to_native_register_emit(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0,
-        regs = Regs0
-    } = State,
+    StateP,
     {x_reg, X},
     Contents
 ) when
     X < ?MAX_REG
 ->
+    %% Cache miss: this loads ctx->x[X] from memory, so keep its pending store.
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State = pending_clear_x(StateP, X),
     Avail = jit_regs:available_regs(Regs0),
     Reg =
         case Avail of
@@ -2964,10 +3041,13 @@ move_to_native_register(
     Regs1 = jit_regs:set_contents(Regs0, RegDst, {x_reg, extra}),
     State#state{stream = Stream1, regs = Regs1};
 move_to_native_register(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, {x_reg, X}, RegDst
+    StateP, {x_reg, X}, RegDst
 ) when
     X < ?MAX_REG
 ->
+    %% Reads ctx->x[X] from memory: keep its pending store.
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
+        State = pending_clear_x(StateP, X),
     {XReg, X_REGOffset} = ?X_REG(X),
     I1 = jit_xtensa_asm:l32i(RegDst, XReg, X_REGOffset),
     Stream1 = StreamModule:append(Stream0, I1),
@@ -3093,13 +3173,15 @@ increment_sp(
     State#state{stream = Stream1, regs = Regs1}.
 
 set_continuation_to_label(
+    StateP,
+    Label
+) ->
+    %% Re-entry point with unknown x-cache state: commit pending stores.
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         regs = Regs0
-    } = State,
-    Label
-) ->
+    } = State = pending_clear_all(StateP),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
@@ -3120,14 +3202,15 @@ set_continuation_to_label(
 %% Returns a reference so the offset will be updated with update_branches.
 %% Only used with OP_WAIT_TIMEOUT.
 set_continuation_to_offset(
+    StateP
+) ->
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         branches = Branches,
         jump_table_start = JumpTableStart,
         regs = Regs0
-    } = State
-) ->
+    } = State = pending_clear_all(StateP),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     OffsetRef = make_ref(),
@@ -3149,7 +3232,10 @@ set_continuation_to_offset(
 %% In windowed ABI, C calls the continuation via CALL8, so we need ENTRY
 %% to establish a new register window frame.
 -spec continuation_entry_point(#state{}) -> #state{}.
-continuation_entry_point(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+continuation_entry_point(StateP) ->
+    %% Resumption target: re-entry with unknown x-cache state.
+    #state{stream_module = StreamModule, stream = Stream0} =
+        State = pending_clear_all(StateP),
     I1 = jit_xtensa_asm:entry(a1, ?ENTRY_FRAME_SIZE),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1}.
@@ -4100,13 +4186,16 @@ call_or_schedule_next(State0, Label) ->
     rewrite_cp_offset(State2, RewriteOffset, TempReg).
 
 call_only_or_schedule_next(
+    StateP,
+    Label
+) ->
+    %% Both the hot jump and the reschedule resume by reading ctx->x at
+    %% Label: pendings the target reads keep their store.
     #state{
         stream_module = StreamModule,
         stream = Stream0,
         regs = Regs0
-    } = State0a,
-    Label
-) ->
+    } = State0a = pending_filter_label(StateP, Label),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
@@ -4443,7 +4532,11 @@ reg_bit(a15) -> ?REG_BIT_A15.
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec add_label(state(), integer() | reference()) -> state().
-add_label(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Label) ->
+add_label(StateP, Label) ->
+    %% Unknown predecessors may join here: pending stores not in the label's
+    %% live-in mask are dead and get nop'd; those in the mask keep their store.
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
+        State0 = pending_flush_label(StateP, Label),
     Offset0 = StreamModule:offset(Stream0),
     Regs1 = jit_regs:invalidate_all(Regs0),
     add_label(State0#state{regs = Regs1}, Label, Offset0).
