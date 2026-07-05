@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   images whose root filesystem does not ship libsodium
 
 ### Changed
+- JIT `bs_match` now commits the bit offset to the match state once, after the whole command
+  sequence, instead of after every command; the intermediate writebacks were dead stores for
+  fixed-size binary field reads (`<<A:8, B:16, C:32, ...>>`)
 - Updated network type db() to dbm() to reflect the actual representation of the type
 - Use ES6 modules for emscripten port, using .mjs suffix
 - `ahttp_client` now returns `{error, {parser, incomplete_response}}` when a socket closes mid-response
