@@ -18,7 +18,7 @@
 % SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %
 
-%% @doc Parse transform that instruments jit:first_pass/4 clauses with
+%% @doc Parse transform that instruments jit:emit_pass/4 clauses with
 %% DWARF opcode tracking calls. For each clause that matches a binary
 %% pattern <<OpcodeInt, .../binary>>, it injects
 %%   MSt0 = MMod:dwarf_opcode(MSt0__pt, OpcodeInt)
@@ -39,8 +39,8 @@
 parse_transform(Forms, _Options) ->
     [transform_form(Form) || Form <- Forms].
 
-transform_form({function, Line, first_pass, 4, Clauses}) ->
-    {function, Line, first_pass, 4, [transform_clause(C) || C <- Clauses]};
+transform_form({function, Line, emit_pass, 4, Clauses}) ->
+    {function, Line, emit_pass, 4, [transform_clause(C) || C <- Clauses]};
 transform_form(Other) ->
     Other.
 
@@ -68,7 +68,7 @@ transform_clause({clause, Line, [Arg1, Arg2, Arg3, Arg4], Guards, Body} = Clause
                 _ ->
                     io:format(
                         standard_error,
-                        "jit_dwarf_pt: warning: first_pass/4 clause at line ~p has non-variable "
+                        "jit_dwarf_pt: warning: emit_pass/4 clause at line ~p has non-variable "
                         "3rd arg, DWARF opcode tracking skipped~n",
                         [Line]
                     ),
