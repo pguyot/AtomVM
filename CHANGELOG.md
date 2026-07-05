@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
   stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
   scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
+- JIT `bs_match` now commits the bit offset to the match state once, after the whole command
+  sequence, instead of after every command; the intermediate writebacks were dead stores for
+  fixed-size binary field reads (`<<A:8, B:16, C:32, ...>>`)
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
