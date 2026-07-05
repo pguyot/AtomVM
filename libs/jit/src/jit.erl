@@ -939,7 +939,19 @@ first_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
                         op_select_val_inline_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
                 end;
             nomatch ->
-                op_select_val_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
+                %% Not all-small-int, but if every case value is still an
+                %% immediate (atoms included — a loaded atom term is a
+                %% canonical immediate word), the tagged word compare is
+                %% exact for ANY source: no boxed/list word ever equals an
+                %% immediate word. This keeps atom-dispatch select_vals off
+                %% the per-entry PRIM_TERM_COMPARE call (the Erlang
+                %% compiler compiles itself through millions of these).
+                case scan_select_val_all_immediates(Rest3, N, MMod) of
+                    true ->
+                        op_select_val_inline_loop(MMod, MSt1, SrcValue, Rest3, N, State0);
+                    false ->
+                        op_select_val_loop(MMod, MSt1, SrcValue, Rest3, N, State0)
+                end
         end,
     ?TRACE("\n", []),
     MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
@@ -6274,6 +6286,38 @@ scan_select_val_int_entries(Bin, N, MMod, Acc) ->
             scan_select_val_int_entries(Rest2, N - 1, MMod, [{Tagged, Label} | Acc]);
         _ ->
             nomatch
+    end.
+
+%% Pure scan: true iff every case value in a select_val list is a
+%% compact-term immediate — an atom (nil included) or a small-in-range
+%% integer. Word comparison against such values is exact for any source
+%% term, so the inline cmp loop applies without a source type gate.
+scan_select_val_all_immediates(_Rest, 0, _MMod) ->
+    true;
+scan_select_val_all_immediates(Bin, N, MMod) ->
+    Skipped =
+        case Bin of
+            <<_:4, ?COMPACT_ATOM:4, _/binary>> ->
+                {_, RestA} = decode_value64(Bin),
+                {ok, RestA};
+            <<_:4, ?COMPACT_LARGE_ATOM:4, _/binary>> ->
+                {_, RestA} = decode_value64(Bin),
+                {ok, RestA};
+            _ ->
+                {MinSafe, MaxSafe} = small_integer_bounds(MMod),
+                case scan_int_compact_term(Bin) of
+                    {ok, Value, RestI} when Value >= MinSafe, Value =< MaxSafe ->
+                        {ok, RestI};
+                    _ ->
+                        nomatch
+                end
+        end,
+    case Skipped of
+        {ok, Rest1} ->
+            {_Label, Rest2} = decode_label(Rest1),
+            scan_select_val_all_immediates(Rest2, N - 1, MMod);
+        nomatch ->
+            false
     end.
 
 scan_int_compact_term(<<_:4, ?COMPACT_INTEGER:4, _/binary>> = Bin) ->

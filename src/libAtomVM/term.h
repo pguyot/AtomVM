@@ -3242,6 +3242,17 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
             if (k == key) {
                 return mid;
             }
+            // Small-integer probes (hot in the compiler's label/var-indexed
+            // maps) compare numerically without the term_compare call; k and
+            // key are known unequal here.
+            if (term_is_integer(k) && term_is_integer(key)) {
+                if (term_to_int(k) < term_to_int(key)) {
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+                continue;
+            }
             TermCompareResult cmp = term_compare(k, key, TermCompareExact, global);
             if (cmp == TermLessThan) {
                 low = mid + 1;
