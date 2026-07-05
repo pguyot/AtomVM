@@ -198,9 +198,11 @@
     relocations = [] :: [{non_neg_integer(), non_neg_integer()}],
     %% Deferred x-register store elision (pass B of jit_liveness): per-label
     %% live-in masks, pending stores (x index -> {stream offset of the str,
-    %% cond depth}), and the current conditional-emission depth.
+    %% store width in bytes, cond depth}), and the current conditional-emission
+    %% depth. The pending machinery lives in jit_backend_pending_impl.hrl.
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
-    pending_x = #{} :: #{non_neg_integer() => {non_neg_integer(), non_neg_integer()}},
+    pending_x = #{} ::
+        #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
     cond_depth = 0 :: non_neg_integer(),
     %% Loop-header register residency: labels that are direct call targets
     %% (from jit_liveness pass A) get a cold-entry preload of their live-in
@@ -3433,86 +3435,16 @@ set_live_masks(State, {Masks, CallTargets}) ->
 -spec supports_loop_residency() -> boolean().
 supports_loop_residency() -> true.
 
-pending_clear_all(#state{pending_x = P} = State) when map_size(P) =:= 0 ->
-    State;
-pending_clear_all(State) ->
-    State#state{pending_x = #{}}.
+%% aarch64 stores are always one 4-byte instruction.
+-include("jit_backend_pending_impl.hrl").
 
-pending_clear_x(#state{pending_x = P} = State, X) when is_integer(X) ->
-    case is_map_key(X, P) of
-        true -> State#state{pending_x = maps:remove(X, P)};
-        false -> State
-    end;
-pending_clear_x(State, _X) ->
-    State.
+%% The store is the last emitted 4-byte instruction, so it started 4 bytes
+%% before the current offset.
+pending_note_store(#state{stream_module = SM, stream = St} = State, X) ->
+    pending_note_store(State, X, SM:offset(St) - 4).
 
-%% Before emitting a store to x[X]: if a same-depth pending store exists,
-%% it is dead — nop it out.
-pending_elide_prev(
-    #state{pending_x = P, cond_depth = D, stream_module = SM, stream = St0} = State, X
-) ->
-    case P of
-        #{X := {Off, D}} ->
-            State#state{stream = SM:replace(St0, Off, jit_aarch64_asm:nop())};
-        _ ->
-            State
-    end.
-
-%% After emitting a store to x[X] whose last 4 bytes are the str itself.
-pending_note_store(#state{live_masks = undefined} = State, _X) ->
-    State;
-pending_note_store(
-    #state{pending_x = P, cond_depth = D, stream_module = SM, stream = St} = State, X
-) when is_integer(X), X < 32 ->
-    State#state{pending_x = P#{X => {SM:offset(St) - 4, D}}};
-pending_note_store(State, _X) ->
-    State.
-
-%% Branch to a label: pendings whose register is in the target's live-in
-%% mask must keep their store (the target may read it from memory).
-pending_filter_label(#state{live_masks = undefined} = State, _Label) ->
-    State;
-pending_filter_label(#state{pending_x = P} = State, _Label) when map_size(P) =:= 0 ->
-    State;
-pending_filter_label(#state{pending_x = P, live_masks = Masks} = State, Label) ->
-    Mask = maps:get(Label, Masks, -1),
-    State#state{
-        pending_x = maps:filter(fun(X, _) -> Mask band (1 bsl X) =:= 0 end, P)
-    }.
-
-%% Window end at a label: pendings that survived every branch filter and
-%% whose register is not in the label's live-in mask are fully dead — nop
-%% their stores. Registers in the mask keep their stores. Either way the
-%% tracking window ends here.
-pending_flush_label(#state{live_masks = undefined} = State, _Label) ->
-    State;
-pending_flush_label(#state{pending_x = P} = State, _Label) when map_size(P) =:= 0 ->
-    State;
-pending_flush_label(
-    #state{pending_x = P, live_masks = Masks, stream_module = SM} = State, Label
-) ->
-    Mask = maps:get(Label, Masks, -1),
-    Stream1 = maps:fold(
-        fun(X, {Off, _D}, StAcc) ->
-            case Mask band (1 bsl X) of
-                0 -> SM:replace(StAcc, Off, jit_aarch64_asm:nop());
-                _ -> StAcc
-            end
-        end,
-        State#state.stream,
-        P
-    ),
-    State#state{stream = Stream1, pending_x = #{}}.
-
-pending_enter_cond(#state{cond_depth = D} = State) ->
-    State#state{cond_depth = D + 1}.
-
-pending_exit_cond(#state{cond_depth = D, pending_x = P} = State) ->
-    D1 = D - 1,
-    State#state{
-        cond_depth = D1,
-        pending_x = maps:filter(fun(_, {_, PD}) -> PD =< D1 end, P)
-    }.
+pending_nop_bytes(4) ->
+    jit_aarch64_asm:nop().
 
 %% Load the fp register array pointer (jit_state->fr) into a freshly allocated
 %% register and return it, so the caller can test it for NULL and only call
