@@ -192,7 +192,7 @@ compile(
     %% the register cache (see jit_liveness).
     MSt0b =
         case erlang:function_exported(MMod, set_live_masks, 2) of
-            true -> MMod:set_live_masks(MSt0, jit_liveness:label_read_masks(Opcodes));
+            true -> MMod:set_live_masks(MSt0, jit_liveness:label_analysis(Opcodes));
             false -> MSt0
         end,
     MSt1 = MMod:jump_table(MSt0b, LabelsCount),
@@ -301,27 +301,35 @@ first_pass(<<?OP_CALL_LAST, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} 
     {NWords, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_CALL_LAST ~p, ~p, ~p\n", [_Arity, Label, NWords]),
     TailCacheKey0 = {op_call_last, NWords, Label},
-    case tail_cache_find(TailCacheKey0, TC) of
+    %% Backends with loop-header residency (set_live_masks) may open the
+    %% call_only block with a site-specific register reconciliation; the
+    %% whole-op block is then not re-enterable from another site. Only the
+    %% inner {op_call_only, Label} block is shared there — its entry is
+    %% intercepted by the backend's jump_to_offset, which emits the
+    %% reusing site's own reconciliation.
+    HotCapable = erlang:function_exported(MMod, set_live_masks, 2),
+    case (not HotCapable) andalso tail_cache_find(TailCacheKey0, TC) of
         false ->
             Offset0 = MMod:offset(MSt0),
             MSt1 = MMod:move_to_cp(MSt0, {y_reg, NWords}),
             % The saved cp occupies one stack slot on 64-bit, two on 32-bit.
             MSt2 = MMod:increment_sp(MSt1, NWords + (8 div MMod:word_size())),
             TailCacheKey1 = {op_call_only, Label},
+            TC0 =
+                case HotCapable of
+                    true -> TC;
+                    false -> tail_cache_store(TailCacheKey0, Offset0, TC)
+                end,
             case tail_cache_find(TailCacheKey1, TC) of
                 false ->
                     Offset1 = MMod:offset(MSt2),
                     MSt3 = MMod:call_only_or_schedule_next(MSt2, Label),
                     State1 = State0#state{
-                        tail_cache = tail_cache_store(
-                            TailCacheKey1, Offset1, tail_cache_store(TailCacheKey0, Offset0, TC)
-                        )
+                        tail_cache = tail_cache_store(TailCacheKey1, Offset1, TC0)
                     };
                 {TailCacheKey1, Offset1} ->
                     MSt3 = MMod:jump_to_offset(MSt2, Offset1),
-                    State1 = State0#state{
-                        tail_cache = tail_cache_store(TailCacheKey0, Offset0, TC)
-                    }
+                    State1 = State0#state{tail_cache = TC0}
             end;
         {TailCacheKey0, Offset0} ->
             MSt3 = MMod:jump_to_offset(MSt0, Offset0),
