@@ -167,6 +167,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a process that exited before ever being scheduled staying in the scheduler's process list
 - Fixed x86_64 JIT `if_else_block` emitting a `rel8` jump to skip the false block, which silently overflowed (and corrupted control flow) when that block exceeded 127 bytes, e.g. inline small-integer arithmetic with a bignum first operand
 - Fixed a bug where AtomVM could only have 256 loaded modules
+- Fixed the JIT direct-dispatch tail following a stale continuation when a load-trapped
+  process was returned unsuspended by the scheduler (a message made it ready during the
+  call), re-executing caller code while the process was trapped
+- Fixed a VM crash when a process received a duplicate code-server resume signal: a process
+  can trap twice for the same not-yet-loaded module (it retries the call after a spurious
+  wake-up), and the second resume re-ran the label to native-entry-point conversion on the
+  already-converted continuation, producing a wild jump on the next schedule-in
 
 ## [0.7.0-beta.0] - 2026-09-28
 
