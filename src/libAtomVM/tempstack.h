@@ -36,7 +36,16 @@ typedef enum
     TempStackFailedAlloc = 1
 } TempStackResult;
 
+// Inline (stack-allocated) capacity before falling back to malloc. Deep-ish
+// term traversals are common on hosted platforms (e.g. the OTP compiler's
+// arity-6+ record compares overflow 8 slots on every probe), so 64-bit
+// desktop-class targets trade 192 bytes of C stack for malloc-free
+// traversal; constrained 32-bit targets keep the smaller footprint.
+#if defined(__x86_64__) || defined(__aarch64__)
+#define MIN_STACK_SIZE 32
+#else
 #define MIN_STACK_SIZE 8
+#endif
 
 struct TempStack
 {
