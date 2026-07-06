@@ -1588,6 +1588,19 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
 // module has native_code == NULL, so the native_code check both routes it
 // through the dispatcher and guards against a stale .continuation left by
 // an earlier direct call.
+// Tagged "branch directly" result for the *_direct primitives. When
+// jumptable entries are 4-aligned (aarch64), the entry itself is returned
+// with bit 0 set. With unaligned entry strides (x86_64's 5-byte slots) a
+// real entry address can carry any low bits, so the entry travels through
+// jit_state->continuation instead and the bare sentinel 1 is returned; the
+// call site branches to jit_state->continuation.
+#if (JIT_JUMPTABLE_ENTRY_SIZE % 4) == 0
+#define JIT_DIRECT_TAGGED(jit_state, cont) (((uintptr_t) (cont)) | 1)
+#else
+#define JIT_DIRECT_TAGGED(jit_state, cont) \
+    ((jit_state)->continuation = (NativeContinuation) (cont), (uintptr_t) 1)
+#endif
+
 static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_state, Context *result)
 {
 #ifndef JIT_JUMPTABLE_IS_DATA
@@ -1595,7 +1608,7 @@ static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_stat
             && jit_state->continuation != NULL
             && jit_state->remaining_reductions > 0
             && jit_state->module->native_code != NULL)) {
-        return ((uintptr_t) jit_state->continuation) | 1;
+        return JIT_DIRECT_TAGGED(jit_state, jit_state->continuation);
     }
 #endif
     return (uintptr_t) result;
@@ -1627,7 +1640,7 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
             }
             jit_state_set_module(jit_state, fun_module);
             uintptr_t target = (uintptr_t) JIT_CONTINUATION_FOR_LABEL(fun_module, label);
-            return target | 1;
+            return JIT_DIRECT_TAGGED(jit_state, target);
         }
     }
 #endif
