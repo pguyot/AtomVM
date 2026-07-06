@@ -19,8 +19,14 @@
  */
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef AVM_NO_SMP
+#include <pthread.h>
+#include <unistd.h>
+#endif
 
 #include "atom_table.h"
 #include "module.h"
@@ -573,6 +579,122 @@ static void test_atom_table_bulk_grow(void)
     free(buf);
 }
 
+#if !defined(AVM_NO_SMP) && !defined(_WIN32)
+// Regression: an out-of-range index lookup must not leave the table lock
+// held (atom_table_get_atom_ptr_and_len used to re-lock instead of unlock
+// on the NULL path, deadlocking the next writer).
+static void test_atom_table_oob_index_then_insert(void)
+{
+    struct AtomTable *table = atom_table_new();
+
+    size_t len;
+    atom_ref_t ref = atom_table_get_atom_ptr_and_len(table, 12345, &len);
+    assert(ref == NULL);
+
+    alarm(5); // deadlock watchdog: SIGALRM kills the test if insert blocks
+    atom_index_t idx;
+    enum AtomTableEnsureAtomResult r
+        = atom_table_ensure_atom(table, (const uint8_t *) "after_oob", 9, AtomTableNoOpts, &idx);
+    alarm(0);
+    assert(r == AtomTableEnsureAtomOk);
+    assert(idx == 0);
+
+    atom_table_destroy(table);
+}
+
+enum
+{
+    CONC_ATOMS = 30000
+};
+
+struct ConcurrentAtomTableCtx
+{
+    struct AtomTable *table;
+    volatile int writer_done;
+};
+
+static void concurrent_atom_name(int id, char *buf, size_t *out_len)
+{
+    *out_len = (size_t) snprintf(buf, 32, "conc_%d", id);
+}
+
+static void *concurrent_atoms_writer(void *arg)
+{
+    struct ConcurrentAtomTableCtx *ctx = arg;
+    for (int i = 0; i < CONC_ATOMS; i++) {
+        char name[32];
+        size_t len;
+        concurrent_atom_name(i, name, &len);
+        atom_index_t idx;
+        enum AtomTableEnsureAtomResult r = atom_table_ensure_atom(
+            ctx->table, (const uint8_t *) name, len, AtomTableCopyAtom, &idx);
+        assert(r == AtomTableEnsureAtomOk);
+        assert((int) idx == i);
+    }
+    ctx->writer_done = 1;
+    return NULL;
+}
+
+static void *concurrent_atoms_reader(void *arg)
+{
+    struct ConcurrentAtomTableCtx *ctx = arg;
+    unsigned seed = (unsigned) (uintptr_t) &arg;
+    while (!ctx->writer_done) {
+        size_t n = atom_table_count(ctx->table);
+        if (n < 2) {
+            continue;
+        }
+        seed = seed * 1103515245 + 12345;
+        int a = (seed >> 8) % n;
+        seed = seed * 1103515245 + 12345;
+        int b = (seed >> 8) % n;
+
+        char name_a[32], name_b[32];
+        size_t len_a, len_b;
+        concurrent_atom_name(a, name_a, &len_a);
+        concurrent_atom_name(b, name_b, &len_b);
+
+        size_t min_len = len_a < len_b ? len_a : len_b;
+        int oracle = memcmp(name_a, name_b, min_len);
+        if (oracle == 0 && len_a != len_b) {
+            oracle = len_a > len_b ? 1 : -1;
+        }
+        int got = atom_table_cmp_using_atom_index(ctx->table, a, b);
+        assert((oracle == 0 && got == 0) || (oracle < 0 && got < 0) || (oracle > 0 && got > 0));
+
+        size_t got_len;
+        const uint8_t *got_str = atom_table_get_atom_string(ctx->table, a, &got_len);
+        assert(got_str != NULL);
+        assert(got_len == len_a);
+        assert(memcmp(got_str, name_a, len_a) == 0);
+    }
+    return NULL;
+}
+
+// Readers race index-based lookups against a writer growing the table
+// through many index-array growth steps and bucket rehashes.
+static void test_atom_table_concurrent_reads(void)
+{
+    struct AtomTable *table = atom_table_new();
+    struct ConcurrentAtomTableCtx ctx = { .table = table, .writer_done = 0 };
+
+    pthread_t writer;
+    pthread_t readers[3];
+    int r = pthread_create(&writer, NULL, concurrent_atoms_writer, &ctx);
+    assert(r == 0);
+    for (int i = 0; i < 3; i++) {
+        r = pthread_create(&readers[i], NULL, concurrent_atoms_reader, &ctx);
+        assert(r == 0);
+    }
+    pthread_join(writer, NULL);
+    for (int i = 0; i < 3; i++) {
+        pthread_join(readers[i], NULL);
+    }
+    assert(atom_table_count(table) == CONC_ATOMS);
+    atom_table_destroy(table);
+}
+#endif
+
 static void test_cp_encoding(void)
 {
     // A stack Module is suitably aligned; only module_index is read by make_cp.
@@ -624,6 +746,10 @@ int main(int argc, char **argv)
     test_atom_table();
     test_atom_table_cmp_many();
     test_atom_table_bulk_grow();
+#if !defined(AVM_NO_SMP) && !defined(_WIN32)
+    test_atom_table_oob_index_then_insert();
+    test_atom_table_concurrent_reads();
+#endif
     test_cp_encoding();
 
     return EXIT_SUCCESS;
