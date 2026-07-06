@@ -40,6 +40,20 @@
 #define SMP_UNLOCK(htable) UNUSED(htable)
 #endif
 
+// Lock-free by-index reads: the index array is only replaced (never freed
+// before table destruction) and entries/count are published with release
+// stores, so hot readers (atom compare and name lookup, dominant in sorted-map
+// workloads) need no rwlock round-trip. Writers stay serialized by the rwlock.
+// Desktop-class 64-bit targets only: index-array growth retires the old
+// array instead of freeing it (concurrent readers may still hold it), and
+// that retention is measurable RAM on MCUs, where the rwlock round-trip is
+// not a bottleneck anyway.
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus) && !defined(AVM_NO_SMP) \
+    && (defined(__x86_64__) || defined(__aarch64__))
+#include <stdatomic.h>
+#define ATOM_TABLE_LOCKFREE_READS 1
+#endif
+
 #define DEFAULT_SIZE 8
 #define CAPACITY_INCREASE 8
 #define MAX_ATOM_LEN ((1 << 12) - 1)
@@ -95,6 +109,15 @@ struct HNodeGroup
     struct HNode nodes[];
 };
 
+// Superseded index arrays, kept alive until table destruction so lock-free
+// readers holding an old pointer never dereference freed memory. Total waste
+// is bounded by the geometric growth (< one current-array size).
+struct RetiredIndexArray
+{
+    struct RetiredIndexArray *next;
+    struct HNode **array;
+};
+
 struct AtomTable
 {
     size_t capacity;
@@ -105,13 +128,36 @@ struct AtomTable
 #endif
     struct HNode **buckets;
 
-    // O(1) atom index -> node mapping, grown under the write lock.
+    // O(1) atom index -> node mapping, grown under the write lock and
+    // published with a release store for lock-free readers.
     struct HNode **index_to_node;
     size_t index_capacity;
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    struct RetiredIndexArray *retired_index_arrays;
+#endif
 
     struct HNodeGroup *first_node_group;
     struct HNodeGroup *last_node_group;
 };
+
+// Publication protocol: init_node() fills the node, the index slot is
+// written, then count is release-stored. A reader that acquire-loads count
+// and sees index < count is therefore guaranteed to see the node pointer in
+// whichever array it subsequently loads (a superseded array still holds all
+// entries below its snapshot count; superseded arrays are never freed until
+// destruction).
+#ifdef ATOM_TABLE_LOCKFREE_READS
+static inline struct HNode *get_published_node(struct AtomTable *table, atom_index_t index)
+{
+    size_t count = atomic_load_explicit((_Atomic size_t *) &table->count, memory_order_acquire);
+    if (UNLIKELY(((size_t) index) >= count)) {
+        return NULL;
+    }
+    struct HNode **array = atomic_load_explicit(
+        (struct HNode * *_Atomic *) &table->index_to_node, memory_order_acquire);
+    return array[index];
+}
+#endif
 
 static struct HNodeGroup *new_node_group(struct AtomTable *table, int len);
 
@@ -137,6 +183,9 @@ struct AtomTable *atom_table_new(void)
         return NULL;
     }
     htable->index_capacity = DEFAULT_SIZE;
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    htable->retired_index_arrays = NULL;
+#endif
 
     htable->last_node_group = NULL;
     htable->first_node_group = new_node_group(htable, DEFAULT_SIZE);
@@ -159,6 +208,15 @@ void atom_table_destroy(struct AtomTable *table)
 #ifndef AVM_NO_SMP
     smp_rwlock_destroy(table->lock);
 #endif
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    struct RetiredIndexArray *retired = table->retired_index_arrays;
+    while (retired) {
+        struct RetiredIndexArray *next = retired->next;
+        free(retired->array);
+        free(retired);
+        retired = next;
+    }
+#endif
     free(table->buckets);
     free(table->index_to_node);
     free(table);
@@ -166,11 +224,15 @@ void atom_table_destroy(struct AtomTable *table)
 
 size_t atom_table_count(struct AtomTable *table)
 {
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    return atomic_load_explicit((_Atomic size_t *) &table->count, memory_order_acquire);
+#else
     SMP_RDLOCK(table);
     size_t count = table->count;
     SMP_UNLOCK(table);
 
     return count;
+#endif
 }
 
 static struct HNodeGroup *new_node_group(struct AtomTable *table, int len)
@@ -189,12 +251,34 @@ static struct HNodeGroup *new_node_group(struct AtomTable *table, int len)
         while (new_capacity < needed) {
             new_capacity *= 2;
         }
+#ifdef ATOM_TABLE_LOCKFREE_READS
+        // Copy-and-publish instead of realloc: concurrent readers may still
+        // hold the old array, so it is retired, not freed.
+        struct RetiredIndexArray *retired = malloc(sizeof(struct RetiredIndexArray));
+        if (IS_NULL_PTR(retired)) {
+            free(new_group);
+            return NULL;
+        }
+        struct HNode **new_array = malloc(new_capacity * sizeof(struct HNode *));
+        if (IS_NULL_PTR(new_array)) {
+            free(retired);
+            free(new_group);
+            return NULL;
+        }
+        memcpy(new_array, table->index_to_node, table->count * sizeof(struct HNode *));
+        retired->array = table->index_to_node;
+        retired->next = table->retired_index_arrays;
+        table->retired_index_arrays = retired;
+        atomic_store_explicit(
+            (struct HNode * *_Atomic *) &table->index_to_node, new_array, memory_order_release);
+#else
         struct HNode **new_array = realloc(table->index_to_node, new_capacity * sizeof(struct HNode *));
         if (IS_NULL_PTR(new_array)) {
             free(new_group);
             return NULL;
         }
         table->index_to_node = new_array;
+#endif
         table->index_capacity = new_capacity;
     }
 
@@ -249,7 +333,7 @@ static inline struct HNode *get_node(const struct AtomTable *hash_table, const u
     return get_node_with_hash(hash_table, string, string_len, hash);
 }
 
-// TODO: this function needs use an efficient structure such as a skip list
+#ifndef ATOM_TABLE_LOCKFREE_READS
 static struct HNode *get_node_using_index(struct AtomTable *table, atom_index_t index)
 {
     if (UNLIKELY(((size_t) index) >= table->count)) {
@@ -258,9 +342,18 @@ static struct HNode *get_node_using_index(struct AtomTable *table, atom_index_t 
 
     return table->index_to_node[index];
 }
+#endif
 
 const uint8_t *atom_table_get_atom_string(struct AtomTable *table, atom_index_t index, size_t *out_size)
 {
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    struct HNode *node = get_published_node(table, index);
+    if (IS_NULL_PTR(node)) {
+        return NULL;
+    }
+    *out_size = node->bytes_len;
+    return node->key;
+#else
     const uint8_t *result;
     SMP_RDLOCK(table);
 
@@ -274,6 +367,7 @@ const uint8_t *atom_table_get_atom_string(struct AtomTable *table, atom_index_t 
 
     SMP_UNLOCK(table);
     return result;
+#endif
 }
 
 bool atom_table_is_equal_to_atom_string(struct AtomTable *table, atom_index_t t_atom_index, AtomString string)
@@ -289,10 +383,15 @@ bool atom_table_is_equal_to_atom_string(struct AtomTable *table, atom_index_t t_
 
 int atom_table_cmp_using_atom_index(struct AtomTable *table, atom_index_t t_atom_index, atom_index_t other_atom_index)
 {
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    struct HNode *t_node = get_published_node(table, t_atom_index);
+    struct HNode *other_node = get_published_node(table, other_atom_index);
+#else
     SMP_RDLOCK(table);
     struct HNode *t_node = get_node_using_index(table, t_atom_index);
     struct HNode *other_node = get_node_using_index(table, other_atom_index);
     SMP_UNLOCK(table);
+#endif
     if (IS_NULL_PTR(t_node)) {
         return -1;
     }
@@ -331,18 +430,27 @@ int atom_table_cmp_using_atom_index(struct AtomTable *table, atom_index_t t_atom
 
 atom_ref_t atom_table_get_atom_ptr_and_len(struct AtomTable *table, atom_index_t index, size_t *out_len)
 {
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    struct HNode *node = get_published_node(table, index);
+    if (IS_NULL_PTR(node)) {
+        return NULL;
+    }
+    *out_len = node->bytes_len;
+    return node;
+#else
     SMP_RDLOCK(table);
 
     struct HNode *node = get_node_using_index(table, index);
     if (IS_NULL_PTR(node)) {
-        SMP_RDLOCK(table);
+        SMP_UNLOCK(table);
         return NULL;
     }
 
-    *out_len = atom_string_len(node->key);
+    *out_len = node->bytes_len;
 
     SMP_UNLOCK(table);
     return node;
+#endif
 }
 
 static inline void init_node(struct HNode *node, const uint8_t *atom_data, size_t atom_len, long index)
@@ -367,13 +475,20 @@ static inline atom_index_t insert_node(struct AtomTable *table, struct HNodeGrou
     unsigned long bucket_index, const uint8_t *atom_data, size_t atom_len)
 {
     atom_index_t new_index = table->count;
-    table->count++;
 
     struct HNode *node = &node_group->nodes[new_index - node_group->first_index];
     table->last_node_group_avail--;
     init_node(node, atom_data, atom_len, new_index);
     insert_node_into_bucket(table, bucket_index, node);
     table->index_to_node[new_index] = node;
+    // Publish the entry: count is release-stored only after the node and its
+    // index slot are fully written, so lock-free readers checking
+    // index < count always see initialized data.
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    atomic_store_explicit((_Atomic size_t *) &table->count, new_index + 1, memory_order_release);
+#else
+    table->count = new_index + 1;
+#endif
 
     return new_index;
 }
