@@ -143,6 +143,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed the JIT direct-dispatch tail following a stale continuation when a load-trapped
+  process was returned unsuspended by the scheduler (a message made it ready during the
+  call), re-executing caller code while the process was trapped
+- Fixed a VM crash when a process received a duplicate code-server resume signal: a process
+  can trap twice for the same not-yet-loaded module (it retries the call after a spurious
+  wake-up), and the second resume re-ran the label to native-entry-point conversion on the
+  already-converted continuation, producing a wild jump on the next schedule-in
 - Fixed a bug where AtomVM could only have 256 loaded modules
 - Fixed `put_map_exact` writing the new key into a keys tuple shared with other maps
 - Fixed a process that exited before ever being scheduled staying in the scheduler's process list
