@@ -717,6 +717,14 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
         avm_int_t other_int = term_to_int(other);
         return (t_int > other_int) ? TermGreaterThan : TermLessThan;
     }
+    // Two distinct atoms order by table lookup alone; resolving them here
+    // skips the tuple/type-index dispatch below. Atom keys are a large share
+    // of map/set probes in compiler-style workloads.
+    if (term_is_atom(t) && term_is_atom(other)) {
+        int c = atom_table_cmp_using_atom_index(
+            global->atom_table, term_to_atom_index(t), term_to_atom_index(other));
+        return (c > 0) ? TermGreaterThan : TermLessThan;
+    }
     if ((opts & (TermCompareExact | TermCompareEqualOnly))
         == (TermCompareExact | TermCompareEqualOnly)) {
         return term_exact_equals(t, other, global);

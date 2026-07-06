@@ -851,6 +851,11 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
                     set_error(ctx, jit_state, 0, UNDEF_ATOM);
                     return jit_handle_error(ctx, jit_state, 0);
                 }
+                // scheduler_wait can return this same context right away (a
+                // message made it Ready during this slice); zeroed reductions
+                // keep the dispatcher from resuming at the stale continuation
+                // while the process is trapped for the code server.
+                jit_state->remaining_reductions = 0; // force schedule_in
                 return scheduler_wait(ctx);
             } else {
                 int target_label = jump->label;
@@ -1590,6 +1595,9 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
             set_error(ctx, jit_state, 0, UNDEF_ATOM);
             return jit_handle_error(ctx, jit_state, 0);
         }
+        // See the code-server trap in jit_call_ext0: a same-context return
+        // from scheduler_wait must not resume at the stale continuation.
+        jit_state->remaining_reductions = 0; // force schedule_in
         return scheduler_wait(ctx);
     }
     return ctx;
@@ -1604,6 +1612,26 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
 // module has native_code == NULL, so the native_code check both routes it
 // through the dispatcher and guards against a stale .continuation left by
 // an earlier direct call.
+// Tagged "branch directly" result for the *_direct primitives. When
+// jumptable entries are 4-aligned (aarch64), the entry itself is returned
+// with bit 0 set. With unaligned entry strides (x86_64's 5-byte slots) a
+// real entry address can carry any low bits, so the entry travels through
+// jit_state->continuation instead and the bare sentinel 1 is returned; the
+// call site branches to jit_state->continuation.
+#if (JIT_JUMPTABLE_ENTRY_SIZE % 4) == 0
+#define JIT_DIRECT_TAGGED(jit_state, cont) (((uintptr_t) (cont)) | 1)
+#else
+#define JIT_DIRECT_TAGGED(jit_state, cont) \
+    ((jit_state)->continuation = (NativeContinuation) (cont), (uintptr_t) 1)
+#endif
+
+// The continuation check below is only sound if jit_state->continuation was
+// set by the current primitive: the *_direct wrappers clear it on entry.
+// Otherwise a path that suspends without resolving — e.g. jit_trap_and_load's
+// scheduler_wait returning the same context because a message made it Ready
+// during the call — would tag a continuation left over from an earlier call
+// in the same scheduling slice, and the call site would branch back into
+// stale code while the process is trapped.
 static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_state, Context *result)
 {
 #ifndef JIT_JUMPTABLE_IS_DATA
@@ -1611,7 +1639,7 @@ static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_stat
             && jit_state->continuation != NULL
             && jit_state->remaining_reductions > 0
             && jit_state->module->native_code != NULL)) {
-        return ((uintptr_t) jit_state->continuation) | 1;
+        return JIT_DIRECT_TAGGED(jit_state, jit_state->continuation);
     }
 #endif
     return (uintptr_t) result;
@@ -1626,6 +1654,7 @@ static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_stat
 // exported native functions) still continue directly when safe.
 static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count)
 {
+    jit_state->continuation = 0;
 #ifndef JIT_JUMPTABLE_IS_DATA
     const term *boxed_value = term_to_const_term_ptr(fun);
     term index_or_function = boxed_value[2];
@@ -1643,7 +1672,7 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
             }
             jit_state_set_module(jit_state, fun_module);
             uintptr_t target = (uintptr_t) JIT_CONTINUATION_FOR_LABEL(fun_module, label);
-            return target | 1;
+            return JIT_DIRECT_TAGGED(jit_state, target);
         }
     }
 #endif
@@ -1655,6 +1684,7 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
 // the call site branch straight to the caller's native code.
 static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 {
+    jit_state->continuation = 0;
     Context *result = jit_return(ctx, jit_state);
     return jit_direct_continuation(ctx, jit_state, result);
 }
@@ -1663,6 +1693,7 @@ static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 // contract as call_fun_direct.
 static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
+    jit_state->continuation = 0;
     Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true);
     if (result == JIT_NATIVE_STAY) {
         return (uintptr_t) JIT_NATIVE_STAY;
@@ -2199,6 +2230,9 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
                 set_error(ctx, jit_state, 0, UNDEF_ATOM);
                 return jit_handle_error(ctx, jit_state, 0);
             }
+            // See the code-server trap in jit_call_ext0: a same-context return
+            // from scheduler_wait must not resume at the stale continuation.
+            jit_state->remaining_reductions = 0; // force schedule_in
             return scheduler_wait(ctx);
         }
         default: {
