@@ -313,6 +313,12 @@ enum TrapAndLoadResult
 // table. Distinct instruction bytes + a relocation table, so it is its own
 // variant: a runtime built without it never matches (and never loads) such code.
 #define JIT_VARIANT_RELOC 8
+// Generated code dispatches *_direct primitive results with the sentinel-
+// continuation contract: the callee entry travels via jit_state->continuation
+// and the primitive returns the bare sentinel 1 (see JIT_DIRECT_TAGGED).
+// Intrinsic to backends whose jumptable entries are not 4-aligned (x86_64);
+// code and runtime must agree, so it is its own variant bit.
+#define JIT_VARIANT_DIRECT_CALL 16
 
 #ifdef JIT_JUMPTABLE_IS_DATA
 /**

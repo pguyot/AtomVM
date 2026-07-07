@@ -4966,7 +4966,14 @@ op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1,
             BSt4 = MMod:shift_left(BSt3, ResReg, 4),
             BSt5 = MMod:or_(BSt4, ResReg, ?TERM_INTEGER_TAG),
             BSt6 = MMod:move_to_vm_register(BSt5, ResReg, Dest),
-            MMod:free_native_registers(BSt6, [ResReg, Divisor, Dest])
+            %% R1 is not consumed by the backend div/rem (the result may land
+            %% in a different register); leaving it allocated leaked a
+            %% register per emitted div/rem — harmless while the old
+            %% call_ext_last emission reset the masks at every external
+            %% call, fatal (mask exhaustion at OP_RETURN) once direct
+            %% dispatch preserved them. Freeing R1 twice when the backend
+            %% returns the dividend register itself is a no-op.
+            MMod:free_native_registers(BSt6, [ResReg, R1, Divisor, Dest])
         end
     ).
 
