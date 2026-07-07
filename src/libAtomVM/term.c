@@ -702,7 +702,20 @@ done:
     return result;
 }
 
+// Depth budget for resolving nested compound elements of the tuple fast
+// path by C recursion (each level re-enters every scalar fast path). Bounded
+// so pathologically deep terms keep the C stack shallow and fall back to the
+// temp-stack walker, which recurses on the heap.
+#define TERM_COMPARE_INLINE_DEPTH 6
+
+static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts, GlobalContext *global, int depth);
+
 TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
+{
+    return term_compare0(t, other, opts, global, TERM_COMPARE_INLINE_DEPTH);
+}
+
+static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts, GlobalContext *global, int depth)
 {
     // Fast paths for the common scalar cases, avoiding the temp-stack machinery
     // below. Identical encodings are always equal (same immediate or same boxed
@@ -760,7 +773,21 @@ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalC
                 tuple_result = (c > 0) ? TermGreaterThan : TermLessThan;
                 break;
             }
-            // A compound or mixed-type element needs the full comparator.
+            // Nested records are pervasive in compiler-style workloads: the
+            // first non-identical element pair being compound used to send
+            // the WHOLE outer tuple to the temp-stack walker. Recursing on
+            // just that element pair re-enters the scalar fast paths one
+            // level down; an equal pair (structurally equal, different
+            // pointers) lets the scan continue.
+            if (depth > 0) {
+                TermCompareResult elem = term_compare0(a, b, opts, global, depth - 1);
+                if (elem == TermEquals) {
+                    continue;
+                }
+                tuple_result = elem;
+                break;
+            }
+            // Out of inline depth: the full comparator takes over.
             resolved = false;
             break;
         }
