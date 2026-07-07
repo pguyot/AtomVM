@@ -601,6 +601,7 @@ compile_erlang(test_monotonic_time)
 
 compile_erlang(exactly_eq)
 compile_erlang(map_comparisons)
+compile_erlang(test_map_tree_order)
 compile_erlang(tuple_comparisons)
 
 compile_erlang(spawn_opt_monitor_normal)
@@ -1191,6 +1192,7 @@ set(erlang_test_beams
 
     exactly_eq.beam
     map_comparisons.beam
+    test_map_tree_order.beam
     tuple_comparisons.beam
 
     spawn_opt_monitor_normal.beam
