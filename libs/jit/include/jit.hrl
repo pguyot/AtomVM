@@ -40,5 +40,9 @@
 %% become a direct branch instead of an indirect load through the native-interface
 %% table.
 -define(JIT_VARIANT_RELOC, 8).
+%% Generated code dispatches *_direct primitive results with the
+%% sentinel-continuation contract (entry travels via jit_state->continuation,
+%% result 1 = branch to it). Intrinsic to backends that emit it (x86_64).
+-define(JIT_VARIANT_DIRECT_CALL, 16).
 
 -define(MAX_REG, 16).
