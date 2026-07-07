@@ -51,7 +51,7 @@ start() ->
 parse_target(Target) ->
     case string:split(Target, "+", all) of
         [BaseTarget] ->
-            {BaseTarget, ?JIT_VARIANT_PIC};
+            {BaseTarget, ?JIT_VARIANT_PIC bor base_variant(BaseTarget)};
         [BaseTarget | Variants] ->
             RequestedVariant = lists:foldl(
                 fun(Variant, Acc) ->
@@ -62,11 +62,18 @@ parse_target(Target) ->
                         _ -> error({unsupported_variant, Variant})
                     end
                 end,
-                ?JIT_VARIANT_PIC,
+                ?JIT_VARIANT_PIC bor base_variant(BaseTarget),
                 Variants
             ),
             {BaseTarget, RequestedVariant}
     end.
+
+%% Variant bits intrinsic to a backend's generated code, not user-selectable.
+%% x86_64 emits the sentinel-continuation direct dispatch at call_ext/call_fun
+%% sites (a different PRIM_CALL_EXT_DIRECT result contract), so its code is
+%% marked incompatible with runtimes that predate it — and vice versa.
+base_variant("x86_64") -> ?JIT_VARIANT_DIRECT_CALL;
+base_variant(_) -> 0.
 
 compile(Target, Dir, Dwarf, Path) ->
     try
