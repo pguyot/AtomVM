@@ -3129,7 +3129,10 @@ div_(
     I5 = jit_x86_64_asm:popq(rdx),
     Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs2 = jit_regs:invalidate_reg(Regs1, rax),
+    %% The quotient register must be accounted as allocated (like rem_'s
+    %% RemTemp): returning it merely invalidated let a later temp
+    %% allocation hand out rax while it still held the live result.
+    Regs2 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs1, rax), reg_bit(rax)),
     {State#state{stream = Stream1, regs = Regs2}, rax}.
 
 %% Signed integer remainder: remainder = DividendReg rem DivisorReg
