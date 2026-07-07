@@ -1738,7 +1738,37 @@ schedule_in:
             jit_state.code_base = (const void *) mod->native_code;
 #endif
             TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
+#if defined(__x86_64__) && defined(AVM_JIT_PIN_REGS)
+            // Pinned-register calling convention: generated code keeps
+            // ctx->heap.heap_ptr in r15 and ctx->e in r13 (callee-saved, so C
+            // primitives preserve them for free). This is the single native
+            // entry boundary: load the pinned registers here and write them
+            // back on return. After a context switch the write-back is
+            // idempotent: the switch-causing primitive already received a
+            // write-back and the return path does not touch the pinned
+            // registers.
+            Context *new_ctx;
+            {
+                register term *pin_hp __asm__("r15") = ctx->heap.heap_ptr;
+                register term *pin_e __asm__("r13") = ctx->e;
+                // The entry pointer rides in rbx (callee-saved, so no overlap
+                // with the caller-saved clobber list is possible).
+                register ModuleNativeEntryPoint entry_reg __asm__("rbx") = native_pc;
+                Context *asm_result;
+                __asm__ volatile(
+                    "call *%%rbx"
+                    : "=a"(asm_result), "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
+                    : "D"(ctx), "S"(&jit_state), "d"(&module_native_interface)
+                    : "rcx", "r8", "r9", "r10", "r11", "memory", "cc",
+                      "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+                      "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
+                new_ctx = asm_result;
+                ctx->heap.heap_ptr = pin_hp;
+                ctx->e = pin_e;
+            }
+#else
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
+#endif
             TRACE("returning from native code at %p, ctx = %p, new_ctx = %p, jit_state.continuation = %p\n", (void *) native_pc, (void *) ctx, (void *) new_ctx, (void *) jit_state.continuation);
             remaining_reductions = jit_state.remaining_reductions;
             fr_bank = jit_state.fr;
