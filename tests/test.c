@@ -557,6 +557,7 @@ struct Test tests[] = {
 
     TEST_CASE_EXPECTED(exactly_eq, 7),
     TEST_CASE_EXPECTED(map_comparisons, 67108863),
+    TEST_CASE_EXPECTED(test_map_tree_order, 0),
     TEST_CASE_EXPECTED(tuple_comparisons, 6),
 
     // Tests relying on echo driver
