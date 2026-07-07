@@ -1584,6 +1584,9 @@ Module *module_new_from_iff_binary(GlobalContext *global, const void *iff_binary
 #ifdef AVM_JIT_RELOC
                 runtime_variant |= JIT_VARIANT_RELOC;
 #endif
+#if JIT_ARCH_TARGET == JIT_ARCH_X86_64
+                runtime_variant |= JIT_VARIANT_DIRECT_CALL;
+#endif
                 if (ENDIAN_SWAP_16(native_code->architectures[arch_index].architecture) == JIT_ARCH_TARGET && ENDIAN_SWAP_16(native_code->architectures[arch_index].variant) == runtime_variant) {
                     size_t arch_offset = ENDIAN_SWAP_32(native_code->architectures[arch_index].offset);
                     size_t arch_code_size;
