@@ -82,11 +82,22 @@ static inline term *memory_rewrite_pointer(term *ptr, const term *old_start, con
 #if defined(HEAP_BLOCK_USABLE_SIZE) && !defined(AVM_DISABLE_HEAP_BLOCK_CACHE) \
     && (defined(__GNUC__) || defined(__clang__))
 
+#if defined(__x86_64__) || defined(__aarch64__)
+// Desktop-class: compiler-sized workloads cycle multi-megabyte young heaps
+// through GC; letting those blocks recycle keeps them out of the allocator's
+// large-block path (mmap/madvise churn).
+#define HEAP_BLOCK_CACHE_SLOTS 12
+#define HEAP_BLOCK_CACHE_MAX_PER_SLOT 4
+#define HEAP_BLOCK_CACHE_MIN_BYTES 256
+#define HEAP_BLOCK_CACHE_MAX_BYTES (8 * 1024 * 1024)
+#define HEAP_BLOCK_CACHE_TOTAL_BYTES (16 * 1024 * 1024)
+#else
 #define HEAP_BLOCK_CACHE_SLOTS 8
 #define HEAP_BLOCK_CACHE_MAX_PER_SLOT 4
 #define HEAP_BLOCK_CACHE_MIN_BYTES 256
 #define HEAP_BLOCK_CACHE_MAX_BYTES 65536
 #define HEAP_BLOCK_CACHE_TOTAL_BYTES (512 * 1024)
+#endif
 
 struct HeapBlockCacheEntry
 {
@@ -103,14 +114,22 @@ static __thread size_t heap_block_cache_bytes = 0;
 
 void *memory_heap_block_alloc(size_t size_bytes)
 {
+    // Best fit, bounded waste: a much-larger cached block must not be pinned
+    // under a small heap (with multi-MB slots a first fit could park 8 MB
+    // under a 1 KB request for the fragment's whole lifetime).
+    int best = -1;
     for (int i = 0; i < HEAP_BLOCK_CACHE_SLOTS; i++) {
-        if (heap_block_cache[i].head != NULL && heap_block_cache[i].size >= size_bytes) {
-            struct HeapBlockCacheEntry *entry = heap_block_cache[i].head;
-            heap_block_cache[i].head = entry->next;
-            heap_block_cache[i].count--;
-            heap_block_cache_bytes -= heap_block_cache[i].size;
-            return entry;
+        if (heap_block_cache[i].head != NULL && heap_block_cache[i].size >= size_bytes
+            && (best < 0 || heap_block_cache[i].size < heap_block_cache[best].size)) {
+            best = i;
         }
+    }
+    if (best >= 0 && heap_block_cache[best].size / 2 <= size_bytes) {
+        struct HeapBlockCacheEntry *entry = heap_block_cache[best].head;
+        heap_block_cache[best].head = entry->next;
+        heap_block_cache[best].count--;
+        heap_block_cache_bytes -= heap_block_cache[best].size;
+        return entry;
     }
     return malloc(size_bytes);
 }
