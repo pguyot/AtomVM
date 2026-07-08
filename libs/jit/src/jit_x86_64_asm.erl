@@ -52,6 +52,9 @@
     jae_rel8/1,
     jle/1,
     jle_rel8/1,
+    jbe/1,
+    jbe_rel8/1,
+    jbe_rel32/1,
     jmp/1,
     jmp_rel8/1,
     jmp_rel32/1,
@@ -578,6 +581,20 @@ jle(Offset) when Offset >= -126 andalso Offset =< 129 ->
 
 jle_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jle(Offset)}.
+
+jbe(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    % Jump if below or equal (unsigned, CF=1 or ZF=1); short jump
+    AdjustedOffset = Offset - 2,
+    <<16#76, AdjustedOffset>>.
+
+jbe_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    {1, jbe(Offset)}.
+
+% Jump if below or equal (unsigned) with a 32-bit displacement (0F 86, 6-byte
+% instruction). Used to skip a block that may exceed the rel8 +127 range.
+jbe_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#86, AdjustedOffset:32/little>>}.
 
 jmp(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
