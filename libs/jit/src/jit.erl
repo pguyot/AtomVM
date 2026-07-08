@@ -4971,11 +4971,12 @@ resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif) ->
 %% Diff <=(unsigned) 63 * need, so the fast path is 3 loads, a sub, a cmp
 %% and one predicted branch over the slow call.
 op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
-    %% Gate on allocate_frame_fast: the marker for backends that opt into
-    %% the inline allocation fast paths (x86_64 exports
-    %% read_avail_heap_memory but measured inline test_heap as a loss).
+    %% Gate on read_shrink_probe_mismatch, the helper this fast path needs:
+    %% backends that measured the inline corridor check as a loss (x86_64,
+    %% where the well-predicted helper call beat the icache cost of the
+    %% per-site check) opt out by not exporting it.
     case
-        erlang:function_exported(MMod, allocate_frame_fast, 2) andalso
+        erlang:function_exported(MMod, read_shrink_probe_mismatch, 1) andalso
             MMod:word_size() =:= 8
     of
         true ->
