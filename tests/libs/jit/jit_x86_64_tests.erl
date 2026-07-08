@@ -128,6 +128,30 @@ add_overflow_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+add_overflow_imm_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:add_overflow(State1, RegA, 32),
+    Stream = ?BACKEND:stream(State2),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   48 83 c0 20             add    $0x20,%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+sub_overflow_imm_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:sub_overflow(State1, RegA, 32),
+    Stream = ?BACKEND:stream(State2),
+    Dump =
+        <<
+            "0:   48 8b 47 58             mov    0x58(%rdi),%rax\n"
+            "4:   48 83 e8 20             sub    $0x20,%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 mul_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
@@ -593,6 +617,43 @@ increment_sp_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+heap_bump_alloc_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:heap_bump_alloc(State0, 2),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	48 8b 47 18          	mov    0x18(%rdi),%rax\n"
+            "   4:	4c 8d 58 10          	lea    0x10(%rax),%r11\n"
+            "   8:	4c 89 5f 18          	mov    %r11,0x18(%rdi)\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+read_heap_fragments_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:read_heap_fragments(State0),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	48 8b 47 08          	mov    0x8(%rdi),%rax\n"
+            "   4:	48 8b 00             	mov    (%rax),%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+allocate_frame_fast_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:allocate_frame_fast(State0, 2),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	48 8b 47 50          	mov    0x50(%rdi),%rax\n"
+            "   4:	48 83 e8 18          	sub    $0x18,%rax\n"
+            "   8:	48 89 47 50          	mov    %rax,0x50(%rdi)\n"
+            "   c:	4c 8b 9f e0 00 00 00 	mov    0xe0(%rdi),%r11\n"
+            "  13:	4c 89 58 10          	mov    %r11,0x10(%rax)\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 if_block_test_() ->
     {setup,
         fun() ->
@@ -637,6 +698,46 @@ if_block_test_() ->
                         "   8:	4c 39 d8             	cmp    %r11,%rax\n"
                         "   b:	7d 04                	jge    0x11\n"
                         "   d:	49 83 c3 02          	add    $0x2,%r11"
+                    >>,
+                    ?assertStream(x86_64, Dump, Stream),
+                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {RegA, '(uint)>', 60},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
+                        "   8:	48 83 f8 3c          	cmp    $0x3c,%rax\n"
+                        "   c:	0f 86 04 00 00 00    	jbe    0x16\n"
+                        "  12:	49 83 c3 02          	add    $0x2,%r11"
+                    >>,
+                    ?assertStream(x86_64, Dump, Stream),
+                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {RegA, '(uint)>', 16#4000000000000000},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+                        "   4:	4c 8b 5f 60          	mov    0x60(%rdi),%r11\n"
+                        "   8:	49 ba 00 00 00 00 00 	movabs $0x4000000000000000,%r10\n"
+                        "   f:	00 00 40 \n"
+                        "  12:	4c 39 d0             	cmp    %r10,%rax\n"
+                        "  15:	0f 86 04 00 00 00    	jbe    0x1f\n"
+                        "  1b:	49 83 c3 02          	add    $0x2,%r11"
                     >>,
                     ?assertStream(x86_64, Dump, Stream),
                     ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
