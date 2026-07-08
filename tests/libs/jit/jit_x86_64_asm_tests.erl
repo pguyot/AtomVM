@@ -1161,6 +1161,19 @@ jle_test_() ->
         ?_assertAsmEqual(<<16#7e, 16#f4>>, "jle .-10", jit_x86_64_asm:jle(-10))
     ].
 
+jbe_test_() ->
+    [
+        ?_assertAsmEqual(<<16#76, 16#f4>>, "jbe .-10", jit_x86_64_asm:jbe(-10))
+    ].
+
+jbe_rel8_test_() ->
+    [
+        ?_assertEqual(
+            {1, jit_tests_common:asm(x86_64, <<16#76, 16#05>>, "jbe .+7")},
+            jit_x86_64_asm:jbe_rel8(7)
+        )
+    ].
+
 jle_rel8_test_() ->
     [
         ?_assertEqual(
