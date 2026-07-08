@@ -86,6 +86,9 @@
     move_float_to_fp_reg/3,
     read_fp_regs_ptr/1,
     read_avail_heap_memory/1,
+    heap_bump_alloc/2,
+    read_heap_fragments/1,
+    allocate_frame_fast/2,
     term_from_float_inline/2,
     supports_vm_reg_cond/0,
     decrement_reductions_and_maybe_schedule_next/1,
@@ -900,6 +903,8 @@ if_else_block(
 cond_skip_disp_width(overflow_set) -> 4;
 cond_skip_disp_width(mul_overflow_set) -> 4;
 cond_skip_disp_width({_, '&', _, '!=', _}) -> 4;
+%% select_val binary-search tree splits guard whole subtrees.
+cond_skip_disp_width({_, '(uint)>', _}) -> 4;
 cond_skip_disp_width(_) -> 1.
 
 %% Patch the forward (skip-the-block) displacement of a conditional jump at byte
@@ -1002,6 +1007,40 @@ if_block_cond0(
     Regs1 = jit_regs:set_contents(Regs0, Temp, {imm, Value}),
     State1 = if_block_free_reg(RegOrTuple, State0#state{regs = Regs1}),
     {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJGEOffset};
+%% Unsigned above: skip the block when Reg <= Value (unsigned). Used for
+%% two-sided corridor checks folded into one compare via unsigned wrap and
+%% for the select_val binary-search tree splits. The skip is rel32: tree
+%% splits guard whole subtrees, which routinely exceed the rel8 +127 range
+%% (see cond_skip_disp_width).
+if_block_cond0(State0, {RegOrTuple, '(uint)>', Value}) when
+    is_integer(Value), ?IS_SINT32_T(Value)
+->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_x86_64_asm:cmpq(Value, Reg),
+    {RelocJBEOffset, I2} = jit_x86_64_asm:jbe_rel32(1),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJBEOffset};
+% Catch-all for large values outside SINT32_T range
+if_block_cond0(
+    #state{regs = Regs0} = State0, {RegOrTuple, '(uint)>', Value}
+) when is_integer(Value) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Temp = first_avail(Avail),
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_x86_64_asm:movabsq(Value, Temp),
+    I2 = jit_x86_64_asm:cmpq(Temp, Reg),
+    {RelocJBEOffset, I3} = jit_x86_64_asm:jbe_rel32(1),
+    Regs1 = jit_regs:set_contents(Regs0, Temp, {imm, Value}),
+    State1 = if_block_free_reg(RegOrTuple, State0#state{regs = Regs1}),
+    {State1, <<I1/binary, I2/binary, I3/binary>>, byte_size(I1) + byte_size(I2) + RelocJBEOffset};
 if_block_cond0(State0, {RegOrTuple, '==', 0}) ->
     Reg =
         case RegOrTuple of
@@ -2978,22 +3017,23 @@ sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
 
-%% Add register Val to Reg in place, setting flags (OF on signed overflow);
-%% testable with the `overflow_set' if-condition.
--spec add_overflow(state(), x86_64_register(), x86_64_register()) -> state().
+%% Add register or immediate Val to Reg in place, setting flags (OF on signed
+%% overflow); testable with the `overflow_set' if-condition.
+-spec add_overflow(state(), x86_64_register(), x86_64_register() | integer()) -> state().
 add_overflow(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
-) when is_atom(Val) ->
+) when is_atom(Val); ?IS_SINT32_T(Val) ->
     I1 = jit_x86_64_asm:addq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
 
-%% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
--spec sub_overflow(state(), x86_64_register(), x86_64_register()) -> state().
+%% Subtract register or immediate Val from Reg in place, setting flags. See
+%% add_overflow/3.
+-spec sub_overflow(state(), x86_64_register(), x86_64_register() | integer()) -> state().
 sub_overflow(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Val
-) when is_atom(Val) ->
+) when is_atom(Val); ?IS_SINT32_T(Val) ->
     I1 = jit_x86_64_asm:subq(Val, Reg),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
@@ -3396,6 +3436,81 @@ read_avail_heap_memory(
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
     }.
+
+%% Bump-allocate NWords terms from the context heap, returning a freshly
+%% allocated register holding the pointer to the first allocated word. The
+%% space is already reserved by the preceding test_heap/allocate (BEAM
+%% bytecode guarantees it), so this is memory_heap_alloc inlined: no bounds
+%% check, just a heap_ptr load/add/store.
+-spec heap_bump_alloc(state(), pos_integer()) -> {state(), x86_64_register()}.
+heap_bump_alloc(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    NWords
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
+    I1 = jit_x86_64_asm:movq(?HEAP_PTR, Reg),
+    I2 = jit_x86_64_asm:leaq({NWords * ?WORD_SIZE, Reg}, Tmp),
+    I3 = jit_x86_64_asm:movq(Tmp, ?HEAP_PTR),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% Load ctx->heap.root->next into a freshly allocated register, so deallocate
+%% can test for pending heap fragments inline and only call the primitive
+%% (which compacts them) when there are any.
+-spec read_heap_fragments(state()) -> {state(), x86_64_register()}.
+read_heap_fragments(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    I1 = jit_x86_64_asm:movq({16#8, ?CTX_REG}, Reg),
+    I2 = jit_x86_64_asm:movq({0, Reg}, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% Push a stack frame, the fast path of the allocate opcode once the room
+%% check passed: e -= (StackNeed + 1) words; e[StackNeed] = ctx->cp. The
+%% 64-bit cp occupies a single stack slot.
+-spec allocate_frame_fast(state(), non_neg_integer()) -> state().
+allocate_frame_fast(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State,
+    StackNeed
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
+    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
+    I2 = jit_x86_64_asm:subq((StackNeed + 1) * ?WORD_SIZE, Reg),
+    I3 = jit_x86_64_asm:movq(Reg, ?Y_REGS),
+    I4 = jit_x86_64_asm:movq(?CP, Tmp),
+    I5 = jit_x86_64_asm:movq(Tmp, {StackNeed * ?WORD_SIZE, Reg}),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %% Load the fp register array pointer (jit_state->fr) into a freshly allocated
 %% register and return it, so the caller can test it for NULL and only call
