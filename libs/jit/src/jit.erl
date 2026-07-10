@@ -2225,9 +2225,7 @@ emit_pass(
             {MSt11, AtomReg} =
                 case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
                     error ->
-                        MMod:call_primitive(
-                            MSt10, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]
-                        );
+                        get_module_atom_term(MMod, MSt10, AtomIndex);
                     {ok, Val} ->
                         {MSt10, Val}
                 end,
@@ -6865,15 +6863,12 @@ emit_fused_tagged_tuple_ops(
     Label, Arg1, Arity, AtomIndex, GetElements, MMod, MSt0, #state{atom_resolver = AtomResolver}
 ) ->
     %% Resolve the expected record tag atom FIRST, before the tuple pointer is
-    %% live. For a user record the atom is resolved by a primitive call; doing
-    %% it now means nothing needs to be preserved across that call. (The unfused
-    %% path resolves it after loading the tag element, so it must spill the tag
-    %% element around the call; keeping the pointer live too, as an in-place
-    %% pointer-preserving fusion would, only adds another spill.)
+    %% live: the resolution allocates a scratch register, so doing it now keeps
+    %% the register pressure of the tuple-matching sequence flat.
     {MSt1, AtomReg} =
         case maps:find(AtomResolver(AtomIndex), ?DEFAULT_ATOMS) of
             error ->
-                MMod:call_primitive(MSt0, ?PRIM_MODULE_GET_ATOM_TERM_BY_ID, [jit_state, AtomIndex]);
+                get_module_atom_term(MMod, MSt0, AtomIndex);
             {ok, Val} ->
                 {MSt0, Val}
         end,

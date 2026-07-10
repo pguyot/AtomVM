@@ -711,6 +711,10 @@ cmpq(Imm, Reg) when ?IS_SINT32_T(Imm), is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
     <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 3:2, 7:3, MODRM_RM:3, Imm:32/little>>.
 
+addq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), ?IS_SINT8_T(Offset), is_atom(Reg) ->
+    % Memory-destination read-modify-write: addq $imm8, disp8(reg)
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 1:2, 0:3, MODRM_RM:3, Offset, Imm>>;
 addq(Imm, Reg) when ?IS_SINT8_T(Imm), is_atom(Reg) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#83, (16#C0 + Index), Imm>>;

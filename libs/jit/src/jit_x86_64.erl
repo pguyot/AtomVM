@@ -2626,6 +2626,14 @@ move_to_cp(
     State#state{stream = Stream1, regs = Regs1}.
 
 increment_sp(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    Offset
+) when Offset >= 0 andalso Offset < 16 ->
+    %% Single read-modify-write, no scratch register.
+    I1 = jit_x86_64_asm:addq(Offset * 8, ?Y_REGS),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1};
+increment_sp(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State,
     Offset
