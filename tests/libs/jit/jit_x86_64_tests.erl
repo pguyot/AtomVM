@@ -381,16 +381,15 @@ call_ext_only_test() ->
     Dump =
         <<
             "   0:	ff 4e 10             	decl   0x10(%rsi)\n"
-            "   3:	75 11                	jne    0x16\n"
-            "   5:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x16\n"
+            "   3:	75 0e                	jne    0x13\n"
+            "   5:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x13\n"
             "   c:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  10:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-            "  14:	ff e0                	jmpq   *%rax\n"
-            "  16:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
-            "  1a:	ba 02 00 00 00       	mov    $0x2,%edx\n"
-            "  1f:	48 89 d1             	mov    %rdx,%rcx\n"
-            "  22:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
-            "  29:	ff e0                	jmpq   *%rax\n"
+            "  10:	ff 62 10             	jmp    *0x10(%rdx)\n"
+            "  13:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
+            "  17:	ba 02 00 00 00       	mov    $0x2,%edx\n"
+            "  1c:	48 89 d1             	mov    %rdx,%rcx\n"
+            "  1f:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
+            "  26:	ff e0                	jmp    *%rax"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -402,16 +401,15 @@ call_ext_last_test() ->
     Dump =
         <<
             "   0:	ff 4e 10             	decl   0x10(%rsi)\n"
-            "   3:	75 11                	jne    0x16\n"
-            "   5:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x16\n"
+            "   3:	75 0e                	jne    0x13\n"
+            "   5:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x13\n"
             "   c:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  10:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-            "  14:	ff e0                	jmpq   *%rax\n"
-            "  16:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
-            "  1a:	ba 02 00 00 00       	mov    $0x2,%edx\n"
-            "  1f:	48 89 d1             	mov    %rdx,%rcx\n"
-            "  22:	41 b8 0a 00 00 00    	mov    $0xa,%r8d\n"
-            "  28:	ff e0                	jmpq   *%rax\n"
+            "  10:	ff 62 10             	jmp    *0x10(%rdx)\n"
+            "  13:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
+            "  17:	ba 02 00 00 00       	mov    $0x2,%edx\n"
+            "  1c:	48 89 d1             	mov    %rdx,%rcx\n"
+            "  1f:	41 b8 0a 00 00 00    	mov    $0xa,%r8d\n"
+            "  25:	ff e0                	jmp    *%rax"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -456,9 +454,8 @@ call_primitive_last_if_block_preserves_cache_test() ->
         "   0:	b8 01 00 00 00       	mov    $0x1,%eax\n"
         "   5:	4c 8b 5f 58          	mov    0x58(%rdi),%r11\n"
         "   9:	48 85 c0             	test   %rax,%rax\n"
-        "   c:	75 05                	jne    0x13\n"
-        "   e:	48 8b 02             	mov    (%rdx),%rax\n"
-        "  11:	ff e0                	jmp    *%rax"
+        "   c:	75 02                	jne    0x10\n"
+        "   e:	ff 22                	jmp    *(%rdx)"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1480,20 +1477,17 @@ call_only_or_schedule_next_and_label_relocation_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:	e9 2a 00 00 00       	jmpq   0x2f\n"
-            "   5:	e9 05 00 00 00       	jmpq   0xf\n"
-            "   a:	e9 1b 00 00 00       	jmpq   0x2a\n"
+            "   0:	e9 24 00 00 00       	jmp    0x29\n"
+            "   5:	e9 05 00 00 00       	jmp    0xf\n"
+            "   a:	e9 18 00 00 00       	jmp    0x27\n"
             "   f:	ff 4e 10             	decl   0x10(%rsi)\n"
             "  12:	74 05                	je     0x19\n"
-            "  14:	e9 11 00 00 00       	jmpq   0x2a\n"
-            "  19:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x2a\n"
+            "  14:	e9 0e 00 00 00       	jmp    0x27\n"
+            "  19:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x27\n"
             "  20:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  24:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-            "  28:	ff e0                	jmpq   *%rax\n"
-            "  2a:	48 8b 02             	mov    (%rdx),%rax\n"
-            "  2d:	ff e0                	jmpq   *%rax\n"
-            "  2f:	48 8b 42 08          	mov    0x8(%rdx),%rax\n"
-            "  33:	ff e0                	jmpq   *%rax\n"
+            "  24:	ff 62 10             	jmp    *0x10(%rdx)\n"
+            "  27:	ff 22                	jmp    *(%rdx)\n"
+            "  29:	ff 62 08             	jmp    *0x8(%rdx)"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1511,20 +1505,17 @@ call_only_or_schedule_next_known_label_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:	e9 2a 00 00 00       	jmpq   0x2f\n"
-            "   5:	e9 05 00 00 00       	jmpq   0xf\n"
-            "   a:	e9 1b 00 00 00       	jmpq   0x2a\n"
+            "   0:	e9 24 00 00 00       	jmp    0x29\n"
+            "   5:	e9 05 00 00 00       	jmp    0xf\n"
+            "   a:	e9 1b 00 00 00       	jmp    0x2a\n"
             "   f:	ff 4e 10             	decl   0x10(%rsi)\n"
             "  12:	74 05                	je     0x19\n"
-            "  14:	e9 11 00 00 00       	jmpq   0x2a\n"
+            "  14:	e9 11 00 00 00       	jmp    0x2a\n"
             "  19:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x2a\n"
             "  20:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  24:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-            "  28:	ff e0                	jmpq   *%rax\n"
-            "  2a:	48 8b 02             	mov    (%rdx),%rax\n"
-            "  2d:	ff e0                	jmpq   *%rax\n"
-            "  2f:	48 8b 42 08          	mov    0x8(%rdx),%rax\n"
-            "  33:	ff e0                	jmpq   *%rax\n"
+            "  24:	ff 62 10             	jmp    *0x10(%rdx)\n"
+            "  27:	ff 22                	jmp    *(%rdx)\n"
+            "  29:	ff 62 08             	jmp    *0x8(%rdx)"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1777,23 +1768,21 @@ call_ext_test() ->
     ?BACKEND:assert_all_native_free(State2),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "\n"
         "   0:	ff 4e 10             	decl   0x10(%rsi)\n"
-        "   3:	75 11                	jne    0x16\n"
-        "   5:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x16\n"
+        "   3:	75 0e                	jne    0x13\n"
+        "   5:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x13\n"
         "   c:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-        "  10:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-        "  14:	ff e0                	jmpq   *%rax\n"
-        "  16:	48 8b 06             	mov    (%rsi),%rax\n"
-        "  19:	8b 00                	mov    (%rax),%eax\n"
-        "  1b:	48 c1 e0 18          	shl    $0x18,%rax\n"
-        "  1f:	48 0d 0c 01 00 00    	or     $0x10c,%rax\n"
-        "  25:	48 89 87 e0 00 00 00 	mov    %rax,0xe0(%rdi)\n"
-        "  2c:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
-        "  30:	ba 02 00 00 00       	mov    $0x2,%edx\n"
-        "  35:	b9 05 00 00 00       	mov    $0x5,%ecx\n"
-        "  3a:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
-        "  41:	ff e0                	jmpq   *%rax\n"
+        "  10:	ff 62 10             	jmp    *0x10(%rdx)\n"
+        "  13:	48 8b 06             	mov    (%rsi),%rax\n"
+        "  16:	8b 00                	mov    (%rax),%eax\n"
+        "  18:	48 c1 e0 18          	shl    $0x18,%rax\n"
+        "  1c:	48 0d 00 01 00 00    	or     $0x100,%rax\n"
+        "  22:	48 89 87 e0 00 00 00 	mov    %rax,0xe0(%rdi)\n"
+        "  29:	48 8b 42 20          	mov    0x20(%rdx),%rax\n"
+        "  2d:	ba 02 00 00 00       	mov    $0x2,%edx\n"
+        "  32:	b9 05 00 00 00       	mov    $0x5,%ecx\n"
+        "  37:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8\n"
+        "  3e:	ff e0                	jmp    *%rax"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1828,42 +1817,41 @@ call_fun_test() ->
     Stream = ?BACKEND:stream(State9),
     Dump = <<
         "   0:	ff 4e 10             	decl   0x10(%rsi)\n"
-        "   3:	75 11                	jne    0x16\n"
-        "   5:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x16\n"
+        "   3:	75 0e                	jne    0x13\n"
+        "   5:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x13\n"
         "   c:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-        "  10:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-        "  14:	ff e0                	jmp    *%rax\n"
-        "  16:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
-        "  1a:	49 89 c3             	mov    %rax,%r11\n"
-        "  1d:	4d 89 da             	mov    %r11,%r10\n"
-        "  20:	41 80 e2 03          	and    $0x3,%r10b\n"
-        "  24:	41 80 fa 02          	cmp    $0x2,%r10b\n"
-        "  28:	0f 84 16 00 00 00    	je     0x44\n"
-        "  2e:	48 8b 82 98 00 00 00 	mov    0x98(%rdx),%rax\n"
-        "  35:	ba 35 00 00 00       	mov    $0x35,%edx\n"
-        "  3a:	b9 8b 01 00 00       	mov    $0x18b,%ecx\n"
-        "  3f:	4d 89 d8             	mov    %r11,%r8\n"
-        "  42:	ff e0                	jmp    *%rax\n"
-        "  44:	49 83 e3 fc          	and    $0xfffffffffffffffc,%r11\n"
-        "  48:	4d 8b 1b             	mov    (%r11),%r11\n"
-        "  4b:	4d 89 da             	mov    %r11,%r10\n"
-        "  4e:	41 80 e2 3f          	and    $0x3f,%r10b\n"
-        "  52:	41 80 fa 14          	cmp    $0x14,%r10b\n"
-        "  56:	0f 84 16 00 00 00    	je     0x72\n"
-        "  5c:	48 8b 82 98 00 00 00 	mov    0x98(%rdx),%rax\n"
-        "  63:	ba 63 00 00 00       	mov    $0x63,%edx\n"
-        "  68:	b9 8b 01 00 00       	mov    $0x18b,%ecx\n"
-        "  6d:	4d 89 d8             	mov    %r11,%r8\n"
-        "  70:	ff e0                	jmp    *%rax\n"
-        "  72:	4c 8b 1e             	mov    (%rsi),%r11\n"
-        "  75:	45 8b 1b             	mov    (%r11),%r11d\n"
-        "  78:	49 c1 e3 18          	shl    $0x18,%r11\n"
-        "  7c:	49 81 cb 64 02 00 00 	or     $0x264,%r11\n"
-        "  83:	4c 89 9f e0 00 00 00 	mov    %r11,0xe0(%rdi)\n"
-        "  8a:	4c 8b 9a 00 01 00 00 	mov    0x100(%rdx),%r11\n"
-        "  91:	48 89 c2             	mov    %rax,%rdx\n"
-        "  94:	31 c9                	xor    %ecx,%ecx\n"
-        "  96:	41 ff e3             	jmp    *%r11"
+        "  10:	ff 62 10             	jmp    *0x10(%rdx)\n"
+        "  13:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "  17:	49 89 c3             	mov    %rax,%r11\n"
+        "  1a:	4d 89 da             	mov    %r11,%r10\n"
+        "  1d:	41 80 e2 03          	and    $0x3,%r10b\n"
+        "  21:	41 80 fa 02          	cmp    $0x2,%r10b\n"
+        "  25:	0f 84 16 00 00 00    	je     0x41\n"
+        "  2b:	48 8b 82 98 00 00 00 	mov    0x98(%rdx),%rax\n"
+        "  32:	ba 32 00 00 00       	mov    $0x32,%edx\n"
+        "  37:	b9 8b 01 00 00       	mov    $0x18b,%ecx\n"
+        "  3c:	4d 89 d8             	mov    %r11,%r8\n"
+        "  3f:	ff e0                	jmp    *%rax\n"
+        "  41:	49 83 e3 fc          	and    $0xfffffffffffffffc,%r11\n"
+        "  45:	4d 8b 1b             	mov    (%r11),%r11\n"
+        "  48:	4d 89 da             	mov    %r11,%r10\n"
+        "  4b:	41 80 e2 3f          	and    $0x3f,%r10b\n"
+        "  4f:	41 80 fa 14          	cmp    $0x14,%r10b\n"
+        "  53:	0f 84 16 00 00 00    	je     0x6f\n"
+        "  59:	48 8b 82 98 00 00 00 	mov    0x98(%rdx),%rax\n"
+        "  60:	ba 60 00 00 00       	mov    $0x60,%edx\n"
+        "  65:	b9 8b 01 00 00       	mov    $0x18b,%ecx\n"
+        "  6a:	4d 89 d8             	mov    %r11,%r8\n"
+        "  6d:	ff e0                	jmp    *%rax\n"
+        "  6f:	4c 8b 1e             	mov    (%rsi),%r11\n"
+        "  72:	45 8b 1b             	mov    (%r11),%r11d\n"
+        "  75:	49 c1 e3 18          	shl    $0x18,%r11\n"
+        "  79:	49 81 cb 58 02 00 00 	or     $0x258,%r11\n"
+        "  80:	4c 89 9f e0 00 00 00 	mov    %r11,0xe0(%rdi)\n"
+        "  87:	4c 8b 9a 00 01 00 00 	mov    0x100(%rdx),%r11\n"
+        "  8e:	48 89 c2             	mov    %rax,%rdx\n"
+        "  91:	31 c9                	xor    %ecx,%ecx\n"
+        "  93:	41 ff e3             	jmp    *%r11"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -1877,12 +1865,11 @@ decrement_reductions_invalidates_cache_test() ->
     Dump = <<
         "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
         "   4:	ff 4e 10             	decl   0x10(%rsi)\n"
-        "   7:	75 11                	jne    0x1a\n"
-        "   9:	48 8d 05 0a 00 00 00 	lea    0xa(%rip),%rax        # 0x1a\n"
+        "   7:	75 0e                	jne    0x17\n"
+        "   9:	48 8d 05 07 00 00 00 	lea    0x7(%rip),%rax        # 0x17\n"
         "  10:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-        "  14:	48 8b 42 10          	mov    0x10(%rdx),%rax\n"
-        "  18:	ff e0                	jmp    *%rax\n"
-        "  1a:	48 8b 47 58          	mov    0x58(%rdi),%rax"
+        "  14:	ff 62 10             	jmp    *0x10(%rdx)\n"
+        "  17:	48 8b 47 58          	mov    0x58(%rdi),%rax"
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2289,16 +2276,15 @@ wait_test() ->
     Stream = ?BACKEND:stream(State6),
     Dump =
         <<
-            "   0:	e9 ff ff ff ff       	jmpq   0x4\n"
-            "   5:	e9 14 00 00 00       	jmpq   0x1e\n"
-            "   a:	e9 f1 00 00 00       	jmpq   0x100\n"
-            "   f:	e9 ff ff ff ff       	jmpq   0x13\n"
-            "  14:	e9 ff ff ff ff       	jmpq   0x18\n"
-            "  19:	e9 ff ff ff ff       	jmpq   0x1d\n"
-            "  1e:	48 8d 05 db 00 00 00 	lea    0xdb(%rip),%rax\n"
+            "   0:	e9 ff ff ff ff       	jmp    0x4\n"
+            "   5:	e9 14 00 00 00       	jmp    0x1e\n"
+            "   a:	e9 f1 00 00 00       	jmp    0x100\n"
+            "   f:	e9 ff ff ff ff       	jmp    0x13\n"
+            "  14:	e9 ff ff ff ff       	jmp    0x18\n"
+            "  19:	e9 ff ff ff ff       	jmp    0x1d\n"
+            "  1e:	48 8d 05 db 00 00 00 	lea    0xdb(%rip),%rax        # 0x100\n"
             "  25:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  29:	48 8b 82 e8 00 00 00 	mov    0xe8(%rdx),%rax\n"
-            "  30:	ff e0                	jmpq   *%rax"
+            "  29:	ff a2 e8 00 00 00    	jmp    *0xe8(%rdx)"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
@@ -2317,16 +2303,15 @@ wait_known_test() ->
     Stream = ?BACKEND:stream(State6),
     Dump =
         <<
-            "   0:	e9 ff ff ff ff       	jmpq   0x4\n"
-            "   5:	e9 14 00 00 00       	jmpq   0x1e\n"
-            "   a:	e9 f1 00 00 00       	jmpq   0x100\n"
-            "   f:	e9 ff ff ff ff       	jmpq   0x13\n"
-            "  14:	e9 ff ff ff ff       	jmpq   0x18\n"
-            "  19:	e9 ff ff ff ff       	jmpq   0x1d\n"
-            "  1e:	48 8d 05 db 00 00 00 	lea    0xdb(%rip),%rax\n"
+            "   0:	e9 ff ff ff ff       	jmp    0x4\n"
+            "   5:	e9 14 00 00 00       	jmp    0x1e\n"
+            "   a:	e9 f1 00 00 00       	jmp    0x100\n"
+            "   f:	e9 ff ff ff ff       	jmp    0x13\n"
+            "  14:	e9 ff ff ff ff       	jmp    0x18\n"
+            "  19:	e9 ff ff ff ff       	jmp    0x1d\n"
+            "  1e:	48 8d 05 db 00 00 00 	lea    0xdb(%rip),%rax        # 0x100\n"
             "  25:	48 89 46 08          	mov    %rax,0x8(%rsi)\n"
-            "  29:	48 8b 82 e8 00 00 00 	mov    0xe8(%rdx),%rax\n"
-            "  30:	ff e0                	jmpq   *%rax"
+            "  29:	ff a2 e8 00 00 00    	jmp    *0xe8(%rdx)"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
