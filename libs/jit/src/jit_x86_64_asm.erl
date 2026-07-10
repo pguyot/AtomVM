@@ -41,6 +41,7 @@
     jz_rel32/1,
     jnz/1,
     jnz_rel8/1,
+    jnz_rel32/1,
     jno/1,
     jno_rel8/1,
     jno_rel32/1,
@@ -531,6 +532,12 @@ jnz(Offset) when Offset >= -126 andalso Offset =< 129 ->
 
 jnz_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jnz(Offset)}.
+
+% Jump if not zero/not equal (ZF=0) with a 32-bit displacement (0F 85, 6-byte
+% instruction). Used for conditional jumps to labels beyond the rel8 range.
+jnz_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#85, AdjustedOffset:32/little>>}.
 
 jno(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Jump if no overflow (OF=0); short jump
