@@ -867,6 +867,12 @@ jmpq({Offset, Reg}) when ?IS_SINT8_T(Offset) ->
         0 -> <<16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>;
         1 -> <<16#41, 16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>
     end);
+jmpq({Offset, Reg}) when ?IS_SINT32_T(Offset) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    (case REX_B of
+        0 -> <<16#FF, 2:2, 4:3, MODRM_RM:3, Offset:32/little>>;
+        1 -> <<16#41, 16#FF, 2:2, 4:3, MODRM_RM:3, Offset:32/little>>
+    end);
 jmpq({Reg}) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#FF, (16#E0 + Index)>>;

@@ -592,6 +592,50 @@ call_primitive_last0(
     };
 call_primitive_last0(
     #state{
+        stream_module = StreamModule
+    } = State0,
+    Primitive,
+    Args
+) when length(Args) =< 2 ->
+    %% With at most two arguments the parameter registers are rdi/rsi (see
+    %% ?PARAMETER_REGS), so the interface register (rdx) survives argument
+    %% marshalling and can base a memory-indirect tail jump directly — no
+    %% temp load of the function pointer. Scratch temps never alias rdx
+    %% (?AVAILABLE_REGS_MASK excludes it), so argument setup cannot clobber it.
+    #{
+        available_mask := AvailableRegs1,
+        used_mask := UsedRegs,
+        param_regs := ParamRegs,
+        args_regs := ArgsRegs,
+        param_mask := ParamMask,
+        args_mask := ArgsMask
+    } = prepare_call_scratch(Args),
+    State1 = set_args2(
+        State0#state{
+            regs = jit_regs:set_masks(State0#state.regs, AvailableRegs1, UsedRegs)
+        },
+        Args,
+        ParamRegs,
+        ArgsRegs,
+        ParamMask,
+        ArgsMask
+    ),
+    #state{stream = Stream1} = State1,
+    PrimAddr =
+        case Primitive of
+            0 -> {0, ?NATIVE_INTERFACE_REG};
+            N -> ?PRIMITIVE(N)
+        end,
+    Call = jit_x86_64_asm:jmpq(PrimAddr),
+    Stream2 = StreamModule:append(Stream1, Call),
+    State1#state{
+        stream = Stream2,
+        regs = jit_regs:set_masks(
+            jit_regs:unreachable(State1#state.regs), ?AVAILABLE_REGS_MASK, 0
+        )
+    };
+call_primitive_last0(
+    #state{
         stream_module = StreamModule,
         stream = Stream0
     } = State0,
