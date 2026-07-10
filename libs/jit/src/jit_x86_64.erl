@@ -42,6 +42,7 @@
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
+    jump_to_label_cond/3,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -724,6 +725,104 @@ jump_to_offset(StateP, TargetOffset) ->
     I1 = jit_x86_64_asm:jmp(RelOffset),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1, regs = jit_regs:unreachable(State#state.regs)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Emit a conditional jump straight to a label. For the fused condition
+%% shapes this is a single jcc to the label instead of if_block's
+%% inverted-jcc-over-a-jmp (5 fewer bytes per site and one branch instead of
+%% two on the taken path — every type-test failure edge). Condition shapes
+%% without a fused form fall back to the if_block emission.
+%% @end
+%% @param StateP current backend state
+%% @param Cond condition to jump on (same forms as if_block)
+%% @param Label label to jump to when Cond holds
+%% @return Updated backend state
+%%-----------------------------------------------------------------------------
+-spec jump_to_label_cond(state(), any(), integer() | reference()) -> state().
+jump_to_label_cond(StateP, Cond, Label) ->
+    case cond_direct_jcc(StateP, Cond) of
+        unsupported ->
+            if_block(StateP, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end);
+        {State0, CmpCode} ->
+            %% Same pending bookkeeping as jump_to_label: the taken edge
+            %% must see stores whose register is in the label's live-in mask.
+            #state{
+                stream_module = StreamModule,
+                stream = Stream0,
+                branches = AccBranches,
+                labels = Labels
+            } =
+                State = pending_filter_label(State0, Label),
+            Offset = StreamModule:offset(Stream0),
+            JccOffset = Offset + byte_size(CmpCode),
+            case Labels of
+                #{Label := LabelOffset} ->
+                    Rel = LabelOffset - JccOffset,
+                    I1 =
+                        if
+                            Rel >= -126 andalso Rel =< 129 ->
+                                jit_x86_64_asm:jnz(Rel);
+                            true ->
+                                {_, I1Rel32} = jit_x86_64_asm:jnz_rel32(Rel),
+                                I1Rel32
+                        end,
+                    Stream1 = StreamModule:append(Stream0, <<CmpCode/binary, I1/binary>>),
+                    State#state{stream = Stream1};
+                _ ->
+                    {RelocOffset, I1} = jit_x86_64_asm:jnz_rel32(2),
+                    Stream1 = StreamModule:append(Stream0, <<CmpCode/binary, I1/binary>>),
+                    BrEntry = {JccOffset + RelocOffset, 32},
+                    ExistingBrs = maps:get(Label, AccBranches, []),
+                    State#state{
+                        stream = Stream1,
+                        branches = AccBranches#{Label => [BrEntry | ExistingBrs]}
+                    }
+            end
+    end.
+
+%% @private
+%% Compare emission for jump_to_label_cond's fused shapes: returns the state
+%% (condition operands freed) and the compare code whose jnz takes the jump
+%% exactly when the condition holds. Non-fused shapes return `unsupported'.
+cond_direct_jcc(State0, {RegOrTuple, '&', Mask, '!=', 0}) when ?IS_UINT8_T(Mask) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_x86_64_asm:testb(Mask, Reg),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1, I1};
+cond_direct_jcc(#state{regs = Regs0} = State0, {{free, Reg} = RegTuple, '&', Mask, '!=', Val}) when
+    ?IS_UINT8_T(Mask)
+->
+    I1 = jit_x86_64_asm:andb(Mask, Reg),
+    I2 = jit_x86_64_asm:cmpb(Val, Reg),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State1 = if_block_free_reg(RegTuple, State0#state{regs = Regs1}),
+    {State1, <<I1/binary, I2/binary>>};
+cond_direct_jcc(#state{regs = Regs0} = State0, {Reg, '&', Mask, '!=', Val}) when
+    is_atom(Reg) andalso ?IS_UINT8_T(Mask)
+->
+    case jit_regs:available_regs(Regs0) of
+        0 ->
+            %% See the matching if_block_cond0 clause: pushq/popq preserve
+            %% EFLAGS, so the cmpb result survives the restore.
+            I1 = jit_x86_64_asm:pushq(Reg),
+            I2 = jit_x86_64_asm:andb(Mask, Reg),
+            I3 = jit_x86_64_asm:cmpb(Val, Reg),
+            I4 = jit_x86_64_asm:popq(Reg),
+            {State0, <<I1/binary, I2/binary, I3/binary, I4/binary>>};
+        Avail ->
+            Temp = first_avail(Avail),
+            I1 = jit_x86_64_asm:movq(Reg, Temp),
+            I2 = jit_x86_64_asm:andb(Mask, Temp),
+            I3 = jit_x86_64_asm:cmpb(Val, Temp),
+            Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+            {State0#state{regs = Regs1}, <<I1/binary, I2/binary, I3/binary>>}
+    end;
+cond_direct_jcc(_State0, _Cond) ->
+    unsupported.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.
