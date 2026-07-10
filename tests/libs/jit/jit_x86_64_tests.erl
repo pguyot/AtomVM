@@ -462,6 +462,19 @@ call_primitive_last_if_block_preserves_cache_test() ->
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
+move_imported_bif_to_native_register_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:move_imported_bif_to_native_register(State0, 3),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	48 8b 06             	mov    (%rsi),%rax\n"
+            "   3:	48 8b 80 90 00 00 00 	mov    0x90(%rax),%rax\n"
+            "   a:	48 8b 40 18          	mov    0x18(%rax),%rax\n"
+            "   e:	48 8b 40 08          	mov    0x8(%rax),%rax\n"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 jump_to_label_cond_testb_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
