@@ -2289,8 +2289,7 @@ emit_pass(<<?OP_PUT_TUPLE2, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Dest, Rest1} = decode_dest(Rest0, MMod, MSt0),
     {ListSize, Rest2} = decode_extended_list_header(Rest1),
     ?TRACE("OP_PUT_TUPLE2 ~p, [", [Dest]),
-    {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_TERM_ALLOC_TUPLE, [ctx, ListSize]),
-    {MSt3, ResultReg} = MMod:and_(MSt2, {free, ResultReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt3, ResultReg} = alloc_tuple(MMod, MSt1, ListSize),
     {MSt4, Rest3} = lists:foldl(
         fun(Index, {AccMSt0, AccRest0}) ->
             {AccMSt1, Element, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
@@ -3554,8 +3553,7 @@ emit_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0) ->
     {MSt4, Dest, Rest4} = decode_dest(Rest3, MMod, MSt3),
     {ListLen, Rest5} = decode_extended_list_header(Rest4),
     ?TRACE("OP_UPDATE_RECORD ~p, ~p, ~p, ~p, [", [Hint, Size, Src, Dest]),
-    {MSt5, DestReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
-    {MSt6, DestReg} = MMod:and_(MSt5, {free, DestReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt6, DestReg} = alloc_tuple(MMod, MSt4, Size),
     {MSt7, ReuseReg} = MMod:move_to_native_register(
         MSt6,
         if
@@ -5076,6 +5074,25 @@ op_test_heap_call(MMod, MSt0, HeapNeed, Live) ->
         ctx, jit_state, HeapNeed, Live
     ]),
     handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1).
+
+%% Allocate a Size-element tuple, returning the UNTAGGED boxed pointer in a
+%% native register; the caller stores elements 1..Size and re-tags. The tuple
+%% space is reserved by the preceding test_heap (BEAM bytecode guarantees it),
+%% so on backends with heap_bump_alloc this is a pure bump allocation plus a
+%% constant header store — inlined like put_list instead of paying a primitive
+%% call per tuple (put_tuple2 is as frequent as put_list in compiler output).
+alloc_tuple(MMod, MSt0, Size) ->
+    case erlang:function_exported(MMod, heap_bump_alloc, 2) of
+        true ->
+            {MSt1, Ptr} = MMod:heap_bump_alloc(MSt0, Size + 1),
+            MSt2 = MMod:move_to_array_element(
+                MSt1, (Size bsl 6) bor ?TERM_BOXED_TUPLE, Ptr, 0
+            ),
+            {MSt2, Ptr};
+        false ->
+            {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
+            MMod:and_(MSt1, {free, ResultReg}, ?TERM_PRIMARY_CLEAR_MASK)
+    end.
 
 %% OP_ALLOCATE / OP_ALLOCATE_HEAP. On aarch64 the room check and frame push
 %% are inlined; the primitive is only called when a GC is actually needed.
