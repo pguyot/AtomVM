@@ -611,9 +611,7 @@ increment_sp_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	48 8b 47 50          	mov    0x50(%rdi),%rax\n"
-            "   4:	48 83 c0 38          	add    $0x38,%rax\n"
-            "   8:	48 89 47 50          	mov    %rax,0x50(%rdi)\n"
+            "   0:	48 83 47 50 38       	addq   $0x38,0x50(%rdi)\n"
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
