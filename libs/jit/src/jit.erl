@@ -8075,9 +8075,17 @@ handle_error_if(Cond, MMod, MSt0) ->
     end).
 
 cond_jump_to_label(Cond, Label, MMod, MSt0) ->
-    MMod:if_block(MSt0, Cond, fun(BSt0) ->
-        MMod:jump_to_label(BSt0, Label)
-    end).
+    case erlang:function_exported(MMod, jump_to_label_cond, 3) of
+        true ->
+            %% Backends with fused conditional jumps emit a single jcc to the
+            %% label for the supported condition shapes (and fall back to the
+            %% if_block form themselves for the rest).
+            MMod:jump_to_label_cond(MSt0, Cond, Label);
+        false ->
+            MMod:if_block(MSt0, Cond, fun(BSt0) ->
+                MMod:jump_to_label(BSt0, Label)
+            end)
+    end.
 
 term_binary_heap_size(Size, MMod) when is_integer(Size) ->
     case MMod:word_size() of
