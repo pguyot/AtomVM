@@ -622,6 +622,15 @@ term context_process_alias_message_signal(Context *ctx, struct TermSignal *signa
 void context_process_code_server_resume_signal(Context *ctx)
 {
 #ifndef AVM_NO_JIT
+    // A process that woke up spuriously while its load request was pending
+    // retries the call, traps again and gets a second resume signal. The
+    // label -> entry-point conversion below is not idempotent, so a resume
+    // for a process that is no longer trapped must be ignored: its
+    // saved_function_ptr already holds the converted entry point, and
+    // converting it again would produce a wild pointer.
+    if (!context_get_flags(ctx, Trap)) {
+        return;
+    }
     // jit_trap_and_load stores the label in saved_function_ptr
     uint32_t label = (uint32_t) (uintptr_t) ctx->saved_function_ptr;
     Module *module = ctx->saved_module;
