@@ -416,9 +416,7 @@ emit_pass(<<?OP_CALL_EXT_LAST, Rest0/binary>>, MMod, MSt0, State0) ->
 emit_pass(<<?OP_BIF0, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Bif, Rest1} = decode_literal(Rest0),
-    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt1, FuncPtr} = resolve_bif_func_ptr(MMod, MSt0, Bif),
     {MSt2, Dest, Rest2} = decode_dest(Rest1, MMod, MSt1),
     ?TRACE("OP_BIF0 ~p, ~p\n", [Bif, Dest]),
     {MSt3, ResultReg} = MMod:call_func_ptr(MSt2, {free, FuncPtr}, [
@@ -433,9 +431,7 @@ emit_pass(<<?OP_BIF1, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {FailLabel, Rest1} = decode_label(Rest0),
     {Bif, Rest2} = decode_literal(Rest1),
-    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt1, FuncPtr} = resolve_bif_func_ptr(MMod, MSt0, Bif),
     {MSt2, Arg, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
     {MSt3, Dest, Rest4} = decode_dest(Rest3, MMod, MSt2),
     ?TRACE("OP_BIF1 ~p, ~p, ~p, ~p\n", [FailLabel, Bif, Arg, Dest]),
@@ -2783,9 +2779,7 @@ emit_pass(<<?OP_BIF3, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {FailLabel, Rest1} = decode_label(Rest0),
     {Bif, Rest2} = decode_literal(Rest1),
-    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt1, FuncPtr} = resolve_bif_func_ptr(MMod, MSt0, Bif),
     {MSt2, Arg1, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
     {MSt3, Arg2, Rest4} = decode_compact_term(Rest3, MMod, MSt2, State0),
     {MSt4, Arg3, Rest5} = decode_compact_term(Rest4, MMod, MSt3, State0),
@@ -4032,9 +4026,7 @@ op_bif2(MMod, MSt0, FailLabel, _Module, _Function, Bif, Arg1, Arg2, Dest) ->
     op_bif2_default(MMod, MSt0, FailLabel, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest).
 
 op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest) ->
-    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
+    {MSt1, FuncPtr} = resolve_bif_func_ptr(MMod, MSt0, Bif),
     {MSt2, ResultReg} = MMod:call_func_ptr(MSt1, {free, FuncPtr}, [
         ctx, FailLabel, {free, Arg1}, {free, Arg2}
     ]),
@@ -4951,6 +4943,17 @@ resolve_gcbif_func_ptr(MMod, MSt0, Live, Bif) ->
             MMod:move_imported_gcbif_to_native_register(MSt0, Live, Bif);
         false ->
             MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_GCBIF, [ctx, jit_state, Live, Bif])
+    end.
+
+%% Plain-BIF function pointer for OP_BIF0/1/2: the pointer is a load-time
+%% constant reachable with an inline 4-load chain, so backends that export
+%% the loader skip the PRIM_GET_IMPORTED_BIF round trip per call site.
+resolve_bif_func_ptr(MMod, MSt0, Bif) ->
+    case erlang:function_exported(MMod, move_imported_bif_to_native_register, 2) of
+        true ->
+            MMod:move_imported_bif_to_native_register(MSt0, Bif);
+        false ->
+            MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [jit_state, Bif])
     end.
 
 %% OP_TEST_HEAP: measured 2026-06-11 on x86_64, inlining the free-space
