@@ -462,6 +462,66 @@ call_primitive_last_if_block_preserves_cache_test() ->
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
+jump_to_label_cond_testb_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:jump_to_label_cond(State1, {{free, Reg}, '&', 16#3, '!=', 0}, 42),
+    ?BACKEND:assert_all_native_free(State2),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "   4:	a8 03                	test   $0x3,%al\n"
+        "   6:	0f 85 fc ff ff ff    	jne    0x8"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+jump_to_label_cond_andb_cmpb_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:jump_to_label_cond(State1, {{free, Reg}, '&', 16#3, '!=', 16#2}, 42),
+    ?BACKEND:assert_all_native_free(State2),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "   4:	24 03                	and    $0x3,%al\n"
+        "   6:	80 f8 02             	cmp    $0x2,%al\n"
+        "   9:	0f 85 fc ff ff ff    	jne    0xb"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
+
+jump_to_label_cond_backward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    State2 = ?BACKEND:add_label(State1, 7),
+    {State3, Reg} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    State4 = ?BACKEND:jump_to_label_cond(State3, {{free, Reg}, '&', 16#3, '!=', 0}, 7),
+    ?BACKEND:assert_all_native_free(State4),
+    Stream = ?BACKEND:stream(State4),
+    %% Jump table = 9 slots of 5 bytes (labels 0..8) = 45 = 0x2d; label 7
+    %% lands at 0x2d, the test/jne follow.
+    <<_:16#2d/binary, Code/binary>> = Stream,
+    Dump = <<
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "   4:	a8 03                	test   $0x3,%al\n"
+        "   6:	75 f8                	jne    0x0"
+    >>,
+    ?assertStream(x86_64, Dump, Code).
+
+jump_to_label_cond_fallback_test() ->
+    %% Unsupported condition shape falls back to if_block + jmp.
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:jump_to_label_cond(State1, {{free, Reg}, '<', 0}, 42),
+    ?BACKEND:assert_all_native_free(State2),
+    Stream = ?BACKEND:stream(State2),
+    Dump = <<
+        "   0:	48 8b 47 58          	mov    0x58(%rdi),%rax\n"
+        "   4:	48 85 c0             	test   %rax,%rax\n"
+        "   7:	7d 05                	jge    0xe\n"
+        "   9:	e9 fc ff ff ff       	jmp    0xa"
+    >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 jump_to_label_if_block_preserves_cache_test() ->
     State0 = terminal_if_preserves_cached_x_reg0(unreachable_test_state(), fun(BSt0) ->
         ?BACKEND:jump_to_label(BSt0, 42)
