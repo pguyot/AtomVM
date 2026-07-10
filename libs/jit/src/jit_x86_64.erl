@@ -67,6 +67,7 @@
     set_continuation_to_offset/1,
     continuation_entry_point/1,
     move_imported_gcbif_to_native_register/3,
+    move_imported_bif_to_native_register/2,
     get_module_index/1,
     get_module_atom_index/2,
     and_/3,
@@ -2882,6 +2883,27 @@ move_imported_gcbif_to_native_register(
         State2#state{stream = Stream3, regs = Regs2},
         PtrReg
     }.
+
+%% Load an imported plain-BIF function pointer into a freshly allocated
+%% register: the same 4-load chain as the gcbif variant, without the
+%% extended-register cleanup prelude (plain BIFs cannot GC). Replaces the
+%% PRIM_GET_IMPORTED_BIF primitive call per bif0/1/2 site.
+-spec move_imported_bif_to_native_register(state(), non_neg_integer()) ->
+    {state(), x86_64_register()}.
+move_imported_bif_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    Bif
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    PtrReg = first_avail(Avail),
+    J1 = jit_x86_64_asm:movq(?JITSTATE_MODULE, PtrReg),
+    J2 = jit_x86_64_asm:movq({?MODULE_IMPORTED_FUNCS, PtrReg}, PtrReg),
+    J3 = jit_x86_64_asm:movq({Bif * ?WORD_SIZE, PtrReg}, PtrReg),
+    J4 = jit_x86_64_asm:movq({?BIF_BIF0_PTR, PtrReg}, PtrReg),
+    Stream1 = StreamModule:append(Stream0, <<J1/binary, J2/binary, J3/binary, J4/binary>>),
+    Bit = reg_bit(PtrReg),
+    Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, PtrReg), Bit),
+    {State0#state{stream = Stream1, regs = Regs1}, PtrReg}.
 
 get_module_index(
     #state{
