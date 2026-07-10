@@ -42,8 +42,37 @@ test() ->
         _ ->
             %% No boot script is embedded in the test AVM pack.
             undefined = atomvm:get_boot(),
-            ok = test_boot_script()
+            ok = test_boot_script(),
+            ok = test_spurious_code_server_resume()
     end,
+    ok.
+
+%%-----------------------------------------------------------------------------
+%% A code-server resume signal for a process that is not trapped must be
+%% ignored. A process can trap twice for the same module (it re-runs the
+%% call site after a spurious wake-up while its load request is pending),
+%% producing two {load, Module, Pid} requests and thus two resume signals.
+%% The second resume used to re-run the label -> native-entry-point
+%% conversion on the already-converted saved continuation, turning it into
+%% a wild pointer and crashing the VM on the next schedule-in.
+%%-----------------------------------------------------------------------------
+test_spurious_code_server_resume() ->
+    Self = self(),
+    Pid = spawn(fun() ->
+        receive
+            ping -> Self ! {self(), pong}
+        end
+    end),
+    %% Let the worker block in receive so its saved continuation is a real
+    %% code pointer, then hit it with a resume it never asked for.
+    timer:sleep(50),
+    true = code_server:resume(Pid, ok),
+    Pid ! ping,
+    ok =
+        receive
+            {Pid, pong} -> ok
+        after 5000 -> timeout
+        end,
     ok.
 
 check_flags([]) ->

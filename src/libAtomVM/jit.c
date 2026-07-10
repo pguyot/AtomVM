@@ -1356,6 +1356,13 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
                 break;
             }
             case CodeServerResumeSignal: {
+                // Duplicate resume (the process re-trapped and got two resume
+                // signals, or already resumed): saved_function_ptr no longer
+                // holds a label; context_process_code_server_resume_signal
+                // ignores it and the continuation must be left untouched.
+                if (!context_get_flags(ctx, Trap)) {
+                    break;
+                }
 #ifdef JIT_JUMPTABLE_IS_DATA
                 // WASM: saved_function_ptr contains raw label (set by jit_trap_and_load)
                 // Save it before context_process_code_server_resume_signal converts it
