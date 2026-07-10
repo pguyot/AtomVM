@@ -1608,6 +1608,13 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
     ((jit_state)->continuation = (NativeContinuation) (cont), (uintptr_t) 1)
 #endif
 
+// The continuation check below is only sound if jit_state->continuation was
+// set by the current primitive: the *_direct wrappers clear it on entry.
+// Otherwise a path that suspends without resolving — e.g. jit_trap_and_load's
+// scheduler_wait returning the same context because a message made it Ready
+// during the call — would tag a continuation left over from an earlier call
+// in the same scheduling slice, and the call site would branch back into
+// stale code while the process is trapped.
 static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_state, Context *result)
 {
 #ifndef JIT_JUMPTABLE_IS_DATA
@@ -1630,6 +1637,7 @@ static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_stat
 // exported native functions) still continue directly when safe.
 static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count)
 {
+    jit_state->continuation = 0;
 #ifndef JIT_JUMPTABLE_IS_DATA
     const term *boxed_value = term_to_const_term_ptr(fun);
     term index_or_function = boxed_value[2];
@@ -1659,6 +1667,7 @@ static uintptr_t jit_call_fun_direct(Context *ctx, JITState *jit_state, int offs
 // the call site branch straight to the caller's native code.
 static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 {
+    jit_state->continuation = 0;
     Context *result = jit_return(ctx, jit_state);
     return jit_direct_continuation(ctx, jit_state, result);
 }
@@ -1667,6 +1676,7 @@ static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 // contract as call_fun_direct.
 static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
+    jit_state->continuation = 0;
     Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true);
     if (result == JIT_NATIVE_STAY) {
         return (uintptr_t) JIT_NATIVE_STAY;
