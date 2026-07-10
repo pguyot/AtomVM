@@ -296,12 +296,11 @@ verify_is_function_typed_optimization_x86_64_test() ->
 
     % Check that call to allocate is directly followed by the building the cp
     % for call
-    % b6:	48 8b 42 10          	mov    0x10(%rdx),%rax
-    % ba:	ff e0                	jmpq   *%rax
-    % bc:	48 8b 47 60          	mov    0x60(%rdi),%rax
-    % c0:	4c 8b 1e             	mov    (%rsi),%r11
-    % c3:	45 8b 1b             	mov    (%r11),%r11d
-    % c6:	49 c1 e3 18          	shl    $0x18,%r11
+    % b6:	ff 62 10             	jmp    *0x10(%rdx)
+    % b9:	48 8b 47 60          	mov    0x60(%rdi),%rax
+    % bd:	4c 8b 1e             	mov    (%rsi),%r11
+    % c0:	45 8b 1b             	mov    (%r11),%r11d
+    % c3:	49 c1 e3 18          	shl    $0x18,%r11
     % ...
 
     % As opposed to:
@@ -335,11 +334,11 @@ verify_is_function_typed_optimization_x86_64_test() ->
     % ...
 
     ?assertMatch(
-        {_, 20},
+        {_, 17},
         binary:match(
             CompiledCode,
-            <<16#48, 16#8b, 16#42, 16#10, 16#ff, 16#e0, 16#48, 16#8b, 16#47, 16#60, 16#4c, 16#8b,
-                16#1e, 16#45, 16#8b, 16#1b, 16#49, 16#c1, 16#e3, 16#18>>
+            <<16#ff, 16#62, 16#10, 16#48, 16#8b, 16#47, 16#60, 16#4c, 16#8b, 16#1e, 16#45, 16#8b,
+                16#1b, 16#49, 16#c1, 16#e3, 16#18>>
         )
     ),
     ok.
