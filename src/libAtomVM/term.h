@@ -131,7 +131,7 @@ struct RecordDef;
 
 #define TERM_BOXED_REFC_BINARY_SIZE 6
 #define TERM_BOXED_BIN_MATCH_STATE_SIZE 4
-#define TERM_BOXED_SUB_BINARY_SIZE 4
+#define TERM_BOXED_SUB_BINARY_SIZE 5
 #define TERM_BOXED_REFERENCE_RESOURCE_SIZE 4
 #define TERM_BOXED_REFERENCE_RESOURCE_HEADER (((TERM_BOXED_REFERENCE_RESOURCE_SIZE - 1) << 6) | TERM_BOXED_REF)
 #define TERM_BOXED_RESOURCE_SIZE TERM_BOXED_REFERENCE_RESOURCE_SIZE
@@ -350,6 +350,22 @@ term term_alloc_refc_binary(size_t size, bool is_const, Heap *heap, GlobalContex
  * @return a term (reference) pointing to the newly allocated sub-binary in the process heap.
  */
 term term_alloc_sub_binary(term binary, size_t offset, size_t len, Heap *heap);
+
+/**
+ * @brief Allocate a sub-binary that may be non-byte-aligned (a bitstring).
+ *
+ * @details Same as term_alloc_sub_binary but carries a trailing partial-byte
+ * bit count (0..7). When trailing_bits is 0 the result is an ordinary
+ * byte-aligned binary; when non-zero the total bit size is len*8 + trailing_bits
+ * and the last referenced byte is only partially valid.
+ * @param binary the referenced binary
+ * @param offset the offset (in bytes) into the referenced binary
+ * @param len the number of whole bytes of the sub-binary
+ * @param trailing_bits number of valid bits (0..7) in the byte following the whole bytes
+ * @param heap the heap to allocate the binary in
+ * @return a term (reference) pointing to the newly allocated sub-binary.
+ */
+term term_alloc_sub_binary_bits(term binary, size_t offset, size_t len, uint8_t trailing_bits, Heap *heap);
 
 /**
  * @brief Gets a pointer to a term stored on the heap
@@ -3240,6 +3256,46 @@ static inline term term_get_sub_binary_ref(term t)
 {
     const term *boxed_value = term_to_const_term_ptr(t);
     return boxed_value[3];
+}
+
+/**
+ * @brief Number of trailing (partial-byte) bits of a sub-binary (0..7).
+ *
+ * @details A byte-aligned sub-binary returns 0. A non-byte-aligned bitstring
+ * returns 1..7, meaning its total bit size is term_binary_size(t)*8 + this.
+ */
+static inline uint8_t term_get_sub_binary_num_trailing_bits(term t)
+{
+    const term *boxed_value = term_to_const_term_ptr(t);
+    return (uint8_t) boxed_value[4];
+}
+
+/**
+ * @brief Total size in bits of any bitstring (binary or sub-binary).
+ */
+static inline size_t term_bit_size(term t)
+{
+    size_t bits = term_binary_size(t) * 8;
+    const term *boxed_value = term_to_const_term_ptr(t);
+    if ((boxed_value[0] & TERM_BOXED_TAG_MASK) == TERM_BOXED_SUB_BINARY) {
+        bits += (uint8_t) boxed_value[4];
+    }
+    return bits;
+}
+
+/**
+ * @brief Whether a bitstring term is byte-aligned (true for all plain binaries).
+ *
+ * @details Only sub-binaries can be non-byte-aligned; heap and refc binaries
+ * are always byte-aligned. This is the predicate behind the is_binary/1 BIF.
+ */
+static inline bool term_is_byte_aligned_binary(term t)
+{
+    const term *boxed_value = term_to_const_term_ptr(t);
+    if ((boxed_value[0] & TERM_BOXED_TAG_MASK) == TERM_BOXED_SUB_BINARY) {
+        return ((uint8_t) boxed_value[4]) == 0;
+    }
+    return true;
 }
 
 /**

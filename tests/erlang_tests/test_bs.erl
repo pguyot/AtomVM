@@ -37,7 +37,7 @@ start() ->
     ok = test_create_with_invalid_int_value(),
     ok = test_create_with_invalid_int_size(),
     ok = test_create_with_int_unit(),
-    ok = test_create_with_unsupported_unaligned_int_size(),
+    ok = test_create_with_unaligned_int_size(),
     ok = test_create_with_int_little_endian(),
     ok = test_create_with_int_signed(),
     ok = test_create_with_invalid_binary_value(),
@@ -145,8 +145,14 @@ test_create_with_int_unit() ->
     ),
     ok.
 
-test_create_with_unsupported_unaligned_int_size() ->
-    atom_unsupported(fun() -> create_int_binary(16#FFFF, id(28)) end).
+test_create_with_unaligned_int_size() ->
+    % A non-byte-aligned total size yields a bitstring (28 bits, 4 stored bytes).
+    B = create_int_binary(16#FFFF, id(28)),
+    28 = bit_size(B),
+    4 = byte_size(B),
+    false = is_binary(B),
+    true = is_bitstring(B),
+    ok.
 
 test_create_with_int_little_endian() ->
     <<2, 1>> = create_int_binary_little_endian(16#0102, 16),

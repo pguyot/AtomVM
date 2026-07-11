@@ -1693,6 +1693,11 @@ static term find_binary(term binary_or_state)
 
 term term_alloc_sub_binary(term binary_or_state, size_t offset, size_t len, Heap *heap)
 {
+    return term_alloc_sub_binary_bits(binary_or_state, offset, len, 0, heap);
+}
+
+term term_alloc_sub_binary_bits(term binary_or_state, size_t offset, size_t len, uint8_t trailing_bits, Heap *heap)
+{
     term *boxed = memory_heap_alloc(heap, TERM_BOXED_SUB_BINARY_SIZE);
     term binary = find_binary(binary_or_state);
 
@@ -1700,6 +1705,7 @@ term term_alloc_sub_binary(term binary_or_state, size_t offset, size_t len, Heap
     boxed[1] = (term) len;
     boxed[2] = (term) offset;
     boxed[3] = binary;
+    boxed[4] = (term) trailing_bits;
 
     return ((term) boxed) | TERM_PRIMARY_BOXED;
 }

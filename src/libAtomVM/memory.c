@@ -1185,8 +1185,8 @@ static void memory_scan_and_rewrite(size_t count, term *terms, const term *old_s
                     break;
 
                 case TERM_BOXED_SUB_BINARY:
-                    // Skip to binary
-                    ptr += 2;
+                    // Skip len, offset, binary ref and trailing-bits scalar fields.
+                    ptr += term_get_size_from_boxed_header(t);
                     break;
 
                 case TERM_BOXED_HEAP_BINARY:

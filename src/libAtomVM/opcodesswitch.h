@@ -2750,7 +2750,7 @@ schedule_in:
 
                 TRACE("is_binary/2, label=%" PRIu32 ", arg1=%" TERM_X_FMT "\n", label, arg1);
 
-                if (!term_is_binary(arg1)) {
+                if (!(term_is_binary(arg1) && term_is_byte_aligned_binary(arg1))) {
                     pc = mod->labels[label];
                 }
 
@@ -5782,18 +5782,26 @@ schedule_in:
                     }
                     binary_size += segment_unit * segment_size;
                 }
-                // Allocate and build binary in second iteration
-                if (binary_size % 8) {
-                    TRACE("bs_create_bin/6: total binary size (%d) is not evenly divisible by 8\n", (int) binary_size);
+                // Allocate and build binary in second iteration. A non-byte-aligned
+                // total size yields a bitstring: the whole bytes are stored in a heap
+                // binary and wrapped in a sub-binary carrying the trailing bit count.
+                size_t trailing_bits = binary_size % 8;
+                size_t binary_bytes = (binary_size + 7) / 8;
+                if (UNLIKELY(trailing_bits != 0 && reuse_binary)) {
+                    TRACE("bs_create_bin/6: non-byte-aligned append is not supported\n");
                     RAISE_ERROR(UNSUPPORTED_ATOM);
                 }
                 TRIM_LIVE_REGS(live);
-                if (UNLIKELY(memory_ensure_free_with_roots(ctx, alloc + term_binary_heap_size(binary_size / 8), live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                size_t bs_heap_size = alloc + term_binary_heap_size(binary_bytes);
+                if (trailing_bits != 0) {
+                    bs_heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                }
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, bs_heap_size, live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
                 term t;
                 if (!reuse_binary) {
-                    t = term_create_empty_binary(binary_size / 8, &ctx->heap, ctx->global);
+                    t = term_create_empty_binary(binary_bytes, &ctx->heap, ctx->global);
                     if (UNLIKELY(term_is_invalid_term(t))) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -6023,6 +6031,9 @@ schedule_in:
                             UNREACHABLE();
                     }
                     offset += segment_size;
+                }
+                if (trailing_bits != 0) {
+                    t = term_alloc_sub_binary_bits(t, 0, binary_size / 8, (uint8_t) trailing_bits, &ctx->heap);
                 }
                 WRITE_REGISTER_GC_SAFE(dreg, t);
                 break;
