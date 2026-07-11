@@ -18,6 +18,13 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
+// glibc gates cpu_set_t / CPU_ZERO / CPU_SET / pthread_setaffinity_np (used by
+// scheduler_bind_to_core below) behind _GNU_SOURCE, which must be defined before
+// any system header is included.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "smp.h"
 
 #ifndef AVM_NO_SMP
@@ -26,8 +33,42 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
+#endif
+
 #include "scheduler.h"
 #include "utils.h"
+
+// Idea 7: bind each spawned sub-scheduler thread to a distinct logical core so
+// its per-scheduler hot data (heap-block cache, mailbox, registers) stays
+// cache-local. The main thread (index 0) is left to the OS. On Linux this is a
+// hard affinity; on macOS THREAD_AFFINITY_POLICY is a locality hint (Intel).
+static void scheduler_bind_to_core(int index)
+{
+    long ncores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncores <= 1) {
+        return;
+    }
+    int core = index % (int) ncores;
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(core, &set);
+    (void) pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#elif defined(__APPLE__)
+    thread_affinity_policy_data_t policy = { .affinity_tag = core + 1 };
+    (void) thread_policy_set(pthread_mach_thread_np(pthread_self()),
+        THREAD_AFFINITY_POLICY, (thread_policy_t) &policy, THREAD_AFFINITY_POLICY_COUNT);
+#else
+    (void) core;
+#endif
+}
 
 struct Mutex
 {
@@ -83,6 +124,8 @@ static void *scheduler_thread_entry_point(void *arg)
 #else
     g_sub_main_thread = true;
 #endif
+    static int scheduler_core_index = 1; // main thread is index 0 (left to OS)
+    scheduler_bind_to_core(__atomic_fetch_add(&scheduler_core_index, 1, __ATOMIC_RELAXED));
     return (void *) (uintptr_t) scheduler_entry_point((GlobalContext *) arg);
 }
 
