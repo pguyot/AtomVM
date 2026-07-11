@@ -2619,13 +2619,31 @@ static term nif_erlang_binary_to_list_1(Context *ctx, int argc, term argv[])
     }
     int len = stop - start + 1;
 
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, len * 2, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    // bitstring_to_list/1 on a non-byte-aligned bitstring yields the whole bytes
+    // followed by a final bitstring element holding the trailing partial byte
+    // (e.g. bitstring_to_list(<<1:1>>) == [<<1:1>>]). The range form (argc == 3)
+    // is byte-only.
+    uint8_t trailing_bits = (argc == 1) ? (uint8_t) (term_bit_size(value) % 8) : 0;
+
+    size_t heap_needed = (size_t) len * 2;
+    if (trailing_bits != 0) {
+        heap_needed += term_binary_heap_size(1) + TERM_BOXED_SUB_BINARY_SIZE + CONS_SIZE;
+    }
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_needed, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
     const uint8_t *bin_data = (const uint8_t *) term_binary_data(value);
 
     term prev = term_nil();
+    if (trailing_bits != 0) {
+        // The partial byte sits just past the whole bytes; wrap its high
+        // trailing_bits into a fresh bitstring as the final list element.
+        term tbin = term_create_empty_binary(1, &ctx->heap, ctx->global);
+        ((uint8_t *) term_binary_data(tbin))[0] = bin_data[bin_size];
+        term tsub = term_alloc_sub_binary_bits(tbin, 0, 0, trailing_bits, &ctx->heap);
+        prev = term_list_prepend(tsub, prev, &ctx->heap);
+    }
     for (int i = stop; i >= start; i--) {
         prev = term_list_prepend(term_from_int11(bin_data[i]), prev, &ctx->heap);
     }
