@@ -491,6 +491,8 @@ recs_value32_byte_len(Byte) ->
 -define(BEAM_TYPE_PORT, (1 bsl 9)).
 -define(BEAM_TYPE_REFERENCE, (1 bsl 10)).
 -define(BEAM_TYPE_TUPLE, (1 bsl 11)).
+%% v4 only: a record is a tuple with a known tagged first element.
+-define(BEAM_TYPE_RECORD, (1 bsl 12)).
 
 type_resolver(<<Version:32, _Count:32, TypeData/binary>>) when
     Version =:= ?BEAM_TYPES_VERSION_V3; Version =:= ?BEAM_TYPES_VERSION_V4
@@ -545,6 +547,12 @@ parse_type_entry(Version, TypeBits, HasLowerBound, HasUpperBound, HasUnit, Rest0
             ?BEAM_TYPE_REFERENCE ->
                 reference;
             ?BEAM_TYPE_TUPLE ->
+                t_tuple;
+            %% v4 record type: a record is a tuple (with a known atom first
+            %% element). Types v2-4 carry no arity, so this is exactly the
+            %% t_tuple guarantee -- the boxed tag checks are skippable, the
+            %% arity/tag are still verified. v3 never sets the record bit.
+            TB when TB =:= (?BEAM_TYPE_TUPLE bor ?BEAM_TYPE_RECORD) ->
                 t_tuple;
             _ ->
                 any
