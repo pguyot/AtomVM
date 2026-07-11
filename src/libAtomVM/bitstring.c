@@ -359,6 +359,16 @@ void bitstring_copy_bits_incomplete_bytes(uint8_t *dst, size_t bits_offset, cons
     *dst = dest_byte;
 }
 
+void bitstring_copy_bits_from(uint8_t *dst, const uint8_t *src, size_t src_offset, size_t bits_count)
+{
+    for (size_t i = 0; i < bits_count; i++) {
+        size_t s = src_offset + i;
+        if (src[s / 8] & (uint8_t) (1 << (7 - (s % 8)))) {
+            dst[i / 8] |= (uint8_t) (1 << (7 - (i % 8)));
+        }
+    }
+}
+
 bool bitstring_extract_f16(
     term src_bin, size_t offset, avm_int_t n, enum BitstringFlags bs_flags, avm_float_t *dst)
 {

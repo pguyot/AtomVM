@@ -487,6 +487,20 @@ static inline bool bitstring_match_utf32(term src_bin, size_t offset, int32_t *c
 void bitstring_copy_bits_incomplete_bytes(uint8_t *dst, size_t bits_offset, const uint8_t *src, size_t bits_count);
 
 /**
+ * @brief Copy bits_count bits starting at bit src_offset of src into dst[0..].
+ *
+ * @details Used to materialize a non-byte-aligned bitstring slice (e.g. a
+ * matched tail whose start is not a byte boundary) into a fresh byte-aligned
+ * buffer. The destination must be pre-zeroed; only set bits are written.
+ *
+ * @param dst           destination buffer (pre-zeroed), receiving bits at offset 0
+ * @param src           source buffer
+ * @param src_offset    offset in bits in the source buffer
+ * @param bits_count    number of bits to copy
+ */
+void bitstring_copy_bits_from(uint8_t *dst, const uint8_t *src, size_t src_offset, size_t bits_count);
+
+/**
  * @brief Copy bits_count bits from src to dst[bits_offset..]
  *
  * @param dst           destination buffer
