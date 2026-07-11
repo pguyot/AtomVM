@@ -533,6 +533,22 @@ bool bitstring_insert_f32(
 bool bitstring_insert_f64(
     term dst_bin, size_t offset, avm_float_t value, enum BitstringFlags bs_flags);
 
+/**
+ * @brief Heap words needed to extract the tail of a match at bit offset bs_offset.
+ * @details Worst case: a byte-aligned start and length shares storage via a
+ * sub-binary; otherwise the remaining bits are copied into a fresh (possibly
+ * bitstring) binary. Pair with bitstring_get_tail.
+ */
+size_t bitstring_get_tail_heap_size(term bs_bin, size_t bs_offset);
+
+/**
+ * @brief Materialize the tail of a match at bit offset bs_offset.
+ * @details Byte-aligned start+length shares storage via a sub-binary; a
+ * non-byte-aligned start or length copies the remaining bits into a fresh
+ * bitstring. Heap must already be reserved (see bitstring_get_tail_heap_size).
+ */
+term bitstring_get_tail(term bs_bin, size_t bs_offset, Heap *heap, GlobalContext *glb);
+
 #ifdef __cplusplus
 }
 #endif

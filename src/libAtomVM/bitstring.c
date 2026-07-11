@@ -369,6 +369,37 @@ void bitstring_copy_bits_from(uint8_t *dst, const uint8_t *src, size_t src_offse
     }
 }
 
+size_t bitstring_get_tail_heap_size(term bs_bin, size_t bs_offset)
+{
+    size_t remaining_bits = term_bit_size(bs_bin) - bs_offset;
+    if (bs_offset % 8 == 0 && remaining_bits % 8 == 0) {
+        return term_sub_binary_heap_size(bs_bin, remaining_bits / 8);
+    }
+    size_t words = term_binary_heap_size((remaining_bits + 7) / 8);
+    if (remaining_bits % 8 != 0) {
+        words += TERM_BOXED_SUB_BINARY_SIZE;
+    }
+    return words;
+}
+
+term bitstring_get_tail(term bs_bin, size_t bs_offset, Heap *heap, GlobalContext *glb)
+{
+    size_t remaining_bits = term_bit_size(bs_bin) - bs_offset;
+    if (bs_offset % 8 == 0 && remaining_bits % 8 == 0) {
+        return term_maybe_create_sub_binary(bs_bin, bs_offset / 8, remaining_bits / 8, heap, glb);
+    }
+    size_t result_bytes = (remaining_bits + 7) / 8;
+    term bin = term_create_empty_binary(result_bytes, heap, glb);
+    uint8_t *dst = (uint8_t *) term_binary_data(bin);
+    memset(dst, 0, result_bytes);
+    bitstring_copy_bits_from(dst, (const uint8_t *) term_binary_data(bs_bin), bs_offset, remaining_bits);
+    size_t trailing = remaining_bits % 8;
+    if (trailing != 0) {
+        return term_alloc_sub_binary_bits(bin, 0, remaining_bits / 8, (uint8_t) trailing, heap);
+    }
+    return bin;
+}
+
 bool bitstring_extract_f16(
     term src_bin, size_t offset, avm_int_t n, enum BitstringFlags bs_flags, avm_float_t *dst)
 {

@@ -1981,6 +1981,22 @@ static term jit_term_maybe_create_sub_binary(Context *ctx, term binary, size_t o
     return term_maybe_create_sub_binary(binary, offset, len, &ctx->heap, ctx->global);
 }
 
+// Worst-case heap words for a bs_match get_tail starting at bit offset bs_offset.
+// Byte-aligned start and length share storage via a sub-binary; otherwise the
+// remaining bits are copied into a fresh (possibly bitstring) binary.
+static size_t jit_bitstring_get_tail_heap_size(term *bs_bin_ptr, size_t bs_offset)
+{
+    term bs_bin = (term) (((uintptr_t) bs_bin_ptr) | TERM_PRIMARY_BOXED);
+    return bitstring_get_tail_heap_size(bs_bin, bs_offset);
+}
+
+// Materialize the tail of a match at bit offset bs_offset. Heap is assumed to
+// already be reserved (see jit_bitstring_get_tail_heap_size); this does not GC.
+static term jit_bitstring_create_tail(Context *ctx, term bs_bin, size_t bs_offset)
+{
+    return bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
+}
+
 static int jit_term_find_map_pos(Context *ctx, term map, term key)
 {
     // Callers (OP_GET_MAP_ELEMENTS miss disambiguation, OP_HAS_MAP_FIELDS,
@@ -2697,7 +2713,9 @@ const ModuleNativeInterface module_native_interface = {
     jit_term_get_map_assoc_miss,
     jit_call_fun_direct,
     jit_call_ext_direct,
-    jit_return_direct
+    jit_return_direct,
+    jit_bitstring_get_tail_heap_size,
+    jit_bitstring_create_tail
 };
 
 #endif

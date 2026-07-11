@@ -879,9 +879,19 @@ emit_pass(<<?OP_IS_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_BINARY ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_binary(Arg1, Label, MMod, MSt1),
-    MSt3 = MMod:free_native_registers(MSt2, [Arg1]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    emit_pass(Rest2, MMod, MSt3, State0);
+    %% is_binary/1 is false for a non-byte-aligned bitstring: a sub-binary whose
+    %% trailing-bit count (array element 4) is non-zero.
+    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Arg1),
+    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, TagReg} = MMod:get_array_element(MSt4, Reg, 0),
+    {MSt6, TagReg} = MMod:and_(MSt5, {free, TagReg}, ?TERM_BOXED_TAG_MASK),
+    MSt7 = MMod:if_block(MSt6, {{free, TagReg}, '==', ?TERM_BOXED_SUB_BINARY}, fun(BSt0) ->
+        {BSt1, TrailReg} = MMod:get_array_element(BSt0, Reg, 4),
+        cond_jump_to_label({{free, TrailReg}, '!=', 0}, Label, MMod, BSt1)
+    end),
+    MSt8 = MMod:free_native_registers(MSt7, [Reg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    emit_pass(Rest2, MMod, MSt8, State0);
 % 55
 emit_pass(<<?OP_IS_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -1651,8 +1661,7 @@ emit_pass(<<?OP_BS_SKIP_BITS2, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt8, BSOffsetReg} = MMod:get_array_element(MSt7, MatchStateRegPtr, 2),
     MSt9 = MMod:add(MSt8, BSOffsetReg, NumBits),
     MSt10 = MMod:free_native_registers(MSt9, [NumBits]),
-    {MSt11, BSBinarySize} = term_binary_size({free, BSBinaryReg}, MMod, MSt10),
-    MSt12 = MMod:shift_left(MSt11, BSBinarySize, 3),
+    {MSt12, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt10),
     MSt13 = cond_jump_to_label({{free, BSBinarySize}, '<', BSOffsetReg}, Fail, MMod, MSt12),
     MSt14 = MMod:move_to_array_element(MSt13, BSOffsetReg, MatchStateRegPtr, 2),
     MSt15 = MMod:free_native_registers(MSt14, [BSOffsetReg, MatchStateRegPtr]),
@@ -1670,8 +1679,7 @@ emit_pass(<<?OP_BS_TEST_TAIL2, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt4, BSOffsetReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 2),
     MSt5 = MMod:free_native_registers(MSt4, [MatchStateRegPtr]),
     MSt6 = MMod:add(MSt5, BSOffsetReg, Bits),
-    {MSt7, BSBinarySize} = term_binary_size({free, BSBinaryReg}, MMod, MSt6),
-    MSt8 = MMod:shift_left(MSt7, BSBinarySize, 3),
+    {MSt8, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt6),
     MSt9 = cond_jump_to_label({{free, BSBinarySize}, '!=', BSOffsetReg}, Fail, MMod, MSt8),
     MSt10 = MMod:free_native_registers(MSt9, [BSOffsetReg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt10),
@@ -1744,9 +1752,8 @@ emit_pass(<<?OP_BS_TEST_UNIT, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt3, BSBinaryReg} = MMod:get_array_element(MSt2, MatchStateRegPtr, 1),
     {MSt4, BSOffsetReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 2),
     MSt5 = MMod:free_native_registers(MSt4, [MatchStateRegPtr]),
-    {MSt6, BSBinarySize} = term_binary_size({free, BSBinaryReg}, MMod, MSt5),
-    MSt7 = MMod:shift_left(MSt6, BSBinarySize, 3),
-    % BSBinarySize = binary_size * 8
+    {MSt7, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt5),
+    % BSBinarySize = source bit size
     MSt8 = MMod:sub(MSt7, BSBinarySize, BSOffsetReg),
     % BSBinarySize = (binary_size * 8) - offset = remaining bits
     MSt9 = MMod:free_native_registers(MSt8, [BSOffsetReg]),
@@ -3706,9 +3713,8 @@ emit_pass_bs_match_ensure_at_least(
         true ->
             {Unit, Rest2} = decode_literal(Rest1),
             ?TRACE("{ensure_at_least,~p,~p},", [Stride, Unit]),
-            {MSt1, Reg} = MMod:get_array_element(MSt0, BSBinaryReg, 1),
-            MSt2 = MMod:shift_left(MSt1, Reg, 3),
-            % Reg is bs_bin_size * 8
+            {MSt2, Reg} = term_bit_size({ptr, BSBinaryReg}, MMod, MSt0),
+            % Reg is the source bit size
             MSt3 = MMod:sub(MSt2, Reg, BSOffsetReg),
             % Reg is (bs_bin_size * 8) - bs_offset = remaining bits
             MSt4 = cond_jump_to_label({Reg, '<', Stride}, Fail, MMod, MSt3),
@@ -3738,9 +3744,8 @@ emit_pass_bs_match_ensure_exactly(
             {J0, Rest0, MatchState, BSOffsetReg, MSt1};
         true ->
             ?TRACE("{ensure_exactly,~p},", [Stride]),
-            {MSt1, Reg} = MMod:get_array_element(MSt0, BSBinaryReg, 1),
-            MSt2 = MMod:shift_left(MSt1, Reg, 3),
-            % Reg is bs_bin_size * 8 (use unit instead ??)
+            {MSt2, Reg} = term_bit_size({ptr, BSBinaryReg}, MMod, MSt0),
+            % Reg is the source bit size
             MSt3 = MMod:sub(MSt2, Reg, BSOffsetReg),
             % Reg is (bs_bin_size * 8) - bs_offset
             MSt4 = cond_jump_to_label({Reg, '!=', Stride}, Fail, MMod, MSt3),
@@ -4011,29 +4016,26 @@ emit_pass_bs_match_get_tail(MatchState, BSBinaryReg, BSOffsetReg, J0, Rest0, MMo
 do_get_tail(
     MatchState, Live, BSOffsetReg, BSBinaryReg, MMod, MSt0
 ) ->
-    MSt1 = cond_raise_badarg({BSOffsetReg, '&', 2#111, '!=', 0}, MMod, MSt0),
-    {MSt2, BSOffseBytesReg} = MMod:shift_right(MSt1, BSOffsetReg, 3),
-    {MSt3, TailBytesReg0} = MMod:get_array_element(MSt2, BSBinaryReg, 1),
-    MSt4 = MMod:sub(MSt3, TailBytesReg0, BSOffseBytesReg),
-    {MSt5, HeapSizeReg} = MMod:call_primitive(MSt4, ?PRIM_TERM_SUB_BINARY_HEAP_SIZE, [
-        BSBinaryReg, {free, TailBytesReg0}
+    % Bit-aware tail: byte-aligned start+length shares storage via a sub-binary;
+    % a non-byte-aligned start or length copies the remaining bits into a fresh
+    % bitstring. BSOffsetReg holds the current bit offset. BSBinaryReg is the
+    % referenced binary as a raw (tag-cleared) pointer on entry.
+    {MSt1, HeapSizeReg} = MMod:call_primitive(MSt0, ?PRIM_BITSTRING_GET_TAIL_HEAP_SIZE, [
+        BSBinaryReg, BSOffsetReg
     ]),
-    {MSt6, NewMatchState} = memory_ensure_free_with_extra_root(
-        MatchState, Live, {free, HeapSizeReg}, MMod, MSt5
+    {MSt2, NewMatchState} = memory_ensure_free_with_extra_root(
+        MatchState, Live, {free, HeapSizeReg}, MMod, MSt1
     ),
-    % Restore BSBinaryReg as it may have been gc'd as well
-    {MSt7, MatchStateReg0} = MMod:copy_to_native_register(MSt6, NewMatchState),
-    {MSt8, MatchStateReg0} = MMod:and_(MSt7, {free, MatchStateReg0}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt9 = MMod:move_array_element(MSt8, MatchStateReg0, 1, BSBinaryReg),
-    MSt10 = MMod:free_native_registers(MSt9, [MatchStateReg0]),
-    {MSt11, BSBinaryReg} = MMod:and_(MSt10, {free, BSBinaryReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt12, TailBytesReg1} = MMod:get_array_element(MSt11, BSBinaryReg, 1),
-    MSt13 = MMod:sub(MSt12, TailBytesReg1, BSOffseBytesReg),
-    MSt14 = MMod:add(MSt13, BSBinaryReg, ?TERM_PRIMARY_BOXED),
-    {MSt15, ResultTerm} = MMod:call_primitive(MSt14, ?PRIM_TERM_MAYBE_CREATE_SUB_BINARY, [
-        ctx, BSBinaryReg, {free, BSOffseBytesReg}, {free, TailBytesReg1}
+    % Reload the referenced binary from the possibly-relocated match state; after
+    % move_array_element BSBinaryReg holds the boxed binary term (tag included).
+    {MSt3, MatchStateReg0} = MMod:copy_to_native_register(MSt2, NewMatchState),
+    {MSt4, MatchStateReg0} = MMod:and_(MSt3, {free, MatchStateReg0}, ?TERM_PRIMARY_CLEAR_MASK),
+    MSt5 = MMod:move_array_element(MSt4, MatchStateReg0, 1, BSBinaryReg),
+    MSt6 = MMod:free_native_registers(MSt5, [MatchStateReg0]),
+    {MSt7, ResultTerm} = MMod:call_primitive(MSt6, ?PRIM_BITSTRING_CREATE_TAIL, [
+        ctx, {free, BSBinaryReg}, BSOffsetReg
     ]),
-    {MSt15, ResultTerm, NewMatchState}.
+    {MSt7, ResultTerm, NewMatchState}.
 
 emit_pass_bs_match_equal_colon_equal(
     Fail, MatchState, BSBinaryReg, BSOffsetReg, J0, Rest0, MMod, MSt0
@@ -8186,6 +8188,28 @@ term_binary_size(Src, MMod, MSt0) ->
     {MSt2, SrcReg} = MMod:and_(MSt1, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
     MSt3 = MMod:move_array_element(MSt2, SrcReg, 1, SrcReg),
     {MSt3, SrcReg}.
+
+%% Emit the total bit size of a binary/bitstring (binary_size*8 plus the
+%% sub-binary trailing bit count) into a fresh register.
+%%
+%% {free, BinReg} takes a tagged boxed term and consumes it; {ptr, PtrReg}
+%% takes an already-tag-cleared pointer and leaves it allocated for the caller.
+term_bit_size({free, BinReg}, MMod, MSt0) ->
+    {MSt1, PtrReg} = MMod:and_(MSt0, {free, BinReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt2, BitsReg} = term_bit_size({ptr, PtrReg}, MMod, MSt1),
+    MSt3 = MMod:free_native_registers(MSt2, [PtrReg]),
+    {MSt3, BitsReg};
+term_bit_size({ptr, PtrReg}, MMod, MSt0) ->
+    {MSt1, BitsReg} = MMod:get_array_element(MSt0, PtrReg, 1),
+    MSt2 = MMod:shift_left(MSt1, BitsReg, 3),
+    {MSt3, TagReg} = MMod:get_array_element(MSt2, PtrReg, 0),
+    {MSt4, TagReg} = MMod:and_(MSt3, {free, TagReg}, ?TERM_BOXED_TAG_MASK),
+    MSt5 = MMod:if_block(MSt4, {{free, TagReg}, '==', ?TERM_BOXED_SUB_BINARY}, fun(BSt0) ->
+        {BSt1, TrailReg} = MMod:get_array_element(BSt0, PtrReg, 4),
+        BSt2 = MMod:add(BSt1, BitsReg, TrailReg),
+        MMod:free_native_registers(BSt2, [TrailReg])
+    end),
+    {MSt5, BitsReg}.
 
 %% The keys tuple is shared with the source map: only the value may be
 %% updated. Writing the key operand (equal but not necessarily identical)

@@ -4182,38 +4182,10 @@ schedule_in:
                 term bs_bin = term_get_match_state_binary(src);
 
                 TRACE("bs_get_tail/3 src=0x%" TERM_X_FMT " dreg=%c%i live=%u\n", src, T_DEST_REG_GC_SAFE(dreg), live);
-                size_t total_bits = term_bit_size(bs_bin);
-                size_t remaining_bits = total_bits - bs_offset;
                 if (bs_offset == 0) {
-
                     WRITE_REGISTER_GC_SAFE(dreg, bs_bin);
-
-                } else if (bs_offset % 8 == 0 && remaining_bits % 8 == 0) {
-                    // Byte-aligned start and length: share storage via a sub-binary.
-                    size_t start_pos = bs_offset / 8;
-                    size_t new_bin_size = remaining_bits / 8;
-                    size_t heap_size = term_sub_binary_heap_size(bs_bin, new_bin_size);
-
-                    TRIM_LIVE_REGS(live);
-                    x_regs[live] = src;
-                    if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                    }
-                    src = x_regs[live];
-                    bs_bin = term_get_match_state_binary(src);
-                    term t = term_maybe_create_sub_binary(bs_bin, start_pos, new_bin_size, &ctx->heap, ctx->global);
-                    WRITE_REGISTER_GC_SAFE(dreg, t);
                 } else {
-                    // Non-byte-aligned tail: copy the remaining bits into a fresh
-                    // byte-aligned bitstring, wrapping in a sub-binary if it has a
-                    // trailing partial byte.
-                    size_t result_bytes = (remaining_bits + 7) / 8;
-                    size_t trailing = remaining_bits % 8;
-                    size_t heap_size = term_binary_heap_size(result_bytes);
-                    if (trailing != 0) {
-                        heap_size += TERM_BOXED_SUB_BINARY_SIZE;
-                    }
-
+                    size_t heap_size = bitstring_get_tail_heap_size(bs_bin, bs_offset);
                     TRIM_LIVE_REGS(live);
                     x_regs[live] = src;
                     if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -4221,15 +4193,7 @@ schedule_in:
                     }
                     src = x_regs[live];
                     bs_bin = term_get_match_state_binary(src);
-                    const uint8_t *src_data = (const uint8_t *) term_binary_data(bs_bin);
-                    term bin = term_create_empty_binary(result_bytes, &ctx->heap, ctx->global);
-                    uint8_t *dst = (uint8_t *) term_binary_data(bin);
-                    memset(dst, 0, result_bytes);
-                    bitstring_copy_bits_from(dst, src_data, bs_offset, remaining_bits);
-                    term t = bin;
-                    if (trailing != 0) {
-                        t = term_alloc_sub_binary_bits(bin, 0, remaining_bits / 8, (uint8_t) trailing, &ctx->heap);
-                    }
+                    term t = bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
                     WRITE_REGISTER_GC_SAFE(dreg, t);
                 }
                 break;
@@ -6343,47 +6307,15 @@ schedule_in:
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
-                            size_t total_bits = term_bit_size(bs_bin);
-                            size_t remaining_bits = total_bits - bs_offset;
-                            term t;
-                            if (bs_offset % 8 == 0 && remaining_bits % 8 == 0) {
-                                // Byte-aligned tail: share storage via a sub-binary.
-                                size_t bs_offset_bytes = bs_offset / 8;
-                                size_t tail_bytes = remaining_bits / 8;
-                                size_t heap_size = term_sub_binary_heap_size(bs_bin, tail_bytes);
-                                TRIM_LIVE_REGS(live);
-                                x_regs[live] = match_state;
-                                if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                                    RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                                }
-                                match_state = x_regs[live];
-                                bs_bin = term_get_match_state_binary(match_state);
-                                t = term_maybe_create_sub_binary(bs_bin, bs_offset_bytes, tail_bytes, &ctx->heap, ctx->global);
-                            } else {
-                                // Non-byte-aligned tail: copy remaining bits into a fresh bitstring.
-                                size_t result_bytes = (remaining_bits + 7) / 8;
-                                size_t trailing = remaining_bits % 8;
-                                size_t heap_size = term_binary_heap_size(result_bytes);
-                                if (trailing != 0) {
-                                    heap_size += TERM_BOXED_SUB_BINARY_SIZE;
-                                }
-                                TRIM_LIVE_REGS(live);
-                                x_regs[live] = match_state;
-                                if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                                    RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                                }
-                                match_state = x_regs[live];
-                                bs_bin = term_get_match_state_binary(match_state);
-                                const uint8_t *src_data = (const uint8_t *) term_binary_data(bs_bin);
-                                term bin = term_create_empty_binary(result_bytes, &ctx->heap, ctx->global);
-                                uint8_t *dst = (uint8_t *) term_binary_data(bin);
-                                memset(dst, 0, result_bytes);
-                                bitstring_copy_bits_from(dst, src_data, bs_offset, remaining_bits);
-                                t = bin;
-                                if (trailing != 0) {
-                                    t = term_alloc_sub_binary_bits(bin, 0, remaining_bits / 8, (uint8_t) trailing, &ctx->heap);
-                                }
+                            size_t heap_size = bitstring_get_tail_heap_size(bs_bin, bs_offset);
+                            TRIM_LIVE_REGS(live);
+                            x_regs[live] = match_state;
+                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                             }
+                            match_state = x_regs[live];
+                            bs_bin = term_get_match_state_binary(match_state);
+                            term t = bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
                             DEST_REGISTER(dreg);
                             DECODE_DEST_REGISTER(dreg, pc);
                             j++;
