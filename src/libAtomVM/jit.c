@@ -2135,6 +2135,11 @@ static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, si
         avm_uint64_t int_value = term_maybe_unbox_int64(value);
         return bitstring_insert_integer(bin, offset, int_value, n, flags);
 
+    } else if ((offset % 8 != 0) || (n % 8 != 0)) {
+        // intn_to_integer_bytes writes whole, byte-aligned bytes; a
+        // non-byte-aligned offset or field width would misplace the bits.
+        // Reject rather than silently miscompile (matches the interpreter).
+        return false;
     } else {
         const intn_digit_t *big_src_value = NULL;
         size_t big_len = 0;

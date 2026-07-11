@@ -5898,6 +5898,13 @@ schedule_in:
                                           "binary\n");
                                     RAISE_ERROR(BADARG_ATOM);
                                 }
+                            } else if ((offset % 8 != 0) || ((size_value * segment_unit) % 8 != 0)) {
+                                // intn_to_integer_bytes writes whole, byte-aligned
+                                // bytes; a non-byte-aligned bit offset or field
+                                // width would misplace the bits. Reject rather than
+                                // silently miscompile (bignums >64 bits only).
+                                TRACE("bs_create_bin/6: non-byte-aligned big integer segment unsupported\n");
+                                RAISE_ERROR(UNSUPPORTED_ATOM);
                             } else {
                                 // when building a binary, `signed` flag is implicit
                                 intn_from_integer_options_t intn_flags
