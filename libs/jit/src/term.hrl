@@ -42,6 +42,8 @@
 -define(TERM_BOXED_REFC_BINARY, 16#20).
 -define(TERM_BOXED_HEAP_BINARY, 16#24).
 -define(TERM_BOXED_SUB_BINARY, 16#28).
+% Boxed word count of a sub-binary (must match TERM_BOXED_SUB_BINARY_SIZE in term.h)
+-define(TERM_BOXED_SUB_BINARY_SIZE, 5).
 -define(TERM_BOXED_MAP, 16#2C).
 -define(TERM_BOXED_EXTERNAL_PID, 16#30).
 -define(TERM_BOXED_EXTERNAL_PORT, 16#34).

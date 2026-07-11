@@ -290,6 +290,7 @@ struct ModuleNativeInterface
     uintptr_t (*return_direct)(Context *ctx, JITState *jit_state);
     size_t (*bitstring_get_tail_heap_size)(term *bs_bin_ptr, size_t bs_offset);
     term (*bitstring_create_tail)(Context *ctx, term bs_bin, size_t bs_offset);
+    term (*bs_create_bin_wrap)(Context *ctx, term byte_binary, size_t total_bits);
 };
 
 extern const ModuleNativeInterface module_native_interface;

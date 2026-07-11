@@ -1990,6 +1990,17 @@ static size_t jit_bitstring_get_tail_heap_size(term *bs_bin_ptr, size_t bs_offse
     return bitstring_get_tail_heap_size(bs_bin, bs_offset);
 }
 
+// Finalize a bs_create_bin result: a byte-aligned total returns the byte
+// binary unchanged; a non-byte-aligned total wraps it in a sub-binary carrying
+// the trailing bit count. Heap for the wrapper is assumed already reserved.
+static term jit_bs_create_bin_wrap(Context *ctx, term byte_binary, size_t total_bits)
+{
+    if (total_bits % 8 == 0) {
+        return byte_binary;
+    }
+    return term_alloc_sub_binary_bits(byte_binary, 0, total_bits / 8, (uint8_t) (total_bits % 8), &ctx->heap);
+}
+
 // Materialize the tail of a match at bit offset bs_offset. Heap is assumed to
 // already be reserved (see jit_bitstring_get_tail_heap_size); this does not GC.
 static term jit_bitstring_create_tail(Context *ctx, term bs_bin, size_t bs_offset)
@@ -2715,7 +2726,8 @@ const ModuleNativeInterface module_native_interface = {
     jit_call_ext_direct,
     jit_return_direct,
     jit_bitstring_get_tail_heap_size,
-    jit_bitstring_create_tail
+    jit_bitstring_create_tail,
+    jit_bs_create_bin_wrap
 };
 
 #endif

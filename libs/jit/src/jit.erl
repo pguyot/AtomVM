@@ -2563,43 +2563,48 @@ emit_pass(
                 MSt3 = MMod:add(MSt2, BinaryRegSize, BinaryLitSize),
                 {MSt3, BinaryRegSize}
         end,
-    MSt5 =
-        if
-            is_integer(BinaryTotalSize) andalso BinaryTotalSize band 16#7 =/= 0 ->
-                MMod:call_primitive_last(MSt4, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                ]);
-            is_integer(BinaryTotalSize) ->
-                MSt4;
-            true ->
-                MMod:if_block(MSt4, {BinaryTotalSize, '&', 16#7, '!=', 0}, fun(BlockSt) ->
-                    MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                    ])
-                end)
-        end,
-    {MSt6, TrimResultReg} = MMod:call_primitive(MSt5, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+    {MSt6, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
     MSt7 = MMod:free_native_registers(MSt6, [TrimResultReg]),
-    {MSt12, BinaryTotalSizeInBytes, AllocSize} =
+    %% A non-byte-aligned total yields a bitstring: allocate ceil(bits/8) bytes,
+    %% reserve a sub-binary wrapper, and wrap after filling (see WrapInfo below).
+    %% Byte-aligned totals and reuse/private_append (always byte-aligned) keep
+    %% the original byte semantics unchanged.
+    {MSt12, BinaryTotalSizeInBytes, AllocSize, WrapInfo} =
         if
-            is_integer(BinaryTotalSize) ->
+            ReuseSourceBinary andalso is_integer(BinaryTotalSize) ->
                 {MSt7, (BinaryTotalSize div 8),
-                    term_binary_heap_size((BinaryTotalSize div 8), MMod) + Alloc};
+                    term_binary_heap_size((BinaryTotalSize div 8), MMod) + Alloc, no_wrap};
+            ReuseSourceBinary ->
+                {MSt8, Bytes} = MMod:shift_right(MSt7, {free, BinaryTotalSize}, 3),
+                {MSt9, BytesCopy} = MMod:copy_to_native_register(MSt8, Bytes),
+                {MSt10, AllocSizeReg} = term_binary_heap_size({free, BytesCopy}, MMod, MSt9),
+                MSt11 =
+                    case Alloc of
+                        0 -> MSt10;
+                        _ -> MMod:add(MSt10, AllocSizeReg, Alloc)
+                    end,
+                {MSt11, Bytes, AllocSizeReg, no_wrap};
+            is_integer(BinaryTotalSize) ->
+                Trailing = BinaryTotalSize rem 8,
+                ByteSize = (BinaryTotalSize + 7) div 8,
+                {Extra, Wrap} =
+                    case Trailing of
+                        0 -> {0, no_wrap};
+                        _ -> {?TERM_BOXED_SUB_BINARY_SIZE, {wrap_lit, BinaryTotalSize}}
+                    end,
+                {MSt7, ByteSize, term_binary_heap_size(ByteSize, MMod) + Alloc + Extra, Wrap};
             true ->
-                {MSt8, BinaryTotalSizeBytes} = MMod:shift_right(MSt7, {free, BinaryTotalSize}, 3),
-                {MSt9, BinaryTotalSizeBytes0} = MMod:copy_to_native_register(
-                    MSt8, BinaryTotalSizeBytes
-                ),
-                {MSt10, AllocSizeReg} = term_binary_heap_size(
-                    {free, BinaryTotalSizeBytes0}, MMod, MSt9
-                ),
-                case Alloc of
-                    0 ->
-                        {MSt10, BinaryTotalSizeBytes, AllocSizeReg};
-                    _ ->
-                        MSt11 = MMod:add(MSt10, AllocSizeReg, Alloc),
-                        {MSt11, BinaryTotalSizeBytes, AllocSizeReg}
-                end
+                MSt8a = MMod:add(MSt7, BinaryTotalSize, 7),
+                {MSt8, CeilBytes} = MMod:shift_right(MSt8a, {free, BinaryTotalSize}, 3),
+                {MSt9, CeilCopy} = MMod:copy_to_native_register(MSt8, CeilBytes),
+                {MSt10, AllocSizeReg} = term_binary_heap_size({free, CeilCopy}, MMod, MSt9),
+                MSt10b = MMod:add(MSt10, AllocSizeReg, ?TERM_BOXED_SUB_BINARY_SIZE),
+                MSt11 =
+                    case Alloc of
+                        0 -> MSt10b;
+                        _ -> MMod:add(MSt10b, AllocSizeReg, Alloc)
+                    end,
+                {MSt11, CeilBytes, AllocSizeReg, wrap_dyn}
         end,
     {MSt13, MemoryEnsureFreeReg} = MMod:call_primitive(
         MSt12, ?PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS, [
@@ -2658,9 +2663,24 @@ emit_pass(
         lists:seq(1, NBSegments)
     ),
     ?TRACE("]\n", []),
-    MSt19 = MMod:free_native_registers(MSt18, [FinalOffset]),
-    MSt20 = MMod:move_to_vm_register(MSt19, CreatedBin, Dest),
-    MSt21 = MMod:free_native_registers(MSt20, [CreatedBin, Dest]),
+    %% Wrap a non-byte-aligned result in a sub-binary carrying the trailing bit
+    %% count. FinalOffset holds the total inserted bit count for the dynamic case.
+    {MSt18b, CreatedBin1} =
+        case WrapInfo of
+            no_wrap ->
+                {MSt18, CreatedBin};
+            {wrap_lit, TotalBits} ->
+                MMod:call_primitive(MSt18, ?PRIM_BS_CREATE_BIN_WRAP, [
+                    ctx, {free, CreatedBin}, TotalBits
+                ]);
+            wrap_dyn ->
+                MMod:call_primitive(MSt18, ?PRIM_BS_CREATE_BIN_WRAP, [
+                    ctx, {free, CreatedBin}, FinalOffset
+                ])
+        end,
+    MSt19 = MMod:free_native_registers(MSt18b, [FinalOffset]),
+    MSt20 = MMod:move_to_vm_register(MSt19, CreatedBin1, Dest),
+    MSt21 = MMod:free_native_registers(MSt20, [CreatedBin1, Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt21),
     emit_pass(Rest7, MMod, MSt21, State1);
 % 178
@@ -3135,8 +3155,18 @@ emit_pass_bs_create_bin_compute_size(
         AtomType =:= private_append) andalso is_integer(Size) andalso Size > 0
 ->
     MSt1 = verify_is_binary(Src, Fail, MMod, MSt0),
-    {MSt2, SizeValue} = term_to_int(Size, 0, MMod, MSt1),
+    {MSt2a, SizeValue} = term_to_int(Size, 0, MMod, MSt1),
     RequiredBits = SizeValue * SegmentUnit,
+    %% A binary segment must be a whole number of bytes (matches the emulator).
+    MSt2 =
+        if
+            RequiredBits rem 8 =/= 0 ->
+                MMod:call_primitive_last(MSt2a, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
+                ]);
+            true ->
+                MSt2a
+        end,
     % Verify the source binary is large enough to provide RequiredBits bits.
     % Without this check the insert step would read past the end of the source
     % (memcpy out of bounds). The emulator performs the same check, and the
@@ -3165,8 +3195,14 @@ emit_pass_bs_create_bin_compute_size(
             {SizeReg, '<', 0}, Fail, MMod, BSt1
         ),
         BSt3 = MMod:mul(BSt2, SizeReg, SegmentUnit),
+        %% A binary segment must be a whole number of bytes (matches the emulator).
+        BSt3b = MMod:if_block(BSt3, {SizeReg, '&', 16#7, '!=', 0}, fun(B) ->
+            MMod:call_primitive_last(B, ?PRIM_RAISE_ERROR, [
+                ctx, jit_state, offset, ?UNSUPPORTED_ATOM
+            ])
+        end),
         BSt4 = cond_raise_badarg_or_jump_to_fail_label(
-            {Reg1, '<', SizeReg}, Fail, MMod, BSt3
+            {Reg1, '<', SizeReg}, Fail, MMod, BSt3b
         ),
         BSt5 = MMod:move_to_native_register(BSt4, SizeReg, Reg1),
         MMod:free_native_registers(BSt5, [SizeReg])
