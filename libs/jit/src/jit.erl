@@ -2196,24 +2196,48 @@ emit_pass(
 ) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
-    {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt1, TypedArg1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
     {Arity, Rest3} = decode_literal(Rest2),
     {AtomIndex, Rest4} = decode_atom(Rest3),
+    %% The Type chunk may prove the source is already a tuple (record matches
+    %% flow through a variable whose SSA type is a tuple); then the boxed
+    %% primary-tag and boxed-header-tag checks are provably true and skipped
+    %% (the arity is still checked -- Types v2-4 carry no tuple arity).
+    KnownTuple = is_known_tuple(TypedArg1),
+    Arg1 = unwrap_typed(TypedArg1),
     ?TRACE("OP_IS_TAGGED_TUPLE ~p, ~p, ~p, ~p\n", [Label, Arg1, Arity, AtomIndex]),
-    case try_fuse_tagged_tuple_ops(Rest4, Arg1, Label, Arity, AtomIndex, MMod, MSt1, State0) of
+    case try_fuse_tagged_tuple_ops(Rest4, TypedArg1, Label, Arity, AtomIndex, MMod, MSt1, State0) of
         {fused, MStFused, RestFused} ->
             ?ASSERT_ALL_NATIVE_FREE(MStFused),
             emit_pass(RestFused, MMod, MStFused, State0);
         not_fused ->
             {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-            MSt3 = cond_jump_to_label(
-                {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
-            ),
+            MSt3 =
+                case KnownTuple of
+                    true ->
+                        MSt2;
+                    false ->
+                        cond_jump_to_label(
+                            {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+                            Label,
+                            MMod,
+                            MSt2
+                        )
+                end,
             {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
             {MSt5, TagReg0} = MMod:get_array_element(MSt4, Reg, 0),
-            MSt6 = cond_jump_to_label(
-                {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
-            ),
+            MSt6 =
+                case KnownTuple of
+                    true ->
+                        MSt5;
+                    false ->
+                        cond_jump_to_label(
+                            {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+                            Label,
+                            MMod,
+                            MSt5
+                        )
+                end,
             {MSt7, TagReg1} = MMod:shift_right(MSt6, {free, TagReg0}, 6),
             MSt8 = cond_jump_to_label({TagReg1, '!=', Arity}, Label, MMod, MSt7),
             MSt9 = MMod:free_native_registers(MSt8, [TagReg1]),
@@ -6875,15 +6899,31 @@ emit_fused_tagged_tuple_ops(
             {ok, Val} ->
                 {MSt0, Val}
         end,
+    KnownTuple = is_known_tuple(Arg1),
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg1)),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
-    ),
+    %% When the Type chunk proves the source is a tuple, the boxed
+    %% primary-tag and header-tag checks are provably true (see the
+    %% non-fused OP_IS_TAGGED_TUPLE path).
+    MSt3 =
+        case KnownTuple of
+            true ->
+                MSt2;
+            false ->
+                cond_jump_to_label(
+                    {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+                )
+        end,
     {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt5, TagReg0} = MMod:get_array_element(MSt4, Reg, 0),
-    MSt6 = cond_jump_to_label(
-        {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
-    ),
+    MSt6 =
+        case KnownTuple of
+            true ->
+                MSt5;
+            false ->
+                cond_jump_to_label(
+                    {TagReg0, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE}, Label, MMod, MSt5
+                )
+        end,
     {MSt7, TagReg1} = MMod:shift_right(MSt6, {free, TagReg0}, 6),
     MSt8 = cond_jump_to_label({TagReg1, '!=', Arity}, Label, MMod, MSt7),
     MSt9 = MMod:free_native_registers(MSt8, [TagReg1]),

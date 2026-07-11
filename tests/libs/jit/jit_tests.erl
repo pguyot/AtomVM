@@ -1387,3 +1387,16 @@ is_function2_typed_register_arity_tests() ->
                 ]
             ]
         end}.
+
+%% A v4 record type is encoded as BEAM_TYPE_TUPLE bor BEAM_TYPE_RECORD (bits
+%% 11 and 12). Record matches -- the common is_tagged_tuple case -- must decode
+%% to t_tuple so the boxed tag checks are elided; regression for treating the
+%% record bit as `any'.
+type_resolver_v4_record_is_tuple_test() ->
+    %% v4 header: <<HasUnit:1, HasUpper:1, HasLower:1, TypeBits:13>>.
+    Tuple = (1 bsl 11),
+    Record = (1 bsl 11) bor (1 bsl 12),
+    Chunk = <<4:32, 2:32, (0 bor Tuple):16, (0 bor Record):16>>,
+    Resolver = jit_precompile:type_resolver(Chunk),
+    ?assertEqual(t_tuple, Resolver(0)),
+    ?assertEqual(t_tuple, Resolver(1)).
