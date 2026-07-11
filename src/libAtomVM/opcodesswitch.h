@@ -4274,7 +4274,7 @@ schedule_in:
                     RAISE_ERROR(BADARG_ATOM);
                 }
 
-                if (term_binary_size(bs_bin) * 8 - bs_offset < MINI(remaining * 8, bits)) {
+                if (term_bit_size(bs_bin) - bs_offset < MINI(remaining * 8, bits)) {
                     TRACE("bs_match_string: failed to match (binary is shorter)\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 } else {
@@ -4348,7 +4348,7 @@ schedule_in:
                 size_t increment = size_val * unit;
                 avm_int_t bs_offset = term_get_match_state_offset(src);
                 term bs_bin = term_get_match_state_binary(src);
-                if ((bs_offset + increment) > term_binary_size(bs_bin) * 8) {
+                if ((bs_offset + increment) > term_bit_size(bs_bin)) {
                     TRACE("bs_skip_bits2: Insufficient capacity to skip bits: %lu, inc: %zu\n", (unsigned long) bs_offset, increment);
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 } else {
@@ -4373,7 +4373,7 @@ schedule_in:
 
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
-                if ((term_binary_size(bs_bin) * 8 - bs_offset) % unit != 0) {
+                if ((term_bit_size(bs_bin) - bs_offset) % unit != 0) {
                     TRACE("bs_test_unit: Available bits in source not evenly divisible by unit\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
@@ -4397,8 +4397,8 @@ schedule_in:
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
 
-                if ((term_binary_size(bs_bin) * 8 - bs_offset) != (unsigned int) bits) {
-                    TRACE("bs_test_tail2: Expected exactly %u bits remaining, but remaining=%u\n", (unsigned) bits, (unsigned) (term_binary_size(bs_bin) * 8 - bs_offset));
+                if ((term_bit_size(bs_bin) - bs_offset) != (unsigned int) bits) {
+                    TRACE("bs_test_tail2: Expected exactly %u bits remaining, but remaining=%u\n", (unsigned) bits, (unsigned) (term_bit_size(bs_bin) - bs_offset));
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
                 break;
@@ -4454,8 +4454,8 @@ schedule_in:
                         }
                     }
                 } else if ((bs_offset % 8 == 0) && (increment % 8 == 0) && (increment <= INTN_MAX_UNSIGNED_BITS_SIZE)) {
-                    unsigned long capacity = term_binary_size(bs_bin);
-                    if (8 * capacity - bs_offset < (unsigned long) increment) {
+                    unsigned long capacity_bits = term_bit_size(bs_bin);
+                    if (capacity_bits - bs_offset < (unsigned long) increment) {
                         JUMP_TO_ADDRESS(mod->labels[fail]);
                     }
                     size_t byte_offset = bs_offset / 8;
@@ -6204,14 +6204,13 @@ schedule_in:
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
-                            size_t bs_bin_size = term_binary_size(bs_bin);
                             if (UNLIKELY(stride < 0)) {
                                 RAISE_ERROR(BADARG_ATOM);
                             }
                             size_t unsigned_stride = (size_t) stride;
-                            size_t remaining = (bs_bin_size * 8) - bs_offset;
+                            size_t remaining = term_bit_size(bs_bin) - bs_offset;
                             if (remaining < unsigned_stride || (remaining - unsigned_stride) % unit != 0) {
-                                TRACE("bs_match/3: ensure_at_least failed -- bs_bin_size = %d, bs_offset = %d, stride = %d, unit = %d\n", (int) bs_bin_size, (int) bs_offset, (int) stride, (int) unit);
+                                TRACE("bs_match/3: ensure_at_least failed -- bs_offset = %d, stride = %d, unit = %d\n", (int) bs_offset, (int) stride, (int) unit);
                                 goto bs_match_jump_to_fail;
                             }
                             break;
@@ -6225,9 +6224,8 @@ schedule_in:
                                 RAISE_ERROR(BADARG_ATOM);
                             }
                             size_t unsigned_stride = (size_t) stride;
-                            size_t bs_bin_size = term_binary_size(bs_bin);
-                            if ((bs_bin_size * 8) - bs_offset != unsigned_stride) {
-                                TRACE("bs_match/3: ensure_exactly failed -- bs_bin_size = %lu, bs_offset = %lu, stride = %lu\n", (unsigned long) bs_bin_size, (unsigned long) bs_offset, (unsigned long) stride);
+                            if (term_bit_size(bs_bin) - bs_offset != unsigned_stride) {
+                                TRACE("bs_match/3: ensure_exactly failed -- bs_offset = %lu, stride = %lu\n", (unsigned long) bs_offset, (unsigned long) stride);
                                 goto bs_match_jump_to_fail;
                             }
                             break;
@@ -6317,7 +6315,7 @@ schedule_in:
                                 TRACE("bs_match/3: Unsupported.  Offset on binary read must be aligned on byte boundaries.\n");
                                 RAISE_ERROR(BADARG_ATOM);
                             }
-                            if ((bs_offset + matched_bits) > term_binary_size(bs_bin) * 8) {
+                            if ((bs_offset + matched_bits) > term_bit_size(bs_bin)) {
                                 TRACE("bs_match/3: insufficient capacity\n");
                                 goto bs_match_jump_to_fail;
                             }
@@ -6345,23 +6343,47 @@ schedule_in:
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
-                            // TODO: rewrite this bit once bitstrings are supported
-                            if (bs_offset % 8 != 0) {
-                                TRACE("bs_match/3: Unsupported.  Offset on binary read must be aligned on byte boundaries.\n");
-                                RAISE_ERROR(BADARG_ATOM);
+                            size_t total_bits = term_bit_size(bs_bin);
+                            size_t remaining_bits = total_bits - bs_offset;
+                            term t;
+                            if (bs_offset % 8 == 0 && remaining_bits % 8 == 0) {
+                                // Byte-aligned tail: share storage via a sub-binary.
+                                size_t bs_offset_bytes = bs_offset / 8;
+                                size_t tail_bytes = remaining_bits / 8;
+                                size_t heap_size = term_sub_binary_heap_size(bs_bin, tail_bytes);
+                                TRIM_LIVE_REGS(live);
+                                x_regs[live] = match_state;
+                                if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                                    RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+                                }
+                                match_state = x_regs[live];
+                                bs_bin = term_get_match_state_binary(match_state);
+                                t = term_maybe_create_sub_binary(bs_bin, bs_offset_bytes, tail_bytes, &ctx->heap, ctx->global);
+                            } else {
+                                // Non-byte-aligned tail: copy remaining bits into a fresh bitstring.
+                                size_t result_bytes = (remaining_bits + 7) / 8;
+                                size_t trailing = remaining_bits % 8;
+                                size_t heap_size = term_binary_heap_size(result_bytes);
+                                if (trailing != 0) {
+                                    heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                                }
+                                TRIM_LIVE_REGS(live);
+                                x_regs[live] = match_state;
+                                if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                                    RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+                                }
+                                match_state = x_regs[live];
+                                bs_bin = term_get_match_state_binary(match_state);
+                                const uint8_t *src_data = (const uint8_t *) term_binary_data(bs_bin);
+                                term bin = term_create_empty_binary(result_bytes, &ctx->heap, ctx->global);
+                                uint8_t *dst = (uint8_t *) term_binary_data(bin);
+                                memset(dst, 0, result_bytes);
+                                bitstring_copy_bits_from(dst, src_data, bs_offset, remaining_bits);
+                                t = bin;
+                                if (trailing != 0) {
+                                    t = term_alloc_sub_binary_bits(bin, 0, remaining_bits / 8, (uint8_t) trailing, &ctx->heap);
+                                }
                             }
-                            size_t total_bytes = term_binary_size(bs_bin);
-                            size_t bs_offset_bytes = bs_offset / 8;
-                            size_t tail_bytes = total_bytes - bs_offset_bytes;
-                            size_t heap_size = term_sub_binary_heap_size(bs_bin, tail_bytes);
-                            TRIM_LIVE_REGS(live);
-                            x_regs[live] = match_state;
-                            if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                            }
-                            match_state = x_regs[live];
-                            bs_bin = term_get_match_state_binary(match_state);
-                            term t = term_maybe_create_sub_binary(bs_bin, bs_offset_bytes, tail_bytes, &ctx->heap, ctx->global);
                             DEST_REGISTER(dreg);
                             DECODE_DEST_REGISTER(dreg, pc);
                             j++;

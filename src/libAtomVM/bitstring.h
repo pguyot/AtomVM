@@ -116,8 +116,8 @@ bool bitstring_insert_any_integer(uint8_t *dst, avm_int_t offset, avm_int64_t va
 static inline bool bitstring_extract_integer(term src_bin, size_t offset, avm_int_t n,
     enum BitstringFlags bs_flags, union maybe_unsigned_int64 *dst)
 {
-    unsigned long capacity = term_binary_size(src_bin);
-    if (8 * capacity - offset < (unsigned long) n) {
+    unsigned long capacity_bits = term_bit_size(src_bin);
+    if (capacity_bits - offset < (unsigned long) n) {
         return false;
     }
 
