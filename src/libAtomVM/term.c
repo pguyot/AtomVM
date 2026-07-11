@@ -1296,25 +1296,36 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                         break;
                     }
                     case TERM_TYPE_INDEX_BINARY: {
-                        int t_size = term_binary_size(t);
-                        int other_size = term_binary_size(other);
+                        size_t t_bits = term_bit_size(t);
+                        size_t other_bits = term_bit_size(other);
 
-                        const char *t_data = term_binary_data(t);
-                        const char *other_data = term_binary_data(other);
+                        const unsigned char *t_data = (const unsigned char *) term_binary_data(t);
+                        const unsigned char *other_data = (const unsigned char *) term_binary_data(other);
 
-                        int cmp_size = (t_size > other_size) ? other_size : t_size;
+                        size_t cmp_bits = (t_bits > other_bits) ? other_bits : t_bits;
+                        size_t cmp_bytes = cmp_bits / 8;
 
-                        int memcmp_result = memcmp(t_data, other_data, cmp_size);
-                        if (memcmp_result == 0) {
-                            if (t_size == other_size) {
-                                CMP_POP_AND_CONTINUE();
-                                break;
-                            } else {
-                                result = (t_size > other_size) ? TermGreaterThan : TermLessThan;
+                        int memcmp_result = memcmp(t_data, other_data, cmp_bytes);
+                        if (memcmp_result != 0) {
+                            result = (memcmp_result > 0) ? TermGreaterThan : TermLessThan;
+                            goto unequal;
+                        }
+                        // Compare the trailing partial byte over its valid bits only.
+                        size_t rem_bits = cmp_bits % 8;
+                        if (rem_bits != 0) {
+                            unsigned char mask = (unsigned char) (0xFF << (8 - rem_bits));
+                            unsigned char tb = t_data[cmp_bytes] & mask;
+                            unsigned char ob = other_data[cmp_bytes] & mask;
+                            if (tb != ob) {
+                                result = (tb > ob) ? TermGreaterThan : TermLessThan;
                                 goto unequal;
                             }
+                        }
+                        if (t_bits == other_bits) {
+                            CMP_POP_AND_CONTINUE();
+                            break;
                         } else {
-                            result = (memcmp_result > 0) ? TermGreaterThan : TermLessThan;
+                            result = (t_bits > other_bits) ? TermGreaterThan : TermLessThan;
                             goto unequal;
                         }
                     }
