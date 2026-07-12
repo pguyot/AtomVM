@@ -230,6 +230,10 @@ size_t mailbox_size(Mailbox *mbox)
 
 // Messages are enqueued using atomics (or emulation) unless this is a no-smp
 // build with no support for driver tasks
+// Not `inline`: an inline function with external linkage may not reference
+// identifiers with internal linkage (C11 6.7.4p3), and the rp2
+// platform_atomic.h emulation behind ATOMIC_COMPARE_EXCHANGE_WEAK_PTR uses
+// static helpers. The definition stays visible in this TU for the optimizer.
 #if !defined(AVM_NO_SMP) || defined(AVM_TASK_DRIVER_ENABLED)
 void mailbox_enqueue_message(Context *c, MailboxMessage *m)
 {
