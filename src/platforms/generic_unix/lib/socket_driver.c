@@ -114,6 +114,7 @@ const char *const close_a = "\x5" "close";
 const char *const closed_a = "\x6" "closed";
 const char *const get_port_a = "\x8" "get_port";
 const char *const accept_a = "\x6" "accept";
+const char *const accept_cancel_a = "\xd" "accept_cancel";
 const char *const sockname_a = "\x8" "sockname";
 const char *const peername_a = "\x8" "peername";
 const char *const controlling_process_a = "\x13" "controlling_process";
@@ -1221,6 +1222,24 @@ static NativeHandlerResult socket_consume_mailbox(Context *ctx)
         TRACE("accept\n");
         term timeout = term_get_tuple_element(cmd, 1);
         socket_driver_do_accept(ctx, pid, ref, timeout);
+    } else if (cmd_name == globalcontext_make_atom(glb, accept_cancel_a)) {
+        TRACE("accept_cancel\n");
+        // {accept_cancel, TargetRef}: remove the accepter queued by the
+        // accept call TargetRef belonged to, so a future connection is
+        // not delivered to a caller that timed out (see gen_tcp_inet).
+        SocketDriverData *socket_data = (SocketDriverData *) ctx->platform_data;
+        uint64_t target_ref_ticks = term_to_ref_ticks(term_get_tuple_element(cmd, 1));
+        synclist_wrlock(&glb->listeners);
+        PassiveRecvListener *listener = socket_data->passive_listener;
+        if (listener != NULL && listener->ref_ticks == target_ref_ticks) {
+            socket_data->passive_listener = NULL;
+            sys_unregister_listener_nolock(glb, &listener->base);
+        } else {
+            listener = NULL;
+        }
+        synclist_unlock(&glb->listeners);
+        free(listener);
+        port_send_reply(ctx, pid, ref, OK_ATOM);
     } else if (cmd_name == globalcontext_make_atom(glb, close_a)) {
         TRACE("close\n");
         port_send_reply(ctx, pid, ref, OK_ATOM);

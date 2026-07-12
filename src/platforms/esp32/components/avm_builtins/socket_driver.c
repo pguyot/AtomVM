@@ -613,6 +613,37 @@ static void do_accept(Context *ctx, const GenMessage *gen_message)
     }
 }
 
+// {accept_cancel, TargetRef}: remove the accepter queued by the accept
+// call TargetRef belonged to, so a future connection is not delivered to
+// a caller that timed out (see gen_tcp_inet).
+static void do_accept_cancel(Context *ctx, const GenMessage *gen_message)
+{
+    struct TCPServerSocketData *tcp_data = ctx->platform_data;
+
+    int32_t pid = term_to_local_process_id(gen_message->pid);
+    uint64_t ref_ticks = term_to_ref_ticks(gen_message->ref);
+
+    if (term_get_tuple_arity(gen_message->req) == 2
+        && term_is_reference(term_get_tuple_element(gen_message->req, 1))) {
+        uint64_t target_ref_ticks = term_to_ref_ticks(term_get_tuple_element(gen_message->req, 1));
+        struct ListHead *item;
+        struct ListHead *tmp;
+        MUTABLE_LIST_FOR_EACH (item, tmp, &tcp_data->accepters_list_head) {
+            struct TCPServerAccepter *accepter
+                = GET_LIST_ENTRY(item, struct TCPServerAccepter, accepter_head);
+            if (accepter->ref_ticks == target_ref_ticks) {
+                list_remove(&accepter->accepter_head);
+                free(accepter);
+            }
+        }
+    }
+
+    if (UNLIKELY(memory_ensure_free(ctx, REPLY_SIZE) != MEMORY_GC_OK)) {
+        AVM_ABORT();
+    }
+    do_send_reply(ctx, OK_ATOM, ref_ticks, pid);
+}
+
 static void do_send_passive_reply(Context *ctx, struct SocketData *socket_data, term reply)
 {
     do_send_reply(ctx, reply, socket_data->passive_ref_ticks, socket_data->passive_receiver_process_pid);
@@ -1553,6 +1584,11 @@ static NativeHandlerResult socket_consume_mailbox(Context *ctx)
             case ACCEPT_ATOM:
                 TRACE("accept\n");
                 do_accept(ctx, &gen_message);
+                break;
+
+            case ACCEPT_CANCEL_ATOM:
+                TRACE("accept_cancel\n");
+                do_accept_cancel(ctx, &gen_message);
                 break;
 
             case CLOSE_ATOM:

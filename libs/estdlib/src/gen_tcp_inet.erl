@@ -126,8 +126,45 @@ accept(ListenSocket) ->
 %% @hidden
 -spec accept(ListenSocket :: inet:socket(), Timeout :: timeout()) ->
     {ok, Socket :: inet:socket()} | {error, Reason :: reason()}.
-accept(ListenSocket, Timeout) ->
-    case call(ListenSocket, {accept, Timeout}) of
+accept(ListenSocket, infinity) ->
+    case call(ListenSocket, {accept, infinity}) of
+        {ok, Socket} when is_pid(Socket) ->
+            {ok, Socket};
+        ErrorReason ->
+            %% TODO close port
+            ErrorReason
+    end;
+accept(ListenSocket, Timeout) when is_integer(Timeout) ->
+    % The socket driver queues the accepter without regard for Timeout,
+    % so the timeout lives here. On expiry the queued accepter must be
+    % cancelled or the next connection would be delivered to a stale
+    % ref (and lost); the cancel call is synchronous, so a reply racing
+    % with the expiry is deterministically in the mailbox afterwards
+    % and the connection nobody waits for is closed.
+    MonitorRef = monitor(port, ListenSocket),
+    ListenSocket ! {'$call', {self(), MonitorRef}, {accept, Timeout}},
+    Result =
+        receive
+            {'DOWN', MonitorRef, port, ListenSocket, normal} ->
+                {error, closed};
+            {'DOWN', MonitorRef, port, ListenSocket, Reason} ->
+                {error, Reason};
+            {MonitorRef, Ret} ->
+                Ret
+        after Timeout ->
+            _ = call(ListenSocket, {accept_cancel, MonitorRef}),
+            receive
+                {MonitorRef, {ok, RacedSocket}} when is_pid(RacedSocket) ->
+                    close(RacedSocket),
+                    {error, timeout};
+                {MonitorRef, _Late} ->
+                    {error, timeout}
+            after 0 ->
+                {error, timeout}
+            end
+        end,
+    demonitor(MonitorRef, [flush]),
+    case Result of
         {ok, Socket} when is_pid(Socket) ->
             {ok, Socket};
         ErrorReason ->

@@ -31,6 +31,53 @@ test() ->
     ok = test_connect_parameters(),
     ok = test_connect_bad_address(),
     ok = test_tcp_double_close(),
+    ok = test_accept_timeout(),
+    ok.
+
+% accept/2 must return {error, timeout} when no connection arrives
+% within Timeout; a bounded receive keeps the suite from hanging on
+% builds where the timeout is ignored and accept blocks forever.
+test_accept_timeout() ->
+    {ok, ListenSocket} = gen_tcp:listen(0, []),
+    Self = self(),
+    Start = erlang:monotonic_time(millisecond),
+    Pid = spawn(fun() ->
+        Self ! {accept_result, gen_tcp:accept(ListenSocket, 200)}
+    end),
+    Result =
+        receive
+            {accept_result, R} -> R
+        after 5000 ->
+            exit(Pid, kill),
+            accept_did_not_return
+        end,
+    Elapsed = erlang:monotonic_time(millisecond) - Start,
+    case Result of
+        {error, timeout} when Elapsed >= 200 ->
+            ok;
+        {error, timeout} ->
+            gen_tcp:close(ListenSocket),
+            throw({accept_timeout_too_early, Elapsed, ?LINE});
+        Other ->
+            gen_tcp:close(ListenSocket),
+            throw({unexpected_accept_result, Other, ?LINE})
+    end,
+    % the listening socket must still accept connections after a timed
+    % out accept (and a cancelled accepter must not swallow this one)
+    {ok, {_ListenAddress, Port}} = inet:sockname(ListenSocket),
+    spawn(fun() ->
+        Self ! {late_accept, gen_tcp:accept(ListenSocket, 5000)}
+    end),
+    {ok, ClientSocket} = gen_tcp:connect({127, 0, 0, 1}, Port, [{active, false}]),
+    ok =
+        receive
+            {late_accept, {ok, _ServerSide}} -> ok;
+            {late_accept, Unexpected} -> throw({unexpected_late_accept, Unexpected, ?LINE})
+        after 5000 ->
+            throw({late_accept_did_not_return, ?LINE})
+        end,
+    gen_tcp:close(ClientSocket),
+    gen_tcp:close(ListenSocket),
     ok.
 
 test_echo_server() ->
