@@ -61,6 +61,8 @@ if (UNLIKELY(err != ESP_OK)) {                                                  
 #define EINPROGRESS_ATOMSTR (ATOM_STR("\xB", "einprogress"))
 #define I2C_ATOMSTR (ATOM_STR("\x4", "$i2c"))
 
+#ifdef CONFIG_AVM_ENABLE_I2C_RESOURCE_NIFS
+
 static ErlNifResourceType *i2c_resource_type;
 
 struct I2CResource
@@ -859,8 +861,6 @@ static const struct Nif i2c_end_transmission_nif =
     .base.type = NIFFunctionType,
     .nif_ptr = nif_i2c_end_transmission
 };
-
-#ifdef CONFIG_AVM_ENABLE_I2C_RESOURCE_NIFS
 
 void i2c_resource_init(GlobalContext *global)
 {
