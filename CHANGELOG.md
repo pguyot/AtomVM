@@ -171,6 +171,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhausting the C stack
 - `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
 - Fixed x86_64 JIT `if_else_block` emitting a `rel8` jump to skip the false block, which silently overflowed (and corrupted control flow) when that block exceeded 127 bytes, e.g. inline small-integer arithmetic with a bignum first operand
+- Fixed a negative dynamic segment size being scaled by the segment unit before validation, which
+  could let a match succeed with a wrapped-around size, and could move the match offset before the
+  start of the binary and crash under JIT
+- Fixed the JIT untagging small integers with a logical instead of an arithmetic shift, turning a
+  negative integer into a large positive one
+- Fixed the `network` mdns configuration to read the documented `host` key; the previously
+  required, undocumented `hostname` key is still accepted
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
