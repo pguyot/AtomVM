@@ -757,6 +757,13 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
                 // TODO: expose an erlang callback so applications can choose how to respond to this
                 // event, i.e. start a periodic scan for known networks, or initiate a connection
                 ESP_LOGI(TAG, "WIFI_EVENT_STA_START received.");
+                // Modem power save (the esp-idf default, WIFI_PS_MIN_MODEM)
+                // makes the station unreachable from the network on APs with
+                // broken DTIM buffering: outbound traffic flows but inbound
+                // ARP/ICMP/TCP is silently lost. Trade standby current for
+                // reachability; deep-sleep-centric applications spend almost
+                // no time with WiFi up anyway.
+                esp_wifi_set_ps(WIFI_PS_NONE);
                 if (!data->managed) {
                     esp_wifi_connect();
                 }
