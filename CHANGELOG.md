@@ -157,6 +157,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start of the binary and crash under JIT
 - Fixed the JIT untagging small integers with a logical instead of an arithmetic shift, turning a
   negative integer into a large positive one
+- Fixed the `network` mdns configuration to read the documented `host` key; the previously
+  required, undocumented `hostname` key is still accepted
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
