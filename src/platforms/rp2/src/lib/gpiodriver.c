@@ -197,10 +197,14 @@ static term nif_gpio_digital_write(Context *ctx, int argc, term argv[])
         }
         term pin_term = term_get_tuple_element(gpio_pin, 1);
         VALIDATE_VALUE(pin_term, term_is_integer);
-        gpio_num = (uint) term_to_int32(pin_term);
-        if (UNLIKELY((gpio_num == -1) || (gpio_num > 1))) {
+        int32_t pin_num = term_to_int32(pin_term);
+        // Only WL_GPIO0 and WL_GPIO1 are usable here. Validate on the signed
+        // value before the cast: `(uint)pin == -1` is a signedness-mismatch
+        // comparison that never holds, and -Werror rejects it.
+        if (UNLIKELY(pin_num < 0 || pin_num > 1)) {
             RAISE_ERROR(BADARG_ATOM);
         }
+        gpio_num = (uint) pin_num;
         cyw43_arch_gpio_put(gpio_num, level);
 #endif
     } else {
