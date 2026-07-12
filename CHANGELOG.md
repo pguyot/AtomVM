@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
   per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
   spilled across the resolver call
+- `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now encode and decode terms
+  iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
+  exhausting the C stack
+- `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
@@ -174,6 +178,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can trap twice for the same not-yet-loaded module (it retries the call after a spurious
   wake-up), and the second resume re-ran the label to native-entry-point conversion on the
   already-converted continuation, producing a wild jump on the next schedule-in
+- Fixed a negative dynamic segment size being scaled by the segment unit before validation, which
+  could let a match succeed with a wrapped-around size, and could move the match offset before the
+  start of the binary and crash under JIT
+- Fixed the JIT untagging small integers with a logical instead of an arithmetic shift, turning a
+  negative integer into a large positive one
 
 ## [0.7.0-beta.0] - 2026-09-28
 
