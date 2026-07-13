@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT `bs_match` now commits the bit offset to the match state once, after the whole command
   sequence, instead of after every command; the intermediate writebacks were dead stores for
   fixed-size binary field reads (`<<A:8, B:16, C:32, ...>>`)
+- JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
+  proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
+  immediate-tag test and the `term_compare` fallback of the untyped path
 - Updated network type db() to dbm() to reflect the actual representation of the type
 - Use ES6 modules for emscripten port, using .mjs suffix
 - `ahttp_client` now returns `{error, {parser, incomplete_response}}` when a socket closes mid-response
