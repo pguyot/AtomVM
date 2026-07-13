@@ -34,7 +34,7 @@
 % NIFs
 -export([
     is_loaded/1,
-    resume/2,
+    resume/3,
     code_chunk/1,
     atom_resolver/2,
     literal_resolver/2,
@@ -80,7 +80,7 @@ handle_info({load, Module, TrappedPid}, State) ->
             true -> ok;
             false -> load(Module)
         end,
-    code_server:resume(TrappedPid, LoadResult),
+    code_server:resume(TrappedPid, Module, LoadResult),
     {noreply, State}.
 
 %% @hidden
@@ -101,9 +101,10 @@ is_loaded(_Module) ->
 %% @doc Resume a process that was trapped waiting for module to be loaded
 %% @return ok
 %% @param Pid process id to resume
+%% @param Module module whose load completed (guards against stale resumes)
 %% @param LoadResult result of the load operation
--spec resume(Pid :: pid(), LoadResult :: ok | undef) -> true.
-resume(_Pid, _LoadResult) ->
+-spec resume(Pid :: pid(), Module :: module(), LoadResult :: ok | undef) -> true.
+resume(_Pid, _Module, _LoadResult) ->
     erlang:nif_error(undefined).
 
 %% @doc Get the bytecode of a given module
