@@ -471,6 +471,7 @@ compile_erlang(test_minor_gc_messages)
 compile_erlang(test_raise)
 compile_erlang(test_map)
 compile_erlang(test_jit_map_size)
+compile_erlang(test_jit_typed_eq)
 
 compile_erlang(ceilint)
 compile_erlang(ceilbadarg)
@@ -1062,6 +1063,7 @@ set(erlang_test_beams
     test_raise.beam
     test_map.beam
     test_jit_map_size.beam
+    test_jit_typed_eq.beam
 
     ceilint.beam
     ceilbadarg.beam
