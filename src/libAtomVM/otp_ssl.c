@@ -52,6 +52,10 @@
 #define MBEDTLS_PRIVATE(member) member
 #endif
 
+// Read size used to pump the TLS state machine when no decoded application
+// data is pending yet (see nif_ssl_read).
+#define DEFAULT_READ_BUFFER_FALLBACK 512
+
 #if defined(MBEDTLS_DEBUG_C) && defined(ENABLE_TRACE)
 
 #include <mbedtls/debug.h>
@@ -646,21 +650,13 @@ static term nif_ssl_read(Context *ctx, int argc, term argv[])
         // Size the result to the decoded bytes actually pending instead of
         // the maximum record payload: allocating 16 KB up front for every
         // read is a large contiguous allocation that fragments and OOMs
-        // small MCU heaps. A zero-length read drives the TLS state machine
-        // (reading at most one record into mbedTLS' own buffer) without
-        // consuming application data.
-        unsigned char dummy;
-        int res0 = mbedtls_ssl_read(&context_rsrc->context, &dummy, 0);
-        if (res0 < 0 && res0 != MBEDTLS_ERR_SSL_WANT_READ && res0 != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            return make_err_result(res0, ctx);
-        }
+        // small MCU heaps. When no decoded data is pending yet, use a small
+        // buffer to pump the TLS state machine through the normal read path
+        // (want_read propagates to the caller's select loop as usual); the
+        // rest of a larger record stays buffered in mbedTLS and the next
+        // read sizes itself exactly.
         size_t avail = mbedtls_ssl_get_bytes_avail(&context_rsrc->context);
-        if (avail == 0) {
-            // No decoded application data pending: have the caller select
-            // on the socket and retry.
-            return make_err_result(MBEDTLS_ERR_SSL_WANT_READ, ctx);
-        }
-        len = (avm_int_t) avail;
+        len = (avail > 0) ? (avm_int_t) avail : DEFAULT_READ_BUFFER_FALLBACK;
     }
     size_t ensure_packet_avail = term_binary_data_size_in_terms(len) + BINARY_HEADER_SIZE;
     size_t requested_size = TUPLE_SIZE(2) + ensure_packet_avail;
