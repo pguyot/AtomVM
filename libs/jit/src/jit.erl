@@ -4120,8 +4120,43 @@ emit_pass_bs_match_skip(MatchState, BSOffsetReg, J0, Rest0, MMod, MSt0) ->
 % indirect call.
 op_bif2(MMod, MSt0, FailLabel, erlang, element, _Bif, Index, Tuple, Dest) ->
     op_bif2_element(MMod, MSt0, FailLabel, Index, Tuple, Dest);
+op_bif2(MMod, MSt0, FailLabel, erlang, Op, Bif, Arg1, Arg2, Dest) when
+    Op =:= '=:='; Op =:= '=/='
+->
+    %% Value-context exact (in)equality with an operand the type proves is a
+    %% non-boxed immediate: a single word compare selects true/false, no BIF
+    %% call (same soundness argument as op_is_exact_eq_immediate). These
+    %% comparison BIFs cannot fail, so FailLabel is irrelevant to the inline
+    %% path.
+    case is_immediate_typed(Arg1) orelse is_immediate_typed(Arg2) of
+        true ->
+            {EqAtom, NeAtom} =
+                case Op of
+                    '=:=' -> {?TRUE_ATOM, ?FALSE_ATOM};
+                    '=/=' -> {?FALSE_ATOM, ?TRUE_ATOM}
+                end,
+            op_bif2_exact_eq_immediate(MMod, MSt0, Arg1, Arg2, Dest, EqAtom, NeAtom);
+        false ->
+            op_bif2_default(
+                MMod, MSt0, FailLabel, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest
+            )
+    end;
 op_bif2(MMod, MSt0, FailLabel, _Module, _Function, Bif, Arg1, Arg2, Dest) ->
     op_bif2_default(MMod, MSt0, FailLabel, Bif, unwrap_typed(Arg1), unwrap_typed(Arg2), Dest).
+
+%% erlang:'=:='/2 (or '=/=') as a value, one operand provably immediate:
+%% Dest := EqAtom when the tagged words are equal, NeAtom otherwise.
+op_bif2_exact_eq_immediate(MMod, MSt0, Arg1, Arg2, Dest, EqAtom, NeAtom) ->
+    {MSt1, Reg1} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    {MSt2, Reg2} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
+    MSt3 = MMod:if_else_block(
+        MSt2,
+        {{free, Reg1}, '==', Reg2},
+        fun(BSt) -> MMod:move_to_vm_register(BSt, EqAtom, Dest) end,
+        fun(BSt) -> MMod:move_to_vm_register(BSt, NeAtom, Dest) end
+    ),
+    MSt4 = MMod:free_native_registers(MSt3, [Reg2]),
+    MMod:free_native_registers(MSt4, [Dest]).
 
 op_bif2_default(MMod, MSt0, FailLabel, Bif, Arg1, Arg2, Dest) ->
     {MSt1, FuncPtr} = resolve_bif_func_ptr(MMod, MSt0, Bif),
