@@ -66,7 +66,7 @@ test_spurious_code_server_resume() ->
     %% Let the worker block in receive so its saved continuation is a real
     %% code pointer, then hit it with a resume it never asked for.
     timer:sleep(50),
-    true = code_server:resume(Pid, ok),
+    true = code_server:resume(Pid, ?MODULE, ok),
     Pid ! ping,
     ok =
         receive
