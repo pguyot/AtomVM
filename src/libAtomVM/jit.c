@@ -368,16 +368,26 @@ static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
 
     int target_label = context_get_catch_label(ctx, &jit_state->module);
     if (target_label) {
+        // context_get_catch_label writes the module pointer directly and the
+        // catch may be in another module; resync cp_base, as the catch
+        // continuation can be entered through a direct branch that skips the
+        // dispatcher's jit_state rebuild. A stale cp_base makes every
+        // subsequent call in the handler push a cp whose module index and
+        // offset belong to different modules, and the eventual return takes
+        // a wild jump.
+        jit_state_set_module(jit_state, jit_state->module);
         if (jit_state->module->native_code) {
             // catch label is in native code.
             jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
         } else {
-            // Native case
-            // jit_state->continuation = jit_state->module->labels[target_label];
-
-            // JIT case
-            // (catch label necessarily is native)
+#ifndef AVM_NO_EMU
+            // The catch handler is in an emulator-pinned module (its catch
+            // was created by emulated execution): hand off to the emulator.
+            jit_state->continuation_pc = jit_state->module->labels[target_label];
+#else
+            // (catch label necessarily is native in a JIT-only build)
             assert(false);
+#endif
         }
         return ctx;
     }
@@ -743,6 +753,17 @@ enum TrapAndLoadResult jit_trap_and_load(Context *ctx, Module *mod, uint32_t lab
     } else {
         return TRAP_AND_LOAD_CODE_SERVER_NOT_FOUND;
     }
+    // Commit the trap state before sending the load request: a fast code
+    // server can send the resume signal before this process suspends, and a
+    // resume processed while the trap state is not set yet would be
+    // discarded as stale, leaving the process trapped forever.
+    ctx->saved_module = mod;
+    // We exceptionally store the label in this field, used by context_process_code_server_resume_signal
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+    ctx->saved_function_ptr = (NativeContinuation) (uintptr_t) label;
+#pragma GCC diagnostic pop
+    context_update_flags(ctx, ~NoFlags, Trap | TrapCodeServer);
     BEGIN_WITH_STACK_HEAP(TUPLE_SIZE(3), heap);
     term code_server_tuple = term_alloc_tuple(3, &heap);
     term_put_tuple_element(code_server_tuple, 0, LOAD_ATOM);
@@ -750,13 +771,6 @@ enum TrapAndLoadResult jit_trap_and_load(Context *ctx, Module *mod, uint32_t lab
     term_put_tuple_element(code_server_tuple, 2, term_from_local_process_id(ctx->process_id));
     globalcontext_send_message(ctx->global, code_server_process_id, code_server_tuple);
     END_WITH_STACK_HEAP(heap, ctx->global);
-    ctx->saved_module = mod;
-    // We exceptionally store the label in this field, used by context_process_code_server_resume_signal
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-    ctx->saved_function_ptr = (NativeContinuation) (uintptr_t) label;
-#pragma GCC diagnostic pop
-    context_update_flags(ctx, ~NoFlags, Trap);
     return TRAP_AND_LOAD_OK;
 }
 
@@ -847,6 +861,16 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
             const struct ModuleFunction *jump = EXPORTED_FUNCTION_TO_MODULE_FUNCTION(func);
             if (jump->target->native_code == NULL) {
                 SMP_MODULE_UNLOCK(jit_state->module);
+#ifndef AVM_NO_EMU
+                if (module_is_pinned_emu(jump->target)) {
+                    // The target is pinned to emulated execution: hand off
+                    // to the emulator (the dispatcher routes emulated
+                    // targets via continuation_pc, see jit_return).
+                    jit_state_set_module(jit_state, jump->target);
+                    jit_state->continuation_pc = jump->target->labels[jump->label];
+                    return ctx;
+                }
+#endif
                 if (UNLIKELY(jit_trap_and_load(ctx, jump->target, jump->label) != TRAP_AND_LOAD_OK)) {
                     set_error(ctx, jit_state, 0, UNDEF_ATOM);
                     return jit_handle_error(ctx, jit_state, 0);
@@ -1376,19 +1400,30 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
                 break;
             }
             case CodeServerResumeSignal: {
-                // Duplicate resume (the process re-trapped and got two resume
-                // signals, or already resumed): saved_function_ptr no longer
-                // holds a label; context_process_code_server_resume_signal
-                // ignores it and the continuation must be left untouched.
-                if (!context_get_flags(ctx, Trap)) {
-                    break;
-                }
+                // Stale resume (the process re-trapped and got two resume
+                // signals, already resumed, or trapped on another module):
+                // context_process_code_server_resume_signal ignores it and
+                // the continuation must be left untouched.
+                struct ImmediateSignal *resume_signal
+                    = CONTAINER_OF(signal_message, struct ImmediateSignal, base);
 #ifdef JIT_JUMPTABLE_IS_DATA
                 // WASM: saved_function_ptr contains raw label (set by jit_trap_and_load)
                 // Save it before context_process_code_server_resume_signal converts it
                 uint32_t resume_label = (uint32_t) ctx->saved_function_ptr;
 #endif
-                context_process_code_server_resume_signal(ctx);
+                if (!context_process_code_server_resume_signal(ctx, resume_signal->immediate)) {
+                    break;
+                }
+#ifndef AVM_NO_EMU
+                if (ctx->saved_module->native_code == NULL) {
+                    // Resumed into an emulator-pinned module: hand off to
+                    // the emulator (the dispatcher routes emulated targets
+                    // via continuation_pc, see jit_return).
+                    jit_state_set_module(jit_state, ctx->saved_module);
+                    jit_state->continuation_pc = ctx->saved_ip;
+                    break;
+                }
+#endif
 #ifdef JIT_JUMPTABLE_IS_DATA
                 // WASM: continuation expects (label + 1) encoding
                 jit_state->continuation = (NativeContinuation) (resume_label + 1);
@@ -1593,10 +1628,16 @@ static Context *jit_call_fun(Context *ctx, JITState *jit_state, int offset, term
         jit_state_set_module(jit_state, fun_module);
         jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, label);
     } else {
-        // Native case
-        // jit_state->module = fun_module;
-        // jit_state->continuation = jit_state->module->labels[label];
-
+#ifndef AVM_NO_EMU
+        if (module_is_pinned_emu(fun_module)) {
+            // The fun's module is pinned to emulated execution: hand off to
+            // the emulator (the dispatcher routes emulated targets via
+            // continuation_pc, see jit_return).
+            jit_state_set_module(jit_state, fun_module);
+            jit_state->continuation_pc = fun_module->labels[label];
+            return ctx;
+        }
+#endif
         // JIT case
         if (UNLIKELY(jit_trap_and_load(ctx, fun_module, label) != TRAP_AND_LOAD_OK)) {
             set_error(ctx, jit_state, 0, UNDEF_ATOM);
@@ -2269,11 +2310,20 @@ static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term mo
         }
         case ApplyResolvedModule: {
             if (target_module->native_code) {
-                // catch label is in native code.
                 jit_state_set_module(jit_state, target_module);
                 jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
                 return ctx;
             }
+#ifndef AVM_NO_EMU
+            if (module_is_pinned_emu(target_module)) {
+                // The target is pinned to emulated execution: hand off to
+                // the emulator (the dispatcher routes emulated targets via
+                // continuation_pc, see jit_return).
+                jit_state_set_module(jit_state, target_module);
+                jit_state->continuation_pc = target_module->labels[target_label];
+                return ctx;
+            }
+#endif
             // JIT case
             if (UNLIKELY(jit_trap_and_load(ctx, target_module, target_label) != TRAP_AND_LOAD_OK)) {
                 set_error(ctx, jit_state, 0, UNDEF_ATOM);

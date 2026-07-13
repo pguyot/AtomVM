@@ -389,7 +389,7 @@ void context_process_process_info_request_signal(Context *ctx, struct BuiltInAto
 
 bool context_process_signal_trap_answer(Context *ctx, struct TermSignal *signal)
 {
-    context_update_flags(ctx, ~Trap, NoFlags);
+    context_update_flags(ctx, ~(Trap | TrapCodeServer), NoFlags);
     ctx->x[0] = signal->signal_term;
     return true;
 }
@@ -407,7 +407,7 @@ bool context_process_signal_set_group_leader(Context *ctx, const struct TermSign
 
 void context_process_flush_monitor_signal(Context *ctx, uint64_t ref_ticks, bool info)
 {
-    context_update_flags(ctx, ~Trap, NoFlags);
+    context_update_flags(ctx, ~(Trap | TrapCodeServer), NoFlags);
     bool result = true;
     mailbox_reset(&ctx->mailbox);
     term msg;
@@ -552,21 +552,26 @@ term context_process_alias_message_signal(Context *ctx, struct TermSignal *signa
     return message;
 }
 
-void context_process_code_server_resume_signal(Context *ctx)
+bool context_process_code_server_resume_signal(Context *ctx, term module_name)
 {
 #ifndef AVM_NO_JIT
     // A process that woke up spuriously while its load request was pending
     // retries the call, traps again and gets a second resume signal. The
-    // label -> entry-point conversion below is not idempotent, so a resume
-    // for a process that is no longer trapped must be ignored: its
-    // saved_function_ptr already holds the converted entry point, and
-    // converting it again would produce a wild pointer.
-    if (!context_get_flags(ctx, Trap)) {
-        return;
+    // label -> entry-point conversion below is not idempotent, so a stale
+    // resume must be ignored: it can arrive when the process is no longer
+    // trapped (saved_function_ptr already holds the converted entry point),
+    // when it trapped again on something else (a NIF trap), or when it
+    // trapped again on another module's load. Only resume when this process
+    // is trapped waiting for the code server for this very module.
+    if (context_get_flags(ctx, Trap | TrapCodeServer) != (Trap | TrapCodeServer)) {
+        return false;
+    }
+    Module *module = ctx->saved_module;
+    if (module_get_name(module) != module_name) {
+        return false;
     }
     // jit_trap_and_load stores the label in saved_function_ptr
     uint32_t label = (uint32_t) (uintptr_t) ctx->saved_function_ptr;
-    Module *module = ctx->saved_module;
 #ifndef AVM_NO_EMU
     if (module->native_code) {
 #ifdef JIT_JUMPTABLE_IS_DATA
@@ -576,6 +581,9 @@ void context_process_code_server_resume_signal(Context *ctx)
         ctx->saved_function_ptr = module_get_native_entry_point(module, label);
 #endif
     } else {
+        // The module is pinned to emulated execution (it ran in the
+        // emulator before its compilation completed, and the compiled
+        // stream was discarded): resume in the emulator.
         ctx->saved_ip = module->labels[label];
     }
 #else
@@ -589,8 +597,11 @@ void context_process_code_server_resume_signal(Context *ctx)
     if (ctx->cp == make_cp(module, 0)) {
         ctx->cp = make_cp(module, module->end_instruction_ii);
     }
+#else
+    UNUSED(module_name);
 #endif
-    context_update_flags(ctx, ~Trap, NoFlags);
+    context_update_flags(ctx, ~(Trap | TrapCodeServer), NoFlags);
+    return true;
 }
 
 void context_update_flags(Context *ctx, int mask, int value) CLANG_THREAD_SANITIZE_SAFE

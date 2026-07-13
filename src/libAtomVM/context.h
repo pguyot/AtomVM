@@ -68,6 +68,11 @@ enum ContextFlags
     Trap = 32,
     Distribution = 64,
     Spawning = 128,
+    // Set together with Trap when the process traps waiting for the code
+    // server (jit_trap_and_load); distinguishes such traps from other traps
+    // so a stale code-server resume signal is never applied to an unrelated
+    // trap.
+    TrapCodeServer = 256,
 };
 
 enum HeapGrowthStrategy
@@ -536,9 +541,17 @@ term context_process_alias_message_signal(Context *ctx, struct TermSignal *signa
 /**
  * @brief Resume execution after module has been loaded
  *
+ * @details Ignores the signal (returning false) unless the process is
+ * currently trapped waiting for the code server for this very module: a
+ * process that woke up spuriously while its load request was pending retries
+ * the call and gets a second resume signal, which can arrive after it
+ * resumed and trapped again, possibly on another module's load.
+ *
  * @param ctx the context being executed
+ * @param module_name name of the module the code server finished loading
+ * @return true if the process was resumed, false if the signal was stale
  */
-void context_process_code_server_resume_signal(Context *ctx);
+bool context_process_code_server_resume_signal(Context *ctx, term module_name);
 
 /**
  * @brief Get process information.

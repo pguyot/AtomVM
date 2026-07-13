@@ -650,6 +650,24 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 #define IS_EXTENDED_FP_REGISTER(decode_pc) \
     (*decode_pc) == COMPACT_EXTENDED_FP_REGISTER
 
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+// Cross-module transfer: pin the target module to emulated execution before
+// creating any emulator state for it. If native code was published first the
+// module is pinned native and must be entered through its native entry point
+// instead (mode-interpreted continuation pointers forbid mixing engines
+// within one module, see Module.execution_mode).
+#define JUMP_TO_LABEL(module, label)                                    \
+    if (module != mod) {                                                \
+        prev_mod = mod;                                                 \
+        mod = module;                                                   \
+        code = mod->code->code;                                         \
+        if (UNLIKELY(module_enter_emu(mod))) {                          \
+            native_pc = module_get_native_entry_point(mod, label);      \
+            continue;                                                   \
+        }                                                               \
+    }                                                                   \
+    JUMP_TO_ADDRESS(mod->labels[label])
+#else
 #define JUMP_TO_LABEL(module, label)    \
     if (module != mod) {                \
         prev_mod = mod;                 \
@@ -657,6 +675,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         code = mod->code->code;         \
     }                                   \
     JUMP_TO_ADDRESS(mod->labels[label])
+#endif
 
 #ifndef TRACE_JUMP
     #define JUMP_TO_ADDRESS(address) \
@@ -902,8 +921,11 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                     break;                                                                      \
                 }                                                                               \
                 case CodeServerResumeSignal: {                                                  \
-                    context_process_code_server_resume_signal(ctx);                             \
-                    RESUME();                                                                   \
+                    struct ImmediateSignal *resume_signal                                       \
+                        = CONTAINER_OF(signal_message, struct ImmediateSignal, base);           \
+                    if (context_process_code_server_resume_signal(ctx, resume_signal->immediate)) { \
+                        RESUME();                                                               \
+                    }                                                                           \
                     break;                                                                      \
                 }                                                                               \
                 case AliasMessageSignal:                                                        \
@@ -1639,13 +1661,14 @@ int context_execute_loop(Context *ctx, Module *mod, const char *function_name, i
     ctx->saved_function_ptr = module_get_native_entry_point(mod, label);
 #endif
 #else
-    if (mod->native_code) {
+    if (mod->native_code || module_enter_emu(mod)) {
 #ifdef JIT_JUMPTABLE_IS_DATA
         ctx->saved_function_ptr = (NativeContinuation) (label + 1);
 #else
         ctx->saved_function_ptr = module_get_native_entry_point(mod, label);
 #endif
     } else {
+        // The startup module is pinned to emulated execution.
         ctx->saved_ip = mod->labels[label];
     }
 #endif

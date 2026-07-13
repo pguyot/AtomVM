@@ -1843,7 +1843,14 @@ static term nif_erlang_spawn_fun_opt(Context *ctx, int argc, term argv[])
 
     new_ctx->saved_module = fun_module;
 #ifndef AVM_NO_JIT
+#ifndef AVM_NO_EMU
+    // Pin the module's execution mode before creating the initial saved
+    // state: saved_ip (emulated) and saved_function_ptr (native) must match
+    // the mode the module is pinned to when the process first runs.
+    if (fun_module->native_code || module_enter_emu(fun_module)) {
+#else
     if (fun_module->native_code) {
+#endif
 #ifdef JIT_JUMPTABLE_IS_DATA
         // WASM: store (label + 1) encoding; schedule_in resolves per-thread func ptr
         new_ctx->saved_function_ptr = (NativeContinuation) (label + 1);
@@ -1900,7 +1907,13 @@ term nif_erlang_spawn_opt(Context *ctx, int argc, term argv[])
     }
     new_ctx->saved_module = found_module;
 #ifndef AVM_NO_JIT
+#ifndef AVM_NO_EMU
+    // Pin the module's execution mode before creating the initial saved
+    // state (see nif_erlang_spawn_fun_opt).
+    if (found_module->native_code || module_enter_emu(found_module)) {
+#else
     if (found_module->native_code) {
+#endif
 #ifdef JIT_JUMPTABLE_IS_DATA
         // WASM: store (label + 1) encoding; schedule_in resolves per-thread func ptr
         new_ctx->saved_function_ptr = (NativeContinuation) (label + 1);
@@ -7012,6 +7025,12 @@ static term nif_code_server_is_loaded(Context *ctx, int argc, term argv[])
 
 #ifndef AVM_NO_JIT
     if (IS_NULL_PTR(found_module->native_code)) {
+#ifndef AVM_NO_EMU
+        // A module pinned to emulated execution has nothing to compile.
+        if (module_is_pinned_emu(found_module)) {
+            return TRUE_ATOM;
+        }
+#endif
         return FALSE_ATOM;
     }
 #endif
@@ -7025,7 +7044,11 @@ static term nif_code_server_resume(Context *ctx, int argc, term argv[])
     if (UNLIKELY(!term_is_pid(process_pid))) {
         RAISE_ERROR(BADARG_ATOM);
     }
-    term load_result = argv[1];
+    term module_name = argv[1];
+    if (UNLIKELY(!term_is_atom(module_name))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    term load_result = argv[2];
 
     Context *target = globalcontext_get_process_lock(ctx->global, term_to_local_process_id(process_pid));
     if (IS_NULL_PTR(target)) {
@@ -7033,7 +7056,10 @@ static term nif_code_server_resume(Context *ctx, int argc, term argv[])
     }
 
     if (load_result == OK_ATOM) {
-        mailbox_send_empty_body_signal(target, CodeServerResumeSignal);
+        // The resume signal carries the module name so a stale duplicate
+        // resume is never applied to a process that trapped again on
+        // another module's load.
+        mailbox_send_immediate_signal(target, CodeServerResumeSignal, module_name);
     } else {
         mailbox_send_immediate_signal(target, TrapExceptionSignal, load_result);
     }
@@ -7223,18 +7249,36 @@ static term nif_code_server_set_native_code(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    ModuleNativeEntryPoint entry_point = jit_stream_entry_point(ctx, argv[2]);
-    if (IS_NULL_PTR(entry_point)) {
-        RAISE_ERROR(BADARG_ATOM);
-    }
-
     SMP_MODULE_LOCK(mod);
+#ifndef AVM_NO_EMU
+    if (module_is_pinned_emu(mod)) {
+        // The emulator already executed this module: live frames hold
+        // bytecode offsets in their continuation pointers, so native code
+        // cannot be published anymore. Discard the compiled stream (the
+        // stream resource keeps ownership and its destructor releases it)
+        // and leave the module emulated; the trapped process is resumed
+        // into the emulator.
+        SMP_MODULE_UNLOCK(mod);
+        return OK_ATOM;
+    }
+#endif
+    bool published = false;
     if (mod->native_code == NULL) {
+        // Take ownership of the stream only when actually publishing, so a
+        // discarded stream is still released by its resource destructor.
+        ModuleNativeEntryPoint entry_point = jit_stream_entry_point(ctx, argv[2]);
+        if (IS_NULL_PTR(entry_point)) {
+            SMP_MODULE_UNLOCK(mod);
+            RAISE_ERROR(BADARG_ATOM);
+        }
         module_set_native_code(mod, labels_count, entry_point);
+        published = true;
     }
     SMP_MODULE_UNLOCK(mod);
 
-    sys_set_cache_native_code(ctx->global, mod, JIT_FORMAT_VERSION, entry_point, labels_count);
+    if (published) {
+        sys_set_cache_native_code(ctx->global, mod, JIT_FORMAT_VERSION, mod->native_code, labels_count);
+    }
 
     return OK_ATOM;
 }
