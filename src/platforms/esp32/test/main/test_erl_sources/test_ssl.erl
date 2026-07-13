@@ -26,15 +26,20 @@ start() ->
     Entropy = ssl:nif_entropy_init(),
     CtrDrbg = ssl:nif_ctr_drbg_init(),
     ok = ssl:nif_ctr_drbg_seed(CtrDrbg, Entropy, <<"AtomVM">>),
-    % Get address of github.com
+    % Exercise getaddrinfo through the SLIRP DNS forwarder (10.0.2.3, answered
+    % by the qemu host's resolver).
     {ok, Results} = net:getaddrinfo_nif("github.com", undefined),
-    [TCPAddr | _] = [
+    [_TCPAddr | _] = [
         Addr
      || #{addr := #{addr := Addr}, type := stream, protocol := tcp, family := inet} <- Results
     ],
-    % Connect to github.com:443
+    % Connect to the TLS server the test harness (local_test_servers.py) runs
+    % on the qemu SLIRP host: this test only runs under qemu
+    % (CONFIG_ETH_USE_OPENETH) and CI runner egress is too unreliable to
+    % reach an external site. The server answers like https://github.com
+    % would (HTTP/1.1), with a self-signed certificate (authmode is none).
     {ok, Socket} = socket:open(inet, stream, tcp),
-    ok = socket:connect(Socket, #{family => inet, addr => TCPAddr, port => 443}),
+    ok = socket:connect(Socket, #{family => inet, addr => {10, 0, 2, 2}, port => 443}),
     % Initialize SSL Socket and config
     SSLContext = ssl:nif_init(),
     ok = ssl:nif_set_bio(SSLContext, Socket),
