@@ -39,7 +39,11 @@ test_tcp_client(Active, BinaryOpt) ->
         {proto, tcp},
         {connect, true},
         {controlling_process, self()},
-        {address, "github.com"},
+        % The test harness (local_test_servers.py) answers on the qemu SLIRP
+        % host with the same 301 an http://github.com request would get:
+        % these tests only run under qemu (CONFIG_ETH_USE_OPENETH) and CI
+        % runner egress is too unreliable to reach the real site.
+        {address, "10.0.2.2"},
         {port, 80},
         {active, Active},
         {buffer, 512},
@@ -148,8 +152,10 @@ test_udp(Active, QueryID) ->
     ],
     ok = call(Socket, {init, Params}, 30000),
     {ok, {MyIPAddr, _Port}} = call(Socket, {sockname}),
+    % 10.0.2.3 is the SLIRP built-in DNS forwarder: the query is answered by
+    % the qemu host's resolver, no external UDP round-trip involved.
     ok =
-        case call(Socket, {sendto, {1, 1, 1, 1}, 53, ?UDP_QUERY(QueryID)}) of
+        case call(Socket, {sendto, {10, 0, 2, 3}, 53, ?UDP_QUERY(QueryID)}) of
             % generic_unix socket driver
             {ok, _Len} -> ok;
             % esp32 socket driver
@@ -162,8 +168,8 @@ test_udp(Active, QueryID) ->
             true ->
                 ok =
                     receive
-                        %               {udp, Socket, {{1,1,1,1}, 53, <<QueryID:16, 1:1, _:7, _/binary>>}} -> ok;    % not supported yet
-                        {udp, _WrappedSocket, {1, 1, 1, 1}, 53, <<QueryID:16, B, _/binary>>} when
+                        %               {udp, Socket, {{10,0,2,3}, 53, <<QueryID:16, 1:1, _:7, _/binary>>}} -> ok;    % not supported yet
+                        {udp, _WrappedSocket, {10, 0, 2, 3}, 53, <<QueryID:16, B, _/binary>>} when
                             B band 16#80 =:= 16#80
                         ->
                             ok;
@@ -183,8 +189,8 @@ test_udp(Active, QueryID) ->
             false ->
                 ok =
                     case call(Socket, {recvfrom, 512, 30000}) of
-                        %               {ok, {{1,1,1,1}, 53, <<QueryID:16, 1:1, _:7, _/binary>>}} -> ok;
-                        {ok, {{1, 1, 1, 1}, 53, <<QueryID:16, B, _/binary>>}} when
+                        %               {ok, {{10,0,2,3}, 53, <<QueryID:16, 1:1, _:7, _/binary>>}} -> ok;
+                        {ok, {{10, 0, 2, 3}, 53, <<QueryID:16, B, _/binary>>}} when
                             B band 16#80 =:= 16#80
                         ->
                             ok;
