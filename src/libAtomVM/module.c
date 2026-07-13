@@ -2781,5 +2781,29 @@ void module_set_native_code(Module *mod, uint32_t labels_count, ModuleNativeEntr
     mod->native_code = entry_point;
     // Extra function is OP_INT_CALL_END
     mod->end_instruction_ii = JIT_JUMPTABLE_OFFSET + JIT_JUMPTABLE_ENTRY_SIZE * labels_count;
+#ifndef AVM_NO_EMU
+    mod->execution_mode = ModuleExecutionModeNative;
+#endif
+}
+#endif
+
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+bool module_enter_emu(Module *mod)
+{
+    // Fast paths: both final states are stable once reached, so an unlocked
+    // read that observes one of them is safe.
+    if (mod->execution_mode == ModuleExecutionModeEmu) {
+        return false;
+    }
+    if (mod->execution_mode == ModuleExecutionModeNative) {
+        return true;
+    }
+    SMP_MODULE_LOCK(mod);
+    if (mod->execution_mode == ModuleExecutionModeUnknown) {
+        mod->execution_mode = ModuleExecutionModeEmu;
+    }
+    bool is_native = mod->execution_mode == ModuleExecutionModeNative;
+    SMP_MODULE_UNLOCK(mod);
+    return is_native;
 }
 #endif
