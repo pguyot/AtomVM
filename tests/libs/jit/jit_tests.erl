@@ -148,6 +148,32 @@
     <<0, 0, 0, 4, 0, 0, 0, 2, 16#1F, 16#FF, 16#00, 16#40>>
 ).
 
+% Code + atom + import chunks from test_bif_eq.erl:
+%   f(X, Y) when is_atom(X) -> X =:= Y.
+%   g(X, Y) when is_atom(X) -> X =/= Y.
+% Both comparisons are value-context bif2 calls whose first operand is a typed
+% register annotated {t_atom, any}, exercising the immediate-typed inline.
+-define(CODE_CHUNK_BIF_EQ,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 181, 0, 0, 0, 9, 0, 0, 0, 4, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 48, 21, 3, 11, 5, 0, 87, 3, 16, 19, 3, 19, 1, 48, 153, 32, 2, 18, 82, 32, 1, 64, 48,
+        53, 3, 11, 5, 16, 87, 3, 16, 19, 3, 19, 1, 80, 153, 0, 2, 18, 114, 0, 1, 96, 64, 18, 3, 78,
+        16, 32, 1, 112, 153, 0, 2, 18, 114, 16, 1, 128, 64, 3, 19, 64, 18, 3, 78, 32, 48, 3>>
+).
+-define(ATU8_CHUNK_BIF_EQ,
+    <<255, 255, 255, 248, 176, 116, 101, 115, 116, 95, 98, 105, 102, 95, 101, 113, 16, 102, 96, 101,
+        114, 108, 97, 110, 103, 48, 61, 58, 61, 16, 103, 48, 61, 47, 61, 176, 109, 111, 100, 117,
+        108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95,
+        105, 110, 102, 111>>
+).
+-define(IMPT_CHUNK_BIF_EQ,
+    <<0, 0, 0, 4, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 6, 0, 0, 0, 2, 0, 0, 0,
+        3, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 8, 0, 0, 0, 2>>
+).
+% Real v4 Type chunk from that module: index 1 = BEAM_TYPE_ATOM (0x0001) -> t_atom.
+-define(TYPE_CHUNK_BIF_EQ,
+    <<0, 0, 0, 4, 0, 0, 0, 2, 16#1F, 16#FF, 16#00, 16#01>>
+).
+
 -ifdef(JIT_DWARF).
 compile_stream_setup(CodeChunk) ->
     compile_stream_setup_for_backend(jit_x86_64, CodeChunk).
@@ -427,6 +453,27 @@ map_size_typed_optimization_test_() ->
             ),
             Typed = compile_stream_for_backend(
                 Backend, ?CODE_CHUNK_MAP_SIZE, ?ATU8_CHUNK_MAP_SIZE, ?TYPE_CHUNK_MAP, ImportResolver
+            ),
+            ?assert(byte_size(Typed) < byte_size(Untyped))
+        end}
+     || Backend <- [jit_x86_64, jit_aarch64, jit_armv6m]
+    ].
+
+%% Value-context '=:='/'=/=' (bif2) with an operand the Type chunk proves is an
+%% atom compiles to an inline word compare selecting true/false instead of the
+%% BIF call. Verified by shrinkage: the typed compile is strictly smaller than
+%% the untyped one across the backends this module can target.
+bif_eq_exact_atom_typed_optimization_test_() ->
+    ImportResolver = jit_precompile:import_resolver(
+        ?IMPT_CHUNK_BIF_EQ, jit_precompile:atom_resolver(?ATU8_CHUNK_BIF_EQ)
+    ),
+    [
+        {atom_to_list(Backend), fun() ->
+            Untyped = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_BIF_EQ, ?ATU8_CHUNK_BIF_EQ, <<>>, ImportResolver
+            ),
+            Typed = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_BIF_EQ, ?ATU8_CHUNK_BIF_EQ, ?TYPE_CHUNK_BIF_EQ, ImportResolver
             ),
             ?assert(byte_size(Typed) < byte_size(Untyped))
         end}
