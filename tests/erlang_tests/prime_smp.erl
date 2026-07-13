@@ -33,33 +33,48 @@ start() ->
     0.
 
 benchmark_smp(Cores) ->
-    benchmark_smp(Cores, 0).
+    benchmark_smp(Cores, calibrate_limit(2000), 0).
 
-benchmark_smp(_Cores, Attempts) when
+benchmark_smp(_Cores, _Limit, Attempts) when
     Attempts > 10
 ->
     failed;
-benchmark_smp(Cores, Attempts) ->
+benchmark_smp(Cores, Limit, Attempts) ->
     erlang:system_flag(schedulers_online, Cores),
-    SMP = measure_time(),
+    SMP = measure_time(Limit),
     erlang:system_flag(schedulers_online, 1),
-    SingleCore = measure_time(),
+    SingleCore = measure_time(Limit),
     if
         SingleCore > SMP + (SMP div 2) ->
             ok;
         true ->
             erlang:display({SingleCore, SMP, Attempts}),
-            benchmark_smp(Cores, Attempts + 1)
+            benchmark_smp(Cores, Limit, Attempts + 1)
     end.
 
-measure_time() ->
+% Grow the workload until one worker runs for at least 50ms: with JIT the
+% original limit finishes in a few milliseconds, where scheduler switching
+% and timer granularity noise drown the SMP-vs-single-core comparison on
+% busy CI runners.
+calibrate_limit(Limit) ->
+    Start = erlang:system_time(microsecond),
+    _ = calculate_list(1, Limit),
+    Elapsed = erlang:system_time(microsecond) - Start,
+    if
+        Elapsed >= 50000 orelse Limit >= 64000 ->
+            Limit;
+        true ->
+            calibrate_limit(Limit * 2)
+    end.
+
+measure_time(Limit) ->
     {Pid1, Ref1} = spawn_opt(?MODULE, calculate_primes, [], [monitor]),
     {Pid2, Ref2} = spawn_opt(?MODULE, calculate_primes, [], [monitor]),
     {Pid3, Ref3} = spawn_opt(?MODULE, calculate_primes, [], [monitor]),
     Start = erlang:system_time(microsecond),
-    Pid1 ! {self(), start},
-    Pid2 ! {self(), start},
-    Pid3 ! {self(), start},
+    Pid1 ! {self(), start, Limit},
+    Pid2 ! {self(), start, Limit},
+    Pid3 ! {self(), start, Limit},
     receive
         {'DOWN', Ref1, process, Pid1, normal} -> ok
     end,
@@ -87,9 +102,8 @@ test_prime(Num, I) ->
 
 calculate_primes() ->
     receive
-        {_Parent, start} -> ok
-    end,
-    calculate_list(1, 2000).
+        {_Parent, start, Limit} -> calculate_list(1, Limit)
+    end.
 
 calculate_list(First, Last) when First < 2 ->
     calculate_list(First + 1, Last);
