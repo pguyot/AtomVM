@@ -87,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
   proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
   immediate-tag test and the `term_compare` fallback of the untyped path
+- JIT now inlines `erlang:map_size/1` when the `Type` chunk proves the argument is a map, reading
+  the size directly (handling both the flat and tree map representations) instead of calling the
+  BIF
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
