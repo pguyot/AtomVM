@@ -100,6 +100,29 @@
         16#00, 16#00, 16#06, 16#00, 16#00, 16#00, 16#00, 16#41, 16#51, 16#61, 16#81, 16#91, 16#B1>>
 ).
 
+% Code + atom chunks from test_eq_exact_atom.erl:
+%   both(A, B) when is_atom(A), is_atom(B) ->
+%       if A =:= B -> same; true -> different end.
+% The is_eq_exact operands are typed registers annotated t_atom, exercising the
+% immediate-typed exact-equality optimization (single native word compare).
+-define(CODE_CHUNK_EQ_EXACT_ATOM,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 178, 0, 0, 0, 8, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 32,
+        1, 32, 48, 21, 3, 48, 21, 19, 43, 53, 87, 3, 16, 87, 19, 16, 64, 50, 3, 19, 1, 48, 64, 66,
+        3, 19, 1, 64, 153, 0, 2, 18, 82, 0, 1, 80, 64, 18, 3, 78, 16, 0, 1, 96, 153, 0, 2, 18, 82,
+        16, 1, 112, 64, 3, 19, 64, 18, 3, 78, 32, 16, 3>>
+).
+-define(ATU8_CHUNK_EQ_EXACT_ATOM,
+    <<0, 0, 0, 7, 18, 116, 101, 115, 116, 95, 101, 113, 95, 101, 120, 97, 99, 116, 95, 97, 116, 111,
+        109, 4, 98, 111, 116, 104, 4, 115, 97, 109, 101, 9, 100, 105, 102, 102, 101, 114, 101, 110,
+        116, 11, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 6, 101, 114, 108, 97, 110,
+        103, 15, 103, 101, 116, 95, 109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111>>
+).
+% Synthetic v4 Type chunk: two entries, both BEAM_TYPE_ATOM (0x0001) -> t_atom,
+% so whichever type index the typed operands reference resolves to t_atom.
+-define(TYPE_CHUNK_ALL_ATOM,
+    <<4:32, 2:32, 16#00, 16#01, 16#00, 16#01>>
+).
+
 -ifdef(JIT_DWARF).
 compile_stream_setup(CodeChunk) ->
     compile_stream_setup_for_backend(jit_x86_64, CodeChunk).
@@ -334,6 +357,27 @@ verify_is_function_typed_optimization_x86_64_test() ->
         )
     ),
     ok.
+
+%% is_eq_exact with an operand typed as an immediate (t_atom) compiles to a
+%% single native word compare, skipping the runtime immediate-tag test and the
+%% term_compare fallback of the untyped path. Verified by shrinkage: the typed
+%% compile is strictly smaller than the untyped one. Runs across the backends
+%% this module can target (see backend_to_arch/1) so the optimization is
+%% exercised in more than one code generator. The is_ne_exact clause shares the
+%% same helper (op_is_exact_eq_immediate).
+is_eq_exact_atom_typed_optimization_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Untyped = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_EQ_EXACT_ATOM, ?ATU8_CHUNK_EQ_EXACT_ATOM, <<>>
+            ),
+            Typed = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_EQ_EXACT_ATOM, ?ATU8_CHUNK_EQ_EXACT_ATOM, ?TYPE_CHUNK_ALL_ATOM
+            ),
+            ?assert(byte_size(Typed) < byte_size(Untyped))
+        end}
+     || Backend <- [jit_x86_64, jit_aarch64, jit_armv6m]
+    ].
 
 tail_call_cache_armv6m_test() ->
     CompiledCode = compile_stream_for_backend(
