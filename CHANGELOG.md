@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
   exhausting the C stack
 - `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
+- JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
+  proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
+  immediate-tag test and the `term_compare` fallback of the untyped path
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
