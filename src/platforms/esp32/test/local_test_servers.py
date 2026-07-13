@@ -77,7 +77,10 @@ def make_https_handler(context):
     class HTTPSHandler(socketserver.BaseRequestHandler):
         def handle(self):
             try:
-                self.request.settimeout(10)
+                # The qemu guest computes the ECDHE/ECDSA handshake in
+                # software emulation; under the memory-check build a step can
+                # take tens of seconds.
+                self.request.settimeout(120)
                 with context.wrap_socket(self.request, server_side=True) as tls:
                     tls.recv(2048)
                     tls.sendall(HTTPS_RESPONSE)
@@ -86,8 +89,8 @@ def make_https_handler(context):
                     # the client's shutdown and fails its close.
                     while tls.recv(2048):
                         pass
-            except (OSError, ssl.SSLError):
-                pass
+            except (OSError, ssl.SSLError) as exc:
+                print("tls error:", repr(exc), flush=True)
 
     return HTTPSHandler
 
@@ -96,9 +99,13 @@ def ensure_certificate(certdir):
     cert = os.path.join(certdir, "cert.pem")
     key = os.path.join(certdir, "key.pem")
     if not (os.path.exists(cert) and os.path.exists(key)):
+        # ECDSA P-256, like github.com: the esp32 qemu targets fail RSA
+        # handshakes (MBEDTLS_ERR_RSA_PUBLIC_FAILED, the emulated hardware
+        # bignum unit), while the ECDSA path is exercised on every green run.
         subprocess.run(
             [
-                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "openssl", "req", "-x509", "-newkey", "ec",
+                "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                 "-keyout", key, "-out", cert, "-days", "30",
                 "-subj", "/CN=10.0.2.2",
             ],
@@ -115,6 +122,13 @@ def main():
 
     cert, key = ensure_certificate(args.certdir)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    # Same parameters a github.com TLS 1.2 handshake uses: the esp32 qemu
+    # targets only enable TLS 1.2 and their emulated crypto hardware is
+    # exercised (and green) on exactly this suite/curve combination.
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
+    context.set_ciphers("ECDHE-ECDSA-AES128-GCM-SHA256")
+    context.set_ecdh_curve("prime256v1")
     context.load_cert_chain(cert, key)
 
     http_server = ReusableTCPServer(("0.0.0.0", 80), HTTPHandler)
