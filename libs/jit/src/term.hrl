@@ -45,6 +45,11 @@
 % Boxed word count of a sub-binary (must match TERM_BOXED_SUB_BINARY_SIZE in term.h)
 -define(TERM_BOXED_SUB_BINARY_SIZE, 5).
 -define(TERM_BOXED_MAP, 16#2C).
+% Map layout (must match term.h). A flat map stores its keys tuple at
+% boxed_value[TERM_MAP_KEYS_OFFSET]; a tree map stores the nil marker there and
+% its size (a tagged small integer) at boxed_value[TERM_MAP_TREE_SIZE_INDEX].
+-define(TERM_MAP_KEYS_OFFSET, 1).
+-define(TERM_MAP_TREE_SIZE_INDEX, 3).
 -define(TERM_BOXED_EXTERNAL_PID, 16#30).
 -define(TERM_BOXED_EXTERNAL_PORT, 16#34).
 -define(TERM_BOXED_EXTERNAL_REF, 16#38).
