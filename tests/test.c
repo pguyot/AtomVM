@@ -434,6 +434,7 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(test_raise, 7),
     TEST_CASE(test_map),
     TEST_CASE(test_jit_map_size),
+    TEST_CASE(test_jit_typed_eq),
     TEST_CASE_ATOMVM_ONLY(test_refc_binaries, 0),
     TEST_CASE(test_sub_binaries),
     TEST_CASE_ATOMVM_ONLY(test_throw_call_ext_last, 0),
