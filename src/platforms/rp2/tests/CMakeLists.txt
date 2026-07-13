@@ -54,5 +54,15 @@ pico_enable_stdio_uart(rp2_tests 1)
 # create map/bin/hex/uf2 file in addition to ELF.
 pico_add_extra_outputs(rp2_tests)
 
+# The test modules are flashed at 0x10100000 (MAIN_AVM in test_main.c, -s in
+# test_erl_sources/CMakeLists.txt); fail the build if the image grows into
+# them, as flashing the modules would corrupt the firmware.
+add_custom_command(TARGET rp2_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DNM=${CMAKE_NM} -DELF=$<TARGET_FILE:rp2_tests> -DLIMIT=0x10100000
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/../check_flash_layout.cmake
+    VERBATIM
+)
+
 add_subdirectory(test_erl_sources)
 add_dependencies(rp2_tests rp2_test_modules)
