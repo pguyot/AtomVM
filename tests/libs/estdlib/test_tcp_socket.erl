@@ -272,13 +272,16 @@ test_send_receive(Port, N) ->
 
 close_client_socket(Socket) ->
     %%
-    %% Close the socket, and wait for a signal that we came out of recv
+    %% Close the socket, and wait for a signal that we came out of recv.
+    %% The signal is guaranteed to arrive (the echo server's recv returns
+    %% once the peer closes); the timeout only bounds a real hang and must
+    %% accommodate slow lanes (qemu-user, valgrind).
     %%
     ok = socket:close(Socket),
     receive
         recv_terminated ->
             ok
-    after 2000 ->
+    after 30000 ->
         throw({timeout, waiting, recv_terminated})
     end.
 
