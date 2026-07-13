@@ -1,6 +1,11 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y
+# Development builds must fit the factory partition on every supported chip,
+# including variants with extra components (e.g. libsodium); IDF's default -Og
+# no longer fits. Release builds use CONFIG_COMPILER_OPTIMIZATION_PERF instead
+# (see sdkconfig.release-defaults.in).
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_LWIP_IPV6=n
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="@AVM_PARTITION_TABLE_FILENAME@"
 CONFIG_APP_REPRODUCIBLE_BUILD=y
