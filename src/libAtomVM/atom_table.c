@@ -44,7 +44,12 @@
 // before table destruction) and entries/count are published with release
 // stores, so hot readers (atom compare and name lookup, dominant in sorted-map
 // workloads) need no rwlock round-trip. Writers stay serialized by the rwlock.
-#if defined(HAVE_ATOMIC) && !defined(__cplusplus) && !defined(AVM_NO_SMP)
+// Desktop-class 64-bit targets only: index-array growth retires the old
+// array instead of freeing it (concurrent readers may still hold it), and
+// that retention is measurable RAM on MCUs, where the rwlock round-trip is
+// not a bottleneck anyway.
+#if defined(HAVE_ATOMIC) && !defined(__cplusplus) && !defined(AVM_NO_SMP) \
+    && (defined(__x86_64__) || defined(__aarch64__))
 #include <stdatomic.h>
 #define ATOM_TABLE_LOCKFREE_READS 1
 #endif
