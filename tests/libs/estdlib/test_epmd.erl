@@ -181,7 +181,11 @@ test_client() ->
         end,
 
     {ok, Pid2} = erl_epmd:start_link(),
-    noport = erl_epmd:port_please("test_epmd", "localhost"),
+    %% The daemon drops the registration when it processes the previous
+    %% client's disconnect; the DOWN above only guarantees the client died.
+    %% Wait (bounded) for the daemon to catch up: slow lanes (valgrind,
+    %% qemu-user) can otherwise still observe the old registration here.
+    noport = wait_noport("test_epmd", "localhost", 100),
     {ok, Creation2} = erl_epmd:register_node("test_epmd", 12345),
     true = Creation1 =/= Creation2,
     MonitorRef2 = monitor(process, Pid2),
@@ -194,6 +198,17 @@ test_client() ->
         end,
 
     ok.
+
+wait_noport(Name, Host, 0) ->
+    erl_epmd:port_please(Name, Host);
+wait_noport(Name, Host, Tries) ->
+    case erl_epmd:port_please(Name, Host) of
+        noport ->
+            noport;
+        _StillRegistered ->
+            timer:sleep(100),
+            wait_noport(Name, Host, Tries - 1)
+    end.
 
 test_two_clients() ->
     {ok, Pid1} = erl_epmd:start_link(),

@@ -153,9 +153,12 @@ init({sup, WorkerName}) ->
 
 start_boot_worker(WorkerName) ->
     Pid = spawn_link(fun() ->
-        true = register(WorkerName, self()),
         receive
             stop -> ok
         end
     end),
+    %% Register from the parent so the name is visible as soon as the
+    %% supervisor start returns; registering inside the spawned process
+    %% races the caller's whereis on slow lanes.
+    true = register(WorkerName, Pid),
     {ok, Pid}.
