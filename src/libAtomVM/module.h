@@ -188,6 +188,20 @@ struct Module
 
     unsigned int free_literals_data : 1;
 
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+    // Monotonic execution mode: unknown until first executed, then pinned to
+    // emulated (first entered by the emulator) or native (native code
+    // published first). Continuation pointers store bytecode offsets for
+    // emulated modules and native code offsets for native modules, so a
+    // module must never switch mode once frames referencing it exist. See
+    // module_enter_emu / nif_code_server_set_native_code. Guarded by the
+    // module mutex; the final states are stable so unlocked reads that
+    // observe them are safe.
+    // (Kept after the fields whose offsets are pinned by the JIT backends,
+    // see the static asserts in jit.c.)
+    int execution_mode;
+#endif
+
 #ifndef AVM_NO_SMP
     Mutex *mutex;
 #endif
@@ -686,6 +700,43 @@ uint32_t module_label_code_offset(Module *mod, int label);
  * @param entry_point the native entry point
  */
 void module_set_native_code(Module *mod, uint32_t labels_count, ModuleNativeEntryPoint entry_point);
+
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+
+enum ModuleExecutionMode
+{
+    ModuleExecutionModeUnknown = 0,
+    ModuleExecutionModeEmu = 1,
+    ModuleExecutionModeNative = 2
+};
+
+/**
+ * @brief Pin a module to emulated execution before the emulator enters it.
+ *
+ * @details Called by the emulator right before it starts executing a
+ * module's bytecode. Once a module ran in the emulator, live frames hold
+ * bytecode offsets in their continuation pointers, so a later publication of
+ * native code would corrupt every return into the module: publication
+ * (nif_code_server_set_native_code) is refused for emulator-pinned modules.
+ * Conversely, if native code was published first, the module is pinned
+ * native and the emulator must not enter it.
+ *
+ * @param mod the module the emulator is about to execute
+ * @return false if the module is now pinned to emulated execution (the
+ * caller proceeds in the emulator); true if native code won the race and the
+ * caller must dispatch to the module's native entry point instead
+ */
+bool module_enter_emu(Module *mod);
+
+/**
+ * @brief Tells whether a module is pinned to emulated execution.
+ */
+static inline bool module_is_pinned_emu(const Module *mod)
+{
+    return mod->execution_mode == ModuleExecutionModeEmu;
+}
+
+#endif
 
 #ifdef __cplusplus
 }

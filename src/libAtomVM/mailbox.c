@@ -117,7 +117,8 @@ void mailbox_message_dispose(MailboxMessage *m, Heap *heap)
             free(request_signal);
             break;
         }
-        case TrapExceptionSignal: {
+        case TrapExceptionSignal:
+        case CodeServerResumeSignal: {
             struct ImmediateSignal *immediate_signal = CONTAINER_OF(m, struct ImmediateSignal, base);
             free(immediate_signal);
             break;
@@ -140,7 +141,6 @@ void mailbox_message_dispose(MailboxMessage *m, Heap *heap)
             free(monitor_signal);
             break;
         }
-        case CodeServerResumeSignal:
         case GCSignal:
             free(m);
             break;
