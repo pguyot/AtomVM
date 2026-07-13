@@ -123,6 +123,31 @@
     <<4:32, 2:32, 16#00, 16#01, 16#00, 16#01>>
 ).
 
+% Code + atom + import chunks from test_map_size.erl:
+%   sz(M) when is_map(M) -> map_size(M).
+% The map_size gc_bif operand is a typed register annotated t_map, exercising
+% the inline map_size optimization.
+-define(CODE_CHUNK_MAP_SIZE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 181, 0, 0, 0, 7, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 16,
+        1, 32, 156, 21, 3, 124, 5, 16, 0, 87, 3, 16, 3, 19, 1, 48, 153, 0, 2, 18, 82, 0, 1, 64, 64,
+        18, 3, 78, 16, 16, 1, 80, 153, 0, 2, 18, 82, 16, 1, 96, 64, 3, 19, 64, 18, 3, 78, 32, 32,
+        3>>
+).
+-define(ATU8_CHUNK_MAP_SIZE,
+    <<255, 255, 255, 250, 208, 116, 101, 115, 116, 95, 109, 97, 112, 95, 115, 105, 122, 101, 32,
+        115, 122, 96, 101, 114, 108, 97, 110, 103, 128, 109, 97, 112, 95, 115, 105, 122, 101, 176,
+        109, 111, 100, 117, 108, 101, 95, 105, 110, 102, 111, 240, 103, 101, 116, 95, 109, 111, 100,
+        117, 108, 101, 95, 105, 110, 102, 111>>
+).
+-define(IMPT_CHUNK_MAP_SIZE,
+    <<0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 6, 0, 0, 0, 1, 0, 0, 0,
+        3, 0, 0, 0, 6, 0, 0, 0, 2>>
+).
+% Real v4 Type chunk from that module: index 1 = BEAM_TYPE_MAP (0x0040) -> t_map.
+-define(TYPE_CHUNK_MAP,
+    <<0, 0, 0, 4, 0, 0, 0, 2, 16#1F, 16#FF, 16#00, 16#40>>
+).
+
 -ifdef(JIT_DWARF).
 compile_stream_setup(CodeChunk) ->
     compile_stream_setup_for_backend(jit_x86_64, CodeChunk).
@@ -373,6 +398,27 @@ is_eq_exact_atom_typed_optimization_test_() ->
             ),
             Typed = compile_stream_for_backend(
                 Backend, ?CODE_CHUNK_EQ_EXACT_ATOM, ?ATU8_CHUNK_EQ_EXACT_ATOM, ?TYPE_CHUNK_ALL_ATOM
+            ),
+            ?assert(byte_size(Typed) < byte_size(Untyped))
+        end}
+     || Backend <- [jit_x86_64, jit_aarch64, jit_armv6m]
+    ].
+
+%% map_size/1 on a value the Type chunk proves is a map compiles to an inline
+%% size read (handling both the flat and tree map representations) instead of a
+%% BIF call. Verified by shrinkage: the typed compile is strictly smaller than
+%% the untyped one across the backends this module can target.
+map_size_typed_optimization_test_() ->
+    ImportResolver = jit_precompile:import_resolver(
+        ?IMPT_CHUNK_MAP_SIZE, jit_precompile:atom_resolver(?ATU8_CHUNK_MAP_SIZE)
+    ),
+    [
+        {atom_to_list(Backend), fun() ->
+            Untyped = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_MAP_SIZE, ?ATU8_CHUNK_MAP_SIZE, <<>>, ImportResolver
+            ),
+            Typed = compile_stream_for_backend(
+                Backend, ?CODE_CHUNK_MAP_SIZE, ?ATU8_CHUNK_MAP_SIZE, ?TYPE_CHUNK_MAP, ImportResolver
             ),
             ?assert(byte_size(Typed) < byte_size(Untyped))
         end}
