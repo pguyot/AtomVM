@@ -20,6 +20,16 @@
 
 cmake_minimum_required(VERSION 3.13)
 
+# The flash layout reserves [0x10000000, 0x10100000) for the firmware:
+# lib.avm is flashed at 0x10100000 (LIB_AVM in src/main.c), as are the test
+# modules used by rp2_tests. The pico-sdk default build type is Release
+# (-O3), which no longer fits below that boundary on pico_w; default to
+# MinSizeRel instead. Images are checked against the boundary at build time
+# (see check_flash_layout.cmake).
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE MinSizeRel)
+endif()
+
 set(PICO_SDK_FETCH_FROM_GIT on)
 
 # pico_sdk_import.cmake is a single file copied from this SDK
