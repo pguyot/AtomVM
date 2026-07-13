@@ -6191,7 +6191,42 @@ op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt1);
 op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
-    op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
+    %% Either operand's type proves it is a non-boxed immediate (see
+    %% is_immediate_type/1): exact equality is then a single native word
+    %% compare, with no runtime tag test and no term_compare fallback. Unlike
+    %% the small-integer clause above this needs no range check — every atom is
+    %% immediate.
+    case is_immediate_typed(Arg1) orelse is_immediate_typed(Arg2) of
+        true ->
+            op_is_exact_eq_immediate(MMod, MSt0, Label, Arg1, Arg2, '!=');
+        false ->
+            op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
+    end.
+
+%% Single native word compare for exact (in)equality when one operand carries a
+%% provably-immediate type. Correct because an immediate term (atom, nil) is
+%% =:= to another term iff their tagged words are bit-identical: two distinct
+%% immediates differ in their words, and a boxed term's word (a tagged pointer)
+%% never collides with an immediate's word. JumpCond is '!=' for is_eq_exact
+%% (jump to Label when NOT equal) or '==' for is_ne_exact (jump when equal).
+op_is_exact_eq_immediate(MMod, MSt0, Label, Arg1, Arg2, JumpCond) ->
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
+    MSt3 = cond_jump_to_label({{free, Arg1Reg}, JumpCond, Arg2Reg}, Label, MMod, MSt2),
+    MMod:free_native_registers(MSt3, [Arg2Reg]).
+
+%% A decoded operand whose static type proves it is a non-boxed immediate.
+is_immediate_typed({typed, _Arg, Type}) -> is_immediate_type(Type);
+is_immediate_typed(_) -> false.
+
+%% Types whose every inhabitant is a non-boxed immediate term. `t_atom' (all
+%% atoms are immediates) and `nil' (the empty list) qualify. Small integers are
+%% immediate too but a `t_integer' range may include bignums, so they are
+%% handled by the range-based clauses. `pid'/`port' are excluded because
+%% external pids/ports are boxed.
+is_immediate_type(t_atom) -> true;
+is_immediate_type(nil) -> true;
+is_immediate_type(_) -> false.
 
 op_is_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
     %% is_eq_exact jumps to Label when the operands are NOT equal.
@@ -6331,7 +6366,13 @@ op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, MSt1);
 op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
-    op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2).
+    %% Immediate-typed operand: single native word compare (see op_is_eq_exact).
+    case is_immediate_typed(Arg1) orelse is_immediate_typed(Arg2) of
+        true ->
+            op_is_exact_eq_immediate(MMod, MSt0, Label, Arg1, Arg2, '==');
+        false ->
+            op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2)
+    end.
 
 op_is_not_eq_exact_default(MMod, MSt0, Label, Arg1, Arg2) ->
     %% is_ne_exact jumps to Label when the operands ARE equal.
