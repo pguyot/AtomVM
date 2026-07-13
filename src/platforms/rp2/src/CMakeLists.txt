@@ -85,3 +85,12 @@ endif()
 
 # create map/bin/hex/uf2 file in addition to ELF.
 pico_add_extra_outputs(AtomVM)
+
+# lib.avm and main.avm are flashed at fixed offsets (LIB_AVM/MAIN_AVM in
+# main.c); fail the build if the firmware grows into them.
+add_custom_command(TARGET AtomVM POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DNM=${CMAKE_NM} -DELF=$<TARGET_FILE:AtomVM> -DLIMIT=0x10100000
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/../check_flash_layout.cmake
+    VERBATIM
+)
