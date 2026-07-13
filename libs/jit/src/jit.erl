@@ -4120,6 +4120,9 @@ op_bif2_element(MMod, MSt0, FailLabel, Index, Tuple, Dest) ->
     MSt14 = MMod:free_native_registers(MSt13, [TupleReg, Dest]),
     MSt14.
 
+% map_size on a known map - inline (no badmap check needed: the type proves it)
+op_gc_bif1(MMod, MSt0, _FailLabel, _Live, _Bif, erlang, 'map_size', {typed, _, t_map} = Arg, Dest) ->
+    op_gc_bif1_map_size(MMod, MSt0, unwrap_typed(Arg), Dest);
 % byte_size on a known binary - inline
 op_gc_bif1(MMod, MSt0, FailLabel, Live, Bif, erlang, 'byte_size', Arg, Dest) ->
     case is_known_binary(MMod, MSt0, Arg) of
@@ -4239,6 +4242,45 @@ is_known_binary(_MMod, _MSt, {typed, _Arg, {t_bs_matchable, Unit}}) when Unit re
     true;
 is_known_binary(_MMod, _MSt, _) ->
     false.
+
+%% Inline erlang:map_size/1 on a value the type proves is a map. Mirrors
+%% term_get_map_size: the two map representations are distinguished by the word
+%% at boxed_value[TERM_MAP_KEYS_OFFSET]. For a tree map that word is the nil
+%% marker (an immediate), and the size lives at boxed_value[TERM_MAP_TREE_SIZE_INDEX]
+%% already encoded as a tagged small integer, so it is the result verbatim. For
+%% a flat map that word is a boxed keys tuple, and the size is its arity
+%% (header >> 6) re-tagged as a small integer. Each representation-specific read
+%% is guarded by its branch: the tree-size slot does not exist on an empty flat
+%% map (3 words), and the keys word is not a pointer on a tree map.
+op_gc_bif1_map_size(MMod, MSt0, Arg, Dest) ->
+    {MSt1, MapReg} = MMod:move_to_native_register(MSt0, Arg),
+    {MSt2, MapReg} = MMod:and_(MSt1, {free, MapReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt3, KeysReg} = MMod:get_array_element(MSt2, MapReg, ?TERM_MAP_KEYS_OFFSET),
+    %% Both branches leave the tagged size term in ResultReg (seeded here).
+    {MSt4, ResultReg} = MMod:move_to_native_register(MSt3, 0),
+    %% A tree map has the nil marker where a flat map has a boxed keys tuple.
+    MSt5 = MMod:if_else_block(
+        MSt4,
+        {KeysReg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+        fun(BSt0) ->
+            %% Tree map: the size slot already holds the tagged integer.
+            MMod:move_array_element(BSt0, MapReg, ?TERM_MAP_TREE_SIZE_INDEX, ResultReg)
+        end,
+        fun(BSt0) ->
+            %% Flat map: ResultReg := keys tuple header, arity = header >> 6.
+            {BSt1, KeysTupleReg} = MMod:copy_to_native_register(BSt0, KeysReg),
+            {BSt2, KeysTupleReg} = MMod:and_(BSt1, {free, KeysTupleReg}, ?TERM_PRIMARY_CLEAR_MASK),
+            BSt3 = MMod:move_array_element(BSt2, KeysTupleReg, 0, ResultReg),
+            BSt4 = MMod:free_native_registers(BSt3, [KeysTupleReg]),
+            {BSt5, ResultReg2} = MMod:shift_right(BSt4, {free, ResultReg}, 6),
+            %% Re-tag the raw arity as a small integer.
+            BSt6 = MMod:shift_left(BSt5, ResultReg2, 4),
+            MMod:or_(BSt6, ResultReg2, ?TERM_INTEGER_TAG)
+        end
+    ),
+    MSt6 = MMod:free_native_registers(MSt5, [MapReg, KeysReg]),
+    MSt7 = MMod:move_to_vm_register(MSt6, ResultReg, Dest),
+    MMod:free_native_registers(MSt7, [ResultReg, Dest]).
 
 op_gc_bif2(
     MMod,
