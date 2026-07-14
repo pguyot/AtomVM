@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing macOS 15 coverage is unchanged
 - `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now process nested lists, tuples
   and maps iteratively
+- Added generational garbage collection: minor collections only copy recently allocated data and
+  promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
+  `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
+  sweep on every collection), inspect with `process_info/2`
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
