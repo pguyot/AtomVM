@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `console:print_err/1` to write to standard error
 - Added `erlang:term_to_binary/2`, `erlang:is_builtin/3` and `erlang:bitstring_to_list/1`
 - Added `lists:mapfoldr/3`
+- Added generational garbage collection: minor collections only copy recently allocated data and
+  promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
+  `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
+  sweep on every collection), inspect with `process_info/2`
 
 ### Changed
 - Updated network type db() to dbm() to reflect the actual representation of the type

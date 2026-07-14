@@ -224,6 +224,7 @@
 -type spawn_option() ::
     {min_heap_size, pos_integer()}
     | {max_heap_size, pos_integer()}
+    | {fullsweep_after, non_neg_integer()}
     | {atomvm_heap_growth, atomvm_heap_growth_strategy()}
     | link
     | monitor
@@ -338,6 +339,7 @@ send_after(Time, Dest, Msg) ->
 %%      <li><b>memory</b> the estimated total number of bytes in use by the process (integer)</li>
 %%      <li><b>links</b> the list of linked processes</li>
 %%      <li><b>monitored_by</b> the list of processes, NIF resources or ports that monitor the process</li>
+%%      <li><b>fullsweep_after</b> the maximum number of minor (generational) collections before a full-sweep garbage collection (integer)</li>
 %% </ul>
 %% Specifying an unsupported term or atom raises a bad_arg error.
 %%
@@ -351,7 +353,8 @@ send_after(Time, Dest, Msg) ->
     (Pid :: pid(), message_queue_len) -> {message_queue_len, non_neg_integer()};
     (Pid :: pid(), memory) -> {memory, non_neg_integer()};
     (Pid :: pid(), links) -> {links, [pid()]};
-    (Pid :: pid(), monitored_by) -> {monitored_by, [pid() | resource() | port()]}.
+    (Pid :: pid(), monitored_by) -> {monitored_by, [pid() | resource() | port()]};
+    (Pid :: pid(), fullsweep_after) -> {fullsweep_after, non_neg_integer()}.
 process_info(_Pid, _Key) ->
     erlang:nif_error(undefined).
 
@@ -1523,9 +1526,15 @@ group_leader(_Leader, _Pid) ->
 %% '''
 %% and the process does not exit if `Reason' is not `normal'.
 %%
+%% `fullsweep_after' sets the maximum number of minor (generational)
+%% collections before the next garbage collection is a full sweep; `0'
+%% disables generational collection (every collection is a full sweep).
+%%
 %% @end
 %%-----------------------------------------------------------------------------
--spec process_flag(Flag :: trap_exit, Value :: boolean()) -> pid().
+-spec process_flag
+    (trap_exit, boolean()) -> boolean();
+    (fullsweep_after, non_neg_integer()) -> non_neg_integer().
 process_flag(_Flag, _Value) ->
     erlang:nif_error(undefined).
 
