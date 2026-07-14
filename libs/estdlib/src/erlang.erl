@@ -157,6 +157,7 @@
     hd/1,
     is_atom/1,
     is_binary/1,
+    is_bitstring/1,
     is_boolean/1,
     is_float/1,
     is_function/1,
@@ -988,15 +989,16 @@ binary_to_list(_Binary) ->
 
 %%-----------------------------------------------------------------------------
 %% @param   Bitstring   Bitstring to convert to list
-%% @returns a list of bytes from the bitstring
+%% @returns a list of bytes, with a final element holding the trailing bits if
+%%          `Bitstring' is not a whole number of bytes
 %% @doc     Convert a bitstring to a list of bytes.
 %%
-%% Unlike Erlang/OTP, AtomVM only supports byte-aligned bitstrings (binaries),
-%% so the returned list never has a trailing bitstring and this function
-%% behaves like `binary_to_list/1'.
+%%          If the number of bits in `Bitstring' is not divisible by `8', the
+%%          last element of the list is a bitstring containing the trailing
+%%          `1..7' bits, e.g. `bitstring_to_list(<<1:1>>)' returns `[<<1:1>>]'.
 %% @end
 %%-----------------------------------------------------------------------------
--spec bitstring_to_list(Bitstring :: bitstring()) -> [byte()].
+-spec bitstring_to_list(Bitstring :: bitstring()) -> [byte() | bitstring()].
 bitstring_to_list(_Bitstring) ->
     erlang:nif_error(undefined).
 
@@ -2032,6 +2034,19 @@ is_atom(_Term) ->
 %%-----------------------------------------------------------------------------
 -spec is_binary(Term :: term()) -> boolean().
 is_binary(_Term) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Term  the term to test
+%% @returns `true' if `Term' is a bitstring; `false', otherwise.
+%% @doc     Return `true' if `Term' is a bitstring (including a binary);
+%%          `false', otherwise.
+%%
+%% This function may be used in a guard expression.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec is_bitstring(Term :: term()) -> boolean().
+is_bitstring(_Term) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------

@@ -391,11 +391,14 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
         ret += printed;
         return ret;
 
-    } else if (term_is_binary(t)) {
+    } else if (term_is_bitstring(t)) {
         int len = term_binary_size(t);
         const unsigned char *binary_data = (const unsigned char *) term_binary_data(t);
+        uint8_t trailing_bits = (uint8_t) (term_bit_size(t) % 8);
 
-        int is_printable = 1;
+        // Print no empty string ahead of the trailing bits field of a
+        // sub-byte bitstring (<<1:1>>, not <<""1:1>>)
+        int is_printable = (len != 0) || (trailing_bits == 0);
         for (int i = 0; i < len; i++) {
             if (!isprint(binary_data[i])) {
                 is_printable = 0;
@@ -435,6 +438,16 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
                 }
                 ret += printed;
             }
+        }
+        if (trailing_bits != 0) {
+            // Print the trailing partial byte as a final Value:Size field.
+            uint8_t trailing_value = (uint8_t) (binary_data[len] >> (8 - trailing_bits));
+            int printed = fun->print(fun, "%s%u:%u", len != 0 ? "," : "",
+                (unsigned int) trailing_value, (unsigned int) trailing_bits);
+            if (UNLIKELY(printed < 0)) {
+                return printed;
+            }
+            ret += printed;
         }
         int printed = fun->print(fun, ">>");
         if (UNLIKELY(printed < 0)) {
@@ -1339,25 +1352,36 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                         break;
                     }
                     case TERM_TYPE_INDEX_BINARY: {
-                        int t_size = term_binary_size(t);
-                        int other_size = term_binary_size(other);
+                        size_t t_bits = term_bit_size(t);
+                        size_t other_bits = term_bit_size(other);
 
-                        const char *t_data = term_binary_data(t);
-                        const char *other_data = term_binary_data(other);
+                        const unsigned char *t_data = (const unsigned char *) term_binary_data(t);
+                        const unsigned char *other_data = (const unsigned char *) term_binary_data(other);
 
-                        int cmp_size = (t_size > other_size) ? other_size : t_size;
+                        size_t cmp_bits = (t_bits > other_bits) ? other_bits : t_bits;
+                        size_t cmp_bytes = cmp_bits / 8;
 
-                        int memcmp_result = memcmp(t_data, other_data, cmp_size);
-                        if (memcmp_result == 0) {
-                            if (t_size == other_size) {
-                                CMP_POP_AND_CONTINUE();
-                                break;
-                            } else {
-                                result = (t_size > other_size) ? TermGreaterThan : TermLessThan;
+                        int memcmp_result = memcmp(t_data, other_data, cmp_bytes);
+                        if (memcmp_result != 0) {
+                            result = (memcmp_result > 0) ? TermGreaterThan : TermLessThan;
+                            goto unequal;
+                        }
+                        // Compare the trailing partial byte over its valid bits only.
+                        size_t rem_bits = cmp_bits % 8;
+                        if (rem_bits != 0) {
+                            unsigned char mask = (unsigned char) (0xFF << (8 - rem_bits));
+                            unsigned char tb = t_data[cmp_bytes] & mask;
+                            unsigned char ob = other_data[cmp_bytes] & mask;
+                            if (tb != ob) {
+                                result = (tb > ob) ? TermGreaterThan : TermLessThan;
                                 goto unequal;
                             }
+                        }
+                        if (t_bits == other_bits) {
+                            CMP_POP_AND_CONTINUE();
+                            break;
                         } else {
-                            result = (memcmp_result > 0) ? TermGreaterThan : TermLessThan;
+                            result = (t_bits > other_bits) ? TermGreaterThan : TermLessThan;
                             goto unequal;
                         }
                     }
@@ -1736,12 +1760,17 @@ static term find_binary(term binary_or_state)
 
 term term_alloc_sub_binary(term binary_or_state, size_t offset, size_t len, Heap *heap)
 {
+    return term_alloc_sub_binary_bits(binary_or_state, offset, len, 0, heap);
+}
+
+term term_alloc_sub_binary_bits(term binary_or_state, size_t offset, size_t len, uint8_t trailing_bits, Heap *heap)
+{
     term *boxed = memory_heap_alloc(heap, TERM_BOXED_SUB_BINARY_SIZE);
     term binary = find_binary(binary_or_state);
 
     boxed[0] = ((TERM_BOXED_SUB_BINARY_SIZE - 1) << 6) | TERM_BOXED_SUB_BINARY;
     boxed[1] = (term) len;
-    boxed[2] = (term) offset;
+    boxed[2] = (term) ((offset << 3) | trailing_bits);
     boxed[3] = binary;
 
     return ((term) boxed) | TERM_PRIMARY_BOXED;

@@ -1082,14 +1082,14 @@ static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
         }                                                   \
     }
 
-#define VERIFY_IS_BINARY(t, opcode_name, label)          \
-    if (UNLIKELY(!term_is_binary(t))) {                  \
-        TRACE(opcode_name ": " #t " is not a binary\n"); \
-        if (label == 0) {                                \
-            RAISE_ERROR(BADARG_ATOM);                    \
-        } else {                                         \
-            JUMP_TO_LABEL(mod, label);                   \
-        }                                                \
+#define VERIFY_IS_BITSTRING(t, opcode_name, label)          \
+    if (UNLIKELY(!term_is_bitstring(t))) {                  \
+        TRACE(opcode_name ": " #t " is not a bitstring\n"); \
+        if (label == 0) {                                   \
+            RAISE_ERROR(BADARG_ATOM);                       \
+        } else {                                            \
+            JUMP_TO_LABEL(mod, label);                      \
+        }                                                   \
     }
 
 #define VERIFY_IS_MATCH_STATE(t, opcode_name, label)             \
@@ -1102,10 +1102,10 @@ static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
         }                                                        \
     }
 
-#define VERIFY_IS_MATCH_OR_BINARY(t, opcode_name)                          \
-    if (UNLIKELY(!(term_is_binary(t) || term_is_match_state(t)))) {        \
-        TRACE(opcode_name ": " #t " is not a binary or match context.\n"); \
-        RAISE_ERROR(BADARG_ATOM);                                          \
+#define VERIFY_IS_MATCH_OR_BINARY(t, opcode_name)                             \
+    if (UNLIKELY(!(term_is_bitstring(t) || term_is_match_state(t)))) {        \
+        TRACE(opcode_name ": " #t " is not a bitstring or match context.\n"); \
+        RAISE_ERROR(BADARG_ATOM);                                             \
     }
 
 #define CALL_FUN(fun, args_count)                             \
@@ -1258,36 +1258,35 @@ static bool sort_kv_pairs(struct kv_pair *kv, int size, GlobalContext *global)
 #endif
 
 /**
- * @brief Scale a dynamic segment size by its unit.
+ * @brief Scale a dynamic segment size by its unit, in bits.
  *
- * @details Matching opcodes take a segment size from a register and scale it by
- * the segment unit. The size can be negative or large enough for the product to
- * overflow, so it cannot be multiplied blindly: the scaled size is compared
- * against the remaining capacity and added to the match offset, and scaling
- * first lets a negative size wrap to a small one that passes the capacity check,
- * or move the match offset before the start of the binary.
+ * @details Matching opcodes take a segment size that is scaled by the segment
+ * unit. The size comes from a register and can be negative or large enough for
+ * the product to overflow, so it cannot be multiplied blindly: converting a
+ * negative value to `size_t` and multiplying can wrap back to a small size that
+ * then passes the capacity check and matches, where BEAM fails the match.
  *
  * @param size the segment size, as a term (must be any integer)
- * @param unit the segment unit
- * @param max_value the largest acceptable scaled size
- * @param scaled_size on success, the scaled size
- * @returns \c true if the scaled size is representable and at most
- * \c max_value, \c false if the match should fail
+ * @param unit the segment unit, in bits
+ * @param max_bits the number of bits available for this segment
+ * @param size_bits on success, the scaled size, in bits
+ * @returns \c true if the scaled size is representable and fits within
+ * \c max_bits, \c false if the match should fail
  */
-static inline bool bs_scaled_size(term size, uint32_t unit, size_t max_value, size_t *scaled_size)
+static inline bool bs_scaled_size_bits(term size, uint32_t unit, size_t max_bits, size_t *size_bits)
 {
     if (!term_is_integer(size)) {
-        // a size that doesn't fit in a small integer cannot fit in max_value
+        // a size that doesn't fit in a small integer cannot fit in max_bits
         return false;
     }
     avm_int_t size_val = term_to_int(size);
     if (size_val < 0) {
         return false;
     }
-    if (unit != 0 && (size_t) size_val > max_value / unit) {
+    if (unit != 0 && (size_t) size_val > max_bits / unit) {
         return false;
     }
-    *scaled_size = (size_t) size_val * unit;
+    *size_bits = (size_t) size_val * unit;
     return true;
 }
 
@@ -3500,9 +3499,9 @@ schedule_in:
 
                 VERIFY_IS_INTEGER(size, "bs_init_bits", 0);
                 avm_int_t size_val = term_to_int(size);
-                if (size_val % 8 != 0) {
-                    TRACE("bs_init_bits: size_val (" AVM_INT_FMT ") is not evenly divisible by 8\n", size_val);
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
+                if (UNLIKELY(size_val < 0)) {
+                    TRACE("bs_init_bits: size_val (" AVM_INT_FMT ") is negative\n", size_val);
+                    RAISE_ERROR(BADARG_ATOM);
                 }
                 if (flags_value != 0) {
                     TRACE("bs_init_bits: neither signed nor native or little endian encoding supported.\n");
@@ -3511,18 +3510,34 @@ schedule_in:
 
                 TRACE("bs_init_bits/6, fail=%i size=" AVM_INT_FMT " words=%u live=%u dreg=%c%i\n", fail, size_val, (unsigned) words, (unsigned) live, T_DEST_REG(dreg));
 
+                // A non-byte-aligned total size yields a bitstring: the whole
+                // bytes live in a binary and the result wraps it in a sub-binary
+                // carrying the trailing bit count, as bs_create_bin does.
+                size_t bs_total_bits = (size_t) size_val;
+                size_t bs_total_bytes = (bs_total_bits + 7) / 8;
+                size_t bs_trailing_bits = bs_total_bits % 8;
+                size_t bs_heap_size = words + term_binary_heap_size(bs_total_bytes);
+                if (bs_trailing_bits != 0) {
+                    bs_heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                }
                 TRIM_LIVE_REGS(live);
-                if (UNLIKELY(memory_ensure_free_with_roots(ctx, words + term_binary_heap_size(size_val / 8), live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, bs_heap_size, live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
-                term t = term_create_empty_binary(size_val / 8, &ctx->heap, ctx->global);
+                term t = term_create_empty_binary(bs_total_bytes, &ctx->heap, ctx->global);
                 if (UNLIKELY(term_is_invalid_term(t))) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
 
+                // ctx->bs stays the whole binary: the bs_put_* opcodes check
+                // their capacity in whole bytes, and the trailing partial byte
+                // is part of it.
                 ctx->bs = t;
                 ctx->bs_offset = 0;
 
+                if (bs_trailing_bits != 0) {
+                    t = term_alloc_sub_binary_bits(t, 0, bs_total_bits / 8, (uint8_t) bs_trailing_bits, &ctx->heap);
+                }
                 WRITE_REGISTER(dreg, t);
                 break;
             }
@@ -3547,37 +3562,55 @@ schedule_in:
                 DEST_REGISTER(dreg);
                 DECODE_DEST_REGISTER(dreg, pc);
 
-                VERIFY_IS_BINARY(src, "bs_append", 0);
+                VERIFY_IS_BITSTRING(src, "bs_append", 0);
                 VERIFY_IS_INTEGER(size, "bs_append", 0);
                 avm_int_t size_val = term_to_int(size);
 
-                if (size_val % 8 != 0) {
-                    TRACE("bs_append: size_val (" AVM_INT_FMT ") is not evenly divisible by 8\n", size_val);
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
-                }
-                if (unit != 8) {
-                    TRACE("bs_append: unit is not equal to 8; unit=%u\n", (unsigned) unit);
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
+                if (UNLIKELY(size_val < 0)) {
+                    TRACE("bs_append: size_val (" AVM_INT_FMT ") is negative\n", size_val);
+                    RAISE_ERROR(BADARG_ATOM);
                 }
 
-                size_t src_size = term_binary_size(src);
+                // Sizes are bit-granular: size_val is the number of bits to
+                // append and the source may be a non-byte-aligned bitstring,
+                // whose trailing bits belong in the result and shift every
+                // segment written after them. The source size must be a
+                // multiple of the segment unit, as on BEAM: a /binary segment
+                // (unit 8) rejects a partial source, a /bitstring one (unit 1)
+                // accepts it.
+                size_t src_bits = term_bit_size(src);
+                if (UNLIKELY(unit == 0 || (src_bits % unit) != 0)) {
+                    TRACE("bs_append: source bit size (%zu) is not a multiple of unit %u\n", src_bits, (unsigned) unit);
+                    RAISE_ERROR(BADARG_ATOM);
+                }
+
+                size_t bs_total_bits = src_bits + (size_t) size_val;
+                size_t bs_total_bytes = (bs_total_bits + 7) / 8;
+                size_t bs_trailing_bits = bs_total_bits % 8;
+                size_t bs_heap_size = term_binary_heap_size(bs_total_bytes);
+                if (bs_trailing_bits != 0) {
+                    bs_heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                }
                 TRIM_LIVE_REGS(live);
                 x_regs[live] = src;
-                if (UNLIKELY(memory_ensure_free_with_roots(ctx, term_binary_heap_size(src_size + size_val / 8), live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, bs_heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
 
                 TRACE("bs_append/8, fail=%u size=" AVM_INT_FMT " unit=%u src=0x%" TERM_X_FMT " dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg));
                 src = x_regs[live];
-                term t = term_create_empty_binary(src_size + size_val / 8, &ctx->heap, ctx->global);
+                term t = term_create_empty_binary(bs_total_bytes, &ctx->heap, ctx->global);
                 if (UNLIKELY(term_is_invalid_term(t))) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
-                memcpy((void *) term_binary_data(t), (void *) term_binary_data(src), src_size);
+                bitstring_copy_bits((uint8_t *) term_binary_data(t), 0, (const uint8_t *) term_binary_data(src), src_bits);
 
                 ctx->bs = t;
-                ctx->bs_offset = src_size * 8;
+                ctx->bs_offset = src_bits;
 
+                if (bs_trailing_bits != 0) {
+                    t = term_alloc_sub_binary_bits(t, 0, bs_total_bits / 8, (uint8_t) bs_trailing_bits, &ctx->heap);
+                }
                 WRITE_REGISTER(dreg, t);
                 break;
             }
@@ -3598,29 +3631,56 @@ schedule_in:
                 DEST_REGISTER(dreg);
                 DECODE_DEST_REGISTER(dreg, pc);
 
-                VERIFY_IS_BINARY(src, "bs_private_append", 0);
+                VERIFY_IS_BITSTRING(src, "bs_private_append", 0);
                 VERIFY_IS_INTEGER(size, "bs_private_append", 0);
                 avm_int_t size_val = term_to_int(size);
 
-                if (size_val % 8 != 0) {
-                    TRACE("bs_private_append: size_val (%li) is not evenly divisible by 8\n", (long int) size_val);
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
+                if (UNLIKELY(size_val < 0)) {
+                    TRACE("bs_private_append: size_val (%li) is negative\n", (long int) size_val);
+                    RAISE_ERROR(BADARG_ATOM);
                 }
 
-                size_t src_size = term_binary_size(src);
-                if (UNLIKELY(memory_ensure_free_opt(ctx, term_binary_heap_size(src_size + size_val / 8), MEMORY_NO_GC) != MEMORY_GC_OK)) {
+                size_t src_bits = term_bit_size(src);
+                if (UNLIKELY(unit == 0 || (src_bits % unit) != 0)) {
+                    TRACE("bs_private_append: source bit size (%zu) is not a multiple of unit %u\n", src_bits, (unsigned) unit);
+                    RAISE_ERROR(BADARG_ATOM);
+                }
+
+                size_t bs_total_bits = src_bits + (size_t) size_val;
+                size_t bs_total_bytes = (bs_total_bits + 7) / 8;
+                size_t bs_trailing_bits = bs_total_bits % 8;
+                // The binary can only be reused in place when it owns whole
+                // bytes: term_reuse_binary grows a byte-sized buffer, and the
+                // source trailing bits would land at the wrong offset.
+                bool bs_can_reuse = (src_bits % 8) == 0;
+                size_t bs_heap_size = term_binary_heap_size(bs_total_bytes);
+                if (bs_trailing_bits != 0) {
+                    bs_heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                }
+                if (UNLIKELY(memory_ensure_free_opt(ctx, bs_heap_size, MEMORY_NO_GC) != MEMORY_GC_OK)) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
                 DECODE_COMPACT_TERM(src, src_pc)
-                term t = term_reuse_binary(src, src_size + size_val / 8, &ctx->heap, ctx->global);
+                term t;
+                if (bs_can_reuse) {
+                    t = term_reuse_binary(src, bs_total_bytes, &ctx->heap, ctx->global);
+                } else {
+                    t = term_create_empty_binary(bs_total_bytes, &ctx->heap, ctx->global);
+                    if (LIKELY(!term_is_invalid_term(t))) {
+                        bitstring_copy_bits((uint8_t *) term_binary_data(t), 0, (const uint8_t *) term_binary_data(src), src_bits);
+                    }
+                }
                 if (UNLIKELY(term_is_invalid_term(t))) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
 
                 ctx->bs = t;
-                ctx->bs_offset = src_size * 8;
+                ctx->bs_offset = src_bits;
 
                 TRACE("bs_private_append/6, fail=%u size=" AVM_INT_FMT " unit=%u src=0x%" TERM_X_FMT " dreg=%c%i\n", (unsigned) fail, size_val, (unsigned) unit, src, T_DEST_REG(dreg));
+                if (bs_trailing_bits != 0) {
+                    t = term_alloc_sub_binary_bits(t, 0, bs_total_bits / 8, (uint8_t) bs_trailing_bits, &ctx->heap);
+                }
                 WRITE_REGISTER(dreg, t);
                 break;
             }
@@ -3695,43 +3755,47 @@ schedule_in:
                 term src;
                 DECODE_COMPACT_TERM(src, pc);
 
-                VERIFY_IS_BINARY(src, "bs_put_binary", 0);
-                unsigned long size_val = 0;
+                VERIFY_IS_BITSTRING(src, "bs_put_binary", 0);
+                // Sizes and the destination offset are bit-granular: a partial
+                // bitstring source contributes its trailing bits and shifts
+                // every segment written after it.
+                size_t src_bits = term_bit_size(src);
+                size_t size_bits = 0;
                 if (term_is_integer(size)) {
-                    avm_int_t bit_size = term_to_int(size) * unit;
-                    if (bit_size % 8 != 0) {
-                        TRACE("bs_put_binary: Bit size must be evenly divisible by 8.\n");
-                        RAISE_ERROR(UNSUPPORTED_ATOM);
+                    avm_int_t signed_size_value = term_to_int(size);
+                    if (UNLIKELY(signed_size_value < 0)) {
+                        TRACE("bs_put_binary: size is negative\n");
+                        RAISE_ERROR(BADARG_ATOM);
                     }
-                    size_val = bit_size / 8;
+                    if (UNLIKELY(unit != 0 && (size_t) signed_size_value > src_bits / unit)) {
+                        TRACE("bs_put_binary: size larger than the source bitstring\n");
+                        RAISE_ERROR(BADARG_ATOM);
+                    }
+                    size_bits = (size_t) signed_size_value * unit;
                 } else if (size == ALL_ATOM) {
-                    size_val = term_binary_size(src);
+                    size_bits = src_bits;
                 } else {
                     TRACE("bs_put_binary: Unsupported size term type in put binary: %p\n", (void *) size);
                     RAISE_ERROR(BADARG_ATOM);
                 }
-                if (size_val > term_binary_size(src)) {
-                    TRACE("bs_put_binary: binary data size (%li) larger than source binary size (%li)\n", (long) size_val, (long) term_binary_size(src));
+                if (UNLIKELY(size_bits > src_bits)) {
+                    TRACE("bs_put_binary: binary data size (%zu bits) larger than source binary size (%zu bits)\n", size_bits, src_bits);
                     RAISE_ERROR(BADARG_ATOM);
                 }
                 if (flags_value != 0) {
                     TRACE("bs_put_binary: neither signed nor native or little endian encoding supported.\n");
                     RAISE_ERROR(UNSUPPORTED_ATOM);
                 }
-
-                if (ctx->bs_offset % 8 != 0) {
-                    TRACE("bs_put_binary: Unsupported bit syntax operation.  Writing binaries must be byte-aligend.\n");
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
-                }
-
-                TRACE("bs_put_binary/5, fail=%u size=%li unit=%u flags=%x src=0x%x\n", (unsigned) fail, size_val, (unsigned) unit, (int) flags_value, (unsigned int) src);
-
-                int result = term_bs_insert_binary(ctx->bs, ctx->bs_offset, src, size_val);
-                if (UNLIKELY(result)) {
-                    TRACE("bs_put_binary: Failed to insert binary into binary: %i\n", result);
+                size_t bs_capacity_bits = term_binary_size(ctx->bs) * 8;
+                if (UNLIKELY(ctx->bs_offset > bs_capacity_bits || bs_capacity_bits - ctx->bs_offset < size_bits)) {
+                    TRACE("bs_put_binary: insufficient capacity to write binary\n");
                     RAISE_ERROR(BADARG_ATOM);
                 }
-                ctx->bs_offset += 8 * size_val;
+
+                TRACE("bs_put_binary/5, fail=%u size=%zu bits unit=%u flags=%x src=0x%x\n", (unsigned) fail, size_bits, (unsigned) unit, (int) flags_value, (unsigned int) src);
+
+                bitstring_copy_bits((uint8_t *) term_binary_data(ctx->bs), ctx->bs_offset, (const uint8_t *) term_binary_data(src), size_bits);
+                ctx->bs_offset += size_bits;
                 break;
             }
 
@@ -3805,7 +3869,7 @@ schedule_in:
                 uint32_t offset;
                 DECODE_LITERAL(offset, pc);
 
-                if (UNLIKELY(!term_is_binary(ctx->bs))) {
+                if (UNLIKELY(!term_is_bitstring(ctx->bs))) {
                     TRACE("bs_put_string: Bad state.  ctx->bs is not a binary.\n");
                     RAISE_ERROR(BADARG_ATOM);
                 }
@@ -3856,7 +3920,7 @@ schedule_in:
                 VERIFY_IS_INTEGER(src, "bs_put_utf8/3", 0);
                 avm_int_t src_value = term_to_int(src);
                 TRACE("bs_put_utf8/3 flags=%x, src=0x%lx\n", (int) flags, (long) src_value);
-                if (UNLIKELY(!term_is_binary(ctx->bs))) {
+                if (UNLIKELY(!term_is_bitstring(ctx->bs))) {
                     TRACE("bs_put_utf8/3: Bad state.  ctx->bs is not a binary.\n");
                     RAISE_ERROR(BADARG_ATOM);
                 }
@@ -3904,7 +3968,7 @@ schedule_in:
                 VERIFY_IS_INTEGER(src, "bs_put_utf16/3", 0);
                 avm_int_t src_value = term_to_int(src);
                 TRACE("bs_put_utf16/3 flags=%x, src=" AVM_INT_FMT "\n", (int) flags, src_value);
-                if (UNLIKELY(!term_is_binary(ctx->bs))) {
+                if (UNLIKELY(!term_is_bitstring(ctx->bs))) {
                     TRACE("bs_put_utf16: Bad state.  ctx->bs is not a binary.\n");
                     RAISE_ERROR(BADARG_ATOM);
                 }
@@ -3933,7 +3997,7 @@ schedule_in:
                 VERIFY_IS_INTEGER(src, "bs_put_utf32/3", 0);
                 avm_int_t src_value = term_to_int(src);
                 TRACE("bs_put_utf32/3 flags=%x, src=" AVM_INT_FMT "\n", (int) flags, src_value);
-                if (UNLIKELY(!term_is_binary(ctx->bs))) {
+                if (UNLIKELY(!term_is_bitstring(ctx->bs))) {
                     TRACE("bs_put_utf32/3: Bad state.  ctx->bs is not a binary.\n");
                     RAISE_ERROR(BADARG_ATOM);
                 }
@@ -4173,7 +4237,7 @@ schedule_in:
                     // of allocating a copy: per-byte matching loops would
                     // otherwise allocate a match state for every byte.
                     WRITE_REGISTER_GC_SAFE(dreg, src);
-                } else if (!term_is_binary(src)) {
+                } else if (!term_is_bitstring(src)) {
                     pc = mod->labels[fail];
                 } else {
                     // MEMORY_CAN_SHRINK because bs_start_match is classified as gc in beam_ssa_codegen.erl
@@ -4226,29 +4290,18 @@ schedule_in:
 
                 TRACE("bs_get_tail/3 src=0x%" TERM_X_FMT " dreg=%c%i live=%u\n", src, T_DEST_REG_GC_SAFE(dreg), live);
                 if (bs_offset == 0) {
-
                     WRITE_REGISTER_GC_SAFE(dreg, bs_bin);
-
                 } else {
-                    if (bs_offset % 8 != 0) {
-                        TRACE("bs_get_tail: Unsupported alignment.\n");
-                        RAISE_ERROR(UNSUPPORTED_ATOM);
-                    } else {
-                        size_t start_pos = bs_offset / 8;
-                        size_t src_size = term_binary_size(bs_bin);
-                        size_t new_bin_size = src_size - start_pos;
-                        size_t heap_size = term_sub_binary_heap_size(bs_bin, src_size - start_pos);
-
-                        TRIM_LIVE_REGS(live);
-                        x_regs[live] = src;
-                        if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-                            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-                        }
-                        src = x_regs[live];
-                        bs_bin = term_get_match_state_binary(src);
-                        term t = term_maybe_create_sub_binary(bs_bin, start_pos, new_bin_size, &ctx->heap, ctx->global);
-                        WRITE_REGISTER_GC_SAFE(dreg, t);
+                    size_t heap_size = bitstring_get_tail_heap_size(bs_bin, bs_offset);
+                    TRIM_LIVE_REGS(live);
+                    x_regs[live] = src;
+                    if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
+                    src = x_regs[live];
+                    bs_bin = term_get_match_state_binary(src);
+                    term t = bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
+                    WRITE_REGISTER_GC_SAFE(dreg, t);
                 }
                 break;
             }
@@ -4292,7 +4345,7 @@ schedule_in:
                     RAISE_ERROR(BADARG_ATOM);
                 }
 
-                if (term_binary_size(bs_bin) * 8 - bs_offset < MINI(remaining * 8, bits)) {
+                if (term_bit_size(bs_bin) - bs_offset < MINI(remaining * 8, bits)) {
                     TRACE("bs_match_string: failed to match (binary is shorter)\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 } else {
@@ -4359,14 +4412,14 @@ schedule_in:
                 VERIFY_IS_MATCH_STATE(src, "bs_skip_bits2", 0);
                 VERIFY_IS_ANY_INTEGER(size, "bs_skip_bits2", 0);
                 // Ignore flags value as skipping bits is the same whatever the endianness
-                TRACE("bs_skip_bits2/5, fail=%u src=%p unit=%u flags=%x\n", (unsigned) fail, (void *) src, (unsigned) unit, (int) flags_value);
+                TRACE("bs_skip_bits2/5, fail=%u src=%p size=0x%lx unit=%u flags=%x\n", (unsigned) fail, (void *) src, (unsigned long) term_to_int(size), (unsigned) unit, (int) flags_value);
 
                 avm_int_t bs_offset = term_get_match_state_offset(src);
                 term bs_bin = term_get_match_state_binary(src);
-                size_t bs_capacity = term_binary_size(bs_bin) * 8;
+                size_t bs_capacity = term_bit_size(bs_bin);
                 size_t increment;
                 if ((size_t) bs_offset > bs_capacity
-                    || !bs_scaled_size(size, unit, bs_capacity - bs_offset, &increment)) {
+                    || !bs_scaled_size_bits(size, unit, bs_capacity - bs_offset, &increment)) {
                     TRACE("bs_skip_bits2: Insufficient capacity to skip bits: %lu\n", (unsigned long) bs_offset);
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 } else {
@@ -4391,7 +4444,7 @@ schedule_in:
 
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
-                if ((term_binary_size(bs_bin) * 8 - bs_offset) % unit != 0) {
+                if ((term_bit_size(bs_bin) - bs_offset) % unit != 0) {
                     TRACE("bs_test_unit: Available bits in source not evenly divisible by unit\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
@@ -4415,8 +4468,8 @@ schedule_in:
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
 
-                if ((term_binary_size(bs_bin) * 8 - bs_offset) != (unsigned int) bits) {
-                    TRACE("bs_test_tail2: Expected exactly %u bits remaining, but remaining=%u\n", (unsigned) bits, (unsigned) (term_binary_size(bs_bin) * 8 - bs_offset));
+                if ((term_bit_size(bs_bin) - bs_offset) != (unsigned int) bits) {
+                    TRACE("bs_test_tail2: Expected exactly %u bits remaining, but remaining=%u\n", (unsigned) bits, (unsigned) (term_bit_size(bs_bin) - bs_offset));
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
                 break;
@@ -4441,15 +4494,15 @@ schedule_in:
                 VERIFY_IS_MATCH_STATE(src, "bs_get_integer", 0);
                 VERIFY_IS_ANY_INTEGER(size, "bs_get_integer", 0);
 
-                TRACE("bs_get_integer2/7, fail=%u src=%p live=%u unit=%u flags=%x\n", (unsigned) fail, (void *) src, (unsigned) live, (unsigned) unit, (int) flags_value);
+                TRACE("bs_get_integer2/7, fail=%u src=%p live=%u size=%u unit=%u flags=%x\n", (unsigned) fail, (void *) src, (unsigned) term_to_int(size), (unsigned) live, (unsigned) unit, (int) flags_value);
 
                 union maybe_unsigned_int64 value;
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
-                size_t bs_capacity = term_binary_size(bs_bin) * 8;
+                size_t bs_capacity = term_bit_size(bs_bin);
                 size_t increment_bits;
                 if ((size_t) bs_offset > bs_capacity
-                    || !bs_scaled_size(size, unit, bs_capacity - bs_offset, &increment_bits)) {
+                    || !bs_scaled_size_bits(size, unit, bs_capacity - bs_offset, &increment_bits)) {
                     TRACE("bs_get_integer2: size is negative or exceeds the remaining capacity\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
@@ -4478,8 +4531,8 @@ schedule_in:
                         }
                     }
                 } else if ((bs_offset % 8 == 0) && (increment % 8 == 0) && (increment <= INTN_MAX_UNSIGNED_BITS_SIZE)) {
-                    unsigned long capacity = term_binary_size(bs_bin);
-                    if (8 * capacity - bs_offset < (unsigned long) increment) {
+                    unsigned long capacity_bits = term_bit_size(bs_bin);
+                    if (capacity_bits - bs_offset < (unsigned long) increment) {
                         JUMP_TO_ADDRESS(mod->labels[fail]);
                     }
                     size_t byte_offset = bs_offset / 8;
@@ -4524,10 +4577,10 @@ schedule_in:
                 avm_float_t value;
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
-                size_t bs_capacity = term_binary_size(bs_bin) * 8;
+                size_t bs_capacity = term_bit_size(bs_bin);
                 size_t increment_bits;
                 if ((size_t) bs_offset > bs_capacity
-                    || !bs_scaled_size(size, unit, bs_capacity - bs_offset, &increment_bits)) {
+                    || !bs_scaled_size_bits(size, unit, bs_capacity - bs_offset, &increment_bits)) {
                     TRACE("bs_get_float2: size is negative or exceeds the remaining capacity\n");
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 }
@@ -4591,50 +4644,49 @@ schedule_in:
                 term bs_bin = term_get_match_state_binary(src);
                 avm_int_t bs_offset = term_get_match_state_offset(src);
 
-                if (unit != 8) {
-                    TRACE("bs_get_binary2: Unsupported: unit must be 8.\n");
-                    RAISE_ERROR(UNSUPPORTED_ATOM);
-                }
-                size_t bs_capacity = term_binary_size(bs_bin);
-                if ((size_t) bs_offset / 8 > bs_capacity) {
-                    TRACE("bs_get_binary2: match state offset is past the end of the binary\n");
-                    JUMP_TO_ADDRESS(mod->labels[fail]);
-                }
-                size_t remaining_bytes = bs_capacity - bs_offset / 8;
-                size_t size_val = 0;
-                if (term_is_any_integer(size)) {
-                    // A negative or oversized size fails the match, as on BEAM
-                    if (!bs_scaled_size(size, 1, remaining_bytes, &size_val)) {
-                        TRACE("bs_get_binary2: size is negative or exceeds the remaining capacity\n");
-                        JUMP_TO_ADDRESS(mod->labels[fail]);
-                    }
-                } else if (size == ALL_ATOM) {
-                    size_val = remaining_bytes;
-                } else {
-                    TRACE("bs_get_binary2: size is neither an integer nor the atom `all`\n");
-                    RAISE_ERROR(BADARG_ATOM);
-                }
-                if (bs_offset % unit != 0) {
-                    TRACE("bs_get_binary2: Unsupported.  Offset on binary read must be aligned on byte boundaries.\n");
-                    RAISE_ERROR(BADARG_ATOM);
-                }
                 if (flags_value != 0) {
                     TRACE("bs_get_binary2: neither signed nor native or little endian encoding supported.\n");
                     RAISE_ERROR(UNSUPPORTED_ATOM);
                 }
 
+                size_t bs_capacity = term_bit_size(bs_bin);
+                if ((size_t) bs_offset > bs_capacity) {
+                    TRACE("bs_get_binary2: match state offset is past the end of the bitstring\n");
+                    JUMP_TO_ADDRESS(mod->labels[fail]);
+                }
+                size_t remaining_bits = bs_capacity - bs_offset;
+                size_t size_bits;
+                if (term_is_any_integer(size)) {
+                    // A negative or overflowing size fails the match, as on BEAM
+                    if (!bs_scaled_size_bits(size, unit, remaining_bits, &size_bits)) {
+                        TRACE("bs_get_binary2: size is negative or exceeds the remaining capacity\n");
+                        JUMP_TO_ADDRESS(mod->labels[fail]);
+                    }
+                } else if (size == ALL_ATOM) {
+                    // all takes the whole remainder, which must be a multiple
+                    // of the segment unit
+                    if (remaining_bits % unit != 0) {
+                        TRACE("bs_get_binary2: remainder is not a multiple of unit\n");
+                        JUMP_TO_ADDRESS(mod->labels[fail]);
+                    }
+                    size_bits = remaining_bits;
+                } else {
+                    TRACE("bs_get_binary2: size is neither an integer nor the atom `all`\n");
+                    RAISE_ERROR(BADARG_ATOM);
+                }
+
                 TRACE("bs_get_binary2/7, fail=%u src=%p live=%u unit=%u\n", (unsigned) fail, (void *) bs_bin, (unsigned) live, (unsigned) unit);
 
-                if (size_val > remaining_bytes) {
-                    TRACE("bs_get_binary2: insufficient capacity -- bs_offset = %d, size_val = %zu\n", (int) bs_offset, size_val);
+                if (size_bits > remaining_bits) {
+                    TRACE("bs_get_binary2: insufficient capacity -- bs_offset = %d, size_bits = %d\n", (int) bs_offset, (int) size_bits);
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 } else {
-                    term_set_match_state_offset(src, bs_offset + size_val * unit);
+                    term_set_match_state_offset(src, bs_offset + size_bits);
 
                     TRIM_LIVE_REGS(live);
                     // there is always room for a MAX_REG + 1 register, used as working register
                     x_regs[live] = bs_bin;
-                    size_t heap_size = term_sub_binary_heap_size(bs_bin, size_val);
+                    size_t heap_size = bitstring_slice_heap_size(bs_bin, bs_offset, size_bits);
                     if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -4644,7 +4696,7 @@ schedule_in:
 
                     bs_bin = x_regs[live];
 
-                    term t = term_maybe_create_sub_binary(bs_bin, bs_offset / unit, size_val, &ctx->heap, ctx->global);
+                    term t = bitstring_slice(bs_bin, bs_offset, size_bits, &ctx->heap, ctx->global);
                     WRITE_REGISTER(dreg, t);
                 }
                 break;
@@ -4880,7 +4932,7 @@ schedule_in:
 
                 TRACE("is_bitstr/2, label=%i, arg1=%" TERM_X_FMT "\n", label, arg1);
 
-                if (!term_is_binary(arg1)) {
+                if (!term_is_bitstring(arg1)) {
                     pc = mod->labels[label];
                 }
 
@@ -5587,10 +5639,10 @@ schedule_in:
                     // Reuse an existing match state in place, like
                     // bs_start_match3 above.
                     WRITE_REGISTER_GC_SAFE(dreg, src);
-                } else if (term_is_invalid_term(fail_atom) && !term_is_binary(src)) {
+                } else if (term_is_invalid_term(fail_atom) && !term_is_bitstring(src)) {
                     pc = mod->labels[fail_label];
                 } else {
-                    assert(term_is_binary(src));
+                    assert(term_is_bitstring(src));
 
                     TRIM_LIVE_REGS(live);
                     x_regs[live] = src;
@@ -5804,14 +5856,30 @@ schedule_in:
                         case APPEND_ATOM:
                         case BINARY_ATOM:
                         case PRIVATE_APPEND_ATOM: {
-                            VERIFY_IS_BINARY(src, "bs_create_bin/6", fail);
+                            VERIFY_IS_BITSTRING(src, "bs_create_bin/6", fail);
                             if (size == ALL_ATOM) {
-                                // We only support src as a binary of bytes here.
-                                segment_size = term_binary_size(src);
-                                segment_unit = 8;
+                                size_t src_bits = term_bit_size(src);
+                                // The whole source is taken, so its bit size
+                                // must be a multiple of the segment unit: a
+                                // /binary segment (unit 8) rejects a partial
+                                // bitstring, a /bitstring one (unit 1) takes it.
+                                if (UNLIKELY(segment_unit == 0 || (src_bits % segment_unit) != 0)) {
+                                    if (fail == 0) {
+                                        RAISE_ERROR(BADARG_ATOM);
+                                    } else {
+                                        JUMP_TO_LABEL(mod, fail);
+                                    }
+                                }
                                 if (atom_type == PRIVATE_APPEND_ATOM && j == 0) {
+                                    // Reusing the accumulator requires a byte-aligned source
+                                    if (UNLIKELY(src_bits % 8 != 0)) {
+                                        TRACE("bs_create_bin/6: private_append on a non-byte-aligned bitstring is not supported\n");
+                                        RAISE_ERROR(UNSUPPORTED_ATOM);
+                                    }
                                     reuse_binary = true;
                                 }
+                                segment_size = src_bits;
+                                segment_unit = 1;
                             } else {
                                 VERIFY_IS_INTEGER(size, "bs_create_bin/6", fail);
                                 avm_int_t signed_size_value = term_to_int(size);
@@ -5823,13 +5891,7 @@ schedule_in:
                                     }
                                 }
                                 avm_int_t size_in_bits = signed_size_value * segment_unit;
-                                if (size_in_bits % 8) {
-                                    TRACE("bs_create_bin/6: size in bits (%d) is not evenly divisible by 8\n", (int) size_in_bits);
-                                    RAISE_ERROR(UNSUPPORTED_ATOM);
-                                }
-                                avm_int_t size_in_bytes = size_in_bits / 8;
-                                size_t binary_size = term_binary_size(src);
-                                if ((size_t) size_in_bytes > binary_size) {
+                                if ((size_t) size_in_bits > term_bit_size(src)) {
                                     if (fail == 0) {
                                         RAISE_ERROR(BADARG_ATOM);
                                     } else {
@@ -5847,18 +5909,26 @@ schedule_in:
                     }
                     binary_size += segment_unit * segment_size;
                 }
-                // Allocate and build binary in second iteration
-                if (binary_size % 8) {
-                    TRACE("bs_create_bin/6: total binary size (%d) is not evenly divisible by 8\n", (int) binary_size);
+                // Allocate and build binary in second iteration. A non-byte-aligned
+                // total size yields a bitstring: the whole bytes are stored in a heap
+                // binary and wrapped in a sub-binary carrying the trailing bit count.
+                size_t trailing_bits = binary_size % 8;
+                size_t binary_bytes = (binary_size + 7) / 8;
+                if (UNLIKELY(trailing_bits != 0 && reuse_binary)) {
+                    TRACE("bs_create_bin/6: non-byte-aligned append is not supported\n");
                     RAISE_ERROR(UNSUPPORTED_ATOM);
                 }
                 TRIM_LIVE_REGS(live);
-                if (UNLIKELY(memory_ensure_free_with_roots(ctx, alloc + term_binary_heap_size(binary_size / 8), live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+                size_t bs_heap_size = alloc + term_binary_heap_size(binary_bytes);
+                if (trailing_bits != 0) {
+                    bs_heap_size += TERM_BOXED_SUB_BINARY_SIZE;
+                }
+                if (UNLIKELY(memory_ensure_free_with_roots(ctx, bs_heap_size, live, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
                 term t;
                 if (!reuse_binary) {
-                    t = term_create_empty_binary(binary_size / 8, &ctx->heap, ctx->global);
+                    t = term_create_empty_binary(binary_bytes, &ctx->heap, ctx->global);
                     if (UNLIKELY(term_is_invalid_term(t))) {
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -5966,6 +6036,13 @@ schedule_in:
                                           "binary\n");
                                     RAISE_ERROR(BADARG_ATOM);
                                 }
+                            } else if ((offset % 8 != 0) || ((size_value * segment_unit) % 8 != 0)) {
+                                // intn_to_integer_bytes writes whole, byte-aligned
+                                // bytes; a non-byte-aligned bit offset or field
+                                // width would misplace the bits. Reject rather than
+                                // silently miscompile (bignums >64 bits only).
+                                TRACE("bs_create_bin/6: non-byte-aligned big integer segment unsupported\n");
+                                RAISE_ERROR(UNSUPPORTED_ATOM);
                             } else {
                                 // when building a binary, `signed` flag is implicit
                                 intn_from_integer_options_t intn_flags
@@ -6047,21 +6124,19 @@ schedule_in:
                         case APPEND_ATOM:
                         case BINARY_ATOM:
                         case PRIVATE_APPEND_ATOM: {
-                            if (offset % 8) {
-                                TRACE("bs_create_bin/6: current offset (%d) is not evenly divisible by 8\n", (int) offset);
-                                RAISE_ERROR(UNSUPPORTED_ATOM);
-                            }
-                            size_t src_size = term_binary_size(src);
+                            size_t src_bits = term_bit_size(src);
                             if (reuse_binary && j == 0) {
+                                // The size pass verified the reused source is byte-aligned
                                 t = term_reuse_binary(src, binary_size / 8, &ctx->heap, ctx->global);
                                 if (UNLIKELY(term_is_invalid_term(t))) {
                                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                 }
-                                segment_size = src_size * 8;
+                                segment_size = src_bits;
                                 break;
                             }
-                            uint8_t *dst = (uint8_t *) term_binary_data(t) + (offset / 8);
+                            uint8_t *dst = (uint8_t *) term_binary_data(t);
                             const uint8_t *bin = (const uint8_t *) term_binary_data(src);
+                            size_t copy_bits = src_bits;
                             if (size != ALL_ATOM) {
                                 VERIFY_IS_INTEGER(size, "bs_create_bin/6", fail);
                                 avm_int_t signed_size_value = term_to_int(size);
@@ -6069,25 +6144,26 @@ schedule_in:
                                     TRACE("bs_create_bin/6: size value less than 0: %i\n", (int) signed_size_value);
                                     RAISE_ERROR(BADARG_ATOM);
                                 }
-                                // We checked earlier it's a multiple of 8
-                                size_value = ((size_t) signed_size_value) * segment_unit / 8;
-                                if (size_value > src_size) {
+                                copy_bits = ((size_t) signed_size_value) * segment_unit;
+                                if (copy_bits > src_bits) {
                                     if (fail == 0) {
                                         RAISE_ERROR(BADARG_ATOM);
                                     } else {
                                         JUMP_TO_LABEL(mod, fail);
                                     }
                                 }
-                                src_size = size_value;
                             }
-                            memcpy(dst, bin, src_size);
-                            segment_size = src_size * 8;
+                            bitstring_copy_bits(dst, offset, bin, copy_bits);
+                            segment_size = copy_bits;
                             break;
                         }
                         default:
                             UNREACHABLE();
                     }
                     offset += segment_size;
+                }
+                if (trailing_bits != 0) {
+                    t = term_alloc_sub_binary_bits(t, 0, binary_size / 8, (uint8_t) trailing_bits, &ctx->heap);
                 }
                 WRITE_REGISTER_GC_SAFE(dreg, t);
                 break;
@@ -6233,14 +6309,13 @@ schedule_in:
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
-                            size_t bs_bin_size = term_binary_size(bs_bin);
                             if (UNLIKELY(stride < 0)) {
                                 RAISE_ERROR(BADARG_ATOM);
                             }
                             size_t unsigned_stride = (size_t) stride;
-                            size_t remaining = (bs_bin_size * 8) - bs_offset;
+                            size_t remaining = term_bit_size(bs_bin) - bs_offset;
                             if (remaining < unsigned_stride || (remaining - unsigned_stride) % unit != 0) {
-                                TRACE("bs_match/3: ensure_at_least failed -- bs_bin_size = %d, bs_offset = %d, stride = %d, unit = %d\n", (int) bs_bin_size, (int) bs_offset, (int) stride, (int) unit);
+                                TRACE("bs_match/3: ensure_at_least failed -- bs_offset = %d, stride = %d, unit = %d\n", (int) bs_offset, (int) stride, (int) unit);
                                 goto bs_match_jump_to_fail;
                             }
                             break;
@@ -6254,9 +6329,8 @@ schedule_in:
                                 RAISE_ERROR(BADARG_ATOM);
                             }
                             size_t unsigned_stride = (size_t) stride;
-                            size_t bs_bin_size = term_binary_size(bs_bin);
-                            if ((bs_bin_size * 8) - bs_offset != unsigned_stride) {
-                                TRACE("bs_match/3: ensure_exactly failed -- bs_bin_size = %lu, bs_offset = %lu, stride = %lu\n", (unsigned long) bs_bin_size, (unsigned long) bs_offset, (unsigned long) stride);
+                            if (term_bit_size(bs_bin) - bs_offset != unsigned_stride) {
+                                TRACE("bs_match/3: ensure_exactly failed -- bs_offset = %lu, stride = %lu\n", (unsigned long) bs_offset, (unsigned long) stride);
                                 goto bs_match_jump_to_fail;
                             }
                             break;
@@ -6271,16 +6345,19 @@ schedule_in:
                             j++;
                             avm_int_t flags_value;
                             DECODE_FLAGS_LIST(flags_value, flags, opcode)
-                            term size;
-                            DECODE_COMPACT_TERM(size, pc);
+                            // The size of a bs_match integer command is always a
+                            // literal (a BEAM invariant asserted by
+                            // beam_validator: a variable-size segment is emitted
+                            // as a separate bs_get_integer2), as for the binary
+                            // command below.
+                            int size;
+                            DECODE_LITERAL(size, pc);
                             j++;
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
                             // context_clean_registers(ctx, live); // TODO: check if needed
-                            VERIFY_IS_INTEGER(size, "bs_match/3", fail);
-                            avm_int_t size_val = term_to_int(size);
-                            avm_int_t increment = size_val * unit;
+                            avm_int_t increment = (avm_int_t) size * unit;
                             union maybe_unsigned_int64 value;
                             term t;
                             if (increment <= 64) {
@@ -6315,7 +6392,10 @@ schedule_in:
                                     HANDLE_ERROR();
                                 }
                             } else {
-                                goto bs_match_jump_to_fail;
+                                // A >64-bit field at a non-byte-aligned offset (or a
+                                // non-byte-multiple size) is not extracted yet, as on
+                                // the construction side.
+                                RAISE_ERROR(UNSUPPORTED_ATOM);
                             }
                             DEST_REGISTER(dreg);
                             DECODE_DEST_REGISTER(dreg, pc);
@@ -6342,15 +6422,11 @@ schedule_in:
                             DECODE_LITERAL(unit, pc);
                             j++;
                             int matched_bits = size * unit;
-                            if (bs_offset % 8 != 0 || matched_bits % 8 != 0) {
-                                TRACE("bs_match/3: Unsupported.  Offset on binary read must be aligned on byte boundaries.\n");
-                                RAISE_ERROR(BADARG_ATOM);
-                            }
-                            if ((bs_offset + matched_bits) > term_binary_size(bs_bin) * 8) {
+                            if ((bs_offset + matched_bits) > term_bit_size(bs_bin)) {
                                 TRACE("bs_match/3: insufficient capacity\n");
                                 goto bs_match_jump_to_fail;
                             }
-                            size_t heap_size = term_sub_binary_heap_size(bs_bin, matched_bits / 8);
+                            size_t heap_size = bitstring_slice_heap_size(bs_bin, bs_offset, matched_bits);
                             TRIM_LIVE_REGS(live);
                             x_regs[live] = match_state;
                             if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -6358,7 +6434,7 @@ schedule_in:
                             }
                             match_state = x_regs[live];
                             bs_bin = term_get_match_state_binary(match_state);
-                            term t = term_maybe_create_sub_binary(bs_bin, bs_offset / 8, matched_bits / 8, &ctx->heap, ctx->global);
+                            term t = bitstring_slice(bs_bin, bs_offset, matched_bits, &ctx->heap, ctx->global);
                             DEST_REGISTER(dreg);
                             DECODE_DEST_REGISTER(dreg, pc);
                             j++;
@@ -6374,15 +6450,7 @@ schedule_in:
                             int unit;
                             DECODE_LITERAL(unit, pc);
                             j++;
-                            // TODO: rewrite this bit once bitstrings are supported
-                            if (bs_offset % 8 != 0) {
-                                TRACE("bs_match/3: Unsupported.  Offset on binary read must be aligned on byte boundaries.\n");
-                                RAISE_ERROR(BADARG_ATOM);
-                            }
-                            size_t total_bytes = term_binary_size(bs_bin);
-                            size_t bs_offset_bytes = bs_offset / 8;
-                            size_t tail_bytes = total_bytes - bs_offset_bytes;
-                            size_t heap_size = term_sub_binary_heap_size(bs_bin, tail_bytes);
+                            size_t heap_size = bitstring_get_tail_heap_size(bs_bin, bs_offset);
                             TRIM_LIVE_REGS(live);
                             x_regs[live] = match_state;
                             if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -6390,7 +6458,7 @@ schedule_in:
                             }
                             match_state = x_regs[live];
                             bs_bin = term_get_match_state_binary(match_state);
-                            term t = term_maybe_create_sub_binary(bs_bin, bs_offset_bytes, tail_bytes, &ctx->heap, ctx->global);
+                            term t = bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
                             DEST_REGISTER(dreg);
                             DECODE_DEST_REGISTER(dreg, pc);
                             j++;

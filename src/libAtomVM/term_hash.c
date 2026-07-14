@@ -221,7 +221,7 @@ static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global)
         return hash_external_reference(t, h, global);
     } else if (term_is_function(t)) {
         return hash_function(t, h, global);
-    } else if (term_is_binary(t)) {
+    } else if (term_is_bitstring(t)) {
         return hash_binary(t, h, global);
     } else if (term_is_tuple(t)) {
         size_t arity = term_get_tuple_arity(t);

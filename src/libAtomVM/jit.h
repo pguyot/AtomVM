@@ -288,6 +288,12 @@ struct ModuleNativeInterface
     uintptr_t (*call_fun_direct)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
     uintptr_t (*call_ext_direct)(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words);
     uintptr_t (*return_direct)(Context *ctx, JITState *jit_state);
+    size_t (*bitstring_get_tail_heap_size)(term *bs_bin_ptr, size_t bs_offset);
+    term (*bitstring_create_tail)(Context *ctx, term bs_bin, size_t bs_offset);
+    term (*bs_create_bin_wrap)(Context *ctx, term byte_binary, size_t total_bits);
+    size_t (*bitstring_slice_heap_size)(term *bs_bin_ptr, size_t offset, size_t len_bits);
+    term (*bitstring_slice)(Context *ctx, term bs_bin, size_t offset, size_t len_bits);
+    bool (*bitstring_is_multiple_of)(size_t bits, size_t unit);
 };
 
 extern const ModuleNativeInterface module_native_interface;

@@ -1959,7 +1959,10 @@ static term jit_bitstring_extract_integer(
         return extract_bigint(
             ctx, jit_state, int_bytes + byte_offset, n / 8, bitstring_flags_to_intn_opts(bs_flags));
     } else {
-        return FALSE_ATOM;
+        // A >64-bit field at a non-byte-aligned offset (or non-byte-multiple
+        // size) is not extracted yet, as on the construction side.
+        set_error(ctx, jit_state, 0, UNSUPPORTED_ATOM);
+        return term_invalid_term();
     }
 }
 
@@ -2005,6 +2008,44 @@ static term jit_term_maybe_create_sub_binary(Context *ctx, term binary, size_t o
 {
     TRACE("jit_term_maybe_create_sub_binary: binary=%p offset=%d len=%d\n", (void *) binary, (int) offset, (int) len);
     return term_maybe_create_sub_binary(binary, offset, len, &ctx->heap, ctx->global);
+}
+
+static size_t jit_bitstring_get_tail_heap_size(term *bs_bin_ptr, size_t bs_offset)
+{
+    term bs_bin = (term) (((uintptr_t) bs_bin_ptr) | TERM_PRIMARY_BOXED);
+    return bitstring_get_tail_heap_size(bs_bin, bs_offset);
+}
+
+static term jit_bs_create_bin_wrap(Context *ctx, term byte_binary, size_t total_bits)
+{
+    if (total_bits % 8 == 0) {
+        return byte_binary;
+    }
+    return term_alloc_sub_binary_bits(byte_binary, 0, total_bits / 8, (uint8_t) (total_bits % 8), &ctx->heap);
+}
+
+static term jit_bitstring_create_tail(Context *ctx, term bs_bin, size_t bs_offset)
+{
+    return bitstring_get_tail(bs_bin, bs_offset, &ctx->heap, ctx->global);
+}
+
+static size_t jit_bitstring_slice_heap_size(term *bs_bin_ptr, size_t offset, size_t len_bits)
+{
+    term bs_bin = (term) (((uintptr_t) bs_bin_ptr) | TERM_PRIMARY_BOXED);
+    return bitstring_slice_heap_size(bs_bin, offset, len_bits);
+}
+
+// Heap is assumed already reserved (see jit_bitstring_slice_heap_size); does not GC.
+static term jit_bitstring_slice(Context *ctx, term bs_bin, size_t offset, size_t len_bits)
+{
+    return bitstring_slice(bs_bin, offset, len_bits, &ctx->heap, ctx->global);
+}
+
+// Backends have no division, so an `all` segment with a non-power-of-two unit
+// cannot test its remainder with an & (unit - 1) mask.
+static bool jit_bitstring_is_multiple_of(size_t bits, size_t unit)
+{
+    return unit != 0 && bits % unit == 0;
 }
 
 static int jit_term_find_map_pos(Context *ctx, term map, term key)
@@ -2134,6 +2175,9 @@ static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, si
         avm_uint64_t int_value = term_maybe_unbox_int64(value);
         return bitstring_insert_integer(bin, offset, int_value, n, flags);
 
+    } else if ((offset % 8 != 0) || (n % 8 != 0)) {
+        // Reject bitstrings for bigint
+        return false;
     } else {
         const intn_digit_t *big_src_value = NULL;
         size_t big_len = 0;
@@ -2185,23 +2229,21 @@ static void jit_bitstring_copy_module_str(Context *ctx, JITState *jit_state, ter
 static int jit_bitstring_copy_binary(Context *ctx, JITState *jit_state, term t, size_t offset, term src, term size)
 {
     TRACE("jit_bitstring_copy_binary: t=%p offset=%d src=%p size=%p\n", (void *) t, (int) offset, (void *) src, (void *) size);
-    if (offset % 8) {
-        set_error(ctx, jit_state, 0, UNSUPPORTED_ATOM);
-        return -1;
-    }
-    uint8_t *dst = (uint8_t *) term_binary_data(t) + (offset / 8);
+    uint8_t *dst = (uint8_t *) term_binary_data(t);
     const uint8_t *bin = (const uint8_t *) term_binary_data(src);
-    size_t binary_size = term_binary_size(src);
+    size_t src_bits = term_bit_size(src);
+    size_t copy_bits = src_bits;
     if (size != ALL_ATOM) {
-        binary_size = (size_t) term_to_int(size);
-        if (binary_size % 8) {
-            set_error(ctx, jit_state, 0, UNSUPPORTED_ATOM);
+        copy_bits = (size_t) term_to_int(size);
+        if (UNLIKELY(copy_bits > src_bits)) {
+            // Capacity is verified by the emitted size-computation pass; this
+            // is a defensive check only.
+            set_error(ctx, jit_state, 0, BADARG_ATOM);
             return -1;
         }
-        binary_size = binary_size / 8;
     }
-    memcpy(dst, bin, binary_size);
-    return binary_size * 8;
+    bitstring_copy_bits(dst, offset, bin, copy_bits);
+    return (int) copy_bits;
 }
 
 static Context *jit_apply(Context *ctx, JITState *jit_state, int offset, term module, term function, unsigned int arity)
@@ -2514,7 +2556,8 @@ static bool jit_bitstring_match_module_str(Context *ctx, JITState *jit_state, te
     size_t remaining = 0;
     const uint8_t *str = module_get_str(jit_state->module, str_id, &remaining);
 
-    if (term_binary_size(bs_bin) * 8 - bs_offset < MIN(remaining * 8, bits)) {
+    size_t capacity_bits = term_bit_size(bs_bin);
+    if (bs_offset > capacity_bits || capacity_bits - bs_offset < MIN(remaining * 8, bits)) {
         return false;
     }
 
@@ -2726,7 +2769,13 @@ const ModuleNativeInterface module_native_interface = {
     jit_term_get_map_assoc_miss,
     jit_call_fun_direct,
     jit_call_ext_direct,
-    jit_return_direct
+    jit_return_direct,
+    jit_bitstring_get_tail_heap_size,
+    jit_bitstring_create_tail,
+    jit_bs_create_bin_wrap,
+    jit_bitstring_slice_heap_size,
+    jit_bitstring_slice,
+    jit_bitstring_is_multiple_of
 };
 
 #endif

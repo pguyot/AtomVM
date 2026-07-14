@@ -82,6 +82,14 @@ start() ->
             115, 116>>
     ),
     test_reverse(<<"foobar">>, <<131, 109, 0, 0, 0, 6, 102, 111, 111, 98, 97, 114>>),
+    test_reverse(<<1:1>>, <<131, 77, 0, 0, 0, 1, 1, 128>>),
+    test_reverse(<<5:31>>, <<131, 77, 0, 0, 0, 4, 7, 0, 0, 0, 10>>),
+    test_reverse(<<255, 5:7>>, <<131, 77, 0, 0, 0, 2, 7, 255, 10>>),
+    % BIT_BINARY_EXT: insignificant padding bits in the last byte are accepted
+    % on decode (as OTP does) and canonicalized (zeroed) on re-encode.
+    DirtyBitstring = erlang:binary_to_term(id(<<131, 77, 0, 0, 0, 1, 1, 255>>)),
+    true = DirtyBitstring =:= <<1:1>>,
+    <<131, 77, 0, 0, 0, 1, 1, 128>> = erlang:term_to_binary(DirtyBitstring),
     test_reverse(<<":アトムＶＭ">>, <<131, 109, 0, 0, 0, 6, 58, 162, 200, 224, 54, 45>>),
     test_reverse("", <<131, 106>>),
     test_reverse("foobar", <<131, 107, 0, 6, 102, 111, 111, 98, 97, 114>>),
@@ -161,6 +169,7 @@ start() ->
     ok = test_zero_length_list_ext(),
     ok = test_deeply_nested(),
     ok = test_term_to_binary_options(),
+    ok = test_invalid_bit_binary(),
     0.
 
 test_term_to_binary_options() ->
@@ -1422,6 +1431,28 @@ nest_mixed(N, Acc) ->
             _ -> #{m => Acc}
         end,
     nest_mixed(N - 1, Wrapped).
+
+test_invalid_bit_binary() ->
+    %% BIT_BINARY_EXT (tag 77) layout: <<77, Len:32, Bits:8, Data:Len/bytes>>.
+    %% Bits is the number of significant bits in the trailing byte. For a
+    %% non-empty binary it must be in 1..8 (8 meaning a byte-aligned last
+    %% byte), and an empty binary must carry 0. Anything else is a malformed
+    %% encoding and must be rejected, matching OTP.
+
+    %% Bits = 0 with a non-empty binary
+    ok = expect_badarg(fun() -> binary_to_term(<<131, 77, 0, 0, 0, 1, 0, 128>>) end),
+    %% Bits = 9 (> 8)
+    ok = expect_badarg(fun() -> binary_to_term(<<131, 77, 0, 0, 0, 1, 9, 128>>) end),
+    %% Bits = 255 (> 8)
+    ok = expect_badarg(fun() -> binary_to_term(<<131, 77, 0, 0, 0, 1, 255, 128>>) end),
+    %% Non-zero trailing bits with an empty binary
+    ok = expect_badarg(fun() -> binary_to_term(<<131, 77, 0, 0, 0, 0, 5>>) end),
+
+    %% Valid encodings still decode. Bits = 8 is a byte-aligned last byte.
+    <<255>> = binary_to_term(<<131, 77, 0, 0, 0, 1, 8, 255>>),
+    <<1:1>> = binary_to_term(<<131, 77, 0, 0, 0, 1, 1, 128>>),
+    <<255, 5:7>> = binary_to_term(<<131, 77, 0, 0, 0, 2, 7, 255, 10>>),
+    ok.
 
 make_binterm_fun(Id) ->
     fun() ->

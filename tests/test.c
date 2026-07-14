@@ -422,6 +422,8 @@ struct Test tests[] = {
     TEST_CASE(test_bs_int),
     TEST_CASE(test_bs_int_any_flags),
     TEST_CASE(test_bs_int_unaligned),
+    TEST_CASE(test_bs_gettail),
+    TEST_CASE(test_bitstring_to_list),
     TEST_CASE(test_bs_start_match_live),
     TEST_CASE(test_bs_utf),
     TEST_CASE_EXPECTED(bs_append_extra_words, 1),

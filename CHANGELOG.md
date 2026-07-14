@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `console:print_err/1` to write to standard error
 - Added `erlang:term_to_binary/2`, `erlang:is_builtin/3` and `erlang:bitstring_to_list/1`
 - Added `lists:mapfoldr/3`
+- Added support for non-byte-aligned bitstrings, including with the legacy construction
+  opcodes emitted by OTP 26-27 with `no_bs_create_bin`, and added `erlang:bitstring_to_list/1`
 - Added generational garbage collection: minor collections only copy recently allocated data and
   promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
   `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
@@ -127,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `ahttp_client` crash on non-numeric or negative `Content-Length` values
 - Fixed `ahttp_client` crash on headers with empty or all-whitespace values
 - Fixed a bug in `supervisor` handling of failing child
+- Fixed a one-byte out-of-bounds read and write in bit-granular bitstring copies, which could
+  touch the byte past an exactly-sized destination or source buffer
+- Fixed matching an `all`-sized segment with a non-power-of-two unit, which the JIT tested with an
+  `and` mask and rejected as unsupported
+- Fixed a `binary` segment accepting a non-byte-aligned bitstring source instead of raising `badarg`
 - Fixed two bugs related to closing fds in `atomvm:subprocess/4`
 - Fixed `erlang:localtime/1` memory leak, use-after-free, and TZ restore bugs on newlib/picolibc
 - Fixed ESP32 I2C driver resource leaks, half-closed state, and close-during-transmission errors

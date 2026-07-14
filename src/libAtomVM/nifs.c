@@ -174,6 +174,7 @@ static term nif_erlang_binary_to_atom_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_binary_to_float_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_binary_to_integer(Context *ctx, int argc, term argv[]);
 static term nif_erlang_binary_to_list_1(Context *ctx, int argc, term argv[]);
+static term nif_erlang_bitstring_to_list_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_binary_to_existing_atom_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_concat_2(Context *ctx, int argc, term argv[]);
 static term nif_erlang_display_1(Context *ctx, int argc, term argv[]);
@@ -424,6 +425,11 @@ static const struct Nif binary_to_integer_nif = {
 static const struct Nif binary_to_list_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_binary_to_list_1
+};
+
+static const struct Nif bitstring_to_list_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_erlang_bitstring_to_list_1
 };
 
 static const struct Nif binary_to_existing_atom_1_nif = {
@@ -2711,25 +2717,27 @@ static term nif_erlang_list_to_float_1(Context *ctx, int argc, term argv[])
 
 static term nif_erlang_binary_to_list_1(Context *ctx, int argc, term argv[])
 {
-    term value = argv[0];
-    VALIDATE_VALUE(value, term_is_binary);
-
-    int bin_size = term_binary_size(value);
-    int start = 0;
-    int stop = bin_size - 1;
-    if (argc == 3) {
-        // binary_to_list(Binary, Start, Stop): 1-based inclusive range,
-        // 1 =< Start =< Stop =< byte_size(Binary).
-        VALIDATE_VALUE(argv[1], term_is_integer);
-        VALIDATE_VALUE(argv[2], term_is_integer);
-        avm_int_t s = term_to_int(argv[1]);
-        avm_int_t e = term_to_int(argv[2]);
-        if (UNLIKELY(s < 1 || e < s || e > bin_size)) {
-            RAISE_ERROR(BADARG_ATOM);
-        }
-        start = (int) s - 1;
-        stop = (int) e - 1;
+    // binary_to_list/1,3 requires a byte-aligned binary and raises badarg on a
+    // non-byte-aligned bitstring, matching OTP; bitstring_to_list/1 shares the
+    // rest of the implementation for the no-range (argc == 1) case.
+    VALIDATE_VALUE(argv[0], term_is_binary);
+    if (argc == 1) {
+        return nif_erlang_bitstring_to_list_1(ctx, argc, argv);
     }
+
+    term value = argv[0];
+    int bin_size = term_binary_size(value);
+    // binary_to_list(Binary, Start, Stop): 1-based inclusive range,
+    // 1 =< Start =< Stop =< byte_size(Binary).
+    VALIDATE_VALUE(argv[1], term_is_integer);
+    VALIDATE_VALUE(argv[2], term_is_integer);
+    avm_int_t s = term_to_int(argv[1]);
+    avm_int_t e = term_to_int(argv[2]);
+    if (UNLIKELY(s < 1 || e < s || e > bin_size)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    int start = (int) s - 1;
+    int stop = (int) e - 1;
     int len = stop - start + 1;
 
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, len * 2, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
@@ -2740,6 +2748,45 @@ static term nif_erlang_binary_to_list_1(Context *ctx, int argc, term argv[])
 
     term prev = term_nil();
     for (int i = stop; i >= start; i--) {
+        prev = term_list_prepend(term_from_int11(bin_data[i]), prev, &ctx->heap);
+    }
+
+    return prev;
+}
+
+static term nif_erlang_bitstring_to_list_1(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    term value = argv[0];
+    VALIDATE_VALUE(value, term_is_bitstring);
+
+    int bin_size = term_binary_size(value);
+    // bitstring_to_list/1 on a non-byte-aligned bitstring yields the whole bytes
+    // followed by a final bitstring element holding the trailing partial byte
+    // (e.g. bitstring_to_list(<<1:1>>) == [<<1:1>>]).
+    uint8_t trailing_bits = (uint8_t) (term_bit_size(value) % 8);
+
+    size_t heap_needed = (size_t) bin_size * 2;
+    if (trailing_bits != 0) {
+        heap_needed += term_binary_heap_size(1) + TERM_BOXED_SUB_BINARY_SIZE + CONS_SIZE;
+    }
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_needed, 1, &value, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    const uint8_t *bin_data = (const uint8_t *) term_binary_data(value);
+
+    term prev = term_nil();
+    if (trailing_bits != 0) {
+        // The partial byte sits just past the whole bytes; wrap its high
+        // trailing_bits into a fresh bitstring as the final list element.
+        term tbin = term_create_empty_binary(1, &ctx->heap, ctx->global);
+        ((uint8_t *) term_binary_data(tbin))[0] = bin_data[bin_size];
+        term tsub = term_alloc_sub_binary_bits(tbin, 0, 0, trailing_bits, &ctx->heap);
+        prev = term_list_prepend(tsub, prev, &ctx->heap);
+    }
+    for (int i = bin_size - 1; i >= 0; i--) {
         prev = term_list_prepend(term_from_int11(bin_data[i]), prev, &ctx->heap);
     }
 
@@ -3749,7 +3796,7 @@ static term nif_erlang_split_binary(Context *ctx, int argc, term argv[])
     term bin_term = argv[0];
     term pos_term = argv[1];
 
-    VALIDATE_VALUE(bin_term, term_is_binary);
+    VALIDATE_VALUE(bin_term, term_is_bitstring);
     VALIDATE_VALUE(pos_term, term_is_integer);
 
     int32_t size = term_binary_size(bin_term);
@@ -3759,12 +3806,26 @@ static term nif_erlang_split_binary(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    size_t alloc_heap_size = term_sub_binary_heap_size(bin_term, pos) + term_sub_binary_heap_size(bin_term, size - pos) + TUPLE_SIZE(2);
+    // split_binary/2 accepts a bitstring: the second part keeps the trailing
+    // bits, e.g. split_binary(<<1:9>>, 1) == {<<0>>, <<1:1>>}
+    uint8_t trailing_bits = (uint8_t) (term_bit_size(bin_term) % 8);
+
+    size_t second_part_heap_size = trailing_bits == 0
+        ? term_sub_binary_heap_size(bin_term, size - pos)
+        : TERM_BOXED_SUB_BINARY_SIZE;
+    size_t alloc_heap_size = term_sub_binary_heap_size(bin_term, pos) + second_part_heap_size + TUPLE_SIZE(2);
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, alloc_heap_size, 1, &bin_term, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term sub_binary_a = term_maybe_create_sub_binary(bin_term, 0, pos, &ctx->heap, ctx->global);
-    term sub_binary_b = term_maybe_create_sub_binary(bin_term, pos, size - pos, &ctx->heap, ctx->global);
+    term sub_binary_b;
+    if (trailing_bits == 0) {
+        sub_binary_b = term_maybe_create_sub_binary(bin_term, pos, size - pos, &ctx->heap, ctx->global);
+    } else {
+        // only a sub-binary can carry trailing bits
+        size_t offset = term_get_sub_binary_offset(bin_term);
+        sub_binary_b = term_alloc_sub_binary_bits(bin_term, offset + pos, size - pos, trailing_bits, &ctx->heap);
+    }
     term tuple = term_alloc_tuple(2, &ctx->heap);
     term_put_tuple_element(tuple, 0, sub_binary_a);
     term_put_tuple_element(tuple, 1, sub_binary_b);

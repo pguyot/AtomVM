@@ -55,6 +55,7 @@
 #define STRING_EXT 107
 #define LIST_EXT 108
 #define BINARY_EXT 109
+#define BIT_BINARY_EXT 77
 #define SMALL_BIG_EXT 110
 #define NEW_FUN_EXT 112
 #define EXPORT_EXT 113
@@ -73,6 +74,7 @@
 #define STRING_EXT_BASE_SIZE 3
 #define LIST_EXT_BASE_SIZE 5
 #define BINARY_EXT_BASE_SIZE 5
+#define BIT_BINARY_EXT_BASE_SIZE 6
 #define MAP_EXT_BASE_SIZE 5
 #define SMALL_ATOM_EXT_BASE_SIZE 2
 
@@ -377,17 +379,33 @@ static int serialize_simple_term(uint8_t *buf, term t, GlobalContext *glb)
         }
         return k;
 
-    } else if (term_is_binary(t)) {
-        if (!IS_NULL_PTR(buf)) {
-            buf[0] = BINARY_EXT;
+    } else if (term_is_bitstring(t)) {
+        if (term_is_binary(t)) {
+            size_t len = term_binary_size(t);
+            if (!IS_NULL_PTR(buf)) {
+                buf[0] = BINARY_EXT;
+                const uint8_t *data = (const uint8_t *) term_binary_data(t);
+                WRITE_32_UNALIGNED(buf + 1, len);
+                memcpy(buf + 5, data, len);
+            }
+            return 5 + len;
+        } else {
+            size_t total_bits = term_bit_size(t);
+            size_t nbytes = (total_bits + 7) / 8;
+            uint8_t last_byte_bits = (uint8_t) (total_bits % 8);
+            if (!IS_NULL_PTR(buf)) {
+                buf[0] = BIT_BINARY_EXT;
+                const uint8_t *data = (const uint8_t *) term_binary_data(t);
+                WRITE_32_UNALIGNED(buf + 1, nbytes);
+                buf[5] = last_byte_bits;
+                memcpy(buf + 6, data, nbytes);
+                // Zero the insignificant low bits of the final byte (nbytes is
+                // at least 1 here since last_byte_bits is 1..7) so equal
+                // bitstrings have equal external encodings, as OTP does.
+                buf[6 + nbytes - 1] &= (uint8_t) (0xFF << (8 - last_byte_bits));
+            }
+            return 6 + nbytes;
         }
-        size_t len = term_binary_size(t);
-        if (!IS_NULL_PTR(buf)) {
-            const uint8_t *data = (const uint8_t *) term_binary_data(t);
-            WRITE_32_UNALIGNED(buf + 1, len);
-            memcpy(buf + 5, data, len);
-        }
-        return 5 + len;
 
     } else if (term_is_external_fun(t)) {
         if (!IS_NULL_PTR(buf)) {
@@ -855,6 +873,32 @@ static term parse_simple_term(const uint8_t *external_term_buf, size_t *eterm_si
             } else {
                 return term_from_const_binary((uint8_t *) external_term_buf + 5, binary_size, heap, glb);
             }
+        }
+
+        case BIT_BINARY_EXT: {
+            uint32_t binary_size = READ_32_UNALIGNED(external_term_buf + 1);
+            uint8_t last_byte_bits = external_term_buf[5];
+            // last_byte_bits is the number of significant bits in the trailing
+            // byte: 1..8 for a non-empty binary (8 means byte-aligned), 0 for
+            // an empty binary. Reject anything else, matching OTP.
+            if (UNLIKELY(last_byte_bits > 8 || ((last_byte_bits == 0) != (binary_size == 0)))) {
+                return term_invalid_term();
+            }
+            *eterm_size = 6 + binary_size;
+            term bin;
+            if (copy) {
+                bin = term_from_literal_binary((uint8_t *) external_term_buf + 6, binary_size, heap, glb);
+            } else {
+                bin = term_from_const_binary((uint8_t *) external_term_buf + 6, binary_size, heap, glb);
+            }
+            if (UNLIKELY(term_is_invalid_term(bin))) {
+                return bin;
+            }
+            // 8 significant bits (or an empty binary) means byte-aligned.
+            if (last_byte_bits >= 8 || binary_size == 0) {
+                return bin;
+            }
+            return term_alloc_sub_binary_bits(bin, 0, binary_size - 1, last_byte_bits, heap);
         }
 
         case EXPORT_EXT: {
@@ -1396,6 +1440,43 @@ static int calculate_simple_heap_usage(const uint8_t *external_term_buf, size_t 
             } else {
                 return TERM_BOXED_REFC_BINARY_SIZE;
             }
+        }
+
+        case BIT_BINARY_EXT: {
+            if (UNLIKELY(remaining < BIT_BINARY_EXT_BASE_SIZE)) {
+                return INVALID_TERM_SIZE;
+            }
+            uint32_t binary_size = READ_32_UNALIGNED(external_term_buf + 1);
+            uint8_t last_byte_bits = external_term_buf[5];
+            // See BIT_BINARY_EXT in parse_external_terms: 1..8 significant bits
+            // for a non-empty binary, 0 for an empty one.
+            if (UNLIKELY(last_byte_bits > 8 || ((last_byte_bits == 0) != (binary_size == 0)))) {
+                return INVALID_TERM_SIZE;
+            }
+            remaining -= BIT_BINARY_EXT_BASE_SIZE;
+            if (UNLIKELY(remaining < binary_size)) {
+                return INVALID_TERM_SIZE;
+            }
+            *eterm_size = BIT_BINARY_EXT_BASE_SIZE + binary_size;
+
+#if TERM_BYTES == 4
+            int size_in_terms = ((binary_size + 4 - 1) >> 2);
+#elif TERM_BYTES == 8
+            int size_in_terms = ((binary_size + 8 - 1) >> 3);
+#else
+#error
+#endif
+
+            size_t words;
+            if (copy && term_binary_size_is_heap_binary(binary_size)) {
+                words = 2 + size_in_terms;
+            } else {
+                words = TERM_BOXED_REFC_BINARY_SIZE;
+            }
+            if (last_byte_bits < 8 && binary_size != 0) {
+                words += TERM_BOXED_SUB_BINARY_SIZE;
+            }
+            return words;
         }
 
         case EXPORT_EXT: {

@@ -37,7 +37,16 @@ start() ->
     ok = test_create_with_invalid_int_value(),
     ok = test_create_with_invalid_int_size(),
     ok = test_create_with_int_unit(),
-    ok = test_create_with_unsupported_unaligned_int_size(),
+    ok = test_create_with_unaligned_int_size(),
+    ok = test_bitstring_compare(),
+    ok = test_bitstring_bif_guards(),
+    ok = test_bitstring_segments(),
+    ok = test_little_endian_unaligned(),
+    ok = test_bs_match_string_trailing(),
+    ok = test_dynamic_size_extraction(),
+    ok = test_signed_int_unaligned(),
+    ok = test_big_int_unaligned_unsupported(),
+    ok = test_non_pow2_unit(),
     ok = test_create_with_int_little_endian(),
     ok = test_create_with_int_signed(),
     ok = test_create_with_invalid_binary_value(),
@@ -146,8 +155,283 @@ test_create_with_int_unit() ->
     ),
     ok.
 
-test_create_with_unsupported_unaligned_int_size() ->
-    atom_unsupported(fun() -> create_int_binary(16#FFFF, id(28)) end).
+test_create_with_unaligned_int_size() ->
+    B = create_int_binary(16#FFFF, id(28)),
+    28 = bit_size(B),
+    4 = byte_size(B),
+    false = is_binary(B),
+    true = is_bitstring(B),
+    ok.
+
+test_bitstring_compare() ->
+    false = id(<<5:31>>) =:= id(<<5:24>>),
+    false = id(<<5:31>>) == id(<<5:24>>),
+    true = id(<<5:3>>) =:= id(<<5:3>>),
+    true = id(<<5:3>>) == id(<<5:3>>),
+    true = id(<<(id(5)):31>>) =:= id(<<5:31>>),
+    false = id(<<5:3>>) < id(<<4>>),
+    true = id(<<4>>) < id(<<5:3>>),
+    true = id(<<255>>) < id(<<255, 0:1>>),
+    true = id(<<255, 0:1>>) < id(<<255, 1:1>>),
+    true = id(<<1:1>>) > id(<<0:7>>),
+    true = id(<<>>) < id(<<0:1>>),
+    [<<>>, <<254>>, <<255>>, <<255, 0:1>>, <<255, 1:1>>] = sort_bitstrings(
+        id([<<255, 1:1>>, <<255>>, <<255, 0:1>>, <<254>>, <<>>])
+    ),
+    ok.
+
+% BIFs and NIFs that operate on binaries must badarg on a non-byte-aligned
+% bitstring instead of silently truncating it to whole bytes; a few
+% (byte_size/1, bit_size/1, size/1, split_binary/2) accept bitstrings.
+test_bitstring_bif_guards() ->
+    Bits9 = id(<<1:9>>),
+    Bits1 = id(<<1:1>>),
+    2 = byte_size(Bits9),
+    9 = bit_size(Bits9),
+    % size/1 rounds down to whole bytes, unlike byte_size/1 which rounds up
+    1 = size(Bits9),
+    0 = size(Bits1),
+    % is_bitstring accepts a non-byte-aligned bitstring, is_binary does not
+    true = erlang:is_bitstring(Bits9),
+    false = erlang:is_binary(Bits9),
+    true = erlang:is_bitstring(id(<<1, 2>>)),
+    true = erlang:is_binary(id(<<1, 2>>)),
+    false = erlang:is_bitstring(id({})),
+    % binary_part/3 and binary:part/3 badarg on a non-byte-aligned bitstring
+    % only since OTP 27; OTP 26 truncated to whole bytes. AtomVM follows the
+    % modern behavior.
+    HasBitstringPartGuard =
+        erlang:system_info(machine) =:= "ATOM" orelse
+            list_to_integer(erlang:system_info(otp_release)) >= 27,
+    case HasBitstringPartGuard of
+        true ->
+            expect_error(fun() -> binary_part(Bits9, 0, 1) end, badarg),
+            expect_error(fun() -> binary:part(Bits9, 0, 1) end, badarg);
+        false ->
+            ok
+    end,
+    % split_binary/2 keeps the trailing bits in the second part
+    {<<>>, <<0, 1:1>>} = split_binary(Bits9, 0),
+    {<<0>>, <<1:1>>} = split_binary(Bits9, 1),
+    expect_error(fun() -> split_binary(Bits9, 2) end, badarg),
+    expect_error(fun() -> iolist_to_binary(Bits1) end, badarg),
+    expect_error(fun() -> list_to_binary([Bits1]) end, badarg),
+    expect_error(fun() -> iolist_size(Bits1) end, badarg),
+    expect_error(fun() -> binary_to_atom(Bits1, utf8) end, badarg),
+    expect_error(fun() -> binary_to_list(Bits1) end, badarg),
+    expect_error(fun() -> binary_to_term(Bits1) end, badarg),
+    expect_error(fun() -> erlang:crc32(Bits1) end, badarg),
+    expect_error(fun() -> binary:at(Bits9, 0) end, badarg),
+    expect_error(fun() -> binary:copy(Bits1) end, badarg),
+    expect_error(fun() -> binary:split(Bits9, id(<<0>>)) end, badarg),
+    expect_error(fun() -> binary:first(Bits9) end, badarg),
+    expect_error(fun() -> binary:last(Bits9) end, badarg),
+    ok.
+
+% A bitstring used as a segment source must be copied bit-granularly; these
+% used to silently truncate the source to whole bytes. Expected values are
+% written in byte layout so they build through the byte-aligned path even if
+% the compiler does not constant-fold them.
+test_bitstring_segments() ->
+    Bits1 = id(<<1:1>>),
+    <<1:1>> = copy_bitstring(Bits1),
+    <<213, 1:1>> = append_to_bitstring(Bits1),
+    <<5:3>> = copy_bitstring(id(<<5:3>>)),
+    % explicit bit-sized bitstring segments
+    <<2:3>> = take_bits(id(<<2:3>>)),
+    <<5:4>> = sized_then_bit(id(<<2:3>>)),
+    <<T2:2/bits, _/bits>> = id(<<5:3>>),
+    <<2:2>> = T2,
+    % mixed bitstring segments and a byte segment at an unaligned offset
+    <<13:4>> = mix_bitstrings(Bits1, id(<<5:3>>)),
+    <<255, 255, 1:1>> = sandwich(Bits1),
+    ok.
+
+copy_bitstring(B) -> <<B/bitstring>>.
+append_to_bitstring(B) -> <<B/bitstring, 16#AB:8>>.
+take_bits(B) -> <<B:3/bitstring>>.
+sized_then_bit(B) -> <<B:3/bitstring, 1:1>>.
+mix_bitstrings(P, Q) -> <<P/bits, Q/bits>>.
+sandwich(P) -> <<255, P/bits, 255>>.
+
+% Little-endian integers whose width is not a multiple of 8 lay out complete
+% low-order bytes first, then the remaining high-order bits (OTP layout).
+% Expected values are written in byte layout (verified on OTP) so they do not
+% depend on the little-endian runtime path under test.
+test_little_endian_unaligned() ->
+    ok = check_le_cases([
+        {1, 1, <<1:1>>, <<11:4>>},
+        {4, 16#A, <<10:4>>, <<90:7>>},
+        {7, 16#55, <<85:7>>, <<181, 1:2>>},
+        {9, 16#155, <<85, 1:1>>, <<170, 11:4>>},
+        {12, 16#ABC, <<188, 10:4>>, <<183, 74:7>>},
+        {15, 16#5A5A, <<90, 90:7>>, <<171, 86, 2:2>>},
+        {63, 16#123456789ABCDEF, <<239, 205, 171, 137, 103, 69, 35, 1:7>>,
+            <<189, 249, 181, 113, 44, 232, 164, 96, 1:2>>}
+    ]),
+    % signed little-endian round trip of a negative value
+    <<251, 15:4>> = make_le(id(-5), id(12)),
+    <<S:12/little-signed>> = id(<<251, 15:4>>),
+    -5 = S,
+    ok.
+
+check_le_cases([]) ->
+    ok;
+check_le_cases([{W, V, Plain, Prefixed} | T]) ->
+    % construction, at bit offset 0 and after a 3-bit prefix
+    Plain = make_le(id(V), id(W)),
+    Prefixed = make_le_prefixed(id(V), id(W)),
+    % extraction (the inverse mapping), from byte-layout literals
+    <<X:W/little>> = id(Plain),
+    V = X,
+    <<_:3, Y:W/little>> = id(Prefixed),
+    V = Y,
+    check_le_cases(T).
+
+make_le(V, W) -> <<V:W/little>>.
+make_le_prefixed(V, W) -> <<5:3, V:W/little>>.
+
+% Literal matches that consume trailing bits must measure the source capacity
+% in bits, not whole bytes.
+test_bs_match_string_trailing() ->
+    ok = match_9(id(<<255, 1:1>>)),
+    nomatch = match_9(id(<<255, 0:1>>)),
+    nomatch = match_9(id(<<255>>)),
+    ok = match_long(id(<<"hello!!!", 5:3>>)),
+    nomatch = match_long(id(<<"hello!!!", 4:3>>)),
+    ok.
+
+match_9(<<255, 1:1>>) -> ok;
+match_9(_) -> nomatch.
+
+match_long(<<"hello!!!", 5:3>>) -> ok;
+match_long(_) -> nomatch.
+
+% Dynamic-size binary/bitstring segment extraction compiles to bs_get_binary2
+% (OTP 26 through at least 29 emit it; fixed sizes go through bs_match).
+% Sizes are bit-granular and the source offset may be unaligned.
+test_dynamic_size_extraction() ->
+    {<<1, 2>>, <<3>>} = dyn_binary(id(2), id(<<1, 2, 3>>)),
+    nope = dyn_binary(id(4), id(<<1, 2, 3>>)),
+    {<<5:3>>, <<1:1>>} = dyn_bits(id(3), id(<<5:3, 1:1>>)),
+    {<<255, 1:1>>, <<5:3>>} = dyn_bits(id(9), id(<<255, 1:1, 5:3>>)),
+    nope = dyn_bits(id(5), id(<<5:3, 1:1>>)),
+    % dynamic size at an unaligned offset
+    {<<2:2>>, <<1:1>>} = dyn_bits_after3(id(2), id(<<5:3, 2:2, 1:1>>)),
+    % an all-remaining binary tail fails on a non-byte-aligned remainder
+    nope = bin_tail_of(id(<<1:12>>)),
+    % a negative dynamic size fails the match, it does not raise
+    nope = dyn_binary(id(-1), id(<<1, 2, 3>>)),
+    nope = dyn_bits(id(-1), id(<<5:3, 1:1>>)),
+    % a bound segment with a unit other than 8 is only supported since
+    % bit-granular extraction; a negative size must still be rejected before it
+    % is scaled, as it is for the units the parent commit already covers
+    nope = dyn_binary_unit64(id(-1), id(<<1>>)),
+    nope = dyn_binary_unit64(id(-(1 bsl 58)), id(<<1>>)),
+    nope = dyn_binary_unit64(id(-(1 bsl 58) - 1), id(<<1>>)),
+    nope = u3(id(-(1 bsl 62)), id(<<5:6, 1:3>>)),
+    ok.
+
+% A non-power-of-two unit on a variable-size binary segment (BEAM emits
+% bs_get_binary2 with that unit); the JIT must handle what the interpreter does.
+test_non_pow2_unit() ->
+    {<<5:6>>, <<1:3>>} = u3(id(2), id(<<5:6, 1:3>>)),
+    nope = u3(id(4), id(<<5:6, 1:3>>)),
+    % `all` with a non-power-of-two unit: the remainder must be tested with a
+    % real remainder, not a mask, and the JIT must agree with the interpreter
+    <<5:6, 1:3>> = u3_all(id(<<5:6, 1:3>>)),
+    <<1:1, 2:2>> = u3_all(id(<<1:1, 2:2>>)),
+    <<>> = u3_all(id(<<>>)),
+    nope = u3_all(id(<<5:6, 1:2>>)),
+    nope = u3_all(id(<<1>>)),
+    % same, at a non-byte-aligned starting offset
+    <<3:3, 1:3>> = u3_all_after5(id(<<9:5, 3:3, 1:3>>)),
+    nope = u3_all_after5(id(<<9:5, 3:2>>)),
+    ok.
+
+u3(N, B) ->
+    case B of
+        <<X:N/binary-unit:3, R/bitstring>> -> {X, R};
+        _ -> nope
+    end.
+
+u3_all(B) ->
+    case B of
+        <<X/binary-unit:3>> -> X;
+        _ -> nope
+    end.
+
+u3_all_after5(B) ->
+    case B of
+        <<_:5, X/binary-unit:3>> -> X;
+        _ -> nope
+    end.
+
+% A signed integer of the full 64-bit width at a non-byte-aligned offset must
+% sign-extend correctly (guards a shift by the whole type width in the extractor).
+test_signed_int_unaligned() ->
+    AllOnes = id(<<16#0F, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#F0>>),
+    -1 = sig64_at4(AllOnes),
+    18446744073709551615 = uns64_at4(AllOnes),
+    -1000000000000 = sig64_at4(id(<<0:4, -1000000000000:64/signed, 0:4>>)),
+    42 = sig64_at4(id(<<0:4, 42:64/signed, 0:4>>)),
+    ok.
+
+% A >64-bit integer field at a non-byte-aligned offset is not supported yet
+% (BEAM matches it); AtomVM raises unsupported, as the construction side does.
+test_big_int_unaligned_unsupported() ->
+    atom_unsupported(fun() -> big72_at1(id(<<0:1, 42:72, 0:7>>)) end).
+
+big72_at1(B) ->
+    <<_:1, X:72, _:7>> = B,
+    X.
+
+sig64_at4(B) ->
+    <<_:4, X:64/signed, _:4>> = B,
+    X.
+
+uns64_at4(B) ->
+    <<_:4, X:64/unsigned, _:4>> = B,
+    X.
+
+dyn_binary(N, B) ->
+    case B of
+        <<A:N/binary, Rest/binary>> -> {A, Rest};
+        _ -> nope
+    end.
+
+dyn_bits(N, B) ->
+    case B of
+        <<X:N/bitstring, R/bits>> -> {X, R};
+        _ -> nope
+    end.
+
+dyn_binary_unit64(N, B) ->
+    case B of
+        <<X:N/binary-unit:64, R/bits>> -> {X, R};
+        _ -> nope
+    end.
+
+dyn_bits_after3(N, B) ->
+    case B of
+        <<_:3, X:N/bits, R/bits>> -> {X, R};
+        _ -> nope
+    end.
+
+bin_tail_of(B) ->
+    case B of
+        <<X/binary>> -> X;
+        _ -> nope
+    end.
+
+sort_bitstrings(L) -> sort_bitstrings(L, []).
+
+sort_bitstrings([], Sorted) -> Sorted;
+sort_bitstrings([H | T], Sorted) -> sort_bitstrings(T, insert_bitstring(Sorted, H)).
+
+insert_bitstring([], B) -> [B];
+insert_bitstring([H | T], B) when B < H -> [B, H | T];
+insert_bitstring([H | T], B) -> [H | insert_bitstring(T, B)].
 
 test_create_with_int_little_endian() ->
     <<2, 1>> = create_int_binary_little_endian(16#0102, 16),
@@ -186,7 +470,10 @@ test_create_with_binary_size_out_of_range() ->
     expect_error(fun() -> create_binary_binary(<<"foo">>, id(4)) end, badarg).
 
 test_create_with_unsupported_binary_unit() ->
-    atom_unsupported(fun() -> create_binary_binary_unit_3(<<"foo">>, id(3)) end).
+    % A binary segment whose size in bits is not a multiple of 8 takes a
+    % bit-granular prefix of the source (9 bits of <<"foo">> here).
+    <<102, 0:1>> = create_binary_binary_unit_3(<<"foo">>, id(3)),
+    ok.
 
 % Things are very broken here, we get {badmatch, <<16#FFFFFFFF:32>>} but
 % this term isn't equal to {badmatch, <<16#FFFFFFFF:32>>}
@@ -276,9 +563,10 @@ test_get_with_int_signed() ->
     ok.
 
 test_get_with_unaligned_binary() ->
-    atom_unsupported(fun() -> get_int_then_binary(<<1, 2, 3, 4>>, id(4), id(1)) end, fun(T) ->
-        T =:= badarg
-    end).
+    % A dynamic-size binary segment may start at an unaligned offset (the
+    % extracted slice is copied in that case).
+    {0, <<16>>} = get_int_then_binary(<<1, 2, 3, 4>>, id(4), id(1)),
+    ok.
 
 create_int_binary_unit_3(Value, Size) ->
     <<Value:Size/integer-big-unit:3>>.
