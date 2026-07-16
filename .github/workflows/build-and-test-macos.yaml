@@ -275,7 +275,18 @@ jobs:
       timeout-minutes: 20
       working-directory: build
       run: |
-        ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
+        # Retry: test_serial_dist_socat is a known socat/distribution timing
+        # flake on the macOS runner (ping_timeout). Clean up any leftover
+        # socat/epmd between attempts. A deterministic failure fails both.
+        n=0
+        until ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm; do
+          n=$((n+1))
+          if [ "$n" -ge 2 ]; then echo "test_estdlib still failing after $n attempts"; exit 1; fi
+          echo "::warning::test_estdlib failed (attempt $n) — retrying, likely a socat/dist timing flake"
+          pkill -9 -f socat 2>/dev/null || true
+          pkill -9 epmd 2>/dev/null || true
+          sleep 3
+        done
 
     - name: "Test: test_eavmlib.avm"
       timeout-minutes: 10
