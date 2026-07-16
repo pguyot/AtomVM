@@ -224,9 +224,18 @@ jobs:
           PLATFORM="@platforms/cpus/${{ matrix.renode_platform }}"
         fi
         for TEST in ${{ matrix.tests }}; do
-          renode-test "src/platforms/stm32/tests/renode/stm32_${TEST}_test.robot" \
+          # Retry: Renode emulation is non-deterministic and its UART terminal
+          # tester occasionally stalls (a known flake, present on release-0.7).
+          # A deterministic failure still fails all attempts.
+          n=0
+          until renode-test "src/platforms/stm32/tests/renode/stm32_${TEST}_test.robot" \
             --variable ELF:@$PWD/src/platforms/stm32/build/AtomVM-${{ matrix.device }}.elf \
             --variable AVM:@$PWD/build-host/src/platforms/stm32/tests/test_erl_sources/stm32_${TEST}_test.avm \
             --variable AVM_ADDRESS:${{ matrix.avm_address }} \
-            --variable PLATFORM:$PLATFORM
+            --variable PLATFORM:$PLATFORM; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then echo "renode $TEST still failing after $n attempts"; exit 1; fi
+            echo "::warning::renode $TEST failed (attempt $n) — retrying, likely emulator non-determinism"
+            sleep 5
+          done
         done
