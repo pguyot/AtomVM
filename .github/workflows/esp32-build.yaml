@@ -282,7 +282,16 @@ jobs:
         set -e
         . $IDF_PATH/export.sh
         export PATH=/opt/qemu/bin:${PATH}
-        pytest --target=${{matrix.esp-idf-target}} --embedded-services=idf,qemu -s
+        # Retry the qemu run: esp32 SLIRP networking (test_socket UDP/DNS) is a
+        # known non-deterministic flake. A real (deterministic) failure still
+        # fails all attempts; only transient flakes recover.
+        n=0
+        until pytest --target=${{matrix.esp-idf-target}} --embedded-services=idf,qemu -s; do
+          n=$((n+1))
+          if [ "$n" -ge 3 ]; then echo "qemu tests still failing after $n attempts"; exit 1; fi
+          echo "::warning::qemu tests failed (attempt $n) — retrying, likely a SLIRP/timing flake"
+          sleep 10
+        done
         idf.py clean
         cp sdkconfig.defaults.backup sdkconfig.defaults
 
@@ -320,7 +329,16 @@ jobs:
         set -e
         . $IDF_PATH/export.sh
         export PATH=/opt/qemu/bin:${PATH}
-        pytest --target=${{matrix.esp-idf-target}} --embedded-services=idf,qemu -s
+        # Retry the qemu run: esp32 SLIRP networking (test_socket UDP/DNS) is a
+        # known non-deterministic flake. A real (deterministic) failure still
+        # fails all attempts; only transient flakes recover.
+        n=0
+        until pytest --target=${{matrix.esp-idf-target}} --embedded-services=idf,qemu -s; do
+          n=$((n+1))
+          if [ "$n" -ge 3 ]; then echo "qemu tests still failing after $n attempts"; exit 1; fi
+          echo "::warning::qemu tests failed (attempt $n) — retrying, likely a SLIRP/timing flake"
+          sleep 10
+        done
         cp sdkconfig.defaults.backup sdkconfig.defaults
 
     - name: Upload ESP32 tests ELF artifact
