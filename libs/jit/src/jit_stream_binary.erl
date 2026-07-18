@@ -25,6 +25,7 @@
 -export([
     new/1,
     offset/1,
+    committed_offset/1,
     append/2,
     replace/3,
     map/4,
@@ -53,6 +54,19 @@ new(_MaxSize) ->
 -spec offset(stream()) -> non_neg_integer().
 offset(Stream) ->
     byte_size(Stream).
+
+%%-----------------------------------------------------------------------------
+%% @param Stream    stream to query
+%% @returns The backtrack horizon: the offset below which bytes are permanently
+%%          committed and can no longer be re-emitted. A plain binary is never
+%%          flushed until the caller takes it, so the whole stream stays
+%%          rewritable and the horizon is always 0.
+%% @doc     Get the backtrack horizon (see the redo/backtrack compile loop).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec committed_offset(stream()) -> non_neg_integer().
+committed_offset(_Stream) ->
+    0.
 
 %%-----------------------------------------------------------------------------
 %% @param Stream    stream to append to
