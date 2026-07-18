@@ -40,6 +40,7 @@
     call_primitive_with_cp/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
+    jump_to_label_cond/3,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -989,6 +990,68 @@ if_else_block(
         State2#state.regs, State3#state.regs, ?AVAILABLE_REGS_MASK
     ),
     State3#state{stream = Stream6, regs = MergedRegs}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Emit a single conditional branch to a label, taken exactly when Cond
+%% holds (the happy path falls through). This is the fused form of
+%% `if_block(Cond, fun(S) -> jump_to_label(S, Label) end)': instead of a
+%% skip-branch over an unconditional jump (two branches), it emits the compare
+%% and one conditional branch straight to Label.
+%%
+%% `if_block_cond' already lays down the compare followed by a `b(SkipCC, 0)'
+%% placeholder, where SkipCC is taken when Cond is *false* (it skips the block).
+%% We invert it to TakeCC (taken when Cond is true) and retarget the branch at
+%% the label. ARM32 conditional branches reach +/-32MB, so the single-branch
+%% form is always encodable — no range fallback is needed. `{'and', _}' guards
+%% keep the two-branch if_block form.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec jump_to_label_cond(state(), condition() | {'and', [condition()]}, integer() | reference()) ->
+    state().
+jump_to_label_cond(State0, {'and', _} = Cond, Label) ->
+    if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end);
+jump_to_label_cond(State0, Cond, Label) ->
+    %% Commit the label's live-in stores before the branch so the taken edge
+    %% sees them (committing early is safe on the fall-through edge too).
+    #state{stream_module = StreamModule} = State1 = pending_filter_label(State0, Label),
+    Offset0 = StreamModule:offset(State1#state.stream),
+    {State2, SkipCC, BranchInstrOffset} = if_block_cond(State1, Cond),
+    TakeCC = invert_cc(SkipCC),
+    BranchOffset = Offset0 + BranchInstrOffset,
+    #state{stream = Stream0, labels = Labels, branches = Branches} = State2,
+    State3 =
+        case Labels of
+            #{Label := LabelOffset} ->
+                Rel = LabelOffset - BranchOffset,
+                NewInstr = jit_arm32_asm:b(TakeCC, Rel),
+                Stream1 = StreamModule:replace(Stream0, BranchOffset, NewInstr),
+                State2#state{stream = Stream1};
+            _ ->
+                ExistingBrs = maps:get(Label, Branches, []),
+                State2#state{
+                    branches = Branches#{
+                        Label => [{BranchOffset, {cond_branch, TakeCC}} | ExistingBrs]
+                    }
+                }
+        end,
+    State3.
+
+%% ARM condition-code inversion: flips the low bit of the 4-bit encoding.
+-spec invert_cc(jit_arm32_asm:cc()) -> jit_arm32_asm:cc().
+invert_cc(eq) -> ne;
+invert_cc(ne) -> eq;
+invert_cc(cs) -> cc;
+invert_cc(cc) -> cs;
+invert_cc(mi) -> pl;
+invert_cc(pl) -> mi;
+invert_cc(vs) -> vc;
+invert_cc(vc) -> vs;
+invert_cc(hi) -> ls;
+invert_cc(ls) -> hi;
+invert_cc(ge) -> lt;
+invert_cc(lt) -> ge;
+invert_cc(gt) -> le;
+invert_cc(le) -> gt.
 
 -spec if_block_cond(state(), condition()) ->
     {state(), jit_arm32_asm:cc(), non_neg_integer()}.
