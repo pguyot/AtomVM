@@ -3908,3 +3908,54 @@ jump_to_label_cond_fused_backward_test() ->
     BranchOffset = byte_size(Fused) - 4,
     Rel = LabelOffset - BranchOffset,
     ?assertEqual(jit_riscv32_asm:bne(RegA, RegB, Rel), binary:part(Fused, BranchOffset, 4)).
+
+%% A forward fused guard branch is emitted optimistically and resolved at
+%% finalize (update_branches) to a single compare-and-branch once the target
+%% label offset is known. jit_stream_binary is backtrackable, so the forward
+%% path is taken.
+jump_to_label_cond_fused_forward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    {State3, RegB} = ?BACKEND:move_to_native_register(State2, {x_reg, 1}),
+    %% Forward guard jump to label 5 (not yet defined): optimistic 4-byte branch.
+    State4 = ?BACKEND:jump_to_label_cond(State3, {RegA, '!=', RegB}, 5),
+    BranchOffset = ?BACKEND:offset(State4) - 4,
+    %% Some more code, then define label 5 a short (in-range) distance ahead.
+    {State5, _} = ?BACKEND:move_to_native_register(State4, {x_reg, 2}),
+    LabelOffset = ?BACKEND:offset(State5),
+    State6 = ?BACKEND:add_label(State5, 5),
+    State7 = ?BACKEND:update_branches(State6),
+    %% Fit -> no overflow, and the placeholder is now a resolved bne to label 5.
+    ?assertEqual(#{}, ?BACKEND:take_overflows(State7)),
+    Stream = ?BACKEND:stream(State7),
+    Rel = LabelOffset - BranchOffset,
+    ?assertEqual(jit_riscv32_asm:bne(RegA, RegB, Rel), binary:part(Stream, BranchOffset, 4)).
+
+%% A fused guard branch whose target is beyond the ±4 KB B-type reach uses an
+%% inverted-sense skip over a jal to the label. This locks that composition
+%% (skip offset and jal relative distance) byte-exactly via a far backward jump.
+jump_to_label_cond_fused_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    LabelOffset = ?BACKEND:offset(State1),
+    State2 = ?BACKEND:add_label(State1, 1),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    {State4, RegB} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
+    %% ~4.8 KB of padding so label 1 is beyond the B-type window.
+    State5 = lists:foldl(
+        fun(N, S) -> ?BACKEND:move_to_vm_register(S, N, {x_reg, 0}) end,
+        State4,
+        lists:seq(1, 600)
+    ),
+    State6 = ?BACKEND:jump_to_label_cond(State5, {RegA, '!=', RegB}, 1),
+    Stream = ?BACKEND:stream(State6),
+    BranchOffset = byte_size(Stream) - 8,
+    Rel = LabelOffset - BranchOffset,
+    ?assert(Rel < -4096),
+    %% skip beq over the jal (8 bytes), then jal back to label 1 (rel = Rel-4).
+    Expected = <<
+        (jit_riscv32_asm:beq(RegA, RegB, 8))/binary,
+        (jit_riscv32_asm:jal(zero, Rel - 4))/binary
+    >>,
+    ?assertEqual(Expected, binary:part(Stream, BranchOffset, 8)).
