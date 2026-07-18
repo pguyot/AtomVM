@@ -226,9 +226,7 @@ compile(
             false -> MSt0
         end,
     MSt1 = MMod:jump_table(MSt0b, LabelsCount),
-    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1, State0),
-    MSt3 = finalize_pass(MMod, MSt2, State1),
-    MSt4 = MMod:flush(MSt3),
+    MSt4 = emit_finalize_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
     {LabelsCount, MSt4};
 compile(
     <<16:32, 0:32, OpcodeMax:32, _LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>>,
@@ -254,6 +252,39 @@ compile(
     _MSt
 ) ->
     error(badarg, [CodeChunk]).
+
+%% Emit + finalize, with the buffered-stream backtrack loop. Backends that fuse
+%% forward guard branches optimistically (see jump_to_label_cond) report any
+%% that overflowed their reservation via take_overflows/1; we then re-emit from
+%% the post-jump_table checkpoint (MSt1/State0 are pure terms on a buffered
+%% stream) with those branches pinned to the size they needed. Pinning only
+%% grows reservations and the maximum form fits any distance, so this converges;
+%% MaxAttempts is a backstop against a bug, never expected to bind. Backends
+%% without the hooks run a single pass identical to the previous behaviour.
+emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt) ->
+    MSt1b =
+        case erlang:function_exported(MMod, set_branch_hints, 2) of
+            true -> MMod:set_branch_hints(MSt1, Hints);
+            false -> MSt1
+        end,
+    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1b, State0),
+    MSt3 = finalize_pass(MMod, MSt2, State1),
+    Overflows =
+        case erlang:function_exported(MMod, take_overflows, 1) of
+            true -> MMod:take_overflows(MSt3);
+            false -> #{}
+        end,
+    MaxAttempts = 64,
+    case map_size(Overflows) of
+        0 ->
+            MMod:flush(MSt3);
+        _ when Attempt < MaxAttempts ->
+            emit_finalize_loop(
+                Opcodes, MMod, MSt1, State0, maps:merge(Hints, Overflows), Attempt + 1
+            );
+        _ ->
+            error({jit_branch_relaxation_did_not_converge, Attempt, map_size(Overflows)})
+    end.
 
 % 1
 emit_pass(
