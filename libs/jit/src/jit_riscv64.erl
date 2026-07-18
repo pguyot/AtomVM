@@ -40,6 +40,7 @@
     call_primitive_with_cp/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
+    jump_to_label_cond/3,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
