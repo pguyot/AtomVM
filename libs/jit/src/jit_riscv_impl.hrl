@@ -707,6 +707,118 @@ if_else_block(
     ),
     State3#state{stream = Stream6, regs = MergedRegs}.
 
+%%-----------------------------------------------------------------------------
+%% @doc Emit a conditional branch to a label, taken when Cond holds (the happy
+%% path falls through) -- the fused form of
+%% `if_block(Cond, fun(S) -> jump_to_label(S, Label) end)'.
+%%
+%% RISC-V has no flags; if_block_cond returns a compare-and-branch descriptor
+%% `{BranchFunc, Reg, Operand}' whose BranchFunc is taken when Cond is *false*
+%% (it skips the block). We invert BranchFunc to jump straight to the label
+%% when Cond is true.
+%%
+%% For a *backward* label the distance is known exactly, so we always emit the
+%% minimal correct form: a single B-type (±4 KB) collapses today's skip-branch
+%% + far-jump (12 bytes) into 4; larger spans use an inverted-skip + jal/far
+%% sequence. Forward labels (distance unknown at emit time on a page-flushed
+%% flash stream) keep the two-branch form for now -- the buffered-stream redo
+%% path and the flash look-ahead bound handle those. `{'and', _}' keeps
+%% if_block.
+%% @end
+%%-----------------------------------------------------------------------------
+jump_to_label_cond(State0, {'and', _} = Cond, Label) ->
+    if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end);
+jump_to_label_cond(#state{labels = Labels} = State0, Cond, Label) ->
+    case Labels of
+        #{Label := LabelOffset} ->
+            %% Backward: commit the label's live-ins first (ordering, and safe
+            %% on the fall-through edge), then emit the exact minimal branch.
+            #state{stream_module = StreamModule} = State1 = pending_filter_label(State0, Label),
+            Offset0 = StreamModule:offset(State1#state.stream),
+            {State2, {BranchFunc, Reg, Operand}, BranchDelta} = if_block_cond(State1, Cond),
+            BranchOffset = Offset0 + BranchDelta,
+            fuse_cond_branch_exact(State2, BranchFunc, Reg, Operand, BranchOffset, LabelOffset);
+        _ ->
+            %% Forward label: keep the safe two-branch form (fused later by the
+            %% buffered redo / flash look-ahead paths).
+            if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end)
+    end.
+
+%% @private
+%% Overwrite the 4-byte skip-branch placeholder if_block_cond just appended with
+%% the minimal branch-to-label sequence for the known distance Rel, growing the
+%% reservation (append 0xFF filler) when the sequence exceeds 4 bytes.
+fuse_cond_branch_exact(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    BranchFunc,
+    Reg,
+    Operand,
+    BranchOffset,
+    LabelOffset
+) ->
+    Rel = LabelOffset - BranchOffset,
+    Code =
+        if
+            Rel >= -4096 andalso Rel =< 4094 ->
+                %% Single B-type straight to the label, taken when Cond holds.
+                apply(?ASM, invert_branch_func(BranchFunc), [Reg, Operand, Rel]);
+            true ->
+                %% Inverted-sense skip over an unconditional jump to the label:
+                %% [BranchFunc Reg,Op -> past jump][jump -> label]. BranchFunc is
+                %% taken (skips) when Cond is false; falling through reaches the
+                %% jump, taken when Cond is true.
+                Avail = jit_regs:available_regs(Regs0),
+                TempReg =
+                    case Avail of
+                        0 -> t6;
+                        _ -> first_avail(Avail)
+                    end,
+                %% The jump sits 4 bytes after the skip branch.
+                Jump = branch_to_offset_code_at(State, BranchOffset + 4, LabelOffset, TempReg),
+                Skip = apply(?ASM, BranchFunc, [Reg, Operand, 4 + byte_size(Jump)]),
+                <<Skip/binary, Jump/binary>>
+        end,
+    %% if_block_cond reserved 4 bytes; grow the reservation if the sequence is
+    %% longer (0xFF filler keeps the flash bit-clear-only patch valid).
+    ExtraBytes = byte_size(Code) - 4,
+    Stream1 =
+        case ExtraBytes > 0 of
+            true -> StreamModule:append(Stream0, binary:copy(<<16#FF>>, ExtraBytes));
+            false -> Stream0
+        end,
+    Stream2 = StreamModule:replace(Stream1, BranchOffset, Code),
+    State#state{stream = Stream2}.
+
+%% @private
+%% Unconditional jump to LabelOffset emitted at JumpOffset, using a fixed temp
+%% register: c.j/jal for ±1 MB, auipc+jalr beyond. Mirrors branch_to_offset_code
+%% but with an explicit temp (the caller has already picked a free one).
+branch_to_offset_code_at(_State, JumpOffset, LabelOffset, _TempReg) when
+    LabelOffset - JumpOffset =< 1048574, LabelOffset - JumpOffset >= -1048576
+->
+    ?ASM:jal(zero, LabelOffset - JumpOffset);
+branch_to_offset_code_at(_State, JumpOffset, LabelOffset, TempReg) ->
+    Rel = LabelOffset - JumpOffset,
+    Hi20 = (Rel + 16#800) bsr 12,
+    Lo12Unsigned = Rel band 16#FFF,
+    Lo12 =
+        if
+            Lo12Unsigned >= 16#800 -> Lo12Unsigned - 16#1000;
+            true -> Lo12Unsigned
+        end,
+    I1 = ?ASM:auipc(TempReg, Hi20),
+    I2 = ?ASM:jalr(zero, TempReg, Lo12),
+    <<I1/binary, I2/binary>>.
+
+%% @private
+%% Invert a RISC-V compare-and-branch so it is taken on the opposite condition.
+invert_branch_func(beq) -> bne;
+invert_branch_func(bne) -> beq;
+invert_branch_func(blt) -> bge;
+invert_branch_func(bge) -> blt;
+invert_branch_func(bltu) -> bgeu;
+invert_branch_func(bgeu) -> bltu.
+
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
 ) ->

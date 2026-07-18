@@ -3885,3 +3885,26 @@ cached_move_to_vm_imm_reuse_test() ->
         "   4:	03f52623          	sw	t6,44(a0)"
     >>,
     ?assertStream(riscv32, Dump, Stream).
+
+%% jump_to_label_cond fuses a widenable guard into a single compare-and-branch
+%% to a backward label, in place of the two-branch skip + jump form.
+jump_to_label_cond_fused_backward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 4),
+    LabelOffset = ?BACKEND:offset(State1),
+    %% Label 1 sits here; the guard below jumps back to it.
+    State2 = ?BACKEND:add_label(State1, 1),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    {State4, RegB} = ?BACKEND:move_to_native_register(State3, {x_reg, 1}),
+    %% "jump to label 1 when RegA != RegB": a single bne back to label 1.
+    Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State4, {RegA, '!=', RegB}, 1)),
+    Fallback = ?BACKEND:stream(
+        ?BACKEND:if_block(State4, {RegA, '!=', RegB}, fun(BSt0) ->
+            ?BACKEND:jump_to_label(BSt0, 1)
+        end)
+    ),
+    ?assert(byte_size(Fused) < byte_size(Fallback)),
+    %% The fused guard ends with exactly one B-type bne straight to label 1.
+    BranchOffset = byte_size(Fused) - 4,
+    Rel = LabelOffset - BranchOffset,
+    ?assertEqual(jit_riscv32_asm:bne(RegA, RegB, Rel), binary:part(Fused, BranchOffset, 4)).
