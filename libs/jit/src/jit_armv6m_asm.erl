@@ -21,6 +21,7 @@
 -export([
     add/2,
     add/3,
+    cond_to_num/1,
     adds/2,
     adds/3,
     sub/2,
