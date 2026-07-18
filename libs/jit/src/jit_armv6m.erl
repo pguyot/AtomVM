@@ -40,6 +40,7 @@
     call_primitive_with_cp/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
+    jump_to_label_cond/3,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -171,7 +172,10 @@
 
 -type stream() :: any().
 -type branch_type() ::
-    {adr, armv6m_register()} | b_w | {far_branch, non_neg_integer(), armv6m_register()}.
+    {adr, armv6m_register()}
+    | b_w
+    | {cond_branch_w, jit_armv6m_asm:cc()}
+    | {far_branch, non_neg_integer(), armv6m_register()}.
 
 -record(state, {
     stream_module :: module(),
@@ -488,6 +492,11 @@ patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
             {adr, Reg} when Rel rem 4 =:= 2 -> jit_armv6m_asm:adr(Reg, Rel + 2);
             b_w ->
                 jit_armv7m_asm:b_w(Rel - 4);
+            {cond_branch_w, CC} ->
+                %% Fused conditional guard jump (thumb2 only): a single
+                %% B<cc>.W straight to the label, ±1MB. Emitted by
+                %% jump_to_label_cond in place of a skip-branch + far jump.
+                jit_armv7m_asm:b_w(CC, Rel - 4);
             {far_branch, Size, TempReg} ->
                 % Check if branch can now be optimized to near branch
                 if
@@ -1197,6 +1206,116 @@ if_else_block(
         State2#state.regs, State3#state.regs, ?AVAILABLE_REGS_MASK
     ),
     State3#state{stream = Stream6, regs = MergedRegs}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Emit a single conditional branch to a label, taken when Cond holds
+%% (the happy path falls through) -- the fused form of
+%% `if_block(Cond, fun(S) -> jump_to_label(S, Label) end)'.
+%%
+%% Only ARMv7-M (thumb2) can do this: it has B<cond>.W with a ±1MB reach, so a
+%% guard fail-jump collapses from a skip-branch plus a heavyweight far-jump
+%% sequence (12..20 bytes) to one 4-byte instruction. On ARMv6-M (no wide
+%% conditional branch) and for the zero-compare conditions that compile to
+%% cbz/cbnz (forward-only, non-invertible), we keep the two-branch if_block
+%% form. Like aarch64, forward reach is estimated from a label-progress proxy;
+%% out-of-range jumps also fall back. `{'and', _}' guards keep if_block.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec jump_to_label_cond(state(), condition() | {'and', [condition()]}, integer() | reference()) ->
+    state().
+jump_to_label_cond(#state{stream_module = StreamModule, thumb2 = Thumb2} = State0, Cond, Label) ->
+    Offset0 = StreamModule:offset(State0#state.stream),
+    case Thumb2 andalso widenable_cond(Cond) andalso wide_cond_in_range(State0, Label, Offset0) of
+        true ->
+            %% Commit the label's live-in stores before the branch so the taken
+            %% edge sees them (committing early is safe on the fall-through edge
+            %% too, and is idempotent with jump_to_label's own filtering).
+            State1 = pending_filter_label(State0, Label),
+            Offset1 = StreamModule:offset(State1#state.stream),
+            {State2, CC, BranchDelta} = if_block_cond(State1, Cond),
+            %% widenable_cond guarantees an atom CC (a 2-byte bcc placeholder).
+            true = is_atom(CC),
+            fuse_wide_cond_branch(State2, invert_cc(CC), Label, Offset1 + BranchDelta);
+        false ->
+            if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end)
+    end.
+
+%% @private
+%% The conditions that if_block_cond compiles to a plain flag-based bcc (a
+%% 2-byte placeholder with an atom CC) -- i.e. everything except the zero
+%% compares, which yield cbz/cbnz (forward-only, not widenable), and the
+%% multi-condition `{'and', _}' form. Conservative: anything unrecognised
+%% falls back to the two-branch form, which is always correct.
+widenable_cond({_, '==', 0}) -> false;
+widenable_cond({_, '!=', 0}) -> false;
+widenable_cond({'(int)', _, '==', 0}) -> false;
+widenable_cond({'(int)', _, '!=', 0}) -> false;
+widenable_cond({'and', _}) -> false;
+widenable_cond(_) -> true.
+
+%% @private
+%% Is Label reachable by a single B<cond>.W (±1MB) from a branch emitted around
+%% Offset? Backward labels use the exact known distance; forward labels use the
+%% same label-progress proxy as aarch64 (average bytes-per-label so far times
+%% the number of labels still to come), kept well under 1MB for margin. Stub
+%% references (rare) are not fused.
+wide_cond_in_range(#state{labels = Labels}, Label, Offset) ->
+    case Labels of
+        #{Label := LabelOffset} ->
+            Rel = LabelOffset - Offset,
+            Rel >= -16#F0000 andalso Rel =< 16#F0000;
+        _ when is_integer(Label) ->
+            Emitted = maps:size(Labels),
+            Emitted > 0 andalso (Label - Emitted) * (Offset div Emitted) < 16#60000;
+        _ ->
+            false
+    end.
+
+%% @private
+%% Turn the 2-byte bcc placeholder if_block_cond just appended at BranchOffset
+%% into a 4-byte B<cond>.W to Label: append two filler bytes to reserve the
+%% width, then patch it now for a known (backward) label or record a
+%% {cond_branch_w, CC} relocation for a forward one.
+fuse_wide_cond_branch(
+    #state{stream_module = StreamModule, stream = Stream0, labels = Labels, branches = Branches} =
+        State,
+    TakeCC,
+    Label,
+    BranchOffset
+) ->
+    Stream1 = StreamModule:append(Stream0, <<16#FFFF:16>>),
+    case Labels of
+        #{Label := LabelOffset} ->
+            Instr = jit_armv7m_asm:b_w(TakeCC, LabelOffset - BranchOffset - 4),
+            Stream2 = StreamModule:replace(Stream1, BranchOffset, Instr),
+            State#state{stream = Stream2};
+        _ ->
+            ExistingBrs = maps:get(Label, Branches, []),
+            State#state{
+                stream = Stream1,
+                branches = Branches#{
+                    Label => [{BranchOffset, {cond_branch_w, TakeCC}} | ExistingBrs]
+                }
+            }
+    end.
+
+%% @private
+%% ARM condition-code inversion: flips the low bit of the 4-bit encoding.
+-spec invert_cc(jit_armv6m_asm:cc()) -> jit_armv6m_asm:cc().
+invert_cc(eq) -> ne;
+invert_cc(ne) -> eq;
+invert_cc(cs) -> cc;
+invert_cc(cc) -> cs;
+invert_cc(mi) -> pl;
+invert_cc(pl) -> mi;
+invert_cc(vs) -> vc;
+invert_cc(vc) -> vs;
+invert_cc(hi) -> ls;
+invert_cc(ls) -> hi;
+invert_cc(ge) -> lt;
+invert_cc(lt) -> ge;
+invert_cc(gt) -> le;
+invert_cc(le) -> gt.
 
 %% @private
 %% Regenerate the conditional branch that skips an if-block, given the patched

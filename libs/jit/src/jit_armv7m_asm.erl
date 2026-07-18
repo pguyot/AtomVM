@@ -32,6 +32,7 @@
 
 -export([
     b_w/1,
+    b_w/2,
     cbz/2,
     cbnz/2,
     movw/2,
@@ -80,6 +81,47 @@ b_w(Offset) when
     HW2 = (2#10 bsl 14) bor (J1 bsl 13) bor (1 bsl 12) bor (J2 bsl 11) bor Imm11,
     <<HW1:16/little, HW2:16/little>>;
 b_w(Offset) ->
+    error({unencodable_branch_offset, Offset}).
+
+%%-----------------------------------------------------------------------------
+%% Thumb-2 32-bit conditional branch (B<cond>.W)
+%%
+%% Encoding T3 (ARMv7-M):
+%%   First halfword:  11110 S cond[3:0] imm6[5:0]
+%%   Second halfword: 10 J1 0 J2 imm11[10:0]
+%%
+%% Where (unlike the T4 unconditional form, J1/J2 are NOT inverted with S):
+%%   imm32 = SignExtend(S:J2:J1:imm6:imm11:0, 21)
+%%
+%% Range: -1048576 to +1048574 (±1 MB), 2-byte aligned. cond is any real
+%% condition (0..13); AL/unconditional uses the T4 form (b_w/1) instead.
+%%
+%% The offset is relative to PC (instruction address + 4).
+%%-----------------------------------------------------------------------------
+-spec b_w(jit_armv6m_asm:cc(), integer()) -> binary().
+b_w(Cond, Offset) when
+    is_atom(Cond),
+    is_integer(Offset),
+    Offset >= -1048576,
+    Offset =< 1048574,
+    (Offset rem 2) =:= 0
+->
+    CondNum = jit_armv6m_asm:cond_to_num(Cond),
+    %% cond must be a real condition; AL (14) / reserved (15) are not encodable
+    %% in T3 (the unconditional wide branch is b_w/1).
+    true = CondNum =< 13,
+    %% imm32 = SignExtend(S:J2:J1:imm6:imm11:0, 21); drop the low zero bit to
+    %% get the 20-bit value S:J2:J1:imm6:imm11.
+    Imm20 = (Offset bsr 1) band 16#FFFFF,
+    S = (Imm20 bsr 19) band 1,
+    J2 = (Imm20 bsr 18) band 1,
+    J1 = (Imm20 bsr 17) band 1,
+    Imm6 = (Imm20 bsr 11) band 16#3F,
+    Imm11 = Imm20 band 16#7FF,
+    HW1 = (2#11110 bsl 11) bor (S bsl 10) bor (CondNum bsl 6) bor Imm6,
+    HW2 = (2#10 bsl 14) bor (J1 bsl 13) bor (J2 bsl 11) bor Imm11,
+    <<HW1:16/little, HW2:16/little>>;
+b_w(_Cond, Offset) ->
     error({unencodable_branch_offset, Offset}).
 
 %%-----------------------------------------------------------------------------
