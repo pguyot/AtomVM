@@ -159,3 +159,25 @@ rem_thumb2_test() ->
         "   8:	fb05 7716 	mls	r7, r5, r6, r7"
     >>,
     ?assertStream(arm_thumb2, Dump, Stream).
+
+%% jump_to_label_cond fuses a widenable guard into one B<cond>.W (thumb2 only),
+%% in place of the two-branch skip + jump form. Backward label here; the win is
+%% larger on forward jumps (where the fallback reserves a far-branch sequence).
+jump_to_label_cond_fused_thumb2_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 4),
+    %% Label 1 sits at the current (4-aligned) offset; the guard jumps back to it.
+    State2 = ?BACKEND:add_label(State1, 1),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    %% "jump to label 1 when RegA != 5": cmp r7,#5 + a single b<ne>.w back to it.
+    Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State3, {RegA, '!=', 5}, 1)),
+    Fallback = ?BACKEND:stream(
+        ?BACKEND:if_block(State3, {RegA, '!=', 5}, fun(BSt0) ->
+            ?BACKEND:jump_to_label(BSt0, 1)
+        end)
+    ),
+    %% Single fused branch is strictly smaller than the two-branch fallback.
+    ?assert(byte_size(Fused) < byte_size(Fallback)),
+    %% ...and it ends with exactly one B<ne>.W to label 1, eight bytes back
+    %% (ldr + cmp + b.w after the aligned label leaves the branch at label+8).
+    ?assertEqual(jit_armv7m_asm:b_w(ne, -8), binary:part(Fused, byte_size(Fused) - 4, 4)).
