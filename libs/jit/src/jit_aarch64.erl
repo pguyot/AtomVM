@@ -36,6 +36,10 @@
     update_branches/1,
     call_primitive/3,
     call_primitive_last/3,
+    add_deferred_raise/5,
+    take_deferred_raises/1,
+    reset_regs_fresh/1,
+    jump_to_label_cond/3,
     call_primitive_with_cp/3,
     call_primitive_with_cp_direct/3,
     call_primitive_direct/3,
@@ -218,7 +222,13 @@
     %% call_only blocks emitted before their target label existed branch to
     %% the cold entry; when a later site would reuse one and the label has
     %% since gained a hot entry, a fresh block is emitted instead.
-    cold_call_blocks = #{} :: #{non_neg_integer() => integer()}
+    cold_call_blocks = #{} :: #{non_neg_integer() => integer()},
+    %% Deferred (outlined) raise blocks: {StubRef, SiteOffset, Prim, ExtraArgs}.
+    %% The raise site branches to StubRef (happy path falls through); the actual
+    %% tail-calling raise is emitted at the module tail by flush_deferred_raises,
+    %% deduped per {Prim, ExtraArgs} since ctx/jit_state are pinned (x0/x1) and
+    %% the per-site offset is reloaded from a fresh register at each stub.
+    deferred_raises = [] :: [{reference(), non_neg_integer(), non_neg_integer(), [arg()]}]
 }).
 
 -type state() :: #state{}.
@@ -682,6 +692,39 @@ call_primitive_last(
     }.
 
 %%-----------------------------------------------------------------------------
+%% @doc Record a deferred (outlined) raise. The raise site has already branched
+%% to `StubRef' when the error condition holds; the tail-calling raise itself is
+%% emitted at the module tail by `jit:flush_deferred_raises/2'. `SiteOffset' is
+%% the site's native offset, used to reconstruct the exception's line number.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_deferred_raise(state(), reference(), non_neg_integer(), non_neg_integer(), [arg()]) ->
+    state().
+add_deferred_raise(#state{deferred_raises = DR} = State, StubRef, SiteOffset, Prim, ExtraArgs) ->
+    State#state{deferred_raises = [{StubRef, SiteOffset, Prim, ExtraArgs} | DR]}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Return the recorded deferred raises (in emission order) and clear them.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec take_deferred_raises(state()) ->
+    {[{reference(), non_neg_integer(), non_neg_integer(), [arg()]}], state()}.
+take_deferred_raises(#state{deferred_raises = DR} = State) ->
+    {lists:reverse(DR), State#state{deferred_raises = []}}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Reset the tracked register state to fresh (all scratch available, no
+%% contents), used at the head of each outlined raise stub: the stub is entered
+%% only by its site's branch and does nothing but reload its offset and
+%% tail-call, so it may clobber freely -- and a deterministic fresh state makes
+%% the offset register identical across stubs, so same-shape stubs dedup.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec reset_regs_fresh(state()) -> state().
+reset_regs_fresh(#state{regs = Regs} = State) ->
+    State#state{regs = jit_regs:set_masks(jit_regs:invalidate_all(Regs), avail_mask(State), 0)}.
+
+%%-----------------------------------------------------------------------------
 %% @doc Emit a return of a value if it's not equal to ctx.
 %% This logic is used to break out to the scheduler, typically after signal
 %% messages have been processed.
@@ -751,6 +794,97 @@ jump_to_label(
                 regs = jit_regs:unreachable(State#state.regs)
             }
     end.
+
+%%-----------------------------------------------------------------------------
+%% @doc Emit a single conditional branch to `Label' when `Cond' holds; the happy
+%% path falls through. This is the branch-if-true dual of `if_block' (which
+%% branches over its body when the condition is false), so a guard's fail-jump
+%% costs one taken-only branch instead of a skip + unconditional jump, and the
+%% not-taken fall-through is the common, well-predicted path. For the register
+%% test forms (tbz/cbz), which `update_branches' cannot patch to a label, keep
+%% the placeholder as a skip over an unconditional branch (the previous
+%% two-branch shape). Pending x-register stores the label needs are committed
+%% first, exactly as `jump_to_label' does, so both edges see a consistent heap.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec jump_to_label_cond(state(), tuple(), integer() | reference()) -> state().
+jump_to_label_cond(StateP, {'and', _} = Cond, Label) ->
+    %% Compound AND: a single conditional branch cannot express "all hold", so
+    %% fall back to the block form (each sub-condition skips past the branch),
+    %% which if_block already handles.
+    if_block(StateP, Cond, fun(BSt) -> jump_to_label(BSt, Label) end);
+jump_to_label_cond(StateP, Cond, Label) ->
+    #state{stream_module = SM, labels = Labels} = State = pending_filter_label(StateP, Label),
+    Offset0 = SM:offset(State#state.stream),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State, Cond),
+    BranchOffset = Offset0 + BranchInstrOffset,
+    %% A `bcc' reaches only +/-1MB (imm19). For a backward label the exact
+    %% distance is known. For a forward BEAM label the byte offset is not known
+    %% yet, so estimate it from the running bytes-per-label density and the
+    %% number of labels still ahead ((target - emitted) * avg): guard fail-jumps
+    %% are intra-function, so this tracks the real distance closely, and a
+    %% generous margin (well under the +/-1MB `bcc' reach) absorbs the estimate's
+    %% imprecision. When over budget -- or for the far module-tail stub refs --
+    %% keep the full-range two-branch form (bcc skip + `b'), the prior behaviour.
+    InBccRange =
+        case Labels of
+            #{Label := LabelOffset} ->
+                abs(LabelOffset - BranchOffset) < 16#F0000;
+            _ when is_integer(Label) ->
+                Emitted = maps:size(Labels),
+                Emitted > 0 andalso
+                    (Label - Emitted) * (BranchOffset div Emitted) < 16#60000;
+            _ ->
+                false
+        end,
+    case is_atom(CC) andalso InBccRange of
+        true ->
+            record_label_branch(State1, Label, BranchOffset, {bcc, invert_cc(CC)});
+        false ->
+            #state{stream = Stream1} = State1,
+            BOffset = SM:offset(Stream1),
+            Stream2 = SM:append(Stream1, jit_aarch64_asm:b(0)),
+            AfterOffset = SM:offset(Stream2),
+            CondSkip = rewrite_branch_instruction(CC, AfterOffset - BranchOffset),
+            Stream3 = SM:replace(Stream2, BranchOffset, CondSkip),
+            record_label_branch(State1#state{stream = Stream3}, Label, BOffset, b)
+    end.
+
+%% Record (or, if the label offset is already known, immediately patch) a branch
+%% of the given type to Label. Unlike jump_to_label the fall-through remains
+%% reachable, so the register state is left as-is (not marked unreachable).
+record_label_branch(
+    #state{stream_module = SM, stream = Stream, branches = Branches, labels = Labels} = State,
+    Label,
+    BrOffset,
+    Type
+) ->
+    case Labels of
+        #{Label := LabelOffset} ->
+            State#state{stream = patch_branch(SM, Stream, BrOffset, Type, LabelOffset)};
+        _ ->
+            Existing = maps:get(Label, Branches, []),
+            State#state{branches = Branches#{Label => [{BrOffset, Type} | Existing]}}
+    end.
+
+%% Invert an aarch64 condition code (if_block_cond returns the branch-if-false
+%% code; jump_to_label_cond needs branch-if-true).
+invert_cc(eq) -> ne;
+invert_cc(ne) -> eq;
+invert_cc(ge) -> lt;
+invert_cc(lt) -> ge;
+invert_cc(le) -> gt;
+invert_cc(gt) -> le;
+invert_cc(ls) -> hi;
+invert_cc(hi) -> ls;
+invert_cc(lo) -> hs;
+invert_cc(hs) -> lo;
+invert_cc(cc) -> cs;
+invert_cc(cs) -> cc;
+invert_cc(mi) -> pl;
+invert_cc(pl) -> mi;
+invert_cc(vs) -> vc;
+invert_cc(vc) -> vs.
 
 jump_to_offset(#state{cold_call_blocks = CB, loop_entries = LE} = StateP, TargetOffset) when
     is_map_key(TargetOffset, CB) andalso is_map_key(map_get(TargetOffset, CB), LE)
