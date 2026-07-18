@@ -7153,11 +7153,67 @@ verify_is_binary(Arg1, FailLabel, MMod, MSt0) ->
     MMod:free_native_registers(MSt6, [Reg]).
 
 cond_raise_badarg(Cond, MMod, MSt0) ->
-    MMod:if_block(MSt0, Cond, fun(BlockSt) ->
-        MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-            ctx, jit_state, offset, ?BADARG_ATOM
-        ])
-    end).
+    case supports_deferred_raise(MMod) of
+        true ->
+            cond_raise_outlined(Cond, ?PRIM_RAISE_ERROR, [?BADARG_ATOM], MMod, MSt0);
+        false ->
+            MMod:if_block(MSt0, Cond, fun(BlockSt) ->
+                MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?BADARG_ATOM
+                ])
+            end)
+    end.
+
+%% Whether the backend can outline raise blocks to the module tail (see
+%% cond_raise_outlined/5 and flush_deferred_raises/2).
+supports_deferred_raise(MMod) ->
+    erlang:function_exported(MMod, add_deferred_raise, 5).
+
+%% Emit a conditionally-taken raise whose body is deferred to the module tail:
+%% the site only branches to a fresh stub label when the error condition holds,
+%% so the happy path is not interleaved with the (cold) raise setup. The stub
+%% and its dedup are emitted later by flush_deferred_raises/2. SiteOffset is
+%% captured here so the outlined raise reports the site's line, not the tail's.
+cond_raise_outlined(Cond, Prim, ExtraArgs, MMod, MSt0) ->
+    SiteOffset = MMod:offset(MSt0),
+    StubRef = make_ref(),
+    MSt1 = cond_jump_to_label(Cond, StubRef, MMod, MSt0),
+    MMod:add_deferred_raise(MSt1, StubRef, SiteOffset, Prim, ExtraArgs).
+
+%% Emit the deferred raise stubs at the module tail. Blocks with the same
+%% {Prim, ExtraArgs} are shared: the per-site offset is reloaded into a fresh
+%% register (deterministic, since reset_regs_fresh gives an identical state),
+%% then the first occurrence emits the tail-calling raise and later ones branch
+%% to it. ctx/jit_state are pinned, so the shared body only reads that register.
+flush_deferred_raises(MMod, MSt0) ->
+    case erlang:function_exported(MMod, take_deferred_raises, 1) of
+        false ->
+            MSt0;
+        true ->
+            {Deferred, MSt1} = MMod:take_deferred_raises(MSt0),
+            {_Cache, MStN} = lists:foldl(
+                fun({StubRef, SiteOffset, Prim, ExtraArgs}, {Cache, MStA}) ->
+                    MStB = MMod:add_label(MStA, StubRef),
+                    MStC = MMod:reset_regs_fresh(MStB),
+                    {MStD, OffsetReg} = MMod:move_to_native_register(MStC, SiteOffset),
+                    Key = {Prim, ExtraArgs},
+                    case Cache of
+                        #{Key := SharedOffset} ->
+                            MStE = MMod:jump_to_offset(MStD, SharedOffset),
+                            {Cache, MMod:free_native_registers(MStE, [OffsetReg])};
+                        _ ->
+                            SharedOffset = MMod:offset(MStD),
+                            MStE = MMod:call_primitive_last(MStD, Prim, [
+                                ctx, jit_state, {free, OffsetReg} | ExtraArgs
+                            ]),
+                            {Cache#{Key => SharedOffset}, MStE}
+                    end
+                end,
+                {#{}, MSt1},
+                Deferred
+            ),
+            MStN
+    end.
 
 cond_raise_badarg_or_jump_to_fail_label(Cond, 0, MMod, MSt0) ->
     cond_raise_badarg(Cond, MMod, MSt0);
@@ -7865,8 +7921,11 @@ record_continuation_line(MMod, MSt, #state{current_line = Line, line_offsets = A
 
 finalize_pass(MMod, MSt0, #state{line_offsets = Lines}) ->
     ?TRACE("SECOND PASS -- ~B lines\n", [length(Lines)]),
+    % Emit any deferred (outlined) raise stubs at the module tail, before the
+    % label/line metadata function, so their branches resolve in update_branches.
+    MStF = flush_deferred_raises(MMod, MSt0),
     % Add extra function that returns labels and line information
-    MSt1 = MMod:add_label(MSt0, 0),
+    MSt1 = MMod:add_label(MStF, 0),
     SortedLines = lists:keysort(2, Lines),
     MSt2 = MMod:return_labels_and_lines(MSt1, SortedLines),
     MMod:update_branches(MSt2).
@@ -8235,9 +8294,14 @@ term_get_tuple_arity(Tuple, MMod, MSt0) ->
     {MSt4, ArityReg}.
 
 handle_error_if(Cond, MMod, MSt0) ->
-    MMod:if_block(MSt0, Cond, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
-    end).
+    case supports_deferred_raise(MMod) of
+        true ->
+            cond_raise_outlined(Cond, ?PRIM_HANDLE_ERROR, [], MMod, MSt0);
+        false ->
+            MMod:if_block(MSt0, Cond, fun(BSt0) ->
+                MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
+            end)
+    end.
 
 cond_jump_to_label(Cond, Label, MMod, MSt0) ->
     case erlang:function_exported(MMod, jump_to_label_cond, 3) of
