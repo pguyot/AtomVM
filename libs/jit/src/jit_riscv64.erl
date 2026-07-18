@@ -41,6 +41,8 @@
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
     jump_to_label_cond/3,
+    set_branch_hints/2,
+    take_overflows/1,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -200,7 +202,16 @@
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
     pending_x = #{} ::
         #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
-    cond_depth = 0 :: non_neg_integer()
+    cond_depth = 0 :: non_neg_integer(),
+    %% Buffered-stream backtrack (see jump_to_label_cond forward path): forward
+    %% fused guard branches are emitted optimistically at a size taken from
+    %% branch_hints (default 4), resolved at finalize, and any that overflow
+    %% their reservation are reported in overflows so jit:compile can re-emit
+    %% them pinned larger. branch_counter gives each a stable id across re-emits.
+    branch_hints = #{} :: #{non_neg_integer() => pos_integer()},
+    branch_counter = 0 :: non_neg_integer(),
+    fused_branches = [] :: [tuple()],
+    overflows = #{} :: #{non_neg_integer() => pos_integer()}
 }).
 
 -type state() :: #state{}.
