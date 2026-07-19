@@ -134,6 +134,15 @@ typedef enum run_result_t
 
 struct GlobalContext
 {
+    // modules_by_index is read locklessly on every cross-module call and
+    // return: entries are written once (under modules_lock) and the array is
+    // grown by publishing a fresh copy, so readers only need atomic loads.
+    // Retired (pre-growth) arrays stay allocated until globalcontext_destroy
+    // as concurrent readers may still hold them.
+    // First field on purpose: generated native code loads it at offset 0
+    // (config-gated fields elsewhere in this struct would shift any other
+    // offset); pinned by a _Static_assert in jit.c.
+    Module *ATOMIC *ATOMIC modules_by_index;
     struct ListHead ready_processes;
     struct ListHead running_processes;
     struct ListHead waiting_processes;
@@ -182,12 +191,7 @@ struct GlobalContext
 #ifndef AVM_NO_SMP
     RWLock *modules_lock;
 #endif
-    // modules_by_index is read locklessly on every cross-module call and
-    // return: entries are written once (under modules_lock) and the array is
-    // grown by publishing a fresh copy, so readers only need atomic loads.
-    // Retired (pre-growth) arrays stay allocated until globalcontext_destroy
-    // as concurrent readers may still hold them.
-    Module *ATOMIC *ATOMIC modules_by_index;
+    // modules_by_index lives at the top of this struct (see there).
     int modules_by_index_capacity;
     struct ListHead modules_by_index_retired;
     int ATOMIC loaded_modules_count;
