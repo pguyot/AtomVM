@@ -18,6 +18,8 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
+// Assertions are the point of this suite: keep them in every build type.
+#undef NDEBUG
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -921,6 +923,266 @@ void test_cache_valid_ignores_foreign_packs(void)
     fprintf(stderr, "PASS: Cache validity ignores foreign packs test\n");
 }
 
+// --- Held-buffer stream tests -----------------------------------------------
+// The stream holds un-flushed pages in RAM: nothing is written to flash until
+// the compiler declares a prefix final via flush_upto/2 (or the final flush).
+// committed_offset/1 returns the flush horizon. This lets the JIT resolve
+// optimistic forward fused branches in-buffer with arbitrary rewrites, while
+// anything below the horizon only ever receives bit-clear (0xFF-placeholder)
+// patches.
+
+// Entry anchors at mock_flash + 0x1000 (first sector after the pack), so code
+// starts at 0x1000 + sizeof(struct JITEntry).
+#define TEST_ENTRY_OFFSET 0x1000
+#define TEST_CODE_OFFSET (TEST_ENTRY_OFFSET + sizeof(struct JITEntry))
+
+static term setup_held_stream(GlobalContext **glb_out, Context **ctx_out)
+{
+    memset(mock_flash, 0x00, MOCK_FLASH_SIZE);
+    memset(&mock_flash[0], 0xFF, FLASH_SECTOR_SIZE); // first sector with AVM
+
+    GlobalContext *glb = globalcontext_new();
+    Context *ctx = context_new(glb);
+    register_test_avmpack(glb);
+    jit_stream_flash_init(glb);
+
+    nif_function new_nif = get_nif("jit_stream_flash:new/1");
+    term argv[1];
+    argv[0] = term_from_int(10);
+    term stream = new_nif(ctx, 1, argv);
+    *glb_out = glb;
+    *ctx_out = ctx;
+    return stream;
+}
+
+static term append_bytes(Context *ctx, term stream, uint8_t value, size_t count)
+{
+    nif_function append_nif = get_nif("jit_stream_flash:append/2");
+    term argv[2];
+    while (count > 0) {
+        size_t chunk = count > 100 ? 100 : count;
+        uint8_t data[100];
+        memset(data, value, chunk);
+        argv[0] = stream;
+        argv[1] = make_binary_rooted(ctx, data, chunk, &argv[0], 1);
+        stream = append_nif(ctx, 2, argv);
+        count -= chunk;
+    }
+    return stream;
+}
+
+static bool region_is_erased(size_t offset, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        if (mock_flash[offset + i] != 0xFF) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_held_buffer_no_autoflush(void)
+{
+    fprintf(stderr, "\n=== Test: Held Buffer - No Auto Flush ===\n");
+
+    GlobalContext *glb;
+    Context *ctx;
+    term stream = setup_held_stream(&glb, &ctx);
+    nif_function committed_nif = get_nif("jit_stream_flash:committed_offset/1");
+    assert(committed_nif != NULL);
+
+    // Appending across several page boundaries must not write anything to
+    // flash: the pages are held in RAM.
+    stream = append_bytes(ctx, stream, 0xAA, 600);
+    assert(region_is_erased(TEST_ENTRY_OFFSET, 3 * FLASH_PAGE_SIZE));
+
+    // The flush horizon has not advanced.
+    term argv[1];
+    argv[0] = stream;
+    assert(term_to_int(committed_nif(ctx, 1, argv)) == 0);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+    fprintf(stderr, "PASS: Held buffer no auto flush test\n");
+}
+
+void test_held_buffer_flush_upto(void)
+{
+    fprintf(stderr, "\n=== Test: Held Buffer - flush_upto ===\n");
+
+    GlobalContext *glb;
+    Context *ctx;
+    term stream = setup_held_stream(&glb, &ctx);
+    nif_function committed_nif = get_nif("jit_stream_flash:committed_offset/1");
+    nif_function flush_upto_nif = get_nif("jit_stream_flash:flush_upto/2");
+    nif_function flush_nif = get_nif("jit_stream_flash:flush/1");
+    assert(flush_upto_nif != NULL);
+
+    stream = append_bytes(ctx, stream, 0xAA, 600);
+
+    // First page ends at code offset PAGE - sizeof(JITEntry).
+    const int first_page_end = FLASH_PAGE_SIZE - sizeof(struct JITEntry);
+
+    // Declaring a mid-second-page prefix final flushes only the first page.
+    term argv[2];
+    argv[0] = stream;
+    argv[1] = term_from_int(first_page_end + 60);
+    stream = flush_upto_nif(ctx, 2, argv);
+    assert(!region_is_erased(TEST_ENTRY_OFFSET, FLASH_PAGE_SIZE));
+    assert(region_is_erased(TEST_ENTRY_OFFSET + FLASH_PAGE_SIZE, FLASH_PAGE_SIZE));
+    assert(mock_flash[TEST_CODE_OFFSET] == 0xAA);
+    argv[0] = stream;
+    assert(term_to_int(committed_nif(ctx, 1, argv)) == first_page_end);
+
+    // Declaring everything final flushes the second page; the third (partial)
+    // page stays held until the final flush.
+    argv[0] = stream;
+    argv[1] = term_from_int(600);
+    stream = flush_upto_nif(ctx, 2, argv);
+    assert(!region_is_erased(TEST_ENTRY_OFFSET + FLASH_PAGE_SIZE, FLASH_PAGE_SIZE));
+    argv[0] = stream;
+    assert(term_to_int(committed_nif(ctx, 1, argv)) == first_page_end + FLASH_PAGE_SIZE);
+
+    // Final flush writes the tail and the entry size field.
+    argv[0] = stream;
+    stream = flush_nif(ctx, 1, argv);
+    assert(mock_flash[TEST_CODE_OFFSET + 599] == 0xAA);
+
+    ModuleNativeEntryPoint entry = jit_stream_flash_entry_point(ctx, stream);
+    Module fake_mod;
+    fake_mod.code = (CodeChunk *) 0x12345678;
+    globalcontext_set_cache_native_code(glb, &fake_mod, 1, entry, 10);
+    struct JITEntry *jit_entry = (struct JITEntry *) (mock_flash + TEST_ENTRY_OFFSET);
+    assert(jit_entry->size == 600);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+    fprintf(stderr, "PASS: Held buffer flush_upto test\n");
+}
+
+void test_held_buffer_replace_above_horizon(void)
+{
+    fprintf(stderr, "\n=== Test: Held Buffer - Arbitrary Replace Above Horizon ===\n");
+
+    GlobalContext *glb;
+    Context *ctx;
+    term stream = setup_held_stream(&glb, &ctx);
+    nif_function replace_nif = get_nif("jit_stream_flash:replace/3");
+    nif_function flush_nif = get_nif("jit_stream_flash:flush/1");
+
+    stream = append_bytes(ctx, stream, 0xAA, 600);
+
+    // 0xAA -> 0x55 flips bits in both directions: illegal on flushed flash,
+    // legal in a held page. Offset 250 sits in the second (held) page.
+    uint8_t replacement[4];
+    memset(replacement, 0x55, sizeof(replacement));
+    term argv[3];
+    argv[0] = stream;
+    argv[1] = term_from_int(250);
+    argv[2] = make_binary_rooted(ctx, replacement, sizeof(replacement), &argv[0], 1);
+    stream = replace_nif(ctx, 3, argv);
+
+    argv[0] = stream;
+    stream = flush_nif(ctx, 1, argv);
+    assert(mock_flash[TEST_CODE_OFFSET + 249] == 0xAA);
+    assert(mock_flash[TEST_CODE_OFFSET + 250] == 0x55);
+    assert(mock_flash[TEST_CODE_OFFSET + 253] == 0x55);
+    assert(mock_flash[TEST_CODE_OFFSET + 254] == 0xAA);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+    fprintf(stderr, "PASS: Held buffer arbitrary replace test\n");
+}
+
+void test_held_buffer_replace_below_horizon(void)
+{
+    fprintf(stderr, "\n=== Test: Held Buffer - Bit-Clear Replace Below Horizon ===\n");
+
+    GlobalContext *glb;
+    Context *ctx;
+    term stream = setup_held_stream(&glb, &ctx);
+    nif_function replace_nif = get_nif("jit_stream_flash:replace/3");
+    nif_function flush_upto_nif = get_nif("jit_stream_flash:flush_upto/2");
+    nif_function flush_nif = get_nif("jit_stream_flash:flush/1");
+
+    stream = append_bytes(ctx, stream, 0xAA, 600);
+
+    // Flush the first page, then patch below the horizon with a bit-clear-only
+    // change (0xAA -> 0x88), as 0xFF-placeholder relocations do.
+    term argv[3];
+    argv[0] = stream;
+    argv[1] = term_from_int(600);
+    stream = flush_upto_nif(ctx, 2, argv);
+
+    uint8_t replacement[2];
+    memset(replacement, 0x88, sizeof(replacement));
+    argv[0] = stream;
+    argv[1] = term_from_int(10);
+    argv[2] = make_binary_rooted(ctx, replacement, sizeof(replacement), &argv[0], 1);
+    stream = replace_nif(ctx, 3, argv);
+
+    argv[0] = stream;
+    stream = flush_nif(ctx, 1, argv);
+    assert(mock_flash[TEST_CODE_OFFSET + 9] == 0xAA);
+    assert(mock_flash[TEST_CODE_OFFSET + 10] == 0x88);
+    assert(mock_flash[TEST_CODE_OFFSET + 11] == 0x88);
+    assert(mock_flash[TEST_CODE_OFFSET + 12] == 0xAA);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+    fprintf(stderr, "PASS: Held buffer bit-clear replace test\n");
+}
+
+void test_held_buffer_reset(void)
+{
+    fprintf(stderr, "\n=== Test: Held Buffer - Reset (Backtrack Re-Emit) ===\n");
+
+    GlobalContext *glb;
+    Context *ctx;
+    term stream = setup_held_stream(&glb, &ctx);
+    nif_function reset_nif = get_nif("jit_stream_flash:reset/2");
+    nif_function offset_nif = get_nif("jit_stream_flash:offset/1");
+    nif_function flush_nif = get_nif("jit_stream_flash:flush/1");
+    assert(reset_nif != NULL);
+
+    // First emission pass: 600 bytes of 0xAA. Nothing is flushed, so the
+    // whole stream can be rewound for a backtrack re-emit.
+    stream = append_bytes(ctx, stream, 0xAA, 600);
+
+    // Rewind to offset 100 (the post-jump_table checkpoint of the compile
+    // loop) and re-emit different bytes. The re-appended region must accept
+    // arbitrary content: the rewind restores the erased state in RAM.
+    term argv[2];
+    argv[0] = stream;
+    argv[1] = term_from_int(100);
+    stream = reset_nif(ctx, 2, argv);
+    argv[0] = stream;
+    assert(term_to_int(offset_nif(ctx, 1, argv)) == 100);
+
+    // 0x77 shares no set-bit pattern with 0xAA (0xAA & 0x77 = 0x22): without
+    // the reset restoring 0xFF this append would trip the flash validation.
+    stream = append_bytes(ctx, stream, 0x77, 650);
+    argv[0] = stream;
+    assert(term_to_int(offset_nif(ctx, 1, argv)) == 750);
+
+    argv[0] = stream;
+    stream = flush_nif(ctx, 1, argv);
+    assert(mock_flash[TEST_CODE_OFFSET + 99] == 0xAA);
+    assert(mock_flash[TEST_CODE_OFFSET + 100] == 0x77);
+    assert(mock_flash[TEST_CODE_OFFSET + 749] == 0x77);
+
+    ModuleNativeEntryPoint entry = jit_stream_flash_entry_point(ctx, stream);
+    Module fake_mod;
+    fake_mod.code = (CodeChunk *) 0x12345678;
+    globalcontext_set_cache_native_code(glb, &fake_mod, 1, entry, 10);
+    struct JITEntry *jit_entry = (struct JITEntry *) (mock_flash + TEST_ENTRY_OFFSET);
+    assert(jit_entry->size == 750);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+    fprintf(stderr, "PASS: Held buffer reset test\n");
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
@@ -938,6 +1200,11 @@ int main(int argc, char **argv)
     test_tail_corruption_bug();
     test_stale_data_cleanup();
     test_cache_valid_ignores_foreign_packs();
+    test_held_buffer_no_autoflush();
+    test_held_buffer_flush_upto();
+    test_held_buffer_replace_above_horizon();
+    test_held_buffer_replace_below_horizon();
+    test_held_buffer_reset();
 
     fprintf(stderr, "\nAll tests passed!\n");
     return EXIT_SUCCESS;
