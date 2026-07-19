@@ -2316,72 +2316,116 @@ emit_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
     {Live, Rest4} = decode_literal(Rest3),
     ?TRACE("OP_PUT_MAP_EXACT ~p,~p,~p,~p,[", [Label, Src, Dest, Live]),
     {ListSize, Rest5} = decode_extended_list_header(Rest4),
-    % Make sure every key from list is in src
-    NumElements = ListSize div 2,
-    {MSt3, Rest6} = lists:foldl(
-        fun(_Index, {ASt0, ARest0}) ->
-            {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
-            ARest2 = skip_compact_term(ARest1),
-            {ASt2, PosReg} = MMod:call_primitive(ASt1, ?PRIM_TERM_FIND_MAP_POS, [
-                ctx, Src, {free, Key}
+    case ListSize of
+        2 ->
+            %% Single key (the dominant Map#{K := V} shape). The generic path
+            %% below looks the key up once to raise on a missing key and then
+            %% lets PRIM_PUT_MAP_ASSOC search the map a SECOND time; here the
+            %% position from that one lookup is handed straight to the update.
+            %% The heap is reserved BEFORE the lookup so that no collection can
+            %% run between finding the position and using it.
+            {MSt3s, SizeReg} = MMod:call_primitive(MSt2, ?PRIM_PUT_MAP_EXACT_ONE_HEAP_NEED, [
+                ctx, Src
             ]),
-            % A missing required key (:=) fails the guard when a fail label is
-            % set (label /= 0); only raise badarg in body context (label == 0).
-            ASt3 = cond_raise_badarg_or_jump_to_fail_label(
-                {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, ASt2
+            {MSt4s, TrimReg} = MMod:call_primitive(MSt3s, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+            MSt5s = MMod:free_native_registers(MSt4s, [TrimReg]),
+            {MSt6s, NewSrc1} = memory_ensure_free_with_extra_root(
+                Src, Live, {free, SizeReg}, MMod, MSt5s
             ),
-            ASt4 = MMod:if_block(
-                ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
+            {MSt7s, Key1, RestK} = decode_compact_term(Rest5, MMod, MSt6s, State0),
+            {MSt8s, PosReg} = MMod:call_primitive(MSt7s, ?PRIM_TERM_FIND_MAP_POS, [
+                ctx, NewSrc1, Key1
+            ]),
+            %% A missing required key (:=) fails the guard when a fail label is
+            %% set (label /= 0); only raise badarg in body context (label == 0).
+            MSt9s = cond_raise_badarg_or_jump_to_fail_label(
+                {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, MSt8s
+            ),
+            MSt10s = MMod:if_block(
+                MSt9s, {'(int)', PosReg, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
                     MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
                         ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
                     ])
                 end
             ),
-            {ASt4, ARest2}
-        end,
-        {MSt2, Rest5},
-        lists:seq(1, NumElements)
-    ),
-    % Every key is present, so an exact update is an assoc with zero new
-    % entries: reuse PRIM_PUT_MAP_ASSOC, which updates existing keys in place
-    % for flat maps and path-copies for tree-backed maps. Heap reservation is
-    % computed in C (PRIM_PUT_MAP_HEAP_NEED) with new_entries = 0.
-    {MSt4, SrcSizeReg} = MMod:call_primitive(MSt3, ?PRIM_PUT_MAP_HEAP_NEED, [
-        ctx, Src, 0, NumElements
-    ]),
-    {MSt5, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt6 = MMod:free_native_registers(MSt5, [TrimResultReg]),
-    {MSt7, NewSrc} = memory_ensure_free_with_extra_root(
-        Src, Live, {free, SrcSizeReg}, MMod, MSt6
-    ),
-    {MSt8, KVReg} = MMod:call_primitive(MSt7, ?PRIM_MALLOC, [
-        ctx, jit_state, ListSize * MMod:word_size()
-    ]),
-    MSt9 = handle_error_if({KVReg, '==', 0}, MMod, MSt8),
-    {MSt10, Rest6} = lists:foldl(
-        fun(Index, {ASt0, ARest0}) ->
-            {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
-            {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
-            ?TRACE("(~p,~p),", [Key, Value]),
-            ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
-            ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
-            ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
-            {ASt5, ARest2}
-        end,
-        {MSt9, Rest5},
-        lists:seq(0, NumElements - 1)
-    ),
-    ?TRACE("]\n", []),
-    {MSt11, PutMapAssocReg} = MMod:call_primitive(MSt10, ?PRIM_PUT_MAP_ASSOC, [
-        ctx, jit_state, {free, NewSrc}, 0, NumElements, KVReg
-    ]),
-    {MSt12, FreeReg} = MMod:call_primitive(MSt11, ?PRIM_FREE, [{free, KVReg}]),
-    MSt13 = MMod:free_native_registers(MSt12, [FreeReg]),
-    MSt14 = handle_error_if({PutMapAssocReg, '==', 0}, MMod, MSt13),
-    MSt15 = MMod:move_to_vm_register(MSt14, PutMapAssocReg, Dest),
-    MSt16 = MMod:free_native_registers(MSt15, [PutMapAssocReg, Dest]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt16),
-    emit_pass(Rest6, MMod, MSt16, State0);
+            {MSt11s, Value1, RestV} = decode_compact_term(RestK, MMod, MSt10s, State0),
+            ?TRACE("(~p,~p),]\n", [Key1, Value1]),
+            {MSt12s, ResultReg} = MMod:call_primitive(MSt11s, ?PRIM_PUT_MAP_EXACT_ONE, [
+                ctx, jit_state, {free, NewSrc1}, {free, PosReg}, {free, Key1}, {free, Value1}
+            ]),
+            MSt13s = handle_error_if({ResultReg, '==', 0}, MMod, MSt12s),
+            MSt14s = MMod:move_to_vm_register(MSt13s, ResultReg, Dest),
+            MSt15s = MMod:free_native_registers(MSt14s, [ResultReg, Dest]),
+            ?ASSERT_ALL_NATIVE_FREE(MSt15s),
+            emit_pass(RestV, MMod, MSt15s, State0);
+        _ ->
+            % Make sure every key from list is in src
+            NumElements = ListSize div 2,
+            {MSt3, Rest6} = lists:foldl(
+                fun(_Index, {ASt0, ARest0}) ->
+                    {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
+                    ARest2 = skip_compact_term(ARest1),
+                    {ASt2, PosReg} = MMod:call_primitive(ASt1, ?PRIM_TERM_FIND_MAP_POS, [
+                        ctx, Src, {free, Key}
+                    ]),
+                    % A missing required key (:=) fails the guard when a fail label is
+                    % set (label /= 0); only raise badarg in body context (label == 0).
+                    ASt3 = cond_raise_badarg_or_jump_to_fail_label(
+                        {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, ASt2
+                    ),
+                    ASt4 = MMod:if_block(
+                        ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
+                            MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
+                                ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
+                            ])
+                        end
+                    ),
+                    {ASt4, ARest2}
+                end,
+                {MSt2, Rest5},
+                lists:seq(1, NumElements)
+            ),
+            % Every key is present, so an exact update is an assoc with zero new
+            % entries: reuse PRIM_PUT_MAP_ASSOC, which updates existing keys in place
+            % for flat maps and path-copies for tree-backed maps. Heap reservation is
+            % computed in C (PRIM_PUT_MAP_HEAP_NEED) with new_entries = 0.
+            {MSt4, SrcSizeReg} = MMod:call_primitive(MSt3, ?PRIM_PUT_MAP_HEAP_NEED, [
+                ctx, Src, 0, NumElements
+            ]),
+            {MSt5, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+            MSt6 = MMod:free_native_registers(MSt5, [TrimResultReg]),
+            {MSt7, NewSrc} = memory_ensure_free_with_extra_root(
+                Src, Live, {free, SrcSizeReg}, MMod, MSt6
+            ),
+            {MSt8, KVReg} = MMod:call_primitive(MSt7, ?PRIM_MALLOC, [
+                ctx, jit_state, ListSize * MMod:word_size()
+            ]),
+            MSt9 = handle_error_if({KVReg, '==', 0}, MMod, MSt8),
+            {MSt10, Rest6} = lists:foldl(
+                fun(Index, {ASt0, ARest0}) ->
+                    {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
+                    {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
+                    ?TRACE("(~p,~p),", [Key, Value]),
+                    ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
+                    ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
+                    ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
+                    {ASt5, ARest2}
+                end,
+                {MSt9, Rest5},
+                lists:seq(0, NumElements - 1)
+            ),
+            ?TRACE("]\n", []),
+            {MSt11, PutMapAssocReg} = MMod:call_primitive(MSt10, ?PRIM_PUT_MAP_ASSOC, [
+                ctx, jit_state, {free, NewSrc}, 0, NumElements, KVReg
+            ]),
+            {MSt12, FreeReg} = MMod:call_primitive(MSt11, ?PRIM_FREE, [{free, KVReg}]),
+            MSt13 = MMod:free_native_registers(MSt12, [FreeReg]),
+            MSt14 = handle_error_if({PutMapAssocReg, '==', 0}, MMod, MSt13),
+            MSt15 = MMod:move_to_vm_register(MSt14, PutMapAssocReg, Dest),
+            MSt16 = MMod:free_native_registers(MSt15, [PutMapAssocReg, Dest]),
+            ?ASSERT_ALL_NATIVE_FREE(MSt16),
+            emit_pass(Rest6, MMod, MSt16, State0)
+    end;
 % 156
 emit_pass(<<?OP_IS_MAP, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
