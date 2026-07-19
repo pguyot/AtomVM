@@ -52,6 +52,7 @@
     asr/4,
     b/2,
     blx/2,
+    bx/2,
     push/1,
     pop/1,
     bkpt/1,
@@ -530,6 +531,14 @@ blx(Cond, Rm) ->
     CondNum = cond_to_num(Cond),
     RmNum = reg_to_num(Rm),
     Instr = (CondNum bsl 28) bor 16#012FFF30 bor RmNum,
+    <<Instr:32/little>>.
+
+%% BX Rm: branch to the address in Rm without touching lr.
+-spec bx(cc(), arm_gpr_register()) -> binary().
+bx(Cond, Rm) ->
+    CondNum = cond_to_num(Cond),
+    RmNum = reg_to_num(Rm),
+    Instr = (CondNum bsl 28) bor 16#012FFF10 bor RmNum,
     <<Instr:32/little>>.
 
 %%-----------------------------------------------------------------------------

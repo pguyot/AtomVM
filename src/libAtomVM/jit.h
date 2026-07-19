@@ -115,6 +115,18 @@ typedef struct Module Module;
 #define JIT_ARCH_TARGET JIT_ARCH_ARM32
 #define JIT_JUMPTABLE_ENTRY_SIZE 8
 #define JIT_JUMPTABLE_OFFSET 0
+// Pinned-register convention (see the aarch64 block for the general
+// contract): ctx in r7, jit_state in r10, the primitives table in r9 and
+// ctx->e in r8. r11 is deliberately avoided: it is the ARM frame pointer,
+// and a register variable bound to it in the jit.c entry shims is undefined
+// behaviour. The dispatch loop also takes ownership of saving r4-r6
+// (declared as clobbers at the boundary), so generated code has no entry
+// prologue frame. There are no inline heap operations on arm32, so hp is
+// not pinned and only e follows the write-back/reload protocol.
+#define JIT_PINNED_JIT_STATE 1
+#define JIT_PINNED_JIT_STATE_REG "r10"
+#define JIT_PINNED_CTX 1
+#define JIT_PINNED_CTX_REG "r7"
 #elif defined(__arm__)
 #define JIT_ARCH_TARGET JIT_ARCH_ARMV6M
 #ifdef AVM_JIT_THUMB2
@@ -375,7 +387,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 8
+#define JIT_FORMAT_VERSION 9
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
