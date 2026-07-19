@@ -98,9 +98,10 @@ void jit_stream_flash_platform_destroy(struct JSFlashPlatformContext *ctx)
 
 bool jit_stream_flash_platform_is_jit_addr(uintptr_t addr)
 {
-    // The mock flash is one flat region; everything participates.
-    UNUSED(addr);
-    return true;
+    // Mirror the esp32 semantics: only addresses inside the mock JIT flash
+    // region participate in the cache protocol; packs mapped from elsewhere
+    // (app image, other partitions) must be ignored.
+    return addr >= (uintptr_t) mock_flash && addr < (uintptr_t) mock_flash + MOCK_FLASH_SIZE;
 }
 
 bool jit_stream_flash_platform_erase_sector(struct JSFlashPlatformContext *ctx, uintptr_t addr)
@@ -177,10 +178,13 @@ uintptr_t jit_stream_flash_platform_executable_to_ptr(uintptr_t addr)
 }
 
 // Create a minimal AVM pack for testing
-static uint8_t create_minimal_avmpack(void)
+// Offset of the end-section name ("end"/"END" cache validity marker) within a
+// pack built by create_avmpack_at: 24-byte pack header + 12-byte section header.
+#define PACK_END_MARKER_OFFSET (24 + 12)
+
+static void create_avmpack_at(uint8_t *pack)
 {
     // Create a minimal AVM pack with an "end" section
-    uint8_t *pack = mock_flash + 0x100; // Place pack at offset 0x100
 
     // AVM Pack header: "#!/usr/bin/env AtomVM\n" (23 bytes) + padding to 24 bytes
     const char header_str[] = "#!/usr/bin/env AtomVM\n";
@@ -205,23 +209,31 @@ static uint8_t create_minimal_avmpack(void)
 
     // Write null-terminated name starting at offset 12
     memcpy(section + 12, "end", 4); // includes null terminator
+}
 
+static uint8_t create_minimal_avmpack(void)
+{
+    // Place pack at offset 0x100 of the mock JIT flash region
+    create_avmpack_at(mock_flash + 0x100);
     return 0;
 }
 
 // Register AVM pack with global context
-static void register_test_avmpack(GlobalContext *glb)
+static void register_avmpack_data(GlobalContext *glb, const uint8_t *data)
 {
-    create_minimal_avmpack();
-
-    // Create AVMPackData
     struct ConstAVMPack *pack = malloc(sizeof(struct ConstAVMPack));
     avmpack_data_init(&pack->base, &const_avm_pack_info);
-    pack->base.data = mock_flash + 0x100;
+    pack->base.data = data;
     pack->base.in_use = true;
 
     // Add to global context's avmpack list
     synclist_append(&glb->avmpack_data, &pack->base.avmpack_head);
+}
+
+static void register_test_avmpack(GlobalContext *glb)
+{
+    create_minimal_avmpack();
+    register_avmpack_data(glb, mock_flash + 0x100);
 }
 
 // Test helper: create binary term with proper GC rooting
@@ -843,6 +855,72 @@ static void test_stale_data_cleanup(void)
     fprintf(stderr, "PASS: Stale data cleanup test\n");
 }
 
+// Regression test for the cache validity marker bug (fixed by
+// jit_stream_flash_platform_is_jit_addr filtering): packs living OUTSIDE the
+// JIT flash region — embedded in the application image, or in another
+// partition — cannot have their 'end'->'END' marker rewritten and must not
+// participate in the cache validity protocol at all. Before the fix,
+// globalcontext_set_cache_valid tried to rewrite the foreign pack's marker,
+// the out-of-region write failed, the loop aborted, and the cache never
+// became valid (every boot recompiled every runtime-JIT'd module).
+static uint8_t foreign_pack_storage[64];
+
+void test_cache_valid_ignores_foreign_packs(void)
+{
+    fprintf(stderr, "\n=== Test: Cache Validity Ignores Foreign Packs ===\n");
+
+    // Reset flash for this test
+    memset(mock_flash, 0x00, MOCK_FLASH_SIZE);
+    memset(&mock_flash[0], 0xFF, FLASH_SECTOR_SIZE); // first page with AVM
+
+    GlobalContext *glb = globalcontext_new();
+    Context *ctx = context_new(glb);
+
+    // A pack whose backing memory is outside the JIT flash region, registered
+    // FIRST so the validity loop would hit it first. Its marker stays "end"
+    // forever: it can never be rewritten.
+    create_avmpack_at(foreign_pack_storage);
+    register_avmpack_data(glb, foreign_pack_storage);
+
+    // The regular in-region pack that anchors the JIT cache.
+    register_test_avmpack(glb);
+    jit_stream_flash_init(glb);
+
+    nif_function new_nif = get_nif("jit_stream_flash:new/1");
+    nif_function append_nif = get_nif("jit_stream_flash:append/2");
+    nif_function flush_nif = get_nif("jit_stream_flash:flush/1");
+
+    // Compile a small module and finalize it, which runs the validity
+    // protocol (set_cache_valid) since the cache starts invalid.
+    term argv[3];
+    argv[0] = term_from_int(10);
+    term stream = new_nif(ctx, 1, argv);
+    uint8_t data[100];
+    memset(data, 0xAA, sizeof(data));
+    argv[0] = stream;
+    argv[1] = make_binary_rooted(ctx, data, sizeof(data), &argv[0], 1);
+    stream = append_nif(ctx, 2, argv);
+    argv[0] = stream;
+    stream = flush_nif(ctx, 1, argv);
+
+    ModuleNativeEntryPoint entry = jit_stream_flash_entry_point(ctx, stream);
+    Module fake_mod;
+    fake_mod.code = (CodeChunk *) 0x12345678;
+    globalcontext_set_cache_native_code(glb, &fake_mod, 1, entry, 10);
+
+    // The in-region pack's marker must have been flipped to "END" (the cache
+    // is now valid)...
+    assert(memcmp(mock_flash + 0x100 + PACK_END_MARKER_OFFSET, "END", 3) == 0);
+    // ...and the foreign pack must be untouched, without having broken the
+    // validity protocol.
+    assert(memcmp(foreign_pack_storage + PACK_END_MARKER_OFFSET, "end", 3) == 0);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+
+    fprintf(stderr, "PASS: Cache validity ignores foreign packs test\n");
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
@@ -859,6 +937,7 @@ int main(int argc, char **argv)
     test_esp32_crash_bug();
     test_tail_corruption_bug();
     test_stale_data_cleanup();
+    test_cache_valid_ignores_foreign_packs();
 
     fprintf(stderr, "\nAll tests passed!\n");
     return EXIT_SUCCESS;
