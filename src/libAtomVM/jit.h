@@ -373,6 +373,8 @@ struct ModuleNativeInterface
     size_t (*bitstring_slice_heap_size)(term *bs_bin_ptr, size_t offset, size_t len_bits);
     term (*bitstring_slice)(CTXP_ term bs_bin, size_t offset, size_t len_bits);
     bool (*bitstring_is_multiple_of)(size_t bits, size_t unit);
+    size_t (*put_map_one_heap_need)(CTXP_ term src);
+    term (*put_map_assoc_one)(CTXP_ JSP_ term src, term key, term value);
 };
 
 extern const ModuleNativeInterface module_native_interface;

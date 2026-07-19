@@ -2236,10 +2236,35 @@ emit_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
     {Live, Rest4} = decode_literal(Rest3),
     ?TRACE("OP_PUT_MAP_ASSOC ~p,~p,~p,~p,[", [_Label, Src, Dest, Live]),
     {ListSize, Rest5} = decode_extended_list_header(Rest4),
+    case ListSize of
+        2 ->
+            % Single key (the dominant Map#{K => V} shape): reserve the
+            % worst-case heap (as if the key were new) so the sizing
+            % find_map_pos navigation and the kv scratch malloc/free both
+            % disappear; the primitive decides update-vs-insert from its one
+            % search.
+            {MSt1s, SizeReg} = MMod:call_primitive(MSt2, ?PRIM_PUT_MAP_ONE_HEAP_NEED, [ctx, Src]),
+            {MSt2s, TrimReg} = MMod:call_primitive(MSt1s, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+            MSt3s = MMod:free_native_registers(MSt2s, [TrimReg]),
+            {MSt4s, NewSrc1} = memory_ensure_free_with_extra_root(
+                Src, Live, {free, SizeReg}, MMod, MSt3s
+            ),
+            {MSt5s, Key1, RestK} = decode_compact_term(Rest5, MMod, MSt4s, State0),
+            {MSt6s, Value1, RestV} = decode_compact_term(RestK, MMod, MSt5s, State0),
+            ?TRACE("(~p,~p),]\n", [Key1, Value1]),
+            {MSt7s, ResultReg1} = MMod:call_primitive(MSt6s, ?PRIM_PUT_MAP_ASSOC_ONE, [
+                ctx, jit_state, {free, NewSrc1}, {free, Key1}, {free, Value1}
+            ]),
+            MSt8s = handle_error_if({ResultReg1, '==', 0}, MMod, MSt7s),
+            MSt9s = MMod:move_to_vm_register(MSt8s, ResultReg1, Dest),
+            MSt10s = MMod:free_native_registers(MSt9s, [ResultReg1, Dest]),
+            ?ASSERT_ALL_NATIVE_FREE(MSt10s),
+            emit_pass(RestV, MMod, MSt10s, State0);
+        _ ->
     {MSt3, NewEntriesReg} = MMod:move_to_native_register(MSt2, 0),
     % First iteration to compute size
     NumElements = ListSize div 2,
-    {MSt4, Rest6} = lists:foldl(
+    {MSt4, _Rest6a} = lists:foldl(
         fun(_Index, {ASt0, ARest0}) ->
             {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
             ARest2 = skip_compact_term(ARest1),
@@ -2300,7 +2325,8 @@ emit_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt17 = MMod:move_to_vm_register(MSt16, PutMapAssocReg, Dest),
     MSt18 = MMod:free_native_registers(MSt17, [PutMapAssocReg, Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt18),
-    emit_pass(Rest6, MMod, MSt18, State0);
+    emit_pass(Rest6, MMod, MSt18, State0)
+    end;
 % 155
 emit_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
