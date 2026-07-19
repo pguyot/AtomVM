@@ -77,16 +77,27 @@ _Static_assert(sizeof(struct JITEntry) == 16, "sizeof(struct JITEntry) must be 1
 /**
  * @brief JIT stream flash state
  *
- * Maintains the state for writing JIT code to flash with page buffering.
+ * Maintains the state for writing JIT code to flash. Un-flushed pages are
+ * held in a RAM window: nothing is written to flash until the compiler
+ * declares a prefix final through flush_upto/2 (or the final flush/1), so
+ * held pages can still receive arbitrary rewrites (optimistic forward fused
+ * branches resolved in-buffer). Below the flush horizon (committed_offset)
+ * only bit-clear patches of 0xFF placeholders are possible.
  */
 struct JITStreamFlash
 {
     struct JITEntry *jit_entry; ///< Pointer to current JIT entry in flash
-    uintptr_t page_base_addr; ///< Base address of current page
-    uint8_t page_buffer[FLASH_PAGE_SIZE]; ///< Page buffer for writing
-    uint8_t page_offset; ///< Current offset within page
+    uintptr_t window_base_addr; ///< Page-aligned address of the oldest held page
+    uint8_t *window; ///< Held pages (window_pages * FLASH_PAGE_SIZE bytes)
+    size_t window_pages; ///< Number of pages currently held
+    size_t window_capacity; ///< Allocated page slots in window
+    uintptr_t append_addr; ///< Absolute address of the next appended byte
     struct JSFlashPlatformContext *pf_ctx; ///< Platform-specific context
 };
+
+// Initial held-window allocation; grows by doubling. The steady-state size is
+// bounded by the span of unresolved forward branches, typically 1-2 pages.
+#define JSF_INITIAL_WINDOW_PAGES 4
 
 static ErlNifResourceType *jit_stream_flash_resource_type;
 static void jit_stream_flash_dtor(ErlNifEnv *caller_env, void *obj);
@@ -241,17 +252,65 @@ static struct JITEntry *globalcontext_find_last_jit_entry(GlobalContext *global)
     return last_valid;
 }
 
-static bool jit_stream_flash_flush_page(struct JITStreamFlash *js)
+// Write the oldest held page to flash and advance the window.
+// Note: sectors are erased by nif_jit_stream_flash_new (first sector) or
+// jsf_window_extend (when the window grows into a new sector).
+static bool jsf_flush_oldest_page(struct JITStreamFlash *js)
 {
-    // Write the page
-    // Note: sector is already erased by nif_jit_stream_flash_new (first sector)
-    // or jit_stream_flash_append (subsequent sectors when crossing boundaries)
-    if (!jit_stream_flash_platform_write_page(js->pf_ctx, js->page_base_addr, js->page_buffer)) {
-        fprintf(stderr, "Failed to write page at address 0x%lx\n", (unsigned long) js->page_base_addr);
+    if (UNLIKELY(js->window_pages == 0)) {
+        return true;
+    }
+    if (!jit_stream_flash_platform_write_page(js->pf_ctx, js->window_base_addr, js->window)) {
+        fprintf(stderr, "Failed to write page at address 0x%lx\n", (unsigned long) js->window_base_addr);
         return false;
     }
-
+    js->window_pages--;
+    js->window_base_addr += FLASH_PAGE_SIZE;
+    memmove(js->window, js->window + FLASH_PAGE_SIZE, js->window_pages * FLASH_PAGE_SIZE);
     return true;
+}
+
+// Grow the held window by one page (the page right after the current window),
+// erasing the sector it starts if needed and seeding the buffer from the
+// mapped flash content.
+static bool jsf_window_extend(struct JITStreamFlash *js)
+{
+    if (js->window_pages == js->window_capacity) {
+        size_t new_capacity = js->window_capacity * 2;
+        uint8_t *new_window = realloc(js->window, new_capacity * FLASH_PAGE_SIZE);
+        if (IS_NULL_PTR(new_window)) {
+            fprintf(stderr, "Failed to grow JIT stream window to %zu pages\n", new_capacity);
+            return false;
+        }
+        js->window = new_window;
+        js->window_capacity = new_capacity;
+    }
+
+    uintptr_t page_addr = js->window_base_addr + js->window_pages * FLASH_PAGE_SIZE;
+    if ((page_addr & (FLASH_SECTOR_SIZE - 1)) == 0) {
+        // First page of a new sector: erase it if it holds stale data.
+        if (jit_stream_flash_sector_needs_erase(page_addr)) {
+            TRACE("jsf_window_extend -- erasing new sector at %lx\n", (unsigned long) page_addr);
+            if (!jit_stream_flash_platform_erase_sector(js->pf_ctx, page_addr)) {
+                fprintf(stderr, "Failed to erase new sector at address 0x%lx\n", (unsigned long) page_addr);
+                return false;
+            }
+        }
+    }
+    memcpy(js->window + js->window_pages * FLASH_PAGE_SIZE, (const uint8_t *) page_addr, FLASH_PAGE_SIZE);
+    js->window_pages++;
+    return true;
+}
+
+// Pointer into the held window for an absolute address, or NULL if the
+// address is below the window (already flushed) or beyond it.
+static uint8_t *jsf_window_ptr(struct JITStreamFlash *js, uintptr_t addr)
+{
+    if (addr < js->window_base_addr
+        || addr >= js->window_base_addr + js->window_pages * FLASH_PAGE_SIZE) {
+        return NULL;
+    }
+    return js->window + (addr - js->window_base_addr);
 }
 
 static bool jit_stream_flash_finalize_entry(struct JSFlashPlatformContext *pf_ctx, struct JITEntry *jit_entry, uint16_t magic, uint16_t version, uint32_t code, uint32_t labels)
@@ -354,50 +413,31 @@ static bool jit_stream_flash_replace_at_addr(struct JSFlashPlatformContext *pf_c
 static bool jit_stream_flash_append(struct JITStreamFlash *js, const uint8_t *buffer, size_t count)
 {
     while (count > 0) {
+        uint8_t *p = jsf_window_ptr(js, js->append_addr);
+        if (IS_NULL_PTR(p)) {
+            // Append cursor moved past the window: hold one more page.
+            if (!jsf_window_extend(js)) {
+                return false;
+            }
+            p = jsf_window_ptr(js, js->append_addr);
+        }
+
         // Validate flash constraints: can only write to erased (0xFF) bytes
-        uint8_t current_byte = js->page_buffer[js->page_offset];
+        uint8_t current_byte = *p;
         uint8_t new_byte = *buffer;
         if ((~current_byte & new_byte) != 0) {
             // Trying to set bits from 0->1 without erase
             fprintf(stderr, "\n=== JIT STREAM FLASH APPEND ERROR ===\n");
-            fprintf(stderr, "Attempting to write 0x%02x over 0x%02x at page offset %u\n",
-                new_byte, current_byte, js->page_offset);
-            fprintf(stderr, "Page base address: 0x%lx\n", (unsigned long) js->page_base_addr);
-            fprintf(stderr, "Flash address: 0x%lx\n", (unsigned long) (js->page_base_addr + js->page_offset));
+            fprintf(stderr, "Attempting to write 0x%02x over 0x%02x at address 0x%lx\n",
+                new_byte, current_byte, (unsigned long) js->append_addr);
             fprintf(stderr, "Bits being set 0->1: 0x%02x\n", (~current_byte & new_byte));
             fprintf(stderr, "This indicates the sector was not properly erased!\n");
             fprintf(stderr, "=====================================\n\n");
             return false;
         }
 
-        js->page_buffer[js->page_offset] = *buffer;
-        if (js->page_offset == (FLASH_PAGE_SIZE - 1)) {
-            if (!jit_stream_flash_flush_page(js)) {
-                fprintf(stderr, "jit_stream_flash_flush_page failed\n");
-                return false;
-            }
-            // Move to the next page after flushing
-            uintptr_t previous_sector = js->page_base_addr & ~(FLASH_SECTOR_SIZE - 1);
-            js->page_base_addr += FLASH_PAGE_SIZE;
-            js->page_offset = 0;
-            uintptr_t new_sector = js->page_base_addr & ~(FLASH_SECTOR_SIZE - 1);
-
-            // Check if we've entered a new sector and erase if needed
-            if (new_sector != previous_sector) {
-                if (jit_stream_flash_sector_needs_erase(new_sector)) {
-                    TRACE("jit_stream_flash_append -- erasing new sector at %lx\n", (unsigned long) new_sector);
-                    if (!jit_stream_flash_platform_erase_sector(js->pf_ctx, new_sector)) {
-                        fprintf(stderr, "Failed to erase new sector at address 0x%lx\n", (unsigned long) new_sector);
-                        return false;
-                    }
-                }
-            }
-
-            // Read the new page contents into the buffer
-            memcpy(js->page_buffer, (const uint8_t *) js->page_base_addr, FLASH_PAGE_SIZE);
-        } else {
-            js->page_offset++;
-        }
+        *p = new_byte;
+        js->append_addr++;
         buffer++;
         count--;
     }
@@ -442,7 +482,6 @@ static term nif_jit_stream_flash_new(Context *ctx, int argc, term argv[])
     }
 
     js->jit_entry = new_entry;
-    js->page_base_addr = (uintptr_t) new_entry & ~(FLASH_PAGE_SIZE - 1);
 
     // Handle sector erasing for the sector where JIT entry starts
     uintptr_t new_entry_addr = (uintptr_t) new_entry;
@@ -541,10 +580,21 @@ static term nif_jit_stream_flash_new(Context *ctx, int argc, term argv[])
         }
     }
 
-    memcpy(js->page_buffer, (const uint8_t *) js->page_base_addr, FLASH_PAGE_SIZE);
-    js->page_offset = (uintptr_t) new_entry & (FLASH_PAGE_SIZE - 1);
+    // Hold the entry's page in RAM; nothing reaches flash before flush_upto
+    // or the final flush declares it final.
+    js->window_capacity = JSF_INITIAL_WINDOW_PAGES;
+    js->window = malloc(js->window_capacity * FLASH_PAGE_SIZE);
+    if (IS_NULL_PTR(js->window)) {
+        jit_stream_flash_platform_destroy(js->pf_ctx);
+        enif_release_resource(js);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    js->window_base_addr = (uintptr_t) new_entry & ~(FLASH_PAGE_SIZE - 1);
+    memcpy(js->window, (const uint8_t *) js->window_base_addr, FLASH_PAGE_SIZE);
+    js->window_pages = 1;
+    js->append_addr = (uintptr_t) new_entry;
 
-    TRACE("nif_jit_stream_flash_new entry is %p, page_offset is %lx\n", (void *) new_entry, (unsigned long) js->page_offset);
+    TRACE("nif_jit_stream_flash_new entry is %p\n", (void *) new_entry);
 
     // Append the first bytes, which may flush the page
     struct JITEntry header;
@@ -578,12 +628,99 @@ static term nif_jit_stream_flash_offset(Context *ctx, int argc, term argv[])
     }
     struct JITStreamFlash *js_obj = (struct JITStreamFlash *) js_obj_ptr;
 
-    uintptr_t current_addr = js_obj->page_base_addr + js_obj->page_offset;
     uintptr_t base_addr = ((uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry));
 
-    int offset = current_addr - base_addr;
+    int offset = js_obj->append_addr - base_addr;
 
     return term_from_int(offset);
+}
+
+static term nif_jit_stream_flash_committed_offset(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    void *js_obj_ptr;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], jit_stream_flash_resource_type, &js_obj_ptr))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    struct JITStreamFlash *js_obj = (struct JITStreamFlash *) js_obj_ptr;
+
+    uintptr_t base_addr = ((uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry));
+
+    // The flush horizon: everything below it is on flash and can only receive
+    // bit-clear (0xFF-placeholder) patches; everything at or above is held in
+    // RAM and freely rewritable.
+    if (js_obj->window_base_addr <= base_addr) {
+        return term_from_int(0);
+    }
+    return term_from_int(js_obj->window_base_addr - base_addr);
+}
+
+static term nif_jit_stream_flash_reset(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[1], term_is_integer);
+    void *js_obj_ptr;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], jit_stream_flash_resource_type, &js_obj_ptr))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    struct JITStreamFlash *js_obj = (struct JITStreamFlash *) js_obj_ptr;
+
+    avm_int_t offset = term_to_int(argv[1]);
+    uintptr_t target = (uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry) + offset;
+
+    // Rewind the append cursor for a backtrack re-emit (see jit:compile's
+    // emit_finalize_loop). Only the held window can be rewound: content
+    // already flushed to flash is immutable.
+    if (UNLIKELY(offset < 0 || target < js_obj->window_base_addr || target > js_obj->append_addr)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    // Restore the erased state from the rewind point to the end of the kept
+    // pages so the re-emit can append arbitrary new content; pages wholly
+    // beyond the target are dropped (re-extending re-reads the still-erased
+    // flash).
+    size_t keep_pages = (target - js_obj->window_base_addr) / FLASH_PAGE_SIZE + 1;
+    size_t target_off = target - js_obj->window_base_addr;
+    memset(js_obj->window + target_off, 0xFF, keep_pages * FLASH_PAGE_SIZE - target_off);
+    js_obj->window_pages = keep_pages;
+    js_obj->append_addr = target;
+
+    return argv[0];
+}
+
+static term nif_jit_stream_flash_flush_upto(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[1], term_is_integer);
+    void *js_obj_ptr;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], jit_stream_flash_resource_type, &js_obj_ptr))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    struct JITStreamFlash *js_obj = (struct JITStreamFlash *) js_obj_ptr;
+
+    avm_int_t offset = term_to_int(argv[1]);
+    if (UNLIKELY(offset < 0)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    // Write out every held page that is both entirely below the declared-final
+    // offset and fully appended; the page containing the append cursor stays
+    // held (it still grows).
+    uintptr_t final_addr = (uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry) + offset;
+    while (js_obj->window_pages > 0) {
+        uintptr_t page_end = js_obj->window_base_addr + FLASH_PAGE_SIZE;
+        if (page_end > final_addr || page_end > js_obj->append_addr) {
+            break;
+        }
+        if (!jsf_flush_oldest_page(js_obj)) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+    }
+
+    return argv[0];
 }
 
 static term nif_jit_stream_flash_append(Context *ctx, int argc, term argv[])
@@ -647,12 +784,13 @@ static term nif_jit_stream_flash_replace(Context *ctx, int argc, term argv[])
 
         size_t copy_len = page_end_offset - page_start_offset;
 
-        // Check if this is the current buffer page
-        if (current_page_addr == js_obj->page_base_addr) {
-            // Update current buffer directly
-            memcpy(js_obj->page_buffer + page_start_offset, binary_data + binary_offset, copy_len);
+        uint8_t *held = jsf_window_ptr(js_obj, current_page_addr + page_start_offset);
+        if (held != NULL) {
+            // Held page: freely rewritable in RAM.
+            memcpy(held, binary_data + binary_offset, copy_len);
         } else {
-            // This is an already-flushed page, need to update flash
+            // Below the flush horizon: already on flash, only bit-clear
+            // patches of 0xFF placeholders can succeed.
             if (!jit_stream_flash_replace_at_addr(js_obj->pf_ctx, current_page_addr + page_start_offset,
                     binary_data + binary_offset,
                     copy_len)) {
@@ -688,9 +826,8 @@ static term nif_jit_stream_flash_read(Context *ctx, int argc, term argv[])
     }
 
     // Calculate current stream position
-    uintptr_t current_addr = js_obj->page_base_addr + js_obj->page_offset;
     uintptr_t base_addr = ((uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry));
-    size_t stream_offset = current_addr - base_addr;
+    size_t stream_offset = js_obj->append_addr - base_addr;
 
     // Check if read is within bounds
     if (UNLIKELY((size_t) (offset + len) > stream_offset)) {
@@ -701,8 +838,14 @@ static term nif_jit_stream_flash_read(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
-    uintptr_t read_addr = base_addr + offset;
-    return term_from_literal_binary((const uint8_t *) read_addr, len, &ctx->heap, ctx->global);
+    term bin = term_create_uninitialized_binary(len, &ctx->heap, ctx->global);
+    uint8_t *bin_data = (uint8_t *) term_binary_data(bin);
+    for (avm_int_t i = 0; i < len; i++) {
+        uintptr_t addr = base_addr + offset + i;
+        const uint8_t *held = jsf_window_ptr(js_obj, addr);
+        bin_data[i] = held != NULL ? *held : *(const uint8_t *) addr;
+    }
+    return bin;
 }
 
 static term nif_jit_stream_flash_flush(Context *ctx, int argc, term argv[])
@@ -717,20 +860,16 @@ static term nif_jit_stream_flash_flush(Context *ctx, int argc, term argv[])
     struct JITStreamFlash *js_obj = (struct JITStreamFlash *) js_obj_ptr;
 
     // Calculate the size BEFORE flushing
-    uintptr_t current_addr = js_obj->page_base_addr + js_obj->page_offset;
     uintptr_t code_start = (uintptr_t) js_obj->jit_entry + sizeof(struct JITEntry);
-    uint32_t code_size = current_addr - code_start;
+    uint32_t code_size = js_obj->append_addr - code_start;
 
-    // Check if the size field is in the current unflushed page buffer or in an already-flushed page
+    // Update the entry's size field: in the held window if still there,
+    // through a bit-clear replace (0xFFFFFFFF placeholder) if already flushed.
     uintptr_t size_field_addr = (uintptr_t) &js_obj->jit_entry->size;
-    uintptr_t size_field_page = size_field_addr & ~(FLASH_PAGE_SIZE - 1);
-
-    if (size_field_page == js_obj->page_base_addr) {
-        // Size field is in the current buffer, update it directly before flushing
-        size_t offset_in_page = size_field_addr - js_obj->page_base_addr;
-        memcpy(js_obj->page_buffer + offset_in_page, &code_size, sizeof(uint32_t));
+    uint8_t *held_size = jsf_window_ptr(js_obj, size_field_addr);
+    if (held_size != NULL) {
+        memcpy(held_size, &code_size, sizeof(uint32_t));
     } else {
-        // Size field is in an already-flushed page, use replace
         if (!jit_stream_flash_replace_at_addr(js_obj->pf_ctx, size_field_addr,
                 (const uint8_t *) &code_size,
                 sizeof(uint32_t))) {
@@ -738,10 +877,12 @@ static term nif_jit_stream_flash_flush(Context *ctx, int argc, term argv[])
         }
     }
 
-    // Flush the final page
-    if (!jit_stream_flash_flush_page(js_obj)) {
-        fprintf(stderr, "jit_stream_flash_flush_page failed\n");
-        RAISE_ERROR(BADARG_ATOM);
+    // Write out every remaining held page, including the final partial one.
+    while (js_obj->window_pages > 0) {
+        if (!jsf_flush_oldest_page(js_obj)) {
+            fprintf(stderr, "jsf_flush_oldest_page failed\n");
+            RAISE_ERROR(BADARG_ATOM);
+        }
     }
 
     return argv[0];
@@ -775,6 +916,18 @@ static const struct Nif jit_stream_flash_replace_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_jit_stream_flash_replace
 };
+static const struct Nif jit_stream_flash_committed_offset_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_jit_stream_flash_committed_offset
+};
+static const struct Nif jit_stream_flash_flush_upto_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_jit_stream_flash_flush_upto
+};
+static const struct Nif jit_stream_flash_reset_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_jit_stream_flash_reset
+};
 static const struct Nif jit_stream_flash_read_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_jit_stream_flash_read
@@ -807,6 +960,7 @@ static void jit_stream_flash_dtor(ErlNifEnv *caller_env, void *obj)
     if (js_obj->pf_ctx) {
         jit_stream_flash_platform_destroy(js_obj->pf_ctx);
     }
+    free(js_obj->window);
 }
 
 const struct Nif *jit_stream_flash_get_nif(const char *nifname)
@@ -818,6 +972,15 @@ const struct Nif *jit_stream_flash_get_nif(const char *nifname)
         const char *rest = nifname + 17;
         if (strcmp("new/1", rest) == 0) {
             return &jit_stream_flash_new_nif;
+        }
+        if (strcmp("committed_offset/1", rest) == 0) {
+            return &jit_stream_flash_committed_offset_nif;
+        }
+        if (strcmp("flush_upto/2", rest) == 0) {
+            return &jit_stream_flash_flush_upto_nif;
+        }
+        if (strcmp("reset/2", rest) == 0) {
+            return &jit_stream_flash_reset_nif;
         }
         if (strcmp("offset/1", rest) == 0) {
             return &jit_stream_flash_offset_nif;
