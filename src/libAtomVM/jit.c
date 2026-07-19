@@ -2725,106 +2725,659 @@ static void jit_set_tuple_element(Context *ctx, term tuple, uint32_t position, t
     memory_record_old_cell_write(ctx, term_to_term_ptr(tuple) + position + 1);
 }
 
+#if defined(JIT_PINNED_JIT_STATE) != defined(JIT_PINNED_CTX)
+#error "The entry shims currently assume ctx and jit_state are pinned together"
+#endif
+
+#ifdef JIT_PINNED_JIT_STATE
+// Entry shims for the pinned-register convention: generated code passes
+// neither ctx nor jit_state, so each table entry reads them from the pinned
+// callee-saved registers (seeded by the dispatch loop) and forwards to the
+// parameterized implementation. C code must keep calling the
+// implementations, never these shims: a C caller's compiled body may
+// legally park its own locals in the pinned registers mid-frame
+// (callee-saved only guarantees restore-on-return), so only generated-code
+// entry points may read them.
+#define JS_READ() \
+    register JITState *jit_state __asm__(JIT_PINNED_JIT_STATE_REG); \
+    __asm__ volatile("" : "+r"(jit_state))
+#define CTX_READ() \
+    register Context *ctx __asm__(JIT_PINNED_CTX_REG); \
+    __asm__ volatile("" : "+r"(ctx))
+
+static Context * jit_raise_error_pin(int a1, term a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_raise_error(ctx, jit_state, a1, a2);
+}
+
+static Context * jit_return_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_return(ctx, jit_state);
+}
+
+static Context * jit_schedule_next_cp_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_schedule_next_cp(ctx, jit_state);
+}
+
+static Context * jit_call_ext_pin(int a1, int a2, int a3, int a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_call_ext(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static bool jit_allocate_pin(uint32_t a1, uint32_t a2, uint32_t a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_allocate(ctx, jit_state, a1, a2, a3);
+}
+
+static Context * jit_handle_error_pin(int a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_handle_error(ctx, jit_state, a1);
+}
+
+static bool jit_deallocate_pin(uint32_t a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_deallocate(ctx, jit_state, a1);
+}
+
+static Context * jit_terminate_context_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_terminate_context(ctx, jit_state);
+}
+
+static TermCompareResult jit_term_compare_pin(term a1, term a2, TermCompareOpts a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_term_compare(ctx, jit_state, a1, a2, a3);
+}
+
+static bool jit_test_heap_pin(uint32_t a1, uint32_t a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_test_heap(ctx, jit_state, a1, a2);
+}
+
+static term jit_module_load_literal_pin(int a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_module_load_literal(ctx, jit_state, a1);
+}
+
+static bool jit_send_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_send(ctx, jit_state);
+}
+
+static Context * jit_raise_error_tuple_pin(int a1, term a2, term a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_raise_error_tuple(ctx, jit_state, a1, a2, a3);
+}
+
+static term jit_term_alloc_fun_pin(uint32_t a1, uint32_t a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_term_alloc_fun(ctx, jit_state, a1, a2);
+}
+
+static Context * jit_process_signal_messages_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_process_signal_messages(ctx, jit_state);
+}
+
+static Context * jit_raise_pin(term a1, term a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_raise(ctx, jit_state, a1, a2);
+}
+
+static Context * jit_schedule_wait_cp_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_schedule_wait_cp(ctx, jit_state);
+}
+
+static Context * jit_wait_timeout_pin(term a1, int a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_wait_timeout(ctx, jit_state, a1, a2);
+}
+
+static Context * jit_wait_timeout_trap_handler_pin(int a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_wait_timeout_trap_handler(ctx, jit_state, a1);
+}
+
+static Context * jit_call_fun_pin(int a1, term a2, unsigned int a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_call_fun(ctx, jit_state, a1, a2, a3);
+}
+
+static term jit_term_from_float_pin(int a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_term_from_float(ctx, jit_state, a1);
+}
+
+static bool jit_catch_end_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_catch_end(ctx, jit_state);
+}
+
+static bool jit_memory_ensure_free_with_roots_pin(int a1, int a2, int a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_memory_ensure_free_with_roots(ctx, jit_state, a1, a2, a3);
+}
+
+static term jit_bitstring_extract_integer_pin(term * a1, size_t a2, int a3, int a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_bitstring_extract_integer(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static int jit_decode_flags_list_pin(term a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_decode_flags_list(ctx, jit_state, a1);
+}
+
+static void jit_bitstring_copy_module_str_pin(term a1, size_t a2, int a3, size_t a4)
+{
+    CTX_READ();
+    JS_READ();
+    jit_bitstring_copy_module_str(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static int jit_bitstring_copy_binary_pin(term a1, size_t a2, term a3, term a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_bitstring_copy_binary(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static Context * jit_apply_pin(int a1, term a2, term a3, unsigned int a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_apply(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static void * jit_malloc_pin(size_t a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_malloc(ctx, jit_state, a1);
+}
+
+static term jit_put_map_assoc_pin(term a1, size_t a2, size_t a3, term * a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_put_map_assoc(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static bool jit_bitstring_match_module_str_pin(term a1, size_t a2, int a3, size_t a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_bitstring_match_module_str(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static Context * jit_raw_raise_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_raw_raise(ctx, jit_state);
+}
+
+static Context * jit_raise_error_mfa_pin(int a1, int a2, int a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_raise_error_mfa(ctx, jit_state, a1, a2, a3);
+}
+
+static uint32_t jit_record_def_arity_pin(term a1)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_record_def_arity(ctx, jit_state, a1);
+}
+
+static term jit_put_record_pin(term a1, term a2, uint32_t a3, term * a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_put_record(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static uint32_t jit_is_record_accessible_pin(term a1, term a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_is_record_accessible(ctx, jit_state, a1, a2);
+}
+
+static term jit_put_record_resolved_pin(uint32_t a1, term a2, uint32_t a3, term * a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_put_record_resolved(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static BifImpl0 jit_get_imported_gcbif_pin(uint32_t a1, uint32_t a2)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_get_imported_gcbif(ctx, jit_state, a1, a2);
+}
+
+static uintptr_t jit_call_fun_direct_pin(int a1, term a2, unsigned int a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_call_fun_direct(ctx, jit_state, a1, a2, a3);
+}
+
+static uintptr_t jit_call_ext_direct_pin(int a1, int a2, int a3, int a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_call_ext_direct(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static uintptr_t jit_return_direct_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_return_direct(ctx, jit_state);
+}
+
+static void jit_trim_live_regs_pin(uint32_t a1)
+{
+    CTX_READ();
+    jit_trim_live_regs(ctx, a1);
+}
+
+static term jit_put_list_pin(term a1, term a2)
+{
+    CTX_READ();
+    return jit_put_list(ctx, a1, a2);
+}
+
+static term jit_alloc_boxed_integer_fragment_pin(avm_int64_t a1)
+{
+    CTX_READ();
+    return jit_alloc_boxed_integer_fragment(ctx, a1);
+}
+
+static term jit_term_alloc_tuple_pin(uint32_t a1)
+{
+    CTX_READ();
+    return jit_term_alloc_tuple(ctx, a1);
+}
+
+static term * jit_extended_register_ptr_pin(unsigned int a1)
+{
+    CTX_READ();
+    return jit_extended_register_ptr(ctx, a1);
+}
+
+static term jit_mailbox_peek_pin(void)
+{
+    CTX_READ();
+    return jit_mailbox_peek(ctx);
+}
+
+static void jit_mailbox_remove_message_pin(void)
+{
+    CTX_READ();
+    jit_mailbox_remove_message(ctx);
+}
+
+static void jit_timeout_pin(void)
+{
+    CTX_READ();
+    jit_timeout(ctx);
+}
+
+static void jit_mailbox_next_pin(void)
+{
+    CTX_READ();
+    jit_mailbox_next(ctx);
+}
+
+static void jit_cancel_timeout_pin(void)
+{
+    CTX_READ();
+    jit_cancel_timeout(ctx);
+}
+
+static void jit_clear_timeout_flag_pin(void)
+{
+    CTX_READ();
+    jit_clear_timeout_flag(ctx);
+}
+
+static int context_get_flags_pin(int a1)
+{
+    CTX_READ();
+    return context_get_flags(ctx, a1);
+}
+
+static term jit_term_alloc_bin_match_state_pin(term a1, int a2)
+{
+    CTX_READ();
+    return jit_term_alloc_bin_match_state(ctx, a1, a2);
+}
+
+static term jit_term_maybe_create_sub_binary_pin(term a1, size_t a2, size_t a3)
+{
+    CTX_READ();
+    return jit_term_maybe_create_sub_binary(ctx, a1, a2, a3);
+}
+
+static int jit_term_find_map_pos_pin(term a1, term a2)
+{
+    CTX_READ();
+    return jit_term_find_map_pos(ctx, a1, a2);
+}
+
+static term jit_term_create_empty_binary_pin(size_t a1)
+{
+    CTX_READ();
+    return jit_term_create_empty_binary(ctx, a1);
+}
+
+static term jit_bitstring_extract_float_pin(term * a1, int a2, int a3, int a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_bitstring_extract_float(ctx, jit_state, a1, a2, a3, a4);
+}
+
+static term term_copy_map_pin(term a1)
+{
+    CTX_READ();
+    return term_copy_map(ctx, a1);
+}
+
+static term jit_stacktrace_build_pin(void)
+{
+    CTX_READ();
+    return jit_stacktrace_build(ctx);
+}
+
+static term jit_term_reuse_binary_pin(term a1, size_t a2)
+{
+    CTX_READ();
+    return jit_term_reuse_binary(ctx, a1, a2);
+}
+
+static term jit_alloc_big_integer_fragment_pin(size_t a1, term_integer_sign_t a2)
+{
+    CTX_READ();
+    return jit_alloc_big_integer_fragment(ctx, a1, a2);
+}
+
+static void jit_try_case_pin(void)
+{
+    CTX_READ();
+    jit_try_case(ctx);
+}
+
+static term jit_get_record_field_pin(uint32_t a1, term a2, term a3, term a4)
+{
+    CTX_READ();
+    return jit_get_record_field(ctx, a1, a2, a3, a4);
+}
+
+static void jit_set_tuple_element_pin(term a1, uint32_t a2, term a3)
+{
+    CTX_READ();
+    jit_set_tuple_element(ctx, a1, a2, a3);
+}
+
+static size_t jit_put_map_heap_need_pin(term a1, size_t a2, size_t a3)
+{
+    CTX_READ();
+    return jit_put_map_heap_need(ctx, a1, a2, a3);
+}
+
+static term jit_map_get_value_pin(term a1, int a2)
+{
+    CTX_READ();
+    return jit_map_get_value(ctx, a1, a2);
+}
+
+static term jit_term_get_map_assoc_pin(term a1, term a2)
+{
+    CTX_READ();
+    return jit_term_get_map_assoc(ctx, a1, a2);
+}
+
+static int jit_term_get_map_assoc_miss_pin(term a1, term a2)
+{
+    CTX_READ();
+    return jit_term_get_map_assoc_miss(ctx, a1, a2);
+}
+
+static term jit_bitstring_create_tail_pin(term a1, size_t a2)
+{
+    CTX_READ();
+    return jit_bitstring_create_tail(ctx, a1, a2);
+}
+
+static term jit_bs_create_bin_wrap_pin(term a1, size_t a2)
+{
+    CTX_READ();
+    return jit_bs_create_bin_wrap(ctx, a1, a2);
+}
+
+static term jit_bitstring_slice_pin(term a1, size_t a2, size_t a3)
+{
+    CTX_READ();
+    return jit_bitstring_slice(ctx, a1, a2, a3);
+}
+
+static term jit_module_get_atom_term_by_id_pin(int a1)
+{
+    JS_READ();
+    return jit_module_get_atom_term_by_id(jit_state, a1);
+}
+
+static BifImpl0 jit_get_imported_bif_pin(uint32_t a1)
+{
+    JS_READ();
+    return jit_get_imported_bif(jit_state, a1);
+}
+
+static void jit_ensure_fpregs_pin(void)
+{
+    JS_READ();
+    jit_ensure_fpregs(jit_state);
+}
+
+static void jit_term_conv_to_float_pin(term a1, int a2)
+{
+    JS_READ();
+    jit_term_conv_to_float(jit_state, a1, a2);
+}
+
+static bool jit_fadd_pin(int a1, int a2, int a3)
+{
+    JS_READ();
+    return jit_fadd(jit_state, a1, a2, a3);
+}
+
+static bool jit_fsub_pin(int a1, int a2, int a3)
+{
+    JS_READ();
+    return jit_fsub(jit_state, a1, a2, a3);
+}
+
+static bool jit_fmul_pin(int a1, int a2, int a3)
+{
+    JS_READ();
+    return jit_fmul(jit_state, a1, a2, a3);
+}
+
+static bool jit_fdiv_pin(int a1, int a2, int a3)
+{
+    JS_READ();
+    return jit_fdiv(jit_state, a1, a2, a3);
+}
+
+static void jit_fnegate_pin(int a1, int a2)
+{
+    JS_READ();
+    jit_fnegate(jit_state, a1, a2);
+}
+
+#define JS_ENTRY(name) name##_pin
+#else
+#define JS_ENTRY(name) name
+#endif
+
 const ModuleNativeInterface module_native_interface = {
-    jit_raise_error,
-    jit_return,
-    jit_schedule_next_cp,
-    jit_module_get_atom_term_by_id,
-    jit_call_ext,
-    jit_allocate,
-    jit_handle_error,
-    jit_trim_live_regs,
-    jit_get_imported_bif,
-    jit_deallocate,
-    jit_terminate_context,
-    jit_term_compare,
-    jit_test_heap,
-    jit_put_list,
-    jit_module_load_literal,
-    jit_alloc_boxed_integer_fragment,
-    jit_term_alloc_tuple,
-    jit_send,
-    jit_extended_register_ptr,
-    jit_raise_error_tuple,
-    jit_term_alloc_fun,
-    jit_process_signal_messages,
-    jit_mailbox_peek,
-    jit_mailbox_remove_message,
-    jit_timeout,
-    jit_mailbox_next,
-    jit_cancel_timeout,
-    jit_clear_timeout_flag,
-    jit_raise,
-    jit_schedule_wait_cp,
-    jit_wait_timeout,
-    jit_wait_timeout_trap_handler,
-    jit_call_fun,
-    context_get_flags,
-    jit_ensure_fpregs,
-    jit_term_from_float,
+    JS_ENTRY(jit_raise_error),
+    JS_ENTRY(jit_return),
+    JS_ENTRY(jit_schedule_next_cp),
+    JS_ENTRY(jit_module_get_atom_term_by_id),
+    JS_ENTRY(jit_call_ext),
+    JS_ENTRY(jit_allocate),
+    JS_ENTRY(jit_handle_error),
+    JS_ENTRY(jit_trim_live_regs),
+    JS_ENTRY(jit_get_imported_bif),
+    JS_ENTRY(jit_deallocate),
+    JS_ENTRY(jit_terminate_context),
+    JS_ENTRY(jit_term_compare),
+    JS_ENTRY(jit_test_heap),
+    JS_ENTRY(jit_put_list),
+    JS_ENTRY(jit_module_load_literal),
+    JS_ENTRY(jit_alloc_boxed_integer_fragment),
+    JS_ENTRY(jit_term_alloc_tuple),
+    JS_ENTRY(jit_send),
+    JS_ENTRY(jit_extended_register_ptr),
+    JS_ENTRY(jit_raise_error_tuple),
+    JS_ENTRY(jit_term_alloc_fun),
+    JS_ENTRY(jit_process_signal_messages),
+    JS_ENTRY(jit_mailbox_peek),
+    JS_ENTRY(jit_mailbox_remove_message),
+    JS_ENTRY(jit_timeout),
+    JS_ENTRY(jit_mailbox_next),
+    JS_ENTRY(jit_cancel_timeout),
+    JS_ENTRY(jit_clear_timeout_flag),
+    JS_ENTRY(jit_raise),
+    JS_ENTRY(jit_schedule_wait_cp),
+    JS_ENTRY(jit_wait_timeout),
+    JS_ENTRY(jit_wait_timeout_trap_handler),
+    JS_ENTRY(jit_call_fun),
+    JS_ENTRY(context_get_flags),
+    JS_ENTRY(jit_ensure_fpregs),
+    JS_ENTRY(jit_term_from_float),
     term_is_number,
-    jit_term_conv_to_float,
-    jit_fadd,
-    jit_fsub,
-    jit_fmul,
-    jit_fdiv,
-    jit_fnegate,
-    jit_catch_end,
-    jit_memory_ensure_free_with_roots,
-    jit_term_alloc_bin_match_state,
-    jit_bitstring_extract_integer,
+    JS_ENTRY(jit_term_conv_to_float),
+    JS_ENTRY(jit_fadd),
+    JS_ENTRY(jit_fsub),
+    JS_ENTRY(jit_fmul),
+    JS_ENTRY(jit_fdiv),
+    JS_ENTRY(jit_fnegate),
+    JS_ENTRY(jit_catch_end),
+    JS_ENTRY(jit_memory_ensure_free_with_roots),
+    JS_ENTRY(jit_term_alloc_bin_match_state),
+    JS_ENTRY(jit_bitstring_extract_integer),
     jit_term_sub_binary_heap_size,
-    jit_term_maybe_create_sub_binary,
-    jit_term_find_map_pos,
+    JS_ENTRY(jit_term_maybe_create_sub_binary),
+    JS_ENTRY(jit_term_find_map_pos),
     jit_bitstring_utf8_size,
     jit_bitstring_utf16_size,
-    jit_term_create_empty_binary,
-    jit_decode_flags_list,
+    JS_ENTRY(jit_term_create_empty_binary),
+    JS_ENTRY(jit_decode_flags_list),
     jit_bitstring_insert_utf8,
     jit_bitstring_insert_utf16,
     jit_bitstring_insert_utf32,
     jit_bitstring_insert_integer,
-    jit_bitstring_copy_module_str,
-    jit_bitstring_copy_binary,
-    jit_apply,
-    jit_malloc,
+    JS_ENTRY(jit_bitstring_copy_module_str),
+    JS_ENTRY(jit_bitstring_copy_binary),
+    JS_ENTRY(jit_apply),
+    JS_ENTRY(jit_malloc),
     free,
-    jit_put_map_assoc,
-    jit_bitstring_extract_float,
+    JS_ENTRY(jit_put_map_assoc),
+    JS_ENTRY(jit_bitstring_extract_float),
     jit_module_get_fun_arity,
-    jit_bitstring_match_module_str,
+    JS_ENTRY(jit_bitstring_match_module_str),
     jit_bitstring_get_utf8,
     jit_bitstring_get_utf16,
     jit_bitstring_get_utf32,
-    term_copy_map,
-    jit_stacktrace_build,
-    jit_term_reuse_binary,
-    jit_alloc_big_integer_fragment,
+    JS_ENTRY(term_copy_map),
+    JS_ENTRY(jit_stacktrace_build),
+    JS_ENTRY(jit_term_reuse_binary),
+    JS_ENTRY(jit_alloc_big_integer_fragment),
     jit_bitstring_insert_float,
-    jit_raw_raise,
-    jit_raise_error_mfa,
-    jit_try_case,
-    jit_record_def_arity,
+    JS_ENTRY(jit_raw_raise),
+    JS_ENTRY(jit_raise_error_mfa),
+    JS_ENTRY(jit_try_case),
+    JS_ENTRY(jit_record_def_arity),
     jit_record_field_pos,
-    jit_put_record,
+    JS_ENTRY(jit_put_record),
     jit_is_record_of,
-    jit_is_record_accessible,
-    jit_get_record_field,
-    jit_put_record_resolved,
-    jit_get_imported_gcbif,
-    jit_set_tuple_element,
-    jit_put_map_heap_need,
-    jit_map_get_value,
-    jit_term_get_map_assoc,
-    jit_term_get_map_assoc_miss,
-    jit_call_fun_direct,
-    jit_call_ext_direct,
-    jit_return_direct,
+    JS_ENTRY(jit_is_record_accessible),
+    JS_ENTRY(jit_get_record_field),
+    JS_ENTRY(jit_put_record_resolved),
+    JS_ENTRY(jit_get_imported_gcbif),
+    JS_ENTRY(jit_set_tuple_element),
+    JS_ENTRY(jit_put_map_heap_need),
+    JS_ENTRY(jit_map_get_value),
+    JS_ENTRY(jit_term_get_map_assoc),
+    JS_ENTRY(jit_term_get_map_assoc_miss),
+    JS_ENTRY(jit_call_fun_direct),
+    JS_ENTRY(jit_call_ext_direct),
+    JS_ENTRY(jit_return_direct),
     jit_bitstring_get_tail_heap_size,
-    jit_bitstring_create_tail,
-    jit_bs_create_bin_wrap,
+    JS_ENTRY(jit_bitstring_create_tail),
+    JS_ENTRY(jit_bs_create_bin_wrap),
     jit_bitstring_slice_heap_size,
-    jit_bitstring_slice,
+    JS_ENTRY(jit_bitstring_slice),
     jit_bitstring_is_multiple_of
 };
 

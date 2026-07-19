@@ -1822,6 +1822,55 @@ schedule_in:
                 ctx->heap.heap_ptr = pin_hp;
                 ctx->e = pin_e;
             }
+#elif JIT_ARCH_TARGET == JIT_ARCH_AARCH64
+            // aarch64 pinned-register convention: generated code reads
+            // jit_state from x19, the primitives table from x20 and ctx
+            // from x21 (callee-saved, so C primitives preserve them for
+            // free) and never saves or reloads them around primitive
+            // calls. All three are invariant for the whole invocation: a
+            // primitive that switches context makes generated code return
+            // here (return_if_not_equal_to_ctx / the direct-dispatch
+            // result==ctx guards), and the next iteration re-seeds. This
+            // is the single C->native entry boundary; the label-0 metadata
+            // stub (adr x0; ret) reads none of them, so its plain
+            // NULL-argument call sites need no seeding.
+            // hp/e are seeded here but NOT written back on return: generated
+            // code writes them to ctx before every C call and every exit to
+            // this loop goes through a C call, so the ctx fields are always
+            // authoritative when C runs (a write-back here would stomp a
+            // GC's heap move with stale registers).
+            Context *new_ctx;
+            {
+                register JITState *pin_js __asm__("x19") = &jit_state;
+                register const ModuleNativeInterface *pin_p __asm__("x20") = &module_native_interface;
+                register Context *pin_ctx __asm__("x21") = ctx;
+                register term *pin_hp __asm__("x22") = ctx->heap.heap_ptr;
+                register term *pin_e __asm__("x23") = ctx->e;
+                // The entry pointer rides in x24 (callee-saved, so no
+                // overlap with the caller-saved clobber list is possible).
+                register ModuleNativeEntryPoint entry_reg __asm__("x24") = native_pc;
+                register Context *result_reg __asm__("x0");
+// On Darwin x18 is reserved (never allocated, clobber listing warns); on
+// other aarch64 platforms it is a temporary the callee may use.
+#ifdef __APPLE__
+#define AVM_JIT_AARCH64_X18_CLOBBER
+#else
+#define AVM_JIT_AARCH64_X18_CLOBBER "x18",
+#endif
+                __asm__ volatile(
+                    "blr x24"
+                    : "=r"(result_reg), "+r"(pin_js), "+r"(pin_p), "+r"(pin_ctx),
+                      "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
+                    :
+                    : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
+                      "x11", "x12", "x13", "x14", "x15", "x16", "x17",
+                      AVM_JIT_AARCH64_X18_CLOBBER "x30",
+                      "memory", "cc",
+                      "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
+                      "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
+                      "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+                new_ctx = result_reg;
+            }
 #else
             Context *new_ctx = native_pc(ctx, &jit_state, &module_native_interface);
 #endif
