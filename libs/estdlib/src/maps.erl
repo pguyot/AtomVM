@@ -250,11 +250,17 @@ values(Map) ->
 %%-----------------------------------------------------------------------------
 -spec to_list(Map :: #{Key => Value}) -> [{Key, Value}].
 to_list(Map) when is_map(Map) ->
-    to_list(maps:iterator(Map));
+    %% keys/1 and values/1 are nifs walking the map once each, which beats
+    %% stepping the Erlang iterator protocol per entry.
+    zip_kv(?MODULE:keys(Map), ?MODULE:values(Map));
 to_list(Iterator) when is_list(Iterator) andalso is_map(tl(Iterator)) ->
     iterate_entries(maps:next(Iterator), []);
 to_list(Map) ->
     error({badmap, Map}).
+
+%% @private
+zip_kv([K | Ks], [V | Vs]) -> [{K, V} | zip_kv(Ks, Vs)];
+zip_kv([], []) -> [].
 
 %%-----------------------------------------------------------------------------
 %% @param   List a list of `[{Key, Value}]' pairs
@@ -326,7 +332,7 @@ find(Key, Map) ->
     MapOrIterator :: map_or_iterator(Key, Value)
 ) -> #{Key => Value}.
 filter(Pred, Map) when is_function(Pred, 2) andalso is_map(Map) ->
-    iterate_filter(Pred, maps:next(maps:iterator(Map)), ?MODULE:new());
+    ?MODULE:from_list(filter_kv(Pred, ?MODULE:keys(Map), ?MODULE:values(Map)));
 filter(Pred, [Pos | Map] = Iterator) when
     is_function(Pred, 2) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
@@ -357,7 +363,9 @@ filter(_Pred, _Map) ->
     MapOrIterator :: map_or_iterator(Key, Value)
 ) -> Accum.
 fold(Fun, Init, Map) when is_function(Fun, 3) andalso is_map(Map) ->
-    iterate_fold(Fun, maps:next(maps:iterator(Map)), Init);
+    %% keys/1 and values/1 are nifs walking the map once each; folding the two
+    %% resulting lists avoids a maps:next/1 call per entry.
+    fold_kv(Fun, Init, ?MODULE:keys(Map), ?MODULE:values(Map));
 fold(Fun, Init, [Pos | Map] = Iterator) when
     is_function(Fun, 3) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
@@ -418,7 +426,9 @@ from_keys(List, _Value) when is_list(List) ->
 -spec map(Fun :: fun((Key, Value) -> MappedValue), Map :: map_or_iterator(Key, Value)) ->
     #{Key => MappedValue}.
 map(Fun, Map) when is_function(Fun, 2) andalso is_map(Map) ->
-    iterate_map(Fun, maps:next(maps:iterator(Map)), ?MODULE:new());
+    %% Build the result in one from_list/1 pass: the previous accumulator
+    %% (Acc#{K => V} per entry) re-built the map on every entry.
+    ?MODULE:from_list(map_kv(Fun, ?MODULE:keys(Map), ?MODULE:values(Map)));
 map(Fun, [Pos | Map] = Iterator) when
     is_function(Fun, 2) andalso (is_integer(Pos) orelse is_list(Pos)) andalso is_map(Map)
 ->
@@ -555,6 +565,27 @@ iterate_filter(Pred, {Key, Value, Iterator}, Accum) ->
                 Accum
         end,
     iterate_filter(Pred, maps:next(Iterator), NewAccum).
+
+%% @private
+fold_kv(Fun, Acc, [K | Ks], [V | Vs]) ->
+    fold_kv(Fun, Fun(K, V, Acc), Ks, Vs);
+fold_kv(_Fun, Acc, [], []) ->
+    Acc.
+
+%% @private
+map_kv(Fun, [K | Ks], [V | Vs]) ->
+    [{K, Fun(K, V)} | map_kv(Fun, Ks, Vs)];
+map_kv(_Fun, [], []) ->
+    [].
+
+%% @private
+filter_kv(Pred, [K | Ks], [V | Vs]) ->
+    case Pred(K, V) of
+        true -> [{K, V} | filter_kv(Pred, Ks, Vs)];
+        _ -> filter_kv(Pred, Ks, Vs)
+    end;
+filter_kv(_Pred, [], []) ->
+    [].
 
 %% @private
 iterate_fold(_Fun, none, Accum) ->
