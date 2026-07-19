@@ -3,6 +3,69 @@
  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 -->
 
+# Benchmark matrix results — 2026-07-20: erlc 1.55x, app 1.18x
+
+Host: macOS aarch64 (Apple Silicon), `build.release` = Release + LTO, JIT on,
+AOT-precompiled aarch64. BEAM = OTP 29. Interleaved drivers (median of 21 runs
+for the app, 5 for erlc); the **vs-BEAM ratio** is the comparable metric, not
+the absolute milliseconds.
+
+Note: crypto_test needs an mbedtls built with ARMv8 crypto
+(`MBEDTLS_SHA256_USE_ARMV8_A_CRYPTO_IF_PRESENT`); MacPorts' libmbedcrypto has no
+`sha256h`/`aese` instructions. Configure with `-DMBEDTLS_ROOT_DIR=...`.
+
+## Benchmark app (interleaved, median of 21 runs, 3 warmup; microseconds)
+
+| test                  |   BEAM | JIT SMP | vs BEAM |
+|-----------------------|-------:|--------:|--------:|
+| pingpong_speed_test   | 35,673 |  19,767 | 1.80x |
+| prime_speed_test      |  2,937 |   3,783 | 0.78x |
+| prng_test             |    366 |     209 | 1.75x |
+| pi_test               |  6,143 |   6,719 | 0.91x |
+| bigint_test           |  1,639 |   1,756 | 0.93x |
+| crypto_test           |  1,660 |     525 | 3.16x |
+| sudoku_solution_test  |    871 |     445 | 1.96x |
+| sudoku_puzzle_test    | 16,428 |  24,117 | 0.68x |
+| list_test             | 13,458 |   9,611 | 1.40x |
+| map_test              |  1,311 |   1,232 | 1.06x |
+| binary_test           |    484 |     585 | 0.83x |
+| pingpong [sched=1]    |163,343 |  18,401 | 8.88x |
+| prime [sched=1]       |  8,774 |   5,969 | 1.47x |
+
+Aggregate over the 11 base tests: **BEAM 81.0 ms vs JIT SMP 68.7 ms = 1.18x**
+(was 1.07x at the start of the day). Median wall including VM startup: 340 ms vs
+96 ms (3.5x).
+
+- prime is a *scheduling* loss, not a compute one: 0.78x with SMP but **1.47x at
+  `schedulers=1`**. See the per-scheduler run-queue work.
+- pi_test is float-bound; float inlining is deliberately out of scope.
+- sudoku_puzzle's remaining gap is GC copy cost per word (it already performs
+  ~1650 GCs/puzzle against BEAM's ~3945, and copies fewer words).
+
+## erlc — OTP-29 stdlib/kernel/sasl/crypto (interleaved, median of 5 runs)
+
+| app    | files |    BEAM |  JIT SMP | vs BEAM |
+|--------|------:|--------:|---------:|--------:|
+| stdlib |    93 | 27,719 ms | 21,564 ms | 1.29x |
+| kernel |   101 | 20,625 ms | 10,330 ms | 2.00x |
+| sasl   |    17 |  3,218 ms |  1,393 ms | 2.31x |
+| crypto |     2 |    559 ms |    407 ms | 1.37x |
+| **overall** | **213** | **52,121 ms** | **33,694 ms** | **1.55x** |
+
+**AtomVM beats BEAM erlc on 200 of 213 files.** The 13 remaining, worst first:
+unicode_util 0.61x, erl_parse 0.82x, dets 0.84x, qlc 0.84x, disk_log 0.85x,
+erl_lint 0.88x, application_controller 0.93x, socket 0.93x, gen_tcp_socket 0.95x,
+epp 0.96x, erl_pp 0.96x, prim_tty 0.96x, supervisor 0.99x.
+
+The tail is the ordered-map (B-tree) constant factor: after fixing
+`maps:from_keys/2`'s O(n^2) key sort, the unicode_util profile is `term_compare`
+435 / `termtree_get` 255 / `bt_insert` 146 — genuine comparison work inside
+`node_find`, which already carries a small-integer fast path. `maps:remove/2` is
+still 0.05x of BEAM (it rebuilds the whole map where BEAM path-copies) and is the
+clearest remaining lever.
+
+Previous runs below for reference.
+
 # Benchmark matrix results — 2026-07-05 (second update): stdlib WON
 
 With loop-header register residency (6a4b2af03), JITState cp_base
