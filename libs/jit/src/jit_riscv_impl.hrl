@@ -3915,11 +3915,53 @@ add_label(
         Branches
     ),
 
-    State#state{
+    State1 = State#state{
         stream = Stream2, branches = RemainingBranches, labels = Labels#{Label => LabelOffset}
-    };
+    },
+    maybe_eager_resolve_flush(State1, Label);
 add_label(#state{labels = Labels} = State, Label, Offset) ->
     State#state{labels = Labels#{Label => Offset}}.
+
+%% @private
+%% Eager-flush mode (emission pass of the two-pass flash compile, see
+%% jit:compile_emit): resolve the forward fused branches targeting the label
+%% that was just placed -- the sizing pass guarantees they fit -- then advance
+%% the stream's flush horizon to the earliest still-pending write. Everything
+%% below the horizon is final, bounding the RAM the flash stream holds.
+maybe_eager_resolve_flush(#state{eager_flush = false} = State, _Label) ->
+    State;
+maybe_eager_resolve_flush(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        fused_branches = Fused0,
+        labels = Labels,
+        branches = Branches,
+        regs = Regs,
+        overflows = Overflows0
+    } = State,
+    Label
+) ->
+    {Targeting, Fused1} = lists:partition(fun(F) -> element(3, F) =:= Label end, Fused0),
+    {Stream1, Overflows1} = resolve_fused_branches(
+        StreamModule, Stream0, Targeting, Labels, jit_regs:available_regs(Regs), Overflows0
+    ),
+    PendingOffsets =
+        [element(2, F) || F <- Fused1] ++
+            [O || {O, _Type} <- lists:append(maps:values(Branches))],
+    SafeOffset =
+        case PendingOffsets of
+            [] -> StreamModule:offset(Stream1);
+            _ -> lists:min(PendingOffsets)
+        end,
+    Stream2 = StreamModule:flush_upto(Stream1, SafeOffset),
+    State#state{stream = Stream2, fused_branches = Fused1, overflows = Overflows1}.
+
+%% @private
+%% Opt into eager resolution + flushing for streams that expose a controlled
+%% flush horizon (jit:compile_emit calls this on the emission pass).
+enable_eager_flush(#state{stream_module = StreamModule} = State) ->
+    State#state{eager_flush = erlang:function_exported(StreamModule, flush_upto, 2)}.
 
 %% @doc Record a type assertion for a VM x/y register. The assertion is
 %% invalidated automatically by the same hooks that invalidate `regs` tracking

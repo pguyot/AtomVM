@@ -25,6 +25,8 @@
     backend/2,
     beam_chunk_header/3,
     compile/9,
+    compile_sizing/9,
+    compile_emit/10,
     decode_value64/1
 ]).
 
@@ -172,7 +174,7 @@ beam_chunk_header(LabelsCount, Arch, Variant) ->
 %% has the following signature
 %% Context *(*ModuleNativeEntryPoint)(Context *ctx, JITState *jit_state, const ModuleNativeInterface *p)
 compile(
-    <<16:32, 0:32, OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, Opcodes/binary>>,
+    CodeChunk,
     AtomResolver,
     LiteralResolver,
     TypeResolver,
@@ -181,6 +183,88 @@ compile(
     RecordResolver,
     MMod,
     MSt0
+) ->
+    compile0(
+        CodeChunk,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        DebugInfoResolver,
+        RecordResolver,
+        MMod,
+        MSt0,
+        stream
+    ).
+
+%% Sizing pass of the two-pass flash compile: run the backtrack loop on a
+%% counting stream (jit_stream_size) and return the converged forward
+%% fused-branch size hints instead of the stream. Compilation is a pure
+%% function of its input and the hints, so a subsequent compile_emit/10 with
+%% these hints produces identical offsets and cannot overflow.
+compile_sizing(
+    CodeChunk,
+    AtomResolver,
+    LiteralResolver,
+    TypeResolver,
+    ImportResolver,
+    DebugInfoResolver,
+    RecordResolver,
+    MMod,
+    MSt0
+) ->
+    compile0(
+        CodeChunk,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        DebugInfoResolver,
+        RecordResolver,
+        MMod,
+        MSt0,
+        sizing
+    ).
+
+%% Emission pass of the two-pass flash compile: a single pass with the hints
+%% from compile_sizing/9. The backend may flush eagerly (enable_eager_flush)
+%% since no backtrack re-emit can be needed; any overflow is a hard error.
+compile_emit(
+    CodeChunk,
+    AtomResolver,
+    LiteralResolver,
+    TypeResolver,
+    ImportResolver,
+    DebugInfoResolver,
+    RecordResolver,
+    MMod,
+    MSt0,
+    Hints
+) ->
+    compile0(
+        CodeChunk,
+        AtomResolver,
+        LiteralResolver,
+        TypeResolver,
+        ImportResolver,
+        DebugInfoResolver,
+        RecordResolver,
+        MMod,
+        MSt0,
+        {emit, Hints}
+    ).
+
+compile0(
+    <<16:32, 0:32, OpcodeMax:32, LabelsCount:32, _FunctionsCount:32, Opcodes/binary>>,
+    AtomResolver,
+    LiteralResolver,
+    TypeResolver,
+    ImportResolver,
+    DebugInfoResolver,
+    RecordResolver,
+    MMod,
+    MSt0,
+    Mode
 ) when OpcodeMax =< ?OPCODE_MAX ->
     LiveCapable = erlang:function_exported(MMod, set_live_masks, 2),
     HotCapable =
@@ -226,9 +310,18 @@ compile(
             false -> MSt0
         end,
     MSt1 = MMod:jump_table(MSt0b, LabelsCount),
-    MSt4 = emit_finalize_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
-    {LabelsCount, MSt4};
-compile(
+    case Mode of
+        stream ->
+            MSt4 = emit_finalize_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
+            {LabelsCount, MSt4};
+        sizing ->
+            Hints = sizing_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
+            {LabelsCount, Hints};
+        {emit, Hints} ->
+            MSt4 = emit_with_hints(Opcodes, MMod, MSt1, State0, Hints),
+            {LabelsCount, MSt4}
+    end;
+compile0(
     <<16:32, 0:32, OpcodeMax:32, _LabelsCount:32, _FunctionsCount:32, _Opcodes/binary>>,
     _AtomResolver,
     _LiteralResolver,
@@ -237,10 +330,11 @@ compile(
     _DebugInfoResolver,
     _RecordResolver,
     _MMod,
-    _MSt
+    _MSt,
+    _Mode
 ) ->
     error(badarg, [OpcodeMax]);
-compile(
+compile0(
     CodeChunk,
     _AtomResolver,
     _LiteralResolver,
@@ -249,7 +343,8 @@ compile(
     _DebugInfoResolver,
     _RecordResolver,
     _MMod,
-    _MSt
+    _MSt,
+    _Mode
 ) ->
     error(badarg, [CodeChunk]).
 
@@ -266,6 +361,75 @@ compile(
 %% run a single pass identical to the previous behaviour.
 emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt) ->
     emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, MMod:offset(MSt1)).
+
+%% Sizing pass: identical convergence loop, but the result is the converged
+%% hints map (the stream is a discarded counting stream).
+sizing_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt) ->
+    sizing_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, MMod:offset(MSt1)).
+
+sizing_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, CheckpointOffset) ->
+    MSt1a =
+        case Attempt > 0 andalso erlang:function_exported(MMod, rewind_stream, 2) of
+            true -> MMod:rewind_stream(MSt1, CheckpointOffset);
+            false -> MSt1
+        end,
+    MSt1b =
+        case erlang:function_exported(MMod, set_branch_hints, 2) of
+            true -> MMod:set_branch_hints(MSt1a, Hints);
+            false -> MSt1a
+        end,
+    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1b, State0),
+    MSt3 = finalize_pass(MMod, MSt2, State1),
+    Overflows =
+        case erlang:function_exported(MMod, take_overflows, 1) of
+            true -> MMod:take_overflows(MSt3);
+            false -> #{}
+        end,
+    MaxAttempts = 64,
+    case map_size(Overflows) of
+        0 ->
+            Hints;
+        _ when Attempt < MaxAttempts ->
+            sizing_loop(
+                Opcodes,
+                MMod,
+                MSt1,
+                State0,
+                maps:merge(Hints, Overflows),
+                Attempt + 1,
+                CheckpointOffset
+            );
+        _ ->
+            error({jit_branch_relaxation_did_not_converge, Attempt, map_size(Overflows)})
+    end.
+
+%% Emission pass with the hints from a sizing pass: exactly one emission, no
+%% backtrack possible. The backend may flush eagerly to a bounded-RAM stream
+%% (enable_eager_flush); an overflow here means the sizing pass and this pass
+%% diverged, which is a bug -- fail loudly rather than emit corrupt code.
+emit_with_hints(Opcodes, MMod, MSt1, State0, Hints) ->
+    MSt1a =
+        case erlang:function_exported(MMod, set_branch_hints, 2) of
+            true -> MMod:set_branch_hints(MSt1, Hints);
+            false -> MSt1
+        end,
+    %% NOTE: eager flushing (MMod:enable_eager_flush, advancing the stream's
+    %% flush horizon as branches resolve) is not activated yet: jump-table
+    %% entries are legitimately patched more than once (OP_INT_CALL_END
+    %% re-adds label LabelsCount; loop-residency hot entries re-patch), so the
+    %% flash stream must first learn to hold the jump-table pages separately
+    %% from the tail window before the horizon may pass them.
+    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1a, State0),
+    MSt3 = finalize_pass(MMod, MSt2, State1),
+    Overflows =
+        case erlang:function_exported(MMod, take_overflows, 1) of
+            true -> MMod:take_overflows(MSt3);
+            false -> #{}
+        end,
+    case map_size(Overflows) of
+        0 -> MMod:flush(MSt3);
+        _ -> error({jit_emit_overflow_after_sizing, Overflows})
+    end.
 
 emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, CheckpointOffset) ->
     MSt1a =
