@@ -494,11 +494,151 @@ static int divmnu32(
     return 0;
 }
 
+#ifdef __SIZEOF_INT128__
+
+// 64-bit-digit Knuth D with unsigned __int128 intermediates: half the digit
+// count of divmnu32 halves the qhat divisions and the mul-subtract steps,
+// which dominate bignum div/rem (intn_divu was 2/3 of bigint pow_mod time
+// with 32-bit digits).
+static int divmnu64(
+    uint64_t q[], uint64_t r[], const uint64_t u[], const uint64_t v[], int m, int n)
+{
+    const unsigned __int128 b = ((unsigned __int128) 1) << 64;
+    unsigned __int128 qhat;
+    unsigned __int128 rhat;
+    unsigned __int128 p;
+    __int128 t, k;
+    int s, i, j;
+
+    if (m < n || n <= 0 || v[n - 1] == 0) {
+        return 1;
+    }
+
+    if (n == 1) {
+        k = 0;
+        for (j = m - 1; j >= 0; j--) {
+            unsigned __int128 acc = ((unsigned __int128) (uint64_t) k << 64) + u[j];
+            q[j] = (uint64_t) (acc / v[0]);
+            k = (__int128) (acc - (unsigned __int128) q[j] * v[0]);
+        }
+        if (r != NULL) {
+            r[0] = (uint64_t) k;
+        }
+        return 0;
+    }
+
+    // Normalize (the 128-bit promotions keep the (64 - s) shifts defined
+    // when s == 0, mirroring divmnu32).
+    s = __builtin_clzll(v[n - 1]); // 0 <= s <= 63.
+    uint64_t vn[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2];
+    for (i = n - 1; i > 0; i--) {
+        vn[i] = (v[i] << s) | (uint64_t) ((unsigned __int128) v[i - 1] >> (64 - s));
+    }
+    vn[0] = v[0] << s;
+
+    uint64_t un[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2 + 1];
+    un[m] = (uint64_t) ((unsigned __int128) u[m - 1] >> (64 - s));
+    for (i = m - 1; i > 0; i--) {
+        un[i] = (u[i] << s) | (uint64_t) ((unsigned __int128) u[i - 1] >> (64 - s));
+    }
+    un[0] = u[0] << s;
+
+    for (j = m - n; j >= 0; j--) {
+        unsigned __int128 num = ((unsigned __int128) un[j + n] << 64) + un[j + n - 1];
+        qhat = num / vn[n - 1];
+        rhat = num - qhat * vn[n - 1];
+    again:
+        if (qhat >= b
+            || (unsigned __int128) (uint64_t) qhat * vn[n - 2]
+                > (rhat << 64) + un[j + n - 2]) {
+            qhat = qhat - 1;
+            rhat = rhat + vn[n - 1];
+            if (rhat < b) {
+                goto again;
+            }
+        }
+
+        k = 0;
+        for (i = 0; i < n; i++) {
+            p = (unsigned __int128) (uint64_t) qhat * vn[i];
+            t = (__int128) ((unsigned __int128) un[i + j] - k - (uint64_t) p);
+            un[i + j] = (uint64_t) t;
+            k = (__int128) (p >> 64) - (t >> 64);
+        }
+        t = (__int128) ((unsigned __int128) un[j + n] - k);
+        un[j + n] = (uint64_t) t;
+
+        q[j] = (uint64_t) qhat;
+        if (t < 0) {
+            q[j] = q[j] - 1;
+            k = 0;
+            for (i = 0; i < n; i++) {
+                t = (__int128) ((unsigned __int128) un[i + j] + vn[i] + k);
+                un[i + j] = (uint64_t) t;
+                k = t >> 64;
+            }
+            un[j + n] = un[j + n] + (uint64_t) k;
+        }
+    }
+
+    if (r != NULL) {
+        for (i = 0; i < n - 1; i++) {
+            r[i] = (un[i] >> s) | (uint64_t) ((unsigned __int128) un[i + 1] << (64 - s));
+        }
+        r[n - 1] = un[n - 1] >> s;
+    }
+    return 0;
+}
+
+#endif // __SIZEOF_INT128__
+
 size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], size_t n_len,
     intn_digit_t q_out[], intn_digit_t r_out[], size_t *r_out_len)
 {
     size_t u_len = intn_count_digits(m, m_len);
     size_t v_len = intn_count_digits(n, n_len);
+
+#ifdef __SIZEOF_INT128__
+    if (LIKELY(u_len >= v_len && v_len > 0)) {
+        // Pack the little-endian 32-bit digit arrays into 64-bit limbs (a
+        // plain copy on little-endian targets, zero-padded to even counts)
+        // and divide with 64-bit digits.
+        uint64_t u64[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2 + 1] = { 0 };
+        uint64_t v64[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2] = { 0 };
+        uint64_t q64[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2 + 1];
+        uint64_t r64[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2];
+        memcpy(u64, m, u_len * sizeof(intn_digit_t));
+        memcpy(v64, n, v_len * sizeof(intn_digit_t));
+        int m64 = (int) ((u_len + 1) / 2);
+        int n64 = (int) ((v_len + 1) / 2);
+        if (UNLIKELY(divmnu64(q64, r64, u64, v64, m64, n64) != 0)) {
+            abort();
+        }
+        size_t q_digits = u_len - v_len + 1;
+        for (size_t i = 0; i < q_digits; i++) {
+            q_out[i] = (uint32_t) (q64[i / 2] >> (32 * (i & 1)));
+        }
+        if (r_out != NULL) {
+            for (size_t i = 0; i < v_len; i++) {
+                r_out[i] = (uint32_t) (r64[i / 2] >> (32 * (i & 1)));
+            }
+        }
+        size_t q_len = intn_count_digits(q_out, q_digits);
+        if (q_len == 0) {
+            q_out[0] = 0;
+            q_len = 1;
+        }
+        if (r_out != NULL && r_out_len != NULL) {
+            size_t r_len = intn_count_digits(r_out, v_len);
+            if (r_len == 0) {
+                r_out[0] = 0;
+                r_len = 1;
+            }
+            *r_out_len = r_len;
+        }
+        return q_len;
+    }
+#endif
 
     if (UNLIKELY(divmnu32(q_out, r_out, m, n, u_len, v_len) != 0)) {
         abort();
