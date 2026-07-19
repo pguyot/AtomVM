@@ -2895,3 +2895,95 @@ call_only_or_schedule_next_far_test() ->
         >>,
         Code
     ).
+
+%% jump_to_label_cond fuses a widenable guard into a single conditional branch
+%% to a backward label, in place of the two-branch skip + jump form.
+jump_to_label_cond_fused_backward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 4),
+    LabelOffset = ?BACKEND:offset(State1),
+    %% Label 1 sits here; the guard below jumps back to it.
+    State2 = ?BACKEND:add_label(State1, 1),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    %% "jump to label 1 when RegA != 5": a single b.ne back to label 1.
+    Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State3, {RegA, '!=', 5}, 1)),
+    Fallback = ?BACKEND:stream(
+        ?BACKEND:if_block(State3, {RegA, '!=', 5}, fun(BSt0) ->
+            ?BACKEND:jump_to_label(BSt0, 1)
+        end)
+    ),
+    ?assert(byte_size(Fused) < byte_size(Fallback)),
+    %% The fused guard ends with exactly one b.ne straight to label 1.
+    BranchOffset = byte_size(Fused) - 4,
+    Rel = LabelOffset - BranchOffset,
+    ?assertEqual(jit_aarch64_asm:bcc(ne, Rel), binary:part(Fused, BranchOffset, 4)).
+
+%% The register-test conditions (cbz/cbnz/tbz) are invertible too, so a guard
+%% like "jump when Reg != 0" fuses into a single cbnz to a backward label.
+jump_to_label_cond_fused_backward_cbnz_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 4),
+    LabelOffset = ?BACKEND:offset(State1),
+    State2 = ?BACKEND:add_label(State1, 1),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    %% {Reg, '!=', 0} compiles to a cbz skip; fused+inverted it is one cbnz.
+    Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State3, {RegA, '!=', 0}, 1)),
+    BranchOffset = byte_size(Fused) - 4,
+    Rel = LabelOffset - BranchOffset,
+    ?assertEqual(jit_aarch64_asm:cbnz(RegA, Rel), binary:part(Fused, BranchOffset, 4)).
+
+%% A forward fused guard branch is emitted optimistically and resolved at
+%% finalize (update_branches) to a single conditional branch once the target
+%% label offset is known. jit_stream_binary is backtrackable, so the forward
+%% path is taken.
+jump_to_label_cond_fused_forward_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    %% Forward guard jump to label 5 (not yet defined): optimistic 4-byte branch.
+    State3 = ?BACKEND:jump_to_label_cond(State2, {RegA, '!=', 5}, 5),
+    BranchOffset = ?BACKEND:offset(State3) - 4,
+    %% Some more code, then define label 5 a short (in-range) distance ahead.
+    {State4, _} = ?BACKEND:move_to_native_register(State3, {x_reg, 2}),
+    LabelOffset = ?BACKEND:offset(State4),
+    State5 = ?BACKEND:add_label(State4, 5),
+    State6 = ?BACKEND:update_branches(State5),
+    %% Fit -> no overflow, and the placeholder is now a resolved b.ne to label 5.
+    ?assertEqual(#{}, ?BACKEND:take_overflows(State6)),
+    Stream = ?BACKEND:stream(State6),
+    Rel = LabelOffset - BranchOffset,
+    ?assertEqual(jit_aarch64_asm:bcc(ne, Rel), binary:part(Stream, BranchOffset, 4)).
+
+%% A forward fused branch whose target lands beyond the bcc reach overflows its
+%% 4-byte reservation: update_branches reports it in take_overflows, and the
+%% re-emit pass (branch hints pinning it to 8 bytes) produces the
+%% inverted-skip + b pair -- the full backtrack contract at unit level.
+jump_to_label_cond_fused_forward_far_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    State3 = ?BACKEND:jump_to_label_cond(State2, {RegA, '!=', 5}, 5),
+    BranchOffset = ?BACKEND:offset(State3) - 4,
+    %% Place label 5 beyond the +/-1MB bcc reach.
+    LabelOffset = 16#200000,
+    State4 = ?BACKEND:add_label(State3, 5, LabelOffset),
+    State5 = ?BACKEND:update_branches(State4),
+    ?assertEqual(#{0 => 8}, ?BACKEND:take_overflows(State5)),
+    %% Second pass, as driven by jit:compile's emit_finalize_loop: same emission
+    %% with the overflowing branch pinned to 8 bytes.
+    StateR0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    StateR1 = ?BACKEND:jump_table(StateR0, 8),
+    StateR2 = ?BACKEND:set_branch_hints(StateR1, #{0 => 8}),
+    {StateR3, RegA} = ?BACKEND:move_to_native_register(StateR2, {x_reg, 0}),
+    StateR4 = ?BACKEND:jump_to_label_cond(StateR3, {RegA, '!=', 5}, 5),
+    ?assertEqual(BranchOffset + 8, ?BACKEND:offset(StateR4)),
+    StateR5 = ?BACKEND:add_label(StateR4, 5, LabelOffset),
+    StateR6 = ?BACKEND:update_branches(StateR5),
+    ?assertEqual(#{}, ?BACKEND:take_overflows(StateR6)),
+    Stream = ?BACKEND:stream(StateR6),
+    %% b.eq skips over the b (8 bytes); b covers the full distance.
+    Expected = <<
+        (jit_aarch64_asm:bcc(eq, 8))/binary,
+        (jit_aarch64_asm:b(LabelOffset - BranchOffset - 4))/binary
+    >>,
+    ?assertEqual(Expected, binary:part(Stream, BranchOffset, 8)).
