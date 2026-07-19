@@ -375,6 +375,8 @@ struct ModuleNativeInterface
 
     size_t (*put_map_one_heap_need)(CTXP_ term src);
     term (*put_map_assoc_one)(CTXP_ JSP_ term src, term key, term value);
+    size_t (*put_map_exact_one_heap_need)(CTXP_ term src);
+    term (*put_map_exact_one)(CTXP_ JSP_ term src, int pos, term key, term value);
 };
 
 extern const ModuleNativeInterface module_native_interface;
