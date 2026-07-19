@@ -325,7 +325,8 @@ TEST_CASE("test_jit_runtime", "[test_run]")
 
     TEST_ASSERT(ret_value == OK_ATOM);
 }
-#endif
+#endif // CONFIG_IDF_TARGET_ESP32
+#endif // AVM_NO_JIT
 
 TEST_CASE("test_esp_partition", "[test_run]")
 {

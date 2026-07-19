@@ -109,6 +109,17 @@ bool jit_stream_flash_platform_erase_sector(struct JSFlashPlatformContext *pf_ct
 bool jit_stream_flash_platform_write_page(struct JSFlashPlatformContext *pf_ctx, uintptr_t addr, const uint8_t *data);
 
 /**
+ * @brief Check whether a memory-mapped address lies within the flash region
+ * backing the JIT cache (the JIT partition). Avm packs living elsewhere (for
+ * example embedded in the application image, or in another partition) cannot
+ * anchor the JIT cache and cannot have their end marker rewritten, so the
+ * cache-validity machinery must ignore them.
+ * @param addr Virtual (data bus) address to check
+ * @return true if the address is inside the JIT cache flash region
+ */
+bool jit_stream_flash_platform_is_jit_addr(uintptr_t addr);
+
+/**
  * @brief Convert data bus address to instruction bus address
  * @param addr Data bus address
  * @return Instruction bus address (executable pointer)
