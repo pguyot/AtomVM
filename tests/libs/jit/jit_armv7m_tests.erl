@@ -160,16 +160,16 @@ rem_thumb2_test() ->
     >>,
     ?assertStream(arm_thumb2, Dump, Stream).
 
-%% jump_to_label_cond fuses a widenable guard into one B<cond>.W (thumb2 only),
-%% in place of the two-branch skip + jump form. Backward label here; the win is
-%% larger on forward jumps (where the fallback reserves a far-branch sequence).
+%% jump_to_label_cond fuses a widenable guard to a backward label into the
+%% minimal exact form -- here the distance is tiny, so a single 2-byte
+%% Thumb-1 bcc (the old proxy always reserved a 4-byte B<cond>.W).
 jump_to_label_cond_fused_thumb2_test() ->
     State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 4),
     %% Label 1 sits at the current (4-aligned) offset; the guard jumps back to it.
     State2 = ?BACKEND:add_label(State1, 1),
     {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
-    %% "jump to label 1 when RegA != 5": cmp r7,#5 + a single b<ne>.w back to it.
+    %% "jump to label 1 when RegA != 5": cmp r7,#5 + a single bne back to it.
     Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State3, {RegA, '!=', 5}, 1)),
     Fallback = ?BACKEND:stream(
         ?BACKEND:if_block(State3, {RegA, '!=', 5}, fun(BSt0) ->
@@ -178,6 +178,104 @@ jump_to_label_cond_fused_thumb2_test() ->
     ),
     %% Single fused branch is strictly smaller than the two-branch fallback.
     ?assert(byte_size(Fused) < byte_size(Fallback)),
-    %% ...and it ends with exactly one B<ne>.W to label 1, eight bytes back
-    %% (ldr + cmp + b.w after the aligned label leaves the branch at label+8).
-    ?assertEqual(jit_armv7m_asm:b_w(ne, -8), binary:part(Fused, byte_size(Fused) - 4, 4)).
+    %% ...and it ends with exactly one bne to label 1, four bytes back
+    %% (ldr + cmp after the aligned label leaves the branch at label+4).
+    ?assertEqual(jit_armv6m_asm:bcc(ne, -4), binary:part(Fused, byte_size(Fused) - 2, 2)).
+
+%% A backward fused guard branch beyond the Thumb-1 bcc window widens to a
+%% single B<cond>.W (the 2-byte placeholder reservation grows in place).
+jump_to_label_cond_fused_backward_wide_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 4),
+    State2 = ?BACKEND:add_label(State1, 1),
+    %% add_label pads to 4-byte alignment; the label sits at the padded offset.
+    LabelOffset = ?BACKEND:offset(State2),
+    {State3, RegA} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    %% ~400 bytes of padding so label 1 is beyond the 2-byte bcc reach.
+    State4 = lists:foldl(
+        fun(_, S) -> ?BACKEND:move_to_vm_register(S, 1, {x_reg, 0}) end,
+        State3,
+        lists:seq(1, 100)
+    ),
+    Fused = ?BACKEND:stream(?BACKEND:jump_to_label_cond(State4, {RegA, '!=', 5}, 1)),
+    BranchOffset = byte_size(Fused) - 4,
+    Rel = LabelOffset - BranchOffset,
+    ?assert(Rel < -252),
+    ?assertEqual(jit_armv7m_asm:b_w(ne, Rel - 4), binary:part(Fused, BranchOffset, 4)).
+
+%% A forward fused guard branch is emitted optimistically (4-byte reservation)
+%% and resolved at finalize once the target label offset is known; a near
+%% target resolves to the 2-byte bcc padded with a nop.
+jump_to_label_cond_fused_forward_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    %% Forward guard jump to label 5 (not yet defined): optimistic 4-byte form.
+    State3 = ?BACKEND:jump_to_label_cond(State2, {RegA, '!=', 5}, 5),
+    BranchOffset = ?BACKEND:offset(State3) - 4,
+    {State4, _} = ?BACKEND:move_to_native_register(State3, {x_reg, 2}),
+    State5 = ?BACKEND:add_label(State4, 5),
+    %% add_label pads to 4-byte alignment; the label sits at the padded offset.
+    LabelOffset = ?BACKEND:offset(State5),
+    State6 = ?BACKEND:update_branches(State5),
+    %% Fit -> no overflow; near target = bne + nop filling the reservation.
+    ?assertEqual(#{}, ?BACKEND:take_overflows(State6)),
+    Stream = ?BACKEND:stream(State6),
+    Rel = LabelOffset - BranchOffset,
+    Expected = <<(jit_armv6m_asm:bcc(ne, Rel))/binary, (jit_armv6m_asm:nop())/binary>>,
+    ?assertEqual(Expected, binary:part(Stream, BranchOffset, 4)).
+
+%% The cbz/cbnz zero-compare guards (forward-only) fuse too: a near forward
+%% target resolves to a single inverted cbz straight to the label.
+jump_to_label_cond_fused_forward_cbz_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    %% "jump to label 5 when RegA == 0": if_block_cond yields a cbnz skip;
+    %% fused + inverted it is one cbz to the label.
+    State3 = ?BACKEND:jump_to_label_cond(State2, {RegA, '==', 0}, 5),
+    BranchOffset = ?BACKEND:offset(State3) - 4,
+    {State4, _} = ?BACKEND:move_to_native_register(State3, {x_reg, 2}),
+    State5 = ?BACKEND:add_label(State4, 5),
+    %% add_label pads to 4-byte alignment; the label sits at the padded offset.
+    LabelOffset = ?BACKEND:offset(State5),
+    State6 = ?BACKEND:update_branches(State5),
+    ?assertEqual(#{}, ?BACKEND:take_overflows(State6)),
+    Stream = ?BACKEND:stream(State6),
+    Rel = LabelOffset - BranchOffset,
+    Expected = <<(jit_armv7m_asm:cbz(RegA, Rel))/binary, (jit_armv6m_asm:nop())/binary>>,
+    ?assertEqual(Expected, binary:part(Stream, BranchOffset, 4)).
+
+%% A forward fused branch whose target lands beyond the B<cond>.W reach
+%% overflows its 4-byte reservation: update_branches reports it, and the
+%% re-emit pass (branch hints pinning it to 6 bytes) produces the 2-byte
+%% skip over an unconditional B.W -- the full backtrack contract.
+jump_to_label_cond_fused_forward_far_test() ->
+    State0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 8),
+    {State2, RegA} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    State3 = ?BACKEND:jump_to_label_cond(State2, {RegA, '!=', 5}, 5),
+    BranchOffset = ?BACKEND:offset(State3) - 4,
+    %% Place label 5 beyond the +/-1MB B<cond>.W reach.
+    LabelOffset = 16#200000,
+    State4 = ?BACKEND:add_label(State3, 5, LabelOffset),
+    State5 = ?BACKEND:update_branches(State4),
+    ?assertEqual(#{0 => 6}, ?BACKEND:take_overflows(State5)),
+    %% Second pass, as driven by jit:compile's emit_finalize_loop: same emission
+    %% with the overflowing branch pinned to 6 bytes.
+    StateR0 = ?BACKEND:new(?THUMB2_VARIANT, jit_stream_binary, jit_stream_binary:new(0)),
+    StateR1 = ?BACKEND:jump_table(StateR0, 8),
+    StateR2 = ?BACKEND:set_branch_hints(StateR1, #{0 => 6}),
+    {StateR3, RegA} = ?BACKEND:move_to_native_register(StateR2, {x_reg, 0}),
+    StateR4 = ?BACKEND:jump_to_label_cond(StateR3, {RegA, '!=', 5}, 5),
+    ?assertEqual(BranchOffset + 6, ?BACKEND:offset(StateR4)),
+    StateR5 = ?BACKEND:add_label(StateR4, 5, LabelOffset),
+    StateR6 = ?BACKEND:update_branches(StateR5),
+    ?assertEqual(#{}, ?BACKEND:take_overflows(StateR6)),
+    Stream = ?BACKEND:stream(StateR6),
+    %% beq skips over the B.W (6 bytes from the branch); B.W covers the rest.
+    Expected = <<
+        (jit_armv6m_asm:bcc(eq, 6))/binary,
+        (jit_armv7m_asm:b_w(LabelOffset - BranchOffset - 6))/binary
+    >>,
+    ?assertEqual(Expected, binary:part(Stream, BranchOffset, 6)).
