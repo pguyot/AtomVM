@@ -45,6 +45,7 @@
     rewind_stream/2,
     call_primitive_with_cp/3,
     call_primitive_with_cp_direct/3,
+    call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
@@ -320,6 +321,9 @@
 % module->native_code (see _Static_assert in jit.c); used by the inline
 % cross-module return fast path.
 -define(MODULE_NATIVE_CODE, 16#78).
+% module->fun_table (see _Static_assert in jit.c); used by the inline
+% call_fun fast path.
+-define(MODULE_FUN_TABLE, 16#30).
 % module->local_atoms_to_global_table (see _Static_assert in jit.c).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#D8}).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
@@ -4134,6 +4138,120 @@ call_primitive_with_cp(State0, Primitive, Args) ->
 %% (the saved lr still points there; primitives preserve it). cp is set to
 %% the instruction after the dispatch sequence, like call_primitive_with_cp.
 -spec call_primitive_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_FUN with an inline local-fun fast path. Sets cp like
+%% call_primitive_with_cp_direct, then resolves a local fun entirely in
+%% generated code — unbox, fun-table lookup (arity/label/n_freeze are
+%% big-endian 32-bit fields of the FunT chunk), arity check, frozen-variable
+%% copy into x[ArgsCount..], jit_state module/cp_base switch — and branches
+%% straight to the callee's jump-table entry. Exported funs (atom module),
+%% arity mismatches, arity+freeze beyond MAX_REG and non-native targets fall
+%% through to the C primitive, whose tagged-result dispatch is unchanged.
+%% Offsets pinned by _Static_asserts in jit.c.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_fun_with_cp_direct(state(), non_neg_integer(), [any()]) -> state().
+call_fun_with_cp_direct(State0, Primitive, [ctx, jit_state, offset, FunRegArg, ArgsCount] = Args) when
+    is_integer(ArgsCount)
+->
+    {State1, RewriteOffset, RewriteSize} = set_cp(State0),
+    %% The fast path branches away without a C call, so deferred vm-register
+    %% stores must be committed first (the callee reads ctx->x[]).
+    #state{regs = Regs1} = State2 = pending_clear_all(State1),
+    FunReg =
+        case FunRegArg of
+            {free, FR} -> FR;
+            FR when is_atom(FR) -> FR
+        end,
+    Avail = [R || R <- mask_to_list(jit_regs:available_regs(Regs1)), R =/= FunReg],
+    State4 =
+        case length(Avail) >= 7 of
+            true ->
+                [T0, T1, T2, T3, T4, T5, T6 | _] = Avail,
+                emit_call_fun_fast_path(State2, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6);
+            false ->
+                State2
+        end,
+    {State5, ResultReg} = call_primitive(State4, Primitive, Args),
+    #state{stream_module = StreamModule, stream = Stream5} = State5,
+    I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
+    I2 = jit_aarch64_asm:mov(r0, ResultReg),
+    I3 = jit_aarch64_asm:ret(),
+    I4 = jit_aarch64_asm:tbnz(ResultReg, 1, 12),
+    I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
+    I6 = jit_aarch64_asm:br(ResultReg),
+    Stream6 = StreamModule:append(
+        Stream5, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    State6 = free_native_register(State5#state{stream = Stream6}, ResultReg),
+    rewrite_cp_offset(State6, RewriteOffset, RewriteSize).
+
+%% @private
+%% The 40-instruction inline local-fun resolve; every branch to the slow path
+%% targets the first instruction after this block. Instruction indices in the
+%% comments drive the branch displacements — keep them in sync.
+emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    Slow = fun(Idx) -> (40 - Idx) * 4 end,
+    Code = <<
+        % 0: unbox the fun (verify_is_function checked the boxed fun header)
+        (jit_aarch64_asm:and_(T1, FunReg, bnot 3))/binary,
+        % 1: boxed[2] = fun index (small int) or function name (atom)
+        (jit_aarch64_asm:ldr(T2, {T1, 16}))/binary,
+        % 2-4: small-integer tag 0xF or slow
+        (jit_aarch64_asm:and_(T6, T2, 16#F))/binary,
+        (jit_aarch64_asm:cmp(T6, 16#F))/binary,
+        (jit_aarch64_asm:bcc(ne, Slow(4)))/binary,
+        % 5-7: boxed[1] = Module* (aligned) or atom (tagged) -> slow
+        (jit_aarch64_asm:ldr(T3, {T1, 8}))/binary,
+        (jit_aarch64_asm:tst(T3, 3))/binary,
+        (jit_aarch64_asm:bcc(ne, Slow(7)))/binary,
+        % 8: fun_index
+        (jit_aarch64_asm:lsr(T2, T2, 4))/binary,
+        % 9-11: fun_table entry = table + fun_index * 24
+        (jit_aarch64_asm:ldr(T4, {T3, ?MODULE_FUN_TABLE}))/binary,
+        (jit_aarch64_asm:add(T4, T4, T2, {lsl, 3}))/binary,
+        (jit_aarch64_asm:add(T4, T4, T2, {lsl, 4}))/binary,
+        % 12-15: arity_and_freeze (+16), n_freeze (+28), both big-endian
+        (jit_aarch64_asm:ldr_w(T5, {T4, 16}))/binary,
+        (jit_aarch64_asm:rev32_w(T5, T5))/binary,
+        (jit_aarch64_asm:ldr_w(T6, {T4, 28}))/binary,
+        (jit_aarch64_asm:rev32_w(T6, T6))/binary,
+        % 16-18: fun arity must equal the call-site args count
+        (jit_aarch64_asm:sub(T0, T5, T6))/binary,
+        (jit_aarch64_asm:cmp(T0, ArgsCount))/binary,
+        (jit_aarch64_asm:bcc(ne, Slow(18)))/binary,
+        % 19-20: arity + frozen vars must fit the x registers
+        (jit_aarch64_asm:cmp(T5, 16))/binary,
+        (jit_aarch64_asm:bcc(hi, Slow(20)))/binary,
+        % 21-22: label (+20), big-endian
+        (jit_aarch64_asm:ldr_w(T5, {T4, 20}))/binary,
+        (jit_aarch64_asm:rev32_w(T5, T5))/binary,
+        % 23-24: target module native code, or slow (emulated)
+        (jit_aarch64_asm:ldr(T4, {T3, ?MODULE_NATIVE_CODE}))/binary,
+        (jit_aarch64_asm:cbz(T4, Slow(24)))/binary,
+        % 25-33: copy frozen vars boxed[3..] -> x[ArgsCount..]
+        (jit_aarch64_asm:add(T1, T1, 24))/binary,
+        (jit_aarch64_asm:add(T0, ?CTX_REG, 16#58 + 8 * ArgsCount))/binary,
+        (jit_aarch64_asm:cbz(T6, (34 - 27) * 4))/binary,
+        (jit_aarch64_asm:ldr(T2, {T1, 0}))/binary,
+        (jit_aarch64_asm:str(T2, {T0, 0}))/binary,
+        (jit_aarch64_asm:add(T1, T1, 8))/binary,
+        (jit_aarch64_asm:add(T0, T0, 8))/binary,
+        (jit_aarch64_asm:sub(T6, T6, 1))/binary,
+        (jit_aarch64_asm:cbnz(T6, -((33 - 28) * 4)))/binary,
+        % 34-37: jit_state_set_module: module + cp_base (module_index << 24)
+        (jit_aarch64_asm:str(T3, ?JITSTATE_MODULE))/binary,
+        (jit_aarch64_asm:ldr_w(T2, {T3, 0}))/binary,
+        (jit_aarch64_asm:lsl(T2, T2, 24))/binary,
+        (jit_aarch64_asm:str(T2, ?JITSTATE_CPBASE))/binary,
+        % 38-39: branch to the callee's jump-table entry (4 bytes per label)
+        (jit_aarch64_asm:add(T4, T4, T5, {lsl, 2}))/binary,
+        (jit_aarch64_asm:br(T4))/binary
+    >>,
+    40 * 4 = byte_size(Code),
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
 call_primitive_with_cp_direct(State0, Primitive, Args) ->
     {State1, RewriteOffset, RewriteSize} = set_cp(State0),
     {State2, ResultReg} = call_primitive(State1, Primitive, Args),
