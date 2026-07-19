@@ -221,8 +221,10 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
     ),
 
     % Check the reading of x[1] is immediatly followed by a shift right.
-    % 15c:	4c 8b 5f 60          	mov    0x60(%rdi),%r11
-    % 160:	49 c1 eb 04          	shr    $0x4,%r11
+    % Untagging is an arithmetic shift (sar), so that a negative small integer
+    % stays negative instead of becoming a large positive value.
+    % 15c:	4c 8b 5f 38          	mov    0x38(%rdi),%r11
+    % 160:	49 c1 fb 04          	sar    $0x4,%r11
 
     % As opposed to testing its type
     % 15c:	4c 8b 5f 60          	mov    0x60(%rdi),%r11
@@ -231,10 +233,10 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
     % 167:	41 80 fa 0f          	cmp    $0xf,%r10b
     % 16b:	74 05                	je     0x172
     % 16d:	e9 ab 00 00 00       	jmpq   0x21d
-    % 172:	49 c1 eb 04          	shr    $0x4,%r11
+    % 172:	49 c1 fb 04          	sar    $0x4,%r11
     ?assertMatch(
         {_, 8},
-        binary:match(CompiledCode, <<16#4c, 16#8b, 16#5f, 16#60, 16#49, 16#c1, 16#eb, 16#04>>)
+        binary:match(CompiledCode, <<16#4c, 16#8b, 16#5f, 16#38, 16#49, 16#c1, 16#fb, 16#04>>)
     ),
 
     % Check bs_start_match3 emits the match-state reuse fast path: load the
