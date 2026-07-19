@@ -2654,6 +2654,44 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
     return map;
 }
 
+// Heap words for a single-key exact (`:=`) map update: the key is known to
+// exist, so a flat map shares its keys tuple and only needs a fresh values
+// array. Tree-backed maps path-copy as usual.
+size_t jit_put_map_exact_one_heap_need(Context *ctx, term src)
+{
+    UNUSED(ctx);
+    size_t src_size = term_get_map_size(src);
+    if (!term_is_map_tree(src)) {
+        return TERM_MAP_SHARED_SIZE(src_size);
+    }
+    return termtree_put_heap_size(src_size) + (TERM_MAP_TREE_BOXED_ARITY + 1);
+}
+
+// Single-key exact (`:=`) map update at an already-known position. The
+// OP_PUT_MAP_EXACT codegen must locate the key anyway to raise on a missing
+// one, so it hands that position here instead of letting the update search
+// the map a second time. `pos` is only meaningful for a flat map (for a
+// tree, term_find_map_pos reports presence, not a usable rank), so tree maps
+// take the ordinary keyed path. The caller reserved
+// jit_put_map_exact_one_heap_need(...) words.
+static term jit_put_map_exact_one(Context *ctx, JITState *jit_state, term src, int pos, term key, term value)
+{
+    TRACE("jit_put_map_exact_one: src=%p pos=%d\n", (void *) src, pos);
+    if (UNLIKELY(term_is_map_tree(src))) {
+        term kv[2] = { key, value };
+        return jit_map_build_tree(ctx, src, term_get_map_size(src), 1, kv);
+    }
+    size_t src_size = term_get_map_size(src);
+    // Share the keys tuple (the key set is unchanged) and bulk-copy the
+    // values, overwriting the one at pos.
+    term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
+    term *dst_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+    const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+    memcpy(dst_vals, src_vals, src_size * sizeof(term));
+    dst_vals[pos] = value;
+    return map;
+}
+
 // Single-key maps:put with no pre-counted new_entries: the caller reserved
 // jit_put_map_one_heap_need(...) words (the worst case), and update-vs-insert
 // is decided here from the one binary search / tree walk — the sizing
@@ -3306,6 +3344,19 @@ static void jit_set_tuple_element_pin(term a1, uint32_t a2, term a3)
     jit_set_tuple_element(ctx, a1, a2, a3);
 }
 
+static size_t jit_put_map_exact_one_heap_need_pin(term a1)
+{
+    CTX_READ();
+    return jit_put_map_exact_one_heap_need(ctx, a1);
+}
+
+static term jit_put_map_exact_one_pin(term a1, int a2, term a3, term a4)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_put_map_exact_one(ctx, jit_state, a1, a2, a3, a4);
+}
+
 static size_t jit_put_map_one_heap_need_pin(term a1)
 {
     CTX_READ();
@@ -3522,7 +3573,9 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_bitstring_slice),
     jit_bitstring_is_multiple_of,
     JS_ENTRY(jit_put_map_one_heap_need),
-    JS_ENTRY(jit_put_map_assoc_one)
+    JS_ENTRY(jit_put_map_assoc_one),
+    JS_ENTRY(jit_put_map_exact_one_heap_need),
+    JS_ENTRY(jit_put_map_exact_one)
 };
 
 #endif
