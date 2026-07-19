@@ -24,6 +24,7 @@ include(BuildErlang)
 
 set(ERLANG_MODULES
     tests
+    jit_stream_flash_mock
     jit_tests
     jit_tests_common
     jit_liveness_tests

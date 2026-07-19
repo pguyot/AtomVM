@@ -1444,6 +1444,42 @@ gc_bif_add_unbounded_range_runtime_fastpath_test_() ->
      || Backend <- [jit_x86_64, jit_aarch64]
     ].
 
+%% Two-pass flash compile: the sizing pass (counting stream) converges the
+%% fused-branch size hints, then a single emission pass with those hints runs
+%% on a flash-like stream (held window, flush horizon, bit-clear-only below
+%% it -- all enforced strictly by jit_stream_flash_mock). The result must be
+%% byte-identical to the plain buffered-stream compile.
+sizing_emit_flash_identity_test() ->
+    Backend = jit_riscv32,
+    Chunk =
+        <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, 125, 16#05, 16#20, 16#00, 16#03, 16#21, 16#13,
+            3>>,
+    Nil = fun(_) -> undefined end,
+    AnyType = fun(_) -> any end,
+    NoDebug = fun(_) -> false end,
+    ImportResolver = fun(0) -> {erlang, '+', 2} end,
+    Reference = jit_tests_common:compile_chunk(
+        Backend, Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug
+    ),
+    <<16:32, 0:32, _:32, LabelsCount:32, _:32, _/binary>> = Chunk,
+    %% Pass 1: sizing on the counting stream.
+    SizeState = Backend:new(?JIT_VARIANT_PIC, jit_stream_size, jit_stream_size:new(0)),
+    {LabelsCount, Hints} = jit:compile_sizing(
+        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, SizeState
+    ),
+    ?assert(is_map(Hints)),
+    %% Pass 2: single emission with the hints on the flash-like stream.
+    Header = jit:beam_chunk_header(
+        LabelsCount, jit_tests_common:backend_to_arch(Backend), ?JIT_VARIANT_PIC
+    ),
+    MockStream0 = jit_stream_flash_mock:append(jit_stream_flash_mock:new(0), Header),
+    EmitState0 = Backend:new(?JIT_VARIANT_PIC, jit_stream_flash_mock, MockStream0),
+    {LabelsCount, EmitState1} = jit:compile_emit(
+        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, EmitState0, Hints
+    ),
+    {Bytes, _Horizon} = jit_stream_flash_mock:flush(Backend:stream(EmitState1)),
+    ?assertEqual(Reference, Bytes).
+
 gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
     TypedChunk =
         <<16:32, 0:32, 125:32, 1:32, 1:32,
