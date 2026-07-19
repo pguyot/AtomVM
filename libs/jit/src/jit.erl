@@ -2924,7 +2924,17 @@ emit_pass(
             AtomType = AtomResolver(AtomTypeIndex),
             {_Seg, AccRest2} = decode_literal(AccRest1),
             {SegmentUnit, AccRest3} = decode_literal(AccRest2),
-            {AccMSt1, Flags, AccRest4} = decode_compact_term(AccRest3, MMod, AccMSt0, State1),
+            % Segment flags are a compile-time constant (nil or a literal
+            % list); resolving them here lets decode_flags_list fold them to
+            % an immediate instead of decoding the list again at runtime on
+            % every bs_create_bin execution.
+            {AccMSt1, Flags, AccRest4} =
+                try decode_compile_time_literal(AccRest3, State1) of
+                    {FlagsList, CTRest} -> {AccMSt0, FlagsList, CTRest}
+                catch
+                    error:function_clause ->
+                        decode_compact_term(AccRest3, MMod, AccMSt0, State1)
+                end,
             {AccMSt2, Src, AccRest5} = decode_compact_term(AccRest4, MMod, AccMSt1, State1),
             {AccMSt3, Size, AccRest6} = decode_compact_term(AccRest5, MMod, AccMSt2, State1),
             ?TRACE("{~p,~p,~p,~p,~p,~p},", [AtomType, _Seg, SegmentUnit, Flags, Src, Size]),
