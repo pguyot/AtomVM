@@ -1794,33 +1794,35 @@ schedule_in:
             jit_state.code_base = (const void *) mod->native_code;
 #endif
             TRACE("calling native code at %p, ctx = %p\n", (void *) native_pc, (void *) ctx);
-#if defined(__x86_64__) && defined(AVM_JIT_PIN_REGS)
-            // Pinned-register calling convention: generated code keeps
-            // ctx->heap.heap_ptr in r15 and ctx->e in r13 (callee-saved, so C
-            // primitives preserve them for free). This is the single native
-            // entry boundary: load the pinned registers here and write them
-            // back on return. After a context switch the write-back is
-            // idempotent: the switch-causing primitive already received a
-            // write-back and the return path does not touch the pinned
-            // registers.
+#if JIT_ARCH_TARGET == JIT_ARCH_X86_64
+            // x86_64 pinned-register convention: generated code reads
+            // jit_state from r13, the primitives table from rbx, ctx from
+            // r14, and keeps ctx->heap.heap_ptr in r12 / ctx->e in r15
+            // (callee-saved, so C primitives preserve them for free). Same
+            // contract as the aarch64 block below: this is the single
+            // C->native entry boundary and it only SEEDS the registers —
+            // generated code writes hp/e back to ctx before every C call,
+            // so the ctx fields are always authoritative when C runs. The
+            // entry pointer is a memory operand: every callee-saved
+            // register is pinned and rbp stays with the frame.
             Context *new_ctx;
             {
-                register term *pin_hp __asm__("r15") = ctx->heap.heap_ptr;
-                register term *pin_e __asm__("r13") = ctx->e;
-                // The entry pointer rides in rbx (callee-saved, so no overlap
-                // with the caller-saved clobber list is possible).
-                register ModuleNativeEntryPoint entry_reg __asm__("rbx") = native_pc;
+                register JITState *pin_js __asm__("r13") = &jit_state;
+                register const ModuleNativeInterface *pin_p __asm__("rbx") = &module_native_interface;
+                register Context *pin_ctx __asm__("r14") = ctx;
+                register term *pin_hp __asm__("r12") = ctx->heap.heap_ptr;
+                register term *pin_e __asm__("r15") = ctx->e;
                 Context *asm_result;
                 __asm__ volatile(
-                    "call *%%rbx"
-                    : "=a"(asm_result), "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
-                    : "D"(ctx), "S"(&jit_state), "d"(&module_native_interface)
-                    : "rcx", "r8", "r9", "r10", "r11", "memory", "cc",
+                    "call *%[entry]"
+                    : "=a"(asm_result), "+r"(pin_js), "+r"(pin_p), "+r"(pin_ctx),
+                      "+r"(pin_hp), "+r"(pin_e)
+                    : [entry] "m"(native_pc)
+                    : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+                      "memory", "cc",
                       "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
                       "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
                 new_ctx = asm_result;
-                ctx->heap.heap_ptr = pin_hp;
-                ctx->e = pin_e;
             }
 #elif JIT_ARCH_TARGET == JIT_ARCH_AARCH64
             // aarch64 pinned-register convention: generated code reads

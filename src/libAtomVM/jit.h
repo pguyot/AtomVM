@@ -82,6 +82,16 @@ typedef struct Module Module;
 #define JIT_ARCH_TARGET JIT_ARCH_X86_64
 #define JIT_JUMPTABLE_ENTRY_SIZE 5
 #define JIT_JUMPTABLE_OFFSET 0
+// Pinned-register convention (see the aarch64 block below for the general
+// contract): jit_state in r13, the primitives table in rbx, ctx in r14,
+// ctx->heap.heap_ptr in r12 and ctx->e in r15 — all callee-saved under the
+// SysV ABI. Base-register assignment follows ModRM cost (rbx/r14/r15 are
+// plain-ModRM bases; r13 forces a disp8 at offset 0; r12 would need a SIB
+// byte but hp is never used as a base).
+#define JIT_PINNED_JIT_STATE 1
+#define JIT_PINNED_JIT_STATE_REG "r13"
+#define JIT_PINNED_CTX 1
+#define JIT_PINNED_CTX_REG "r14"
 #endif
 
 #if defined(__arm64__) || defined(__aarch64__)
@@ -353,7 +363,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 6
+#define JIT_FORMAT_VERSION 7
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2

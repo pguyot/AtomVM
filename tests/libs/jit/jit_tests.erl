@@ -296,12 +296,13 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
 
     % Check the reading of x[1] is immediatly followed by a shift right.
     % Untagging is an arithmetic shift (sar), so that a negative small integer
-    % stays negative instead of becoming a large positive value.
-    % 15c:	4c 8b 5f 38          	mov    0x38(%rdi),%r11
+    % stays negative instead of becoming a large positive value. ctx is
+    % pinned in r14.
+    % 15c:	4d 8b 5e 60          	mov    0x60(%r14),%r11
     % 160:	49 c1 fb 04          	sar    $0x4,%r11
 
     % As opposed to testing its type
-    % 15c:	4c 8b 5f 60          	mov    0x60(%rdi),%r11
+    % 15c:	4d 8b 5e 60          	mov    0x60(%r14),%r11
     % 160:	4d 89 da             	mov    %r11,%r10
     % 163:	41 80 e2 0f          	and    $0xf,%r10b
     % 167:	41 80 fa 0f          	cmp    $0xf,%r10b
@@ -310,7 +311,7 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
     % 172:	49 c1 fb 04          	sar    $0x4,%r11
     ?assertMatch(
         {_, 8},
-        binary:match(CompiledCode, <<16#4c, 16#8b, 16#5f, 16#38, 16#49, 16#c1, 16#fb, 16#04>>)
+        binary:match(CompiledCode, <<16#4d, 16#8b, 16#5e, 16#60, 16#49, 16#c1, 16#fb, 16#04>>)
     ),
 
     % Check bs_start_match3 emits the match-state reuse fast path: load the
@@ -328,28 +329,33 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
         {_, 27},
         binary:match(
             CompiledCode,
-            <<16#48, 16#8b, 16#47, 16#58, 16#48, 16#83, 16#e0, 16#fc, 16#48, 16#8b, 16#00, 16#83,
-                16#e0, 16#3f, 16#83, 16#f8, 16#04, 16#75, 16#0d, 16#48, 16#8b, 16#47, 16#58, 16#48,
-                16#89, 16#47, 16#68>>
+            <<16#49, 16#8b, 16#46, 16#58, 16#48, 16#83, 16#e0, 16#fc, 16#48, 16#8b, 16#00, 16#83,
+                16#e0, 16#3f, 16#83, 16#f8, 16#04, 16#75, 16#0d, 16#49, 16#8b, 16#46, 16#58, 16#49,
+                16#89, 16#46, 16#68>>
         )
     ),
 
     % The allocation fallback is still emitted: call to term_alloc_bin_match_state
     % with the source as a gc-rooted argument, storing the result to the
     % destination.
-    %   48 8b 77 58          	mov    0x58(%rdi),%rsi
-    %   31 d2                	xor    %edx,%edx
+    %   49 8b 7e 58          	mov    0x58(%r14),%rdi   (src = x[0])
+    %   31 f6                	xor    %esi,%esi         (slots = 0)
+    %   4d 89 66 18          	mov    %r12,0x18(%r14)   (write back hp)
+    %   4d 89 7e 50          	mov    %r15,0x50(%r14)   (write back e)
+    %   48 8b 83 68 01 00 00 	mov    0x168(%rbx),%rax  (term_alloc_bin_match_state)
     %   ff d0                	callq  *%rax
-    %   5a                   	pop    %rdx
-    %   5e                   	pop    %rsi
-    %   5f                   	pop    %rdi
-    %   48 89 47 68          	mov    %rax,0x68(%rdi)
+    %   41 5b                	pop    %r11
+    %   4d 8b 66 18          	mov    0x18(%r14),%r12   (reload hp)
+    %   4d 8b 7e 50          	mov    0x50(%r14),%r15   (reload e)
+    %   49 89 46 68          	mov    %rax,0x68(%r14)   (result to x[2])
     ?assertMatch(
-        {_, 15},
+        {_, 37},
         binary:match(
             CompiledCode,
-            <<16#48, 16#8b, 16#77, 16#58, 16#31, 16#d2, 16#ff, 16#d0, 16#5a, 16#5e, 16#5f, 16#48,
-                16#89, 16#47, 16#68>>
+            <<16#49, 16#8b, 16#7e, 16#58, 16#31, 16#f6, 16#4d, 16#89, 16#66, 16#18, 16#4d, 16#89,
+                16#7e, 16#50, 16#48, 16#8b, 16#83, 16#68, 16#01, 16#00, 16#00, 16#ff, 16#d0, 16#41,
+                16#5b, 16#4d, 16#8b, 16#66, 16#18, 16#4d, 16#8b, 16#7e, 16#50, 16#49, 16#89, 16#46,
+                16#68>>
         )
     ),
 
@@ -400,11 +406,11 @@ verify_is_function_typed_optimization_x86_64_test() ->
     % ...
 
     ?assertMatch(
-        {_, 17},
+        {_, 18},
         binary:match(
             CompiledCode,
-            <<16#ff, 16#62, 16#10, 16#48, 16#8b, 16#47, 16#60, 16#4c, 16#8b, 16#1e, 16#45, 16#8b,
-                16#1b, 16#49, 16#c1, 16#e3, 16#18>>
+            <<16#ff, 16#63, 16#10, 16#49, 16#8b, 16#46, 16#60, 16#4d, 16#8b, 16#5d, 16#00, 16#45,
+                16#8b, 16#1b, 16#49, 16#c1, 16#e3, 16#18>>
         )
     ),
     ok.
@@ -776,8 +782,8 @@ fuse_tuple_multi_get_x86_64_test() ->
         {_, _},
         binary:match(
             CompiledCode,
-            <<16#4c, 16#8b, 16#58, 16#08, 16#4c, 16#89, 16#5f, 16#60, 16#4c, 16#8b, 16#58, 16#10,
-                16#4c, 16#89, 16#5f, 16#68, 16#4c, 16#8b, 16#58, 16#18>>
+            <<16#4c, 16#8b, 16#58, 16#08, 16#4d, 16#89, 16#5e, 16#60, 16#4c, 16#8b, 16#58, 16#10,
+                16#4d, 16#89, 16#5e, 16#68, 16#4c, 16#8b, 16#58, 16#18>>
         )
     ),
     ok.
