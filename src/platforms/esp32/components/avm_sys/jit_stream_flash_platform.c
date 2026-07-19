@@ -191,6 +191,25 @@ bool jit_stream_flash_platform_write_page(struct JSFlashPlatformContext *ctx, ui
     return true;
 }
 
+bool jit_stream_flash_platform_is_jit_addr(uintptr_t addr)
+{
+    // The partition table is immutable; look the JIT partition up once.
+    static const esp_partition_t *s_jit_partition = NULL;
+    if (IS_NULL_PTR(s_jit_partition)) {
+        s_jit_partition = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, JIT_PARTITION_NAME);
+        if (IS_NULL_PTR(s_jit_partition)) {
+            return false;
+        }
+    }
+    size_t flash_offset = spi_flash_cache2phys((const void *) addr);
+    if (UNLIKELY(flash_offset == SPI_FLASH_CACHE2PHYS_FAIL)) {
+        return false;
+    }
+    return flash_offset >= s_jit_partition->address
+        && flash_offset < s_jit_partition->address + s_jit_partition->size;
+}
+
 uintptr_t jit_stream_flash_platform_ptr_to_executable(uintptr_t addr)
 {
     // Convert data cache (DBUS) address to instruction cache (IBUS) address.

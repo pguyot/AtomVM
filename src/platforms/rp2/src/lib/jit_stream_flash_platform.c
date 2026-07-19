@@ -100,6 +100,14 @@ bool jit_stream_flash_platform_write_page(struct JSFlashPlatformContext *pf_ctx,
     return true;
 }
 
+bool jit_stream_flash_platform_is_jit_addr(uintptr_t addr)
+{
+    // On rp2 every avm pack lives in XIP flash (there is no separate JIT
+    // partition and no pack embedded in a non-flash mapping), so any
+    // flash-mapped address participates in the JIT cache protocol.
+    return addr >= XIP_BASE && addr < XIP_BASE + PICO_FLASH_SIZE_BYTES;
+}
+
 uintptr_t jit_stream_flash_platform_ptr_to_executable(uintptr_t addr)
 {
     // Set Thumb bit
