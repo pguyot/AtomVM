@@ -100,7 +100,8 @@
 -define(IS_UINT8_T(X), is_integer(X) andalso X >= 0 andalso X =< 255).
 -define(IS_UINT32_T(X), is_integer(X) andalso X >= 0 andalso X < 16#100000000).
 
--type x86_64_register() :: rax | rcx | rdx | rsi | rdi | r8 | r9 | r10 | r11.
+-type x86_64_register() ::
+    rax | rcx | rdx | rbx | rsi | rdi | r8 | r9 | r10 | r11 | r12 | r13 | r14 | r15.
 
 % Encode a register on 4 bits
 % https://wiki.osdev.org/X86-64_Instruction_Encoding#Registers
@@ -108,12 +109,17 @@
 x86_64_x_reg(rax) -> {0, 0};
 x86_64_x_reg(rcx) -> {0, 1};
 x86_64_x_reg(rdx) -> {0, 2};
+x86_64_x_reg(rbx) -> {0, 3};
 x86_64_x_reg(rsi) -> {0, 6};
 x86_64_x_reg(rdi) -> {0, 7};
 x86_64_x_reg(r8) -> {1, 0};
 x86_64_x_reg(r9) -> {1, 1};
 x86_64_x_reg(r10) -> {1, 2};
-x86_64_x_reg(r11) -> {1, 3}.
+x86_64_x_reg(r11) -> {1, 3};
+x86_64_x_reg(r12) -> {1, 4};
+x86_64_x_reg(r13) -> {1, 5};
+x86_64_x_reg(r14) -> {1, 6};
+x86_64_x_reg(r15) -> {1, 7}.
 
 -define(X86_64_REX(W, R, X, B), <<4:4, W:1, R:1, X:1, B:1>> / binary).
 
@@ -812,8 +818,9 @@ imulq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     REX = 16#48 bor (REX_R bsl 2) bor REX_B,
     <<REX, 16#0F, 16#AF, (16#C0 bor (MODRM_REG bsl 3) bor MODRM_RM)>>.
 
-decl({Offset, rsi}) when ?IS_SINT8_T(Offset) ->
-    <<16#FF, 16#4E, Offset>>.
+decl({Offset, Base}) when is_atom(Base) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Base),
+    <<(rex_opt(0, 0, 0, REX_B))/binary, 16#FF, (modrm_mem(1, MODRM_RM, Offset))/binary>>.
 
 orq_rel32(Imm, rax) when ?IS_UINT32_T(Imm) ->
     {2, <<?X86_64_REX(1, 0, 0, 0), 16#0D, Imm:32/little>>};
