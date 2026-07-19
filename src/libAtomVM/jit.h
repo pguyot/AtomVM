@@ -88,6 +88,17 @@ typedef struct Module Module;
 #define JIT_ARCH_TARGET JIT_ARCH_AARCH64
 #define JIT_JUMPTABLE_ENTRY_SIZE 4
 #define JIT_JUMPTABLE_OFFSET 0
+// Pinned-register convention: generated code keeps jit_state in x19, the
+// primitives table in x20 and ctx in x21 (callee-saved; seeded once per
+// C->native crossing by the dispatch loop). Primitives take neither a
+// jit_state nor a ctx parameter: the table-facing entry shims in jit.c read
+// the pinned registers. A backend opts in by defining JIT_PINNED_JIT_STATE
+// and/or JIT_PINNED_CTX and naming its callee-saved registers here; the
+// JSP_/CTXP_ parameter macros and the shim block adapt. See JS_READ/CTX_READ.
+#define JIT_PINNED_JIT_STATE 1
+#define JIT_PINNED_JIT_STATE_REG "x19"
+#define JIT_PINNED_CTX 1
+#define JIT_PINNED_CTX_REG "x21"
 #endif
 
 #if defined(__arm__) && defined(AVM_JIT_ARM32)
@@ -187,113 +198,145 @@ struct JITState
 // Remember to keep this struct in sync with libs/jit/src/primitives.hrl
 // Primitives must have at most 6 parameters, this is what several backends expect
 
+// jit_state / ctx parameters of primitives. Under JIT_PINNED_JIT_STATE (resp.
+// JIT_PINNED_CTX) the parameter disappears: generated code does not pass it
+// (it is pinned in a callee-saved register) and the table-facing entry shims
+// in jit.c read the register instead. JSP_/CTXP_ sit where the parameter
+// followed by a comma would be, JSP_ONLY/CTXP_ONLY where it is the sole
+// parameter, and CTX_JS_PARAMS covers the exact (ctx, jit_state) shape for
+// every combination of the two flags.
+#ifdef JIT_PINNED_JIT_STATE
+#define JSP_
+#define JSP_ONLY void
+#else
+#define JSP_ JITState *jit_state,
+#define JSP_ONLY JITState *jit_state
+#endif
+
+#ifdef JIT_PINNED_CTX
+#define CTXP_
+#define CTXP_ONLY void
+#else
+#define CTXP_ Context *ctx,
+#define CTXP_ONLY Context *ctx
+#endif
+
+#if defined(JIT_PINNED_CTX) && defined(JIT_PINNED_JIT_STATE)
+#define CTX_JS_PARAMS void
+#elif defined(JIT_PINNED_CTX)
+#define CTX_JS_PARAMS JITState *jit_state
+#elif defined(JIT_PINNED_JIT_STATE)
+#define CTX_JS_PARAMS Context *ctx
+#else
+#define CTX_JS_PARAMS Context *ctx, JITState *jit_state
+#endif
+
 struct ModuleNativeInterface
 {
     // Helpers
-    Context *(*raise_error)(Context *ctx, JITState *jit_state, int offset, term error_term);
-    Context *(*do_return)(Context *ctx, JITState *jit_state);
-    Context *(*schedule_next_cp)(Context *ctx, JITState *jit_state);
-    term (*module_get_atom_term_by_id)(JITState *jit_state, int atom_index);
-    Context *(*call_ext)(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words);
-    bool (*allocate)(Context *ctx, JITState *jit_state, uint32_t stack_need, uint32_t heap_need, uint32_t live);
-    Context *(*handle_error)(Context *ctx, JITState *jit_state, int offset);
-    void (*jit_trim_live_regs)(Context *ctx, uint32_t live);
-    BifImpl0 (*get_imported_bif)(JITState *jit_state, uint32_t bif);
-    bool (*deallocate)(Context *ctx, JITState *jit_state, uint32_t n_words);
-    Context *(*terminate_context)(Context *ctx, JITState *jit_state);
-    TermCompareResult (*term_compare)(Context *ctx, JITState *jit_state, term t, term other, TermCompareOpts opts);
-    bool (*test_heap)(Context *ctx, JITState *jit_state, uint32_t heap_need, uint32_t live);
-    term (*put_list)(Context *ctx, term head, term tail);
-    term (*module_load_literal)(Context *ctx, JITState *jit_state, int index);
-    term (*alloc_boxed_integer_fragment)(Context *ctx, avm_int64_t value);
-    term (*term_alloc_tuple)(Context *ctx, uint32_t size);
-    bool (*send)(Context *ctx, JITState *jit_state);
-    term *(*extended_register_pointer)(Context *ctx, unsigned int index);
-    Context *(*raise_error_tuple)(Context *ctx, JITState *jit_state, int offset, term error_atom, term arg1);
-    term (*term_alloc_fun)(Context *ctx, JITState *jit_state, uint32_t fun_index, uint32_t numfree);
-    Context *(*process_signal_messages)(Context *ctx, JITState *jit_state);
-    term (*mailbox_peek)(Context *ctx);
-    void (*mailbox_remove_message)(Context *ctx);
-    void (*timeout)(Context *ctx);
-    void (*mailbox_next)(Context *ctx);
-    void (*cancel_timeout)(Context *ctx);
-    void (*clear_timeout_flag)(Context *ctx);
-    Context *(*raise)(Context *ctx, JITState *jit_state, term stacktrace, term exc_value);
-    Context *(*schedule_wait_cp)(Context *ctx, JITState *jit_state);
-    Context *(*wait_timeout)(Context *ctx, JITState *jit_state, term timeout, int label);
-    Context *(*wait_timeout_trap_handler)(Context *ctx, JITState *jit_state, int label);
-    Context *(*call_fun)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
-    int (*context_get_flags)(Context *ctx, int mask);
-    void (*ensure_fpregs)(JITState *jit_state);
-    term (*term_from_float)(Context *ctx, JITState *jit_state, int fpreg);
+    Context *(*raise_error)(CTXP_ JSP_ int offset, term error_term);
+    Context *(*do_return)(CTX_JS_PARAMS);
+    Context *(*schedule_next_cp)(CTX_JS_PARAMS);
+    term (*module_get_atom_term_by_id)(JSP_ int atom_index);
+    Context *(*call_ext)(CTXP_ JSP_ int offset, int arity, int index, int n_words);
+    bool (*allocate)(CTXP_ JSP_ uint32_t stack_need, uint32_t heap_need, uint32_t live);
+    Context *(*handle_error)(CTXP_ JSP_ int offset);
+    void (*jit_trim_live_regs)(CTXP_ uint32_t live);
+    BifImpl0 (*get_imported_bif)(JSP_ uint32_t bif);
+    bool (*deallocate)(CTXP_ JSP_ uint32_t n_words);
+    Context *(*terminate_context)(CTX_JS_PARAMS);
+    TermCompareResult (*term_compare)(CTXP_ JSP_ term t, term other, TermCompareOpts opts);
+    bool (*test_heap)(CTXP_ JSP_ uint32_t heap_need, uint32_t live);
+    term (*put_list)(CTXP_ term head, term tail);
+    term (*module_load_literal)(CTXP_ JSP_ int index);
+    term (*alloc_boxed_integer_fragment)(CTXP_ avm_int64_t value);
+    term (*term_alloc_tuple)(CTXP_ uint32_t size);
+    bool (*send)(CTX_JS_PARAMS);
+    term *(*extended_register_pointer)(CTXP_ unsigned int index);
+    Context *(*raise_error_tuple)(CTXP_ JSP_ int offset, term error_atom, term arg1);
+    term (*term_alloc_fun)(CTXP_ JSP_ uint32_t fun_index, uint32_t numfree);
+    Context *(*process_signal_messages)(CTX_JS_PARAMS);
+    term (*mailbox_peek)(CTXP_ONLY);
+    void (*mailbox_remove_message)(CTXP_ONLY);
+    void (*timeout)(CTXP_ONLY);
+    void (*mailbox_next)(CTXP_ONLY);
+    void (*cancel_timeout)(CTXP_ONLY);
+    void (*clear_timeout_flag)(CTXP_ONLY);
+    Context *(*raise)(CTXP_ JSP_ term stacktrace, term exc_value);
+    Context *(*schedule_wait_cp)(CTX_JS_PARAMS);
+    Context *(*wait_timeout)(CTXP_ JSP_ term timeout, int label);
+    Context *(*wait_timeout_trap_handler)(CTXP_ JSP_ int label);
+    Context *(*call_fun)(CTXP_ JSP_ int offset, term fun, unsigned int args_count);
+    int (*context_get_flags)(CTXP_ int mask);
+    void (*ensure_fpregs)(JSP_ONLY);
+    term (*term_from_float)(CTXP_ JSP_ int fpreg);
     bool (*term_is_number)(term t);
-    void (*term_conv_to_float)(JITState *jit_state, term t, int fpreg);
-    bool (*fadd)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fsub)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fmul)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
-    bool (*fdiv)(JITState *jit_state, int fpreg_1, int fpreg_2, int fpreg_3);
-    void (*fnegate)(JITState *jit_state, int fpreg_1, int fpreg_2);
-    bool (*catch_end)(Context *ctx, JITState *jit_state);
-    bool (*memory_ensure_free_with_roots)(Context *ctx, JITState *jit_state, int sz, int live, int flags);
-    term (*term_alloc_bin_match_state)(Context *ctx, term src, int slots);
-    term (*bitstring_extract_integer)(Context *ctx, JITState *jit_state, term *bin_ptr, size_t offset, size_t n, int bs_flags);
+    void (*term_conv_to_float)(JSP_ term t, int fpreg);
+    bool (*fadd)(JSP_ int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fsub)(JSP_ int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fmul)(JSP_ int fpreg_1, int fpreg_2, int fpreg_3);
+    bool (*fdiv)(JSP_ int fpreg_1, int fpreg_2, int fpreg_3);
+    void (*fnegate)(JSP_ int fpreg_1, int fpreg_2);
+    bool (*catch_end)(CTX_JS_PARAMS);
+    bool (*memory_ensure_free_with_roots)(CTXP_ JSP_ int sz, int live, int flags);
+    term (*term_alloc_bin_match_state)(CTXP_ term src, int slots);
+    term (*bitstring_extract_integer)(CTXP_ JSP_ term *bin_ptr, size_t offset, size_t n, int bs_flags);
     size_t (*term_sub_binary_heap_size)(term *bin_ptr, size_t size);
-    term (*term_maybe_create_sub_binary)(Context *ctx, term bin, size_t offset, size_t len);
-    int (*term_find_map_pos)(Context *ctx, term map, term key);
+    term (*term_maybe_create_sub_binary)(CTXP_ term bin, size_t offset, size_t len);
+    int (*term_find_map_pos)(CTXP_ term map, term key);
     int (*bitstring_utf8_size)(avm_int_t c);
     int (*bitstring_utf16_size)(avm_int_t c);
-    term (*term_create_empty_binary)(Context *ctx, size_t len);
-    int (*decode_flags_list)(Context *ctx, JITState *jit_state, term l);
+    term (*term_create_empty_binary)(CTXP_ size_t len);
+    int (*decode_flags_list)(CTXP_ JSP_ term l);
     int (*bitstring_insert_utf8)(term bin, size_t offset, avm_int_t c);
     int (*bitstring_insert_utf16)(term bin, size_t offset, avm_int_t c, enum BitstringFlags flags);
     bool (*bitstring_insert_utf32)(term bin, size_t offset, avm_int_t c, enum BitstringFlags flags);
     bool (*bitstring_insert_integer)(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags);
-    void (*bitstring_copy_module_str)(Context *ctx, JITState *jit_state, term bin, size_t offset, int str_id, size_t len);
+    void (*bitstring_copy_module_str)(CTXP_ JSP_ term bin, size_t offset, int str_id, size_t len);
     int (*bitstring_copy_binary)(term t, size_t offset, term src, term size);
-    Context *(*apply)(Context *ctx, JITState *jit_state, int offset, term module, term function, unsigned int arity);
-    void *(*malloc)(Context *ctx, JITState *jit_state, size_t sz);
+    Context *(*apply)(CTXP_ JSP_ int offset, term module, term function, unsigned int arity);
+    void *(*malloc)(CTXP_ JSP_ size_t sz);
     void (*free)(void *ptr);
-    term (*put_map_assoc)(Context *ctx, JITState *jit_state, term src, size_t new_entries, size_t num_elements, term *kv);
-    term (*bitstring_extract_float)(Context *ctx, JITState *jit_state, term *match_state_ptr, size_t n, int bs_flags, int live);
+    term (*put_map_assoc)(CTXP_ JSP_ term src, size_t new_entries, size_t num_elements, term *kv);
+    term (*bitstring_extract_float)(CTXP_ JSP_ term *match_state_ptr, size_t n, int bs_flags, int live);
     int (*module_get_fun_arity)(Module *fun_module, uint32_t fun_index);
-    bool (*bitstring_match_module_str)(Context *ctx, JITState *jit_state, term bin, size_t offset, int str_id, size_t len);
+    bool (*bitstring_match_module_str)(CTXP_ JSP_ term bin, size_t offset, int str_id, size_t len);
     term (*bitstring_get_utf8)(term src);
     term (*bitstring_get_utf16)(term src, int flags_value);
     term (*bitstring_get_utf32)(term src, int flags_value);
-    term (*term_copy_map)(Context *ctx, term src);
-    term (*stacktrace_build)(Context *ctx);
-    term (*term_reuse_binary)(Context *ctx, term src, size_t len);
-    term (*alloc_big_integer_fragment)(Context *ctx, size_t digits_len, term_integer_sign_t sign);
+    term (*term_copy_map)(CTXP_ term src);
+    term (*stacktrace_build)(CTXP_ONLY);
+    term (*term_reuse_binary)(CTXP_ term src, size_t len);
+    term (*alloc_big_integer_fragment)(CTXP_ size_t digits_len, term_integer_sign_t sign);
     bool (*bitstring_insert_float)(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags);
-    Context *(*raw_raise)(Context *ctx, JITState *jit_state);
-    Context *(*raise_error_mfa)(
-        Context *ctx, JITState *jit_state, int offset, int function_atom_index, int arity);
-    void (*try_case)(Context *ctx);
+    Context *(*raw_raise)(CTX_JS_PARAMS);
+    Context *(*raise_error_mfa)(CTXP_ JSP_ int offset, int function_atom_index, int arity);
+    void (*try_case)(CTXP_ONLY);
     size_t (*bitstring_get_tail_heap_size)(term *bs_bin_ptr, size_t bs_offset);
-    term (*bitstring_create_tail)(Context *ctx, term bs_bin, size_t bs_offset);
-    term (*bs_create_bin_wrap)(Context *ctx, term byte_binary, size_t total_bits);
+    term (*bitstring_create_tail)(CTXP_ term bs_bin, size_t bs_offset);
+    term (*bs_create_bin_wrap)(CTXP_ term byte_binary, size_t total_bits);
     size_t (*bitstring_slice_heap_size)(term *bs_bin_ptr, size_t offset, size_t len_bits);
-    term (*bitstring_slice)(Context *ctx, term bs_bin, size_t offset, size_t len_bits);
+    term (*bitstring_slice)(CTXP_ term bs_bin, size_t offset, size_t len_bits);
     bool (*bitstring_is_multiple_of)(size_t bits, size_t unit);
-    uint32_t (*record_def_arity)(Context *ctx, JITState *jit_state, term id);
+    uint32_t (*record_def_arity)(CTXP_ JSP_ term id);
     uint32_t (*record_field_pos)(term src, term field_name);
-    term (*put_record)(Context *ctx, JITState *jit_state, term id, term src, uint32_t num_pairs, term *kv);
+    term (*put_record)(CTXP_ JSP_ term id, term src, uint32_t num_pairs, term *kv);
     uint32_t (*is_record_of)(term src, term mod_atom, term name_atom);
-    uint32_t (*is_record_accessible)(Context *ctx, JITState *jit_state, term src, term scope);
-    term (*get_record_field)(Context *ctx, uint32_t fail_label, term src, term id, term field);
-    term (*put_record_resolved)(Context *ctx, JITState *jit_state, uint32_t record_index, term src, uint32_t num_pairs, term *kv);
-    BifImpl0 (*get_imported_gcbif)(Context *ctx, JITState *jit_state, uint32_t live, uint32_t bif);
-    void (*set_tuple_element)(Context *ctx, term tuple, uint32_t position, term value);
-    size_t (*put_map_heap_need)(Context *ctx, term src, size_t new_entries, size_t num_elements);
-    term (*map_get_value)(Context *ctx, term map, int pos);
-    term (*term_get_map_assoc)(Context *ctx, term map, term key);
-    int (*term_get_map_assoc_miss)(Context *ctx, term map, term key);
+    uint32_t (*is_record_accessible)(CTXP_ JSP_ term src, term scope);
+    term (*get_record_field)(CTXP_ uint32_t fail_label, term src, term id, term field);
+    term (*put_record_resolved)(CTXP_ JSP_ uint32_t record_index, term src, uint32_t num_pairs, term *kv);
+    BifImpl0 (*get_imported_gcbif)(CTXP_ JSP_ uint32_t live, uint32_t bif);
+    void (*set_tuple_element)(CTXP_ term tuple, uint32_t position, term value);
+    size_t (*put_map_heap_need)(CTXP_ term src, size_t new_entries, size_t num_elements);
+    term (*map_get_value)(CTXP_ term map, int pos);
+    term (*term_get_map_assoc)(CTXP_ term map, term key);
+    int (*term_get_map_assoc_miss)(CTXP_ term map, term key);
     // OP_CALL_FUN direct dispatch: returns the fun's native entry point with
     // bit 0 set (branch to it), or a Context * with bit 0 clear (return to
     // the scheduler loop with it).
-    uintptr_t (*call_fun_direct)(Context *ctx, JITState *jit_state, int offset, term fun, unsigned int args_count);
-    uintptr_t (*call_ext_direct)(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words);
-    uintptr_t (*return_direct)(Context *ctx, JITState *jit_state);
+    uintptr_t (*call_fun_direct)(CTXP_ JSP_ int offset, term fun, unsigned int args_count);
+    uintptr_t (*call_ext_direct)(CTXP_ JSP_ int offset, int arity, int index, int n_words);
+    uintptr_t (*return_direct)(CTX_JS_PARAMS);
 };
 
 extern const ModuleNativeInterface module_native_interface;
@@ -309,7 +352,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 2
+#define JIT_FORMAT_VERSION 6
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
