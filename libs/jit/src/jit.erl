@@ -4062,15 +4062,12 @@ emit_pass_bs_match_integer(
     {Size, Rest3} = decode_literal(Rest2),
     {Unit, Rest4} = decode_literal(Rest3),
     ?TRACE("{integer,~p,~p,~p, ", [Flags, Size, Unit]),
-    {MSt3, SizeReg} = term_to_int(Size, 0, MMod, MSt1),
-    {MSt6, NumBits} =
-        if
-            is_integer(SizeReg) ->
-                {MSt3, SizeReg * Unit};
-            true ->
-                MSt4 = MMod:mul(MSt3, SizeReg, Unit),
-                {MSt4, SizeReg}
-        end,
+    % The size of a bs_match integer command is always a literal (a BEAM
+    % invariant asserted by beam_validator: a variable-size segment is emitted
+    % as a separate bs_get_integer2), so it is a plain integer here, not a
+    % term.
+    MSt6 = MSt1,
+    NumBits = Size * Unit,
     % Byte-aligned unsigned big-endian extraction of a constant 8/16/32 bits
     % is emitted inline on backends providing load_be_unsigned. Bounds are
     % already guaranteed by the ensure_at_least/ensure_exactly commands the
