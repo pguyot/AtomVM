@@ -137,6 +137,19 @@ typedef struct Module Module;
 #define JIT_JUMPTABLE_OFFSET 0
 #endif
 
+#if defined(__riscv)
+// Pinned-register convention (see the aarch64 block for the general
+// contract): ctx in s1, jit_state in s2, the primitives table in s3 and
+// ctx->e in s4 — all callee-saved. ctx takes s1, the only RVC-addressable
+// callee-saved base besides the frame pointer, so compressed argument
+// loads survive. There are no inline heap operations on RISC-V, so hp is
+// not pinned and only e follows the write-back/reload protocol.
+#define JIT_PINNED_JIT_STATE 1
+#define JIT_PINNED_JIT_STATE_REG "s2"
+#define JIT_PINNED_CTX 1
+#define JIT_PINNED_CTX_REG "s1"
+#endif
+
 #ifdef __wasm__
 #define JIT_ARCH_TARGET JIT_ARCH_WASM32
 #define JIT_JUMPTABLE_ENTRY_SIZE 4
@@ -362,7 +375,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 7
+#define JIT_FORMAT_VERSION 8
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
