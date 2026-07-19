@@ -133,6 +133,13 @@ _Static_assert(RefcBinaryIsConst == 1, "REFC_BINARY_IS_CONST is 1 in libs/jit/sr
 _Static_assert(RefcBinaryIsResourceManaged == 2,
     "REFC_BINARY_IS_RESOURCE_MANAGED is 2 in libs/jit/src/term.hrl");
 
+// The inline cross-module return fast path resolves the target module in
+// generated code: ctx->global->modules_by_index[cp >> 24]->native_code.
+_Static_assert(offsetof(Context, global) == 0,
+    "global is the first Context field (cross-module return fast path)");
+_Static_assert(offsetof(GlobalContext, modules_by_index) == 0,
+    "modules_by_index is the first GlobalContext field (cross-module return fast path)");
+
 // The inline allocate/deallocate/test_heap/put_list fast paths in the 64-bit
 // backends read these Context fields at hard-coded offsets.
 #if TERM_BYTES == 8
@@ -199,6 +206,8 @@ _Static_assert(offsetof(JITState, fr) == 0x18, "jit_state->fr is 0x18 in jit/src
 
 // Offsets for inlining the imported-BIF resolution at gc_bif call sites.
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+// Offset for the inline cross-module return fast path.
+_Static_assert(offsetof(Module, native_code) == 0x78, "module->native_code is 0x78 in jit/src/jit_aarch64.erl");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");

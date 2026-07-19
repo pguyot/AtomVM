@@ -49,6 +49,7 @@
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
     jump_to_continuation/2,
+    return_cross_module/2,
     jump_to_offset/2,
     if_block/3,
     if_else_block/4,
@@ -316,6 +317,9 @@
 -define(JITSTATE_CPBASE, {?JITSTATE_REG, 16#28}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+% module->native_code (see _Static_assert in jit.c); used by the inline
+% cross-module return fast path.
+-define(MODULE_NATIVE_CODE, 16#78).
 % module->local_atoms_to_global_table (see _Static_assert in jit.c).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#D8}).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
@@ -1106,6 +1110,52 @@ emit_backedge_recon(#state{stream_module = StreamModule, regs = Regs} = State, B
         Bindings
     ),
     State#state{stream = Stream1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Cross-module return fast path: resolve the caller's module from the cp
+%% in CpReg (ctx->global->modules_by_index[cp >> 24], offsets pinned by
+%% _Static_asserts in jit.c), and when it has native code, update
+%% jit_state->module / cp_base and branch straight to native_code + offset —
+%% the work PRIM_RETURN does in C, minus the call round trip. Falls through
+%% (with CpReg freed) when the target module has no native code (emulated),
+%% for the caller to emit the C fallback.
+%% @end
+%% @param State current backend state
+%% @param CpReg register holding the full cp value, consumed
+%% @return Updated backend state
+%%-----------------------------------------------------------------------------
+-spec return_cross_module(state(), {free, aarch64_register()}) -> state().
+return_cross_module(#state{} = StateP, {free, CpReg}) ->
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State = pending_clear_all(StateP),
+    [IdxReg, ModReg, TargetReg | _] = mask_to_list(jit_regs:available_regs(Regs0)),
+    I1 = jit_aarch64_asm:lsr(IdxReg, CpReg, 24),
+    I2 = jit_aarch64_asm:ldr(ModReg, {?CTX_REG, 0}),
+    I3 = jit_aarch64_asm:ldr(ModReg, {ModReg, 0}),
+    I4 = jit_aarch64_asm:ldr(ModReg, {ModReg, IdxReg, lsl, 3}),
+    I5 = jit_aarch64_asm:ldr(TargetReg, {ModReg, ?MODULE_NATIVE_CODE}),
+    % No native code (emulated target): fall through to the C fallback.
+    I6 = jit_aarch64_asm:cbz(TargetReg, 8 * 4),
+    % jit_state_set_module: module and cp_base (module_index << 24).
+    I7 = jit_aarch64_asm:str(ModReg, ?JITSTATE_MODULE),
+    I8 = jit_aarch64_asm:lsl(IdxReg, IdxReg, 24),
+    I9 = jit_aarch64_asm:str(IdxReg, ?JITSTATE_CPBASE),
+    % native_code + ((cp & 0xFFFFFF) >> 2)
+    I10 = jit_aarch64_asm:and_(CpReg, CpReg, 16#FFFFFF),
+    I11 = jit_aarch64_asm:lsr(CpReg, CpReg, 2),
+    I12 = jit_aarch64_asm:add(TargetReg, TargetReg, CpReg),
+    I13 = jit_aarch64_asm:br(TargetReg),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary,
+            I9/binary, I10/binary, I11/binary, I12/binary, I13/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{
+        stream = Stream1,
+        regs = jit_regs:free_reg(Regs0, reg_bit(CpReg))
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.

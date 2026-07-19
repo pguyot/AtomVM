@@ -772,7 +772,7 @@ emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
     ?TRACE("OP_RETURN\n", []),
     % Optimized return: check if returning within the same module, in which case
     % we jump directly to the continuation rather than going through PRIM_RETURN.
-    MSt5 =
+    MSt5T =
         case MMod:word_size() of
             8 ->
                 % 64-bit: cp packs (module_index << 24) | (offset << 2) in one word.
@@ -807,14 +807,14 @@ emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
                         MMod:jump_to_continuation(BSt3, {free, CPReg1})
                     end
                 ),
-                MMod:free_native_registers(MSt4, [CpReg0]);
+                {MSt4, CpReg0};
             4 ->
                 % 32-bit: cp spans two words, the Module pointer (?CP_MODULE) and
                 % the offset << 2 (?CP_OFFSET). Compare the saved Module pointer
                 % with the current module pointer (jit_state->module).
                 {MSt1, CpModReg} = MMod:get_cp_module(MSt0),
                 {MSt2, CurModReg} = MMod:get_module(MSt1),
-                MMod:if_block(
+                MSt3 = MMod:if_block(
                     MSt2,
                     {{free, CpModReg}, '==', {free, CurModReg}},
                     % Same module: fast intra-module return
@@ -824,25 +824,52 @@ emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
                         % Jump to continuation (this is a tail call)
                         MMod:jump_to_continuation(BSt2, {free, OffReg2})
                     end
-                )
+                ),
+                {MSt3, undefined}
         end,
+    {MSt5, CpRegOrUndef} = MSt5T,
     % Different module: resolve through the return primitive; backends with
     % direct dispatch branch straight to the caller's native code instead of
-    % round-tripping through the scheduler loop.
-    TailCacheKey = {call_primitive_last, ?PRIM_RETURN},
+    % round-tripping through the scheduler loop. Backends exporting
+    % return_cross_module resolve the caller's module and branch to its native
+    % code inline first, leaving the primitive as the emulated-target fallback;
+    % the whole tail (inline resolve + fallback) is position-independent and
+    % register-deterministic (all-free invariant at OP_RETURN), so it is
+    % emitted once and shared through the tail cache.
+    CrossModule =
+        CpRegOrUndef =/= undefined andalso
+            erlang:function_exported(MMod, return_cross_module, 2),
+    TailCacheKey = {call_primitive_last, ?PRIM_RETURN, CrossModule},
     case tail_cache_find(TailCacheKey, TC) of
         false ->
             Offset = MMod:offset(MSt5),
+            MSt5b =
+                case CrossModule of
+                    true ->
+                        MMod:return_cross_module(MSt5, {free, CpRegOrUndef});
+                    false when CpRegOrUndef =/= undefined ->
+                        MMod:free_native_registers(MSt5, [CpRegOrUndef]);
+                    false ->
+                        MSt5
+                end,
             MSt6 =
                 case erlang:function_exported(MMod, call_primitive_direct, 3) of
                     true ->
-                        MMod:call_primitive_direct(MSt5, ?PRIM_RETURN_DIRECT, [ctx, jit_state]);
+                        MMod:call_primitive_direct(MSt5b, ?PRIM_RETURN_DIRECT, [ctx, jit_state]);
                     false ->
-                        MMod:call_primitive_last(MSt5, ?PRIM_RETURN, [ctx, jit_state])
+                        MMod:call_primitive_last(MSt5b, ?PRIM_RETURN, [ctx, jit_state])
                 end,
             State1 = State0#state{tail_cache = tail_cache_store(TailCacheKey, Offset, TC)};
         {TailCacheKey, Offset} ->
-            MSt6 = MMod:jump_to_offset(MSt5, Offset),
+            % The shared tail expects cp in the same (deterministically
+            % allocated) register it was emitted with; only the state-side
+            % ownership is released here.
+            MSt5c =
+                case CpRegOrUndef of
+                    undefined -> MSt5;
+                    _ -> MMod:free_native_registers(MSt5, [CpRegOrUndef])
+                end,
+            MSt6 = MMod:jump_to_offset(MSt5c, Offset),
             State1 = State0
     end,
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
