@@ -179,7 +179,12 @@
     | r12
     | r13
     | r14
-    | r15.
+    | r15
+    | r19
+    | r20
+    | r21
+    | r22
+    | r23.
 
 -define(IS_GPR(Reg),
     (Reg =:= r0 orelse Reg =:= r1 orelse Reg =:= r2 orelse Reg =:= r3 orelse Reg =:= r4 orelse
@@ -229,7 +234,7 @@
     %% Deferred (outlined) raise blocks: {StubRef, SiteOffset, Prim, ExtraArgs}.
     %% The raise site branches to StubRef (happy path falls through); the actual
     %% tail-calling raise is emitted at the module tail by flush_deferred_raises,
-    %% deduped per {Prim, ExtraArgs} since ctx/jit_state are pinned (x0/x1) and
+    %% deduped per {Prim, ExtraArgs} since ctx/jit_state are pinned (x0/x19) and
     %% the per-site offset is reloaded from a fresh register at each stub.
     deferred_raises = [] :: [{reference(), non_neg_integer(), non_neg_integer(), [arg()]}],
     %% Forward fused guard branches (jump_to_label_cond on a backtrackable
@@ -270,9 +275,26 @@
 % ctx->e is 0x50
 % ctx->x is 0x58
 -define(WORD_SIZE, 8).
--define(CTX_REG, r0).
--define(JITSTATE_REG, r1).
--define(NATIVE_INTERFACE_REG, r2).
+%% ctx is pinned in a callee-saved register like jit_state/the table below:
+%% invariant for a whole C->native invocation (a primitive returning a
+%% different Context* makes generated code return to the scheduler, which
+%% re-seeds). Primitives read it via their entry shims; BIFs still take ctx
+%% as an explicit argument (materialized with a mov from r21).
+-define(CTX_REG, r21).
+%% ctx->heap.heap_ptr and ctx->e live in callee-saved registers too. Unlike
+%% ctx/jit_state they MUTATE (inline allocs bump hp, allocate/deallocate move
+%% e, and C primitives GC): generated code writes them back to ctx before
+%% every C call (GC must see a coherent heap) and reloads them after calls
+%% that return. Every exit to the scheduler goes through a C call, so the ctx
+%% fields are always authoritative when C runs; the dispatch loop only seeds.
+-define(HP_REG, r22).
+-define(E_REG, r23).
+%% jit_state and the primitives table live in callee-saved registers, seeded
+%% once per C->native crossing by the scheduler loop (opcodesswitch.h inline
+%% asm). C primitives preserve them per the AAPCS64, so generated code never
+%% saves, restores or reloads them around calls; r1/r2 become scratch.
+-define(JITSTATE_REG, r19).
+-define(NATIVE_INTERFACE_REG, r20).
 -define(Y_REGS, {?CTX_REG, 16#50}).
 -define(HEAP_PTR, {?CTX_REG, 16#18}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * ?WORD_SIZE)}).
@@ -334,16 +356,23 @@
 -define(REG_BIT_R15, (1 bsl 15)).
 -define(REG_BIT_R16, (1 bsl 16)).
 -define(REG_BIT_R17, (1 bsl 17)).
+%% r19/r20 never enter the available/used masks (callee-saved, pinned); the
+%% bits exist so args_regs/regs_to_mask can pass over them.
+-define(REG_BIT_R19, (1 bsl 19)).
+-define(REG_BIT_R20, (1 bsl 20)).
+-define(REG_BIT_R21, (1 bsl 21)).
 
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
         ?REG_BIT_R12 bor ?REG_BIT_R13 bor ?REG_BIT_R14 bor ?REG_BIT_R15 bor
-        ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6)
+        ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6 bor
+        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0)
 ).
 -define(SCRATCH_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
         ?REG_BIT_R12 bor ?REG_BIT_R13 bor ?REG_BIT_R14 bor ?REG_BIT_R15 bor
-        ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6 bor ?REG_BIT_R17)
+        ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6 bor ?REG_BIT_R17 bor
+        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0)
 ).
 
 -include("jit_backend_dwarf_impl.hrl").
@@ -419,19 +448,14 @@ offset(#state{stream_module = StreamModule, stream = Stream}) ->
 relocations(#state{relocations = Relocations}) ->
     Relocations.
 
-%% Registers the allocator may use. In JIT_VARIANT_RELOC mode primitive calls are
-%% direct, so the native-interface register (r2) is never live between calls and
-%% becomes an extra general-purpose register (it is already a parameter register,
-%% so it behaves exactly like r3-r5 around calls).
+%% Registers the allocator may use. With jit_state/native_interface pinned in
+%% r19/r20, the parameter registers r1/r2 are plain scratch in both variants.
 -spec avail_mask(state()) -> non_neg_integer().
 avail_mask(#state{variant = Variant}) ->
     avail_mask_for_variant(Variant).
 
-avail_mask_for_variant(Variant) ->
-    case (Variant band ?JIT_VARIANT_RELOC) =/= 0 of
-        true -> ?AVAILABLE_REGS_MASK bor ?REG_BIT_R2;
-        false -> ?AVAILABLE_REGS_MASK
-    end.
+avail_mask_for_variant(_Variant) ->
+    ?AVAILABLE_REGS_MASK.
 
 %%-----------------------------------------------------------------------------
 %% @doc Flush the current state (unused on aarch64)
@@ -459,7 +483,7 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% free_native_registers/2, free_native_register/2, assert_all_native_free/1,
 %% first_avail/1, mask_to_list/1, args_regs/1, prepare_call_scratch/1) is shared
 %% across the register-based backends and flows through jit_regs.
--define(FIRST_AVAIL_REGS, [r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6]).
+-define(FIRST_AVAIL_REGS, [r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6, r2, r1, r0]).
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, ?JITSTATE_REG).
 -include("jit_backend_regs_impl.hrl").
@@ -615,13 +639,18 @@ call_primitive(
         stream = Stream0
     } = State,
     Primitive,
-    Args
+    Args0
 ) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% x21/x19 and do not take them as parameters. (BIF/computed-pointer
+    %% calls go through call_func_ptr directly and keep their ctx argument.)
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    Pure = prim_pure(Primitive),
     case (State#state.variant band ?JIT_VARIANT_RELOC) =/= 0 of
         true ->
             %% Direct, loader-relocated call: no table load, emit the branch in
             %% call_func_ptr from the {primitive, _} form.
-            call_func_ptr(State, {primitive, Primitive}, Args);
+            call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
         false ->
             PrepCall =
                 case Primitive of
@@ -632,7 +661,7 @@ call_primitive(
                 end,
             Stream1 = StreamModule:append(Stream0, PrepCall),
             StateCall = State#state{stream = Stream1},
-            call_func_ptr(StateCall, {free, ?IP0_REG}, Args)
+            call_func_ptr0(StateCall, {free, ?IP0_REG}, Args, Pure)
     end.
 
 %%-----------------------------------------------------------------------------
@@ -649,8 +678,11 @@ call_primitive(
 call_primitive_last(
     #state{} = StateP,
     Primitive,
-    Args
+    Args0
 ) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% x21/x19 and do not take them as parameters.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% Tail call into C: argument setup below reads x registers from the
     %% context (set_args), so pending stores must persist.
     #state{
@@ -687,7 +719,13 @@ call_primitive_last(
         },
         Args
     ),
-    #state{stream = Stream2} = State1,
+    #state{stream = Stream2a} = State1,
+    %% Write hp/e back to ctx before tail-calling into C (see call_func_ptr).
+    WB = <<
+        (jit_aarch64_asm:str(?HP_REG, ?HEAP_PTR))/binary,
+        (jit_aarch64_asm:str(?E_REG, ?Y_REGS))/binary
+    >>,
+    Stream2 = StreamModule:append(Stream2a, WB),
     {Stream3, Relocations1} =
         case Reloc of
             true ->
@@ -1800,13 +1838,27 @@ shift_left(
 %%-----------------------------------------------------------------------------
 -spec call_func_ptr(state(), {free, aarch64_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), aarch64_register()}.
-call_func_ptr(
+call_func_ptr(#state{} = StateP, FuncPtrTuple, Args) ->
+    call_func_ptr0(StateP, FuncPtrTuple, Args, false).
+
+-spec call_func_ptr0(
+    state(),
+    {free, aarch64_register()} | {primitive, non_neg_integer()},
+    [arg()],
+    boolean()
+) ->
+    {state(), aarch64_register()}.
+call_func_ptr0(
     #state{} = StateP,
     FuncPtrTuple,
-    Args
+    Args,
+    Pure
 ) ->
     %% The callee can read any x register from ctx (and clobbers the
-    %% register cache): all pending stores must persist.
+    %% register cache): all pending stores must persist. ctx/jit_state args
+    %% are NOT filtered here: BIFs and computed function pointers take ctx
+    %% explicitly (set_args materializes it from x21); primitive calls are
+    %% filtered in call_primitive/call_primitive_last.
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -1825,24 +1877,40 @@ call_func_ptr(
     ),
     FreeMask = jit_regs:regs_to_mask(FreeRegs, fun reg_bit/1),
     UsedRegs1 = UsedRegs0 band (bnot FreeMask),
-    %% In JIT_VARIANT_RELOC mode primitive calls are direct branches, so the
-    %% native-interface table register is never used and need not be preserved.
+    %% ctx (r21), jit_state (r19) and the native-interface table (r20) are
+    %% callee-saved: the callee preserves them, so only lr and live scratch
+    %% regs need saving around the call.
     Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
-    SavedRegs =
-        case Reloc of
-            true ->
-                [?LR_REG, ?CTX_REG, ?JITSTATE_REG | mask_to_list(UsedRegs1)];
-            false ->
-                [?LR_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)]
+    SavedRegs = [?LR_REG | mask_to_list(UsedRegs1)],
+    %% If the function pointer lives in a parameter register (r0 is
+    %% allocatable and call results may stay there), argument setup below
+    %% would overwrite it: park it in IP0 first.
+    ParamMask0 = jit_regs:regs_to_mask(parameter_regs(Args), fun reg_bit/1),
+    {FuncPtrTuple1, Stream0b} =
+        case FuncPtrTuple of
+            {free, FPReg} when is_atom(FPReg) ->
+                case reg_bit(FPReg) band ParamMask0 of
+                    0 ->
+                        {FuncPtrTuple, Stream0};
+                    _ ->
+                        {
+                            {free, ?IP0_REG},
+                            StreamModule:append(
+                                Stream0, jit_aarch64_asm:mov(?IP0_REG, FPReg)
+                            )
+                        }
+                end;
+            _ ->
+                {FuncPtrTuple, Stream0}
         end,
-    {SavedRegsOdd, Stream1} = push_registers(SavedRegs, StreamModule, Stream0),
+    {SavedRegsOdd, Stream1} = push_registers(SavedRegs, StreamModule, Stream0b),
 
     % Set up arguments following AArch64 calling convention
     State1 = set_args(State0#state{stream = Stream1}, Args),
     #state{stream = Stream2} = State1,
 
     {FuncPtrReg, Stream3} =
-        case FuncPtrTuple of
+        case FuncPtrTuple1 of
             {free, Reg} ->
                 {Reg, Stream2};
             {primitive, Primitive} when Reloc ->
@@ -1861,6 +1929,21 @@ call_func_ptr(
                 {?IP0_REG, StreamModule:append(Stream2, PrepCall)}
         end,
 
+    %% Write hp/e back to ctx: the callee — and any GC it triggers — must
+    %% see a coherent heap/stack state. Skipped for pure primitives, which
+    %% neither observe nor move hp/e (see prim_pure/1).
+    Stream3b =
+        case Pure of
+            true ->
+                Stream3;
+            false ->
+                WB = <<
+                    (jit_aarch64_asm:str(?HP_REG, ?HEAP_PTR))/binary,
+                    (jit_aarch64_asm:str(?E_REG, ?Y_REGS))/binary
+                >>,
+                StreamModule:append(Stream3, WB)
+        end,
+
     % Call the function pointer: a direct BL (loader-relocated) in reloc mode,
     % otherwise BLR through the loaded pointer.
     {Stream4, Relocations1} =
@@ -1868,13 +1951,13 @@ call_func_ptr(
             {reloc, PrimIdx} ->
                 %% Single direct call. The loader binds it to the primitive when
                 %% in branch range, otherwise to a per-primitive in-module veneer.
-                BlOffset = StreamModule:offset(Stream3),
-                {StreamModule:append(Stream3, jit_aarch64_asm:bl(0)), [
+                BlOffset = StreamModule:offset(Stream3b),
+                {StreamModule:append(Stream3b, jit_aarch64_asm:bl(0)), [
                     {BlOffset, PrimIdx} | State1#state.relocations
                 ]};
             _ ->
                 {
-                    StreamModule:append(Stream3, jit_aarch64_asm:blr(FuncPtrReg)),
+                    StreamModule:append(Stream3b, jit_aarch64_asm:blr(FuncPtrReg)),
                     State1#state.relocations
                 }
         end,
@@ -1891,7 +1974,19 @@ call_func_ptr(
                 {Stream4, r0}
         end,
 
-    Stream6 = pop_registers(SavedRegsOdd, lists:reverse(SavedRegs), StreamModule, Stream5),
+    Stream6a = pop_registers(SavedRegsOdd, lists:reverse(SavedRegs), StreamModule, Stream5),
+    %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
+    Stream6 =
+        case Pure of
+            true ->
+                Stream6a;
+            false ->
+                RL = <<
+                    (jit_aarch64_asm:ldr(?HP_REG, ?HEAP_PTR))/binary,
+                    (jit_aarch64_asm:ldr(?E_REG, ?Y_REGS))/binary
+                >>,
+                StreamModule:append(Stream6a, RL)
+        end,
 
     ResultBit = reg_bit(ResultReg),
     AvailableRegs2 = AvailableRegs1 band (bnot ResultBit),
@@ -2010,6 +2105,12 @@ replace_reg0([Reg | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
 replace_reg0([{free, Reg} | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
+%% Pointer arguments reference the parked register too: the parked copy holds
+%% the pointer, so the dereference happens off the replacement register.
+replace_reg0([{ptr, Reg} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{ptr, Replacement} | T]);
+replace_reg0([{free, {ptr, Reg}} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{free, {ptr, Replacement}} | T]);
 replace_reg0([Other | T], Reg, Replacement, Acc) ->
     replace_reg0(T, Reg, Replacement, [Other | Acc]).
 
@@ -2023,29 +2124,6 @@ set_args0([], [], [], _AvailGP, _LoadedImm, Acc) ->
     list_to_binary(lists:reverse(Acc));
 set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc) ->
     set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
-set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
-set_args0(
-    [jit_state | ArgsT],
-    [?JITSTATE_REG | ArgsRegs],
-    [?JITSTATE_REG | ParamRegs],
-    AvailGP,
-    LoadedImm,
-    Acc
-) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
-set_args0(
-    [jit_state | ArgsT], [?JITSTATE_REG | ArgsRegs], [ParamReg | ParamRegs], AvailGP, LoadedImm, Acc
-) ->
-    false = lists:member(ParamReg, ArgsRegs),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [
-        jit_aarch64_asm:mov(ParamReg, ?JITSTATE_REG) | Acc
-    ]);
-% ctx is special as we need it to access x_reg/y_reg/fp_reg
-set_args0([Arg | ArgsT], [_ArgReg | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
-    false = lists:member(?CTX_REG, ArgsRegs),
-    J = set_args1(Arg, ?CTX_REG),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [J | Acc]);
 set_args0(
     [Arg | ArgsT],
     [_ArgReg | ArgsRegs],
@@ -2085,11 +2163,14 @@ set_args1({x_reg, X}, Reg) ->
     jit_aarch64_asm:ldr(Reg, ?X_REG(X));
 set_args1({ptr, Source}, Reg) ->
     jit_aarch64_asm:ldr(Reg, {Source, 0});
+%% ctx/jit_state as explicit arguments (BIFs, computed function pointers):
+%% materialize from the pinned registers.
+set_args1(ctx, Reg) ->
+    jit_aarch64_asm:mov(Reg, ?CTX_REG);
+set_args1(jit_state, Reg) ->
+    jit_aarch64_asm:mov(Reg, ?JITSTATE_REG);
 set_args1({y_reg, X}, Reg) ->
-    [
-        jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-        jit_aarch64_asm:ldr(Reg, {Reg, X * ?WORD_SIZE})
-    ];
+    jit_aarch64_asm:ldr(Reg, {?E_REG, X * ?WORD_SIZE});
 set_args1(ArgReg, Reg) when ?IS_GPR(ArgReg) ->
     jit_aarch64_asm:mov(Reg, ArgReg);
 set_args1(Arg, Reg) when is_integer(Arg) ->
@@ -2159,17 +2240,13 @@ move_to_vm_register_emit(State0, Src, {ptr, Reg}) when is_atom(Src) ->
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
 move_to_vm_register_emit(
-    #state{regs = Regs0} = State0, Src, {y_reg, Y}
+    #state{} = State0, Src, {y_reg, Y}
 ) when
     is_atom(Src)
 ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
-    I1 = jit_aarch64_asm:ldr(Temp, ?Y_REGS),
-    I2 = jit_aarch64_asm:str(Src, {Temp, Y * ?WORD_SIZE}),
-    Stream1 = (State0#state.stream_module):append(State0#state.stream, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    State0#state{stream = Stream1, regs = Regs1};
+    I1 = jit_aarch64_asm:str(Src, {?E_REG, Y * ?WORD_SIZE}),
+    Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
+    State0#state{stream = Stream1};
 % Source is an integer
 move_to_vm_register_emit(State, 0, Dest) ->
     move_to_vm_register_emit(State, xzr, Dest);
@@ -2198,9 +2275,8 @@ move_to_vm_register_emit(#state{regs = Regs0} = State0, {ptr, Reg}, Dest) ->
     end);
 move_to_vm_register_emit(#state{regs = Regs0} = State0, {y_reg, Y}, Dest) ->
     with_temp(State0, Dest, fun(Temp) ->
-        I1 = jit_aarch64_asm:ldr(Temp, ?Y_REGS),
-        I2 = jit_aarch64_asm:ldr(Temp, {Temp, Y * ?WORD_SIZE}),
-        {<<I1/binary, I2/binary>>, jit_regs:set_contents(Regs0, Temp, {y_reg, Y})}
+        I1 = jit_aarch64_asm:ldr(Temp, {?E_REG, Y * ?WORD_SIZE}),
+        {I1, jit_regs:set_contents(Regs0, Temp, {y_reg, Y})}
     end);
 % term_to_float
 move_to_vm_register_emit(
@@ -2297,18 +2373,13 @@ move_array_element(
     {y_reg, Y}
 ) when is_atom(Reg) andalso is_integer(Index) ->
     Available = jit_regs:available_regs(Regs0),
-    Temp1 = first_avail(Available),
-    Bit1 = reg_bit(Temp1),
-    Avail1 = Available band (bnot Bit1),
-    Temp2 = first_avail(Avail1),
-    I1 = jit_aarch64_asm:ldr(Temp1, ?Y_REGS),
+    Temp2 = first_avail(Available),
     I2 = jit_aarch64_asm:ldr(Temp2, {Reg, Index * ?WORD_SIZE}),
-    I3 = jit_aarch64_asm:str(Temp2, {Temp1, Y * ?WORD_SIZE}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    I3 = jit_aarch64_asm:str(Temp2, {?E_REG, Y * ?WORD_SIZE}),
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Temp1),
-    Regs3 = jit_regs:invalidate_reg(Regs2, Temp2),
+    Regs3 = jit_regs:invalidate_reg(Regs1, Temp2),
     State#state{stream = Stream1, regs = Regs3};
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
@@ -2317,16 +2388,12 @@ move_array_element(
     Index,
     {y_reg, Y}
 ) when is_integer(Index) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
-    I1 = jit_aarch64_asm:ldr(Temp, ?Y_REGS),
     I2 = jit_aarch64_asm:ldr(Reg, {Reg, Index * ?WORD_SIZE}),
-    I3 = jit_aarch64_asm:str(Reg, {Temp, Y * ?WORD_SIZE}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    I3 = jit_aarch64_asm:str(Reg, {?E_REG, Y * ?WORD_SIZE}),
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Reg),
-    Regs3 = jit_regs:invalidate_reg(Regs2, Temp),
+    Regs3 = jit_regs:invalidate_reg(Regs1, Reg),
     State#state{stream = Stream1, regs = Regs3};
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
@@ -2388,18 +2455,14 @@ move_array_element(
     {free, IndexReg},
     {y_reg, Y}
 ) when ?IS_GPR(IndexReg) ->
-    AvailableRegs0 = jit_regs:available_regs(Regs0),
-    Temp = first_avail(AvailableRegs0),
-    I1 = jit_aarch64_asm:ldr(Temp, ?Y_REGS),
     I2 = jit_aarch64_asm:ldr(IndexReg, {Reg, IndexReg, lsl, 3}),
-    I3 = jit_aarch64_asm:str(IndexReg, {Temp, Y * ?WORD_SIZE}),
+    I3 = jit_aarch64_asm:str(IndexReg, {?E_REG, Y * ?WORD_SIZE}),
     Bit = reg_bit(IndexReg),
     Stream1 = StreamModule:append(
-        Stream0, <<I1/binary, I2/binary, I3/binary>>
+        Stream0, <<I2/binary, I3/binary>>
     ),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
-    Regs3 = jit_regs:invalidate_reg(Regs2, IndexReg),
+    Regs3 = jit_regs:invalidate_reg(Regs1, IndexReg),
     State#state{
         stream = Stream1,
         regs = jit_regs:free_reg(Regs3, Bit)
@@ -2700,9 +2763,7 @@ move_to_native_register_emit(
     Available = jit_regs:available_regs(Regs0),
     Reg = first_avail(Available),
     Bit = reg_bit(Reg),
-    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_aarch64_asm:ldr(Reg, {Reg, Y * ?WORD_SIZE}),
-    Code = <<I1/binary, I2/binary>>,
+    Code = jit_aarch64_asm:ldr(Reg, {?E_REG, Y * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
@@ -2769,9 +2830,7 @@ move_to_native_register(
 move_to_native_register(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, {y_reg, Y}, RegDst
 ) ->
-    I1 = jit_aarch64_asm:ldr(RegDst, ?Y_REGS),
-    I2 = jit_aarch64_asm:ldr(RegDst, {RegDst, Y * ?WORD_SIZE}),
-    Code = <<I1/binary, I2/binary>>,
+    Code = jit_aarch64_asm:ldr(RegDst, {?E_REG, Y * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, RegDst, {y_reg, Y}),
     State#state{stream = Stream1, regs = Regs1}.
@@ -2844,38 +2903,15 @@ move_to_cp(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     {y_reg, Y}
 ) ->
+    %% The y-regs base is pinned in ?E_REG: single temp, no base caching.
     Avail = jit_regs:available_regs(Regs0),
-    %% Use two temp registers: BaseReg keeps y_regs_base alive after this op
-    %% so a subsequent increment_sp / y_reg access can reuse it. BaseReg is
-    %% reserved (marked used) and released by the next op that consumes it
-    %% (currently increment_sp).
-    BaseReg = first_avail(Avail),
-    BaseBit = reg_bit(BaseReg),
-    Avail1 = Avail band (bnot BaseBit),
-    case Avail1 of
-        0 ->
-            %% Only one register available, fall back to single-temp version.
-            I1 = jit_aarch64_asm:ldr(BaseReg, ?Y_REGS),
-            I2 = jit_aarch64_asm:ldr(BaseReg, {BaseReg, Y * ?WORD_SIZE}),
-            I3 = jit_aarch64_asm:str(BaseReg, ?CP),
-            Code = <<I1/binary, I2/binary, I3/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            Regs1 = jit_regs:set_contents(Regs0, BaseReg, {y_reg, Y}),
-            State#state{stream = Stream1, regs = Regs1};
-        _ ->
-            ValReg = first_avail(Avail1),
-            I1 = jit_aarch64_asm:ldr(BaseReg, ?Y_REGS),
-            I2 = jit_aarch64_asm:ldr(ValReg, {BaseReg, Y * ?WORD_SIZE}),
-            I3 = jit_aarch64_asm:str(ValReg, ?CP),
-            Code = <<I1/binary, I2/binary, I3/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            %% ValReg was free but may cache stale contents (a following
-            %% loop back-edge reconciliation reads the cache).
-            Regs0b = jit_regs:invalidate_reg(Regs0, ValReg),
-            %% Reserve BaseReg with y_regs_base contents so it isn't reused.
-            Regs1 = jit_regs:set_contents(Regs0b, BaseReg, y_regs_base),
-            State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, BaseBit)}
-    end.
+    ValReg = first_avail(Avail),
+    I1 = jit_aarch64_asm:ldr(ValReg, {?E_REG, Y * ?WORD_SIZE}),
+    I2 = jit_aarch64_asm:str(ValReg, ?CP),
+    Code = <<I1/binary, I2/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:set_contents(Regs0, ValReg, {y_reg, Y}),
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Increment the stack pointer (SP) by a given offset.
@@ -2886,31 +2922,13 @@ move_to_cp(
 %%-----------------------------------------------------------------------------
 -spec increment_sp(state(), integer()) -> state().
 increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    #state{stream_module = StreamModule, stream = Stream0} = State,
     Offset
 ) ->
-    %% If a previous move_to_cp reserved y_regs_base in a register, reuse it
-    %% and release the reservation.
-    case jit_regs:find_reg_with_contents(Regs0, y_regs_base) of
-        {ok, CachedBase} ->
-            I1 = jit_aarch64_asm:add(CachedBase, CachedBase, Offset * ?WORD_SIZE),
-            I2 = jit_aarch64_asm:str(CachedBase, ?Y_REGS),
-            Code = <<I1/binary, I2/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            Bit = reg_bit(CachedBase),
-            Regs1 = jit_regs:free_reg(jit_regs:invalidate_reg(Regs0, CachedBase), Bit),
-            State#state{stream = Stream1, regs = Regs1};
-        none ->
-            Avail = jit_regs:available_regs(Regs0),
-            Reg = first_avail(Avail),
-            I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-            I2 = jit_aarch64_asm:add(Reg, Reg, Offset * ?WORD_SIZE),
-            I3 = jit_aarch64_asm:str(Reg, ?Y_REGS),
-            Code = <<I1/binary, I2/binary, I3/binary>>,
-            Stream1 = StreamModule:append(Stream0, Code),
-            Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-            State#state{stream = Stream1, regs = Regs1}
-    end.
+    %% e is pinned: bump the register directly.
+    Code = jit_aarch64_asm:add(?E_REG, ?E_REG, Offset * ?WORD_SIZE),
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Set the continuation address to point to a specific label. The actual
@@ -3791,12 +3809,11 @@ heap_bump_alloc(
 ) ->
     Available = jit_regs:available_regs(Regs0),
     Reg = first_avail(Available),
-    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
-    I1 = jit_aarch64_asm:ldr(Reg, ?HEAP_PTR),
-    I2 = jit_aarch64_asm:add(Tmp, Reg, NWords * ?WORD_SIZE),
-    I3 = jit_aarch64_asm:str(Tmp, ?HEAP_PTR),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    %% hp is pinned: return the old value and bump the register directly.
+    I1 = jit_aarch64_asm:mov(Reg, ?HP_REG),
+    I2 = jit_aarch64_asm:add(?HP_REG, ?HP_REG, NWords * ?WORD_SIZE),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
@@ -3814,12 +3831,10 @@ read_avail_heap_memory(
 ) ->
     Available = jit_regs:available_regs(Regs0),
     Reg = first_avail(Available),
-    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
-    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_aarch64_asm:ldr(Tmp, ?HEAP_PTR),
-    I3 = jit_aarch64_asm:sub(Reg, Reg, Tmp),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    %% e and hp are pinned: single subtraction, no loads.
+    I1 = jit_aarch64_asm:sub(Reg, ?E_REG, ?HP_REG),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
@@ -3894,17 +3909,15 @@ allocate_frame_fast(
     StackNeed
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Available),
-    Tmp = first_avail(Available band (bnot reg_bit(Reg))),
-    I1 = jit_aarch64_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_aarch64_asm:sub(Reg, Reg, (StackNeed + 1) * ?WORD_SIZE),
-    I3 = jit_aarch64_asm:str(Reg, ?Y_REGS),
+    Tmp = first_avail(Available),
+    %% e is pinned: bump it directly, then store cp into the new frame.
+    I2 = jit_aarch64_asm:sub(?E_REG, ?E_REG, (StackNeed + 1) * ?WORD_SIZE),
     I4 = jit_aarch64_asm:ldr(Tmp, ?CP),
-    I5 = jit_aarch64_asm:str(Tmp, {Reg, StackNeed * ?WORD_SIZE}),
+    I5 = jit_aarch64_asm:str(Tmp, {?E_REG, StackNeed * ?WORD_SIZE}),
     Stream1 = StreamModule:append(
-        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+        Stream0, <<I2/binary, I4/binary, I5/binary>>
     ),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Tmp),
     State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
@@ -4225,6 +4238,55 @@ return_labels_and_lines(
     ),
     State#state{stream = Stream1}.
 
+%% Primitives that neither read nor write ctx->heap.heap_ptr / ctx->e nor
+%% trigger a GC, and do not return a Context *: hp/e stay authoritative in
+%% their pinned registers across the call, so call sites skip the
+%% write-back/reload pair. Context*-returning primitives must NEVER be
+%% listed: their call sites can exit to the scheduler right after the call,
+%% and the write-back before the call is what persists the heap state.
+%% When in doubt, leave a primitive out — the only cost is 4 instructions.
+prim_pure(?PRIM_MODULE_GET_ATOM_TERM_BY_ID) -> true;
+prim_pure(?PRIM_TRIM_LIVE_REGS) -> true;
+prim_pure(?PRIM_GET_IMPORTED_BIF) -> true;
+%% term_compare only sets error fields on OOM (set_error with offset 0), it
+%% never touches the heap.
+prim_pure(?PRIM_TERM_COMPARE) -> true;
+prim_pure(?PRIM_EXTENDED_REGISTER_PTR) -> true;
+prim_pure(?PRIM_MAILBOX_PEEK) -> true;
+prim_pure(?PRIM_MAILBOX_REMOVE_MESSAGE) -> true;
+prim_pure(?PRIM_TIMEOUT) -> true;
+prim_pure(?PRIM_MAILBOX_NEXT) -> true;
+prim_pure(?PRIM_CANCEL_TIMEOUT) -> true;
+prim_pure(?PRIM_CLEAR_TIMEOUT_FLAG) -> true;
+prim_pure(?PRIM_CONTEXT_GET_FLAGS) -> true;
+prim_pure(?PRIM_ENSURE_FPREGS) -> true;
+prim_pure(?PRIM_TERM_IS_NUMBER) -> true;
+prim_pure(?PRIM_TERM_CONV_TO_FLOAT) -> true;
+prim_pure(?PRIM_FADD) -> true;
+prim_pure(?PRIM_FSUB) -> true;
+prim_pure(?PRIM_FMUL) -> true;
+prim_pure(?PRIM_FDIV) -> true;
+prim_pure(?PRIM_FNEGATE) -> true;
+prim_pure(?PRIM_TERM_SUB_BINARY_HEAP_SIZE) -> true;
+prim_pure(?PRIM_TERM_FIND_MAP_POS) -> true;
+prim_pure(?PRIM_BITSTRING_UTF8_SIZE) -> true;
+prim_pure(?PRIM_BITSTRING_UTF16_SIZE) -> true;
+prim_pure(?PRIM_MODULE_GET_FUN_ARITY) -> true;
+prim_pure(?PRIM_BITSTRING_MATCH_MODULE_STR) -> true;
+prim_pure(?PRIM_BITSTRING_GET_UTF8) -> true;
+prim_pure(?PRIM_BITSTRING_GET_UTF16) -> true;
+prim_pure(?PRIM_BITSTRING_GET_UTF32) -> true;
+prim_pure(?PRIM_RECORD_FIELD_POS) -> true;
+prim_pure(?PRIM_IS_RECORD_OF) -> true;
+prim_pure(?PRIM_SET_TUPLE_ELEMENT) -> true;
+prim_pure(?PRIM_PUT_MAP_HEAP_NEED) -> true;
+prim_pure(?PRIM_MAP_GET_VALUE) -> true;
+prim_pure(?PRIM_TERM_GET_MAP_ASSOC) -> true;
+prim_pure(?PRIM_TERM_GET_MAP_ASSOC_MISS) -> true;
+prim_pure(?PRIM_BITSTRING_GET_TAIL_HEAP_SIZE) -> true;
+prim_pure(?PRIM_BITSTRING_SLICE_HEAP_SIZE) -> true;
+prim_pure(_) -> false.
+
 reg_bit(r0) -> ?REG_BIT_R0;
 reg_bit(r1) -> ?REG_BIT_R1;
 reg_bit(r2) -> ?REG_BIT_R2;
@@ -4242,7 +4304,10 @@ reg_bit(r13) -> ?REG_BIT_R13;
 reg_bit(r14) -> ?REG_BIT_R14;
 reg_bit(r15) -> ?REG_BIT_R15;
 reg_bit(r16) -> ?REG_BIT_R16;
-reg_bit(r17) -> ?REG_BIT_R17.
+reg_bit(r17) -> ?REG_BIT_R17;
+reg_bit(r19) -> ?REG_BIT_R19;
+reg_bit(r20) -> ?REG_BIT_R20;
+reg_bit(r21) -> ?REG_BIT_R21.
 
 %%-----------------------------------------------------------------------------
 %% @doc Add a label at the current offset
@@ -4388,5 +4453,8 @@ dwarf_register_number(r13) -> 13;
 dwarf_register_number(r14) -> 14;
 dwarf_register_number(r15) -> 15;
 dwarf_register_number(r16) -> 16;
-dwarf_register_number(r17) -> 17.
+dwarf_register_number(r17) -> 17;
+dwarf_register_number(r19) -> 19;
+dwarf_register_number(r20) -> 20;
+dwarf_register_number(r21) -> 21.
 -endif.
