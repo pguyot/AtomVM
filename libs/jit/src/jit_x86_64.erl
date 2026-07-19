@@ -216,9 +216,23 @@
 % ctx->bs is 0xE8
 % ctx->bs_offset is 0xF0
 % jit_state->fr is 0x18
--define(CTX_REG, rdi).
--define(JITSTATE_REG, rsi).
--define(NATIVE_INTERFACE_REG, rdx).
+%% Pinned-register convention: ctx, jit_state, the primitives table and
+%% ctx->heap.heap_ptr / ctx->e live in callee-saved registers, seeded once
+%% per C->native crossing by the dispatch loop (opcodesswitch.h). C
+%% primitives preserve them per the SysV ABI, so generated code never saves,
+%% restores or reloads them around calls; rdi/rsi/rdx become scratch.
+%% Base-register assignment follows ModRM cost: rbx/r14/r15 encode with a
+%% plain ModRM byte and serve the frequent bases (table, ctx, e); r13 forces
+%% a disp8 at offset 0 and serves the rare jit_state base; r12 would need a
+%% SIB byte but hp is never used as a base.
+-define(CTX_REG, r14).
+-define(JITSTATE_REG, r13).
+-define(NATIVE_INTERFACE_REG, rbx).
+%% hp/e mutate (inline allocs, allocate/deallocate, GC): written back to ctx
+%% before every C call and reloaded after calls that return, except around
+%% primitives listed in jit_prim_pure.hrl.
+-define(HP_REG, r12).
+-define(E_REG, r15).
 -define(Y_REGS, {16#50, ?CTX_REG}).
 -define(X_REG(N), {16#58 + (N * ?WORD_SIZE), ?CTX_REG}).
 -define(CP, {16#E0, ?CTX_REG}).
@@ -263,10 +277,17 @@
 -define(REG_BIT_R9, (1 bsl 6)).
 -define(REG_BIT_R10, (1 bsl 7)).
 -define(REG_BIT_R11, (1 bsl 8)).
+%% Callee-saved pinned registers: never in the available/used masks; the bits
+%% exist so args_regs/regs_to_mask can pass over them.
+-define(REG_BIT_RBX, (1 bsl 9)).
+-define(REG_BIT_R12, (1 bsl 10)).
+-define(REG_BIT_R13, (1 bsl 11)).
+-define(REG_BIT_R14, (1 bsl 12)).
+-define(REG_BIT_R15, (1 bsl 13)).
 
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_RAX bor ?REG_BIT_R11 bor ?REG_BIT_R10 bor ?REG_BIT_R9 bor ?REG_BIT_R8 bor
-        ?REG_BIT_RCX)
+        ?REG_BIT_RCX bor ?REG_BIT_RDX bor ?REG_BIT_RSI bor ?REG_BIT_RDI)
 ).
 -define(SCRATCH_REGS_MASK,
     (?REG_BIT_RDI bor ?REG_BIT_RSI bor ?REG_BIT_RDX bor ?REG_BIT_RCX bor ?REG_BIT_R8 bor
@@ -361,11 +382,12 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% free_native_registers/2, free_native_register/2, assert_all_native_free/1,
 %% first_avail/1, mask_to_list/1, args_regs/1, prepare_call_scratch/1) is shared
 %% across the register-based backends and flows through jit_regs.
--define(FIRST_AVAIL_REGS, [rax, r11, r10, r9, r8, rcx]).
--define(MASK_TO_LIST_REGS, [rcx, r8, r9, r10, r11, rax]).
+-define(FIRST_AVAIL_REGS, [rax, r11, r10, r9, r8, rcx, rdx, rsi, rdi]).
+-define(MASK_TO_LIST_REGS, [rcx, r8, r9, r10, r11, rax, rdx, rsi, rdi]).
 -define(JITSTATE_ARG_REG, ?JITSTATE_REG).
 -include("jit_backend_regs_impl.hrl").
 -include("jit_backend_pending_impl.hrl").
+-include("jit_prim_pure.hrl").
 
 %%-----------------------------------------------------------------------------
 %% @doc Receive the per-label live-in x-register masks (jit_liveness pass A)
@@ -509,50 +531,14 @@ update_branches(
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> {state(), x86_64_register()}.
-call_primitive(
-    StateP,
-    Primitive,
-    Args
-) ->
-    %% The callee reads ctx->x: any pending (elidable) x store must stay.
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0,
-        regs = Regs0
-    } = State = pending_clear_all(StateP),
-    AvailableRegs0 = jit_regs:available_regs(Regs0),
-    % We need a register for the function pointer that should not be used as a parameter
-    ParamRegs = lists:sublist(?PARAMETER_REGS, length(Args)),
-    ParamMask = jit_regs:regs_to_mask(ParamRegs, fun reg_bit/1),
-    FreeFromParams = AvailableRegs0 band (bnot ParamMask),
-    case FreeFromParams of
-        0 ->
-            % No register left, we'll use the stack to save NATIVE_INTERFACE_REG
-            % and rax when calling function.
-            call_func_ptr(State, {primitive, Primitive}, Args);
-        _ ->
-            Temp = first_avail(FreeFromParams),
-            TempBit = reg_bit(Temp),
-            PrepCall =
-                case Primitive of
-                    0 ->
-                        jit_x86_64_asm:movq({0, ?NATIVE_INTERFACE_REG}, Temp);
-                    N ->
-                        jit_x86_64_asm:movq(?PRIMITIVE(N), Temp)
-                end,
-            Stream1 = StreamModule:append(Stream0, PrepCall),
-            call_func_ptr(
-                State#state{
-                    stream = Stream1,
-                    regs = jit_regs:alloc_reg(
-                        jit_regs:invalidate_reg(Regs0, Temp),
-                        TempBit
-                    )
-                },
-                {free, Temp},
-                Args
-            )
-    end.
+call_primitive(StateP, Primitive, Args0) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% r14/r13 and do not take them as parameters. (BIF/computed-pointer
+    %% calls go through call_func_ptr directly and keep their ctx argument.)
+    %% The function pointer is loaded from the pinned table after argument
+    %% setup, directly in call_func_ptr0.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    call_func_ptr0(StateP, {primitive, Primitive}, Args, prim_pure(Primitive)).
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a jump (call without return) to a primitive with arguments. This
@@ -564,45 +550,23 @@ call_primitive(
 %% @param Args arguments to pass to the primitive
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-call_primitive_last(StateP, Primitive, Args) ->
+call_primitive_last(StateP, Primitive, Args0) ->
     %% Control leaves through the primitive, which reads ctx->x: any pending
-    %% x store must stay.
+    %% x store must stay. Pinned-register convention: primitives read ctx and
+    %% jit_state from r14/r13, drop them from the argument list.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     call_primitive_last0(pending_clear_all(StateP), Primitive, Args).
 
-call_primitive_last0(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0
-    } = State0,
-    Primitive,
-    []
-) ->
-    % No arguments: use memory-indirect jump, no need to load function pointer
-    PrimAddr =
-        case Primitive of
-            0 -> {0, ?NATIVE_INTERFACE_REG};
-            N -> ?PRIMITIVE(N)
-        end,
-    Call = jit_x86_64_asm:jmpq(PrimAddr),
-    Stream1 = StreamModule:append(Stream0, Call),
-    State0#state{
-        stream = Stream1,
-        regs = jit_regs:set_masks(
-            jit_regs:unreachable(State0#state.regs), ?AVAILABLE_REGS_MASK, 0
-        )
-    };
 call_primitive_last0(
     #state{
         stream_module = StreamModule
     } = State0,
     Primitive,
     Args
-) when length(Args) =< 2 ->
-    %% With at most two arguments the parameter registers are rdi/rsi (see
-    %% ?PARAMETER_REGS), so the interface register (rdx) survives argument
-    %% marshalling and can base a memory-indirect tail jump directly — no
-    %% temp load of the function pointer. Scratch temps never alias rdx
-    %% (?AVAILABLE_REGS_MASK excludes it), so argument setup cannot clobber it.
+) ->
+    %% The table is pinned in callee-saved rbx, which is never a parameter
+    %% register and survives argument setup: a memory-indirect tail jump
+    %% works for any argument count, no temp load of the function pointer.
     #{
         available_mask := AvailableRegs1,
         used_mask := UsedRegs,
@@ -622,67 +586,20 @@ call_primitive_last0(
         ArgsMask
     ),
     #state{stream = Stream1} = State1,
+    %% Write hp/e back to ctx before tail-calling into C (see call_func_ptr0).
+    WB = <<
+        (jit_x86_64_asm:movq(?HP_REG, ?HEAP_PTR))/binary,
+        (jit_x86_64_asm:movq(?E_REG, ?Y_REGS))/binary
+    >>,
     PrimAddr =
         case Primitive of
             0 -> {0, ?NATIVE_INTERFACE_REG};
             N -> ?PRIMITIVE(N)
         end,
     Call = jit_x86_64_asm:jmpq(PrimAddr),
-    Stream2 = StreamModule:append(Stream1, Call),
+    Stream2 = StreamModule:append(Stream1, <<WB/binary, Call/binary>>),
     State1#state{
         stream = Stream2,
-        regs = jit_regs:set_masks(
-            jit_regs:unreachable(State1#state.regs), ?AVAILABLE_REGS_MASK, 0
-        )
-    };
-call_primitive_last0(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0
-    } = State0,
-    Primitive,
-    Args
-) ->
-    % We need a register for the function pointer that should not be used as a parameter
-    % Since we're not returning, we can use all scratch registers except
-    % registers used for parameters
-    #{
-        temp := Temp,
-        available_mask := AvailableRegs1,
-        used_mask := UsedRegs,
-        param_regs := ParamRegs,
-        args_regs := ArgsRegs,
-        param_mask := ParamMask,
-        args_mask := ArgsMask
-    } = prepare_call_scratch(Args),
-    PrepCall =
-        case Primitive of
-            0 ->
-                jit_x86_64_asm:movq({0, ?NATIVE_INTERFACE_REG}, Temp);
-            N ->
-                jit_x86_64_asm:movq(?PRIMITIVE(N), Temp)
-        end,
-    Stream1 = StreamModule:append(Stream0, PrepCall),
-    State1 = set_args2(
-        State0#state{
-            stream = Stream1,
-            regs = jit_regs:set_masks(
-                jit_regs:invalidate_reg(State0#state.regs, Temp),
-                AvailableRegs1,
-                UsedRegs
-            )
-        },
-        Args,
-        ParamRegs,
-        ArgsRegs,
-        ParamMask,
-        ArgsMask
-    ),
-    #state{stream = Stream2} = State1,
-    Call = jit_x86_64_asm:jmpq({Temp}),
-    Stream3 = StreamModule:append(Stream2, Call),
-    State1#state{
-        stream = Stream3,
         regs = jit_regs:set_masks(
             jit_regs:unreachable(State1#state.regs), ?AVAILABLE_REGS_MASK, 0
         )
@@ -1611,12 +1528,26 @@ shift_left(
 %%-----------------------------------------------------------------------------
 -spec call_func_ptr(state(), {free, x86_64_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), x86_64_register()}.
-call_func_ptr(
+call_func_ptr(StateP, FuncPtrTuple, Args) ->
+    call_func_ptr0(StateP, FuncPtrTuple, Args, false).
+
+-spec call_func_ptr0(
+    state(),
+    {free, x86_64_register()} | {primitive, non_neg_integer()},
+    [arg()],
+    boolean()
+) ->
+    {state(), x86_64_register()}.
+call_func_ptr0(
     StateP,
     FuncPtrTuple,
-    Args
+    Args,
+    Pure
 ) ->
-    %% The callee reads ctx->x: any pending x store must stay.
+    %% The callee reads ctx->x: any pending x store must stay. ctx/jit_state
+    %% args are NOT filtered here: BIFs and computed function pointers take
+    %% ctx explicitly (set_args materializes it from r14); primitive calls
+    %% are filtered in call_primitive/call_primitive_last.
     #state{
         stream_module = StreamModule,
         stream = Stream0,
@@ -1634,55 +1565,72 @@ call_func_ptr(
         [FuncPtrTuple | Args]
     ),
     UsedRegs1 = UsedRegs0 band (bnot FreeMask),
-    SavedRegs = [?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1)],
+    %% ctx/jit_state/table (r14/r13/rbx) are callee-saved: the callee
+    %% preserves them, so only live scratch regs need saving.
+    SavedRegs = mask_to_list(UsedRegs1),
     PushBin = iolist_to_binary([jit_x86_64_asm:pushq(R) || R <- SavedRegs]),
-    Stream1 = StreamModule:append(Stream0, PushBin),
     PushOdds = length(SavedRegs) rem 2,
-    % x86 64 stack should be aligned to 16 bytes when running callq instruction
-    % It is therefore unaligned and we need to always push an odd number of
-    % registers.
-    % Align stack by pushing ?NATIVE_INTERFACE_REG
-    % ?NATIVE_INTERFACE_REG may have been pushed as the function pointer
+    % x86-64 stack must be 16-byte aligned at the callq: entry left it
+    % misaligned by 8, so the total push count must be odd. The filler is
+    % popped into r11 after the call (rax carries the result).
     AlignBin =
         case PushOdds of
             1 -> <<>>;
-            0 -> jit_x86_64_asm:pushq(?NATIVE_INTERFACE_REG)
+            0 -> jit_x86_64_asm:pushq(rax)
         end,
-    Stream4 =
+    %% A {free, Reg} function pointer living in a parameter register would be
+    %% overwritten by argument setup: park it on the stack and pop it into
+    %% rax after set_args. The pair is balanced before the call, so it does
+    %% not affect alignment.
+    ParamMask0 = jit_regs:regs_to_mask(parameter_regs(Args), fun reg_bit/1),
+    {FuncPtrTuple1, ParkBin} =
         case FuncPtrTuple of
-            {free, _} when PushOdds =:= 1 ->
-                Stream1;
-            {free, _} ->
-                StreamModule:append(Stream1, AlignBin);
-            {primitive, Primitive} ->
-                PrepCall0 =
-                    case Primitive of
-                        0 ->
-                            jit_x86_64_asm:movq({0, ?NATIVE_INTERFACE_REG}, ?NATIVE_INTERFACE_REG);
-                        N ->
-                            jit_x86_64_asm:movq(?PRIMITIVE(N), ?NATIVE_INTERFACE_REG)
-                    end,
-                PrepCall1 = jit_x86_64_asm:pushq(?NATIVE_INTERFACE_REG),
-                StreamModule:append(
-                    Stream1, <<PrepCall0/binary, PrepCall1/binary, AlignBin/binary>>
-                )
+            {free, FPReg0} when is_atom(FPReg0) ->
+                case reg_bit(FPReg0) band ParamMask0 of
+                    0 -> {FuncPtrTuple, <<>>};
+                    _ -> {parked, jit_x86_64_asm:pushq(FPReg0)}
+                end;
+            _ ->
+                {FuncPtrTuple, <<>>}
         end,
-    State1 = set_args(State0#state{stream = Stream4}, Args),
+    Stream1 = StreamModule:append(Stream0, <<PushBin/binary, AlignBin/binary, ParkBin/binary>>),
+    State1 = set_args(State0#state{stream = Stream1}, Args),
     #state{stream = Stream5} = State1,
+    %% Write hp/e back to ctx: the callee — and any GC it triggers — must see
+    %% a coherent heap/stack state. Skipped for pure primitives (prim_pure/1).
+    WB =
+        case Pure of
+            true ->
+                <<>>;
+            false ->
+                <<
+                    (jit_x86_64_asm:movq(?HP_REG, ?HEAP_PTR))/binary,
+                    (jit_x86_64_asm:movq(?E_REG, ?Y_REGS))/binary
+                >>
+        end,
     Call =
-        case FuncPtrTuple of
+        case FuncPtrTuple1 of
             {free, FuncPtrReg} ->
                 jit_x86_64_asm:callq({FuncPtrReg});
-            {primitive, _} ->
+            parked ->
                 Call0 = jit_x86_64_asm:popq(rax),
                 Call1 = jit_x86_64_asm:callq({rax}),
-                <<Call0/binary, Call1/binary>>
+                <<Call0/binary, Call1/binary>>;
+            {primitive, Primitive} ->
+                %% The table is pinned in rbx: load the pointer after argument
+                %% setup, into rax (never a parameter register).
+                PrepCall =
+                    case Primitive of
+                        0 -> jit_x86_64_asm:movq({0, ?NATIVE_INTERFACE_REG}, rax);
+                        N -> jit_x86_64_asm:movq(?PRIMITIVE(N), rax)
+                    end,
+                <<PrepCall/binary, (jit_x86_64_asm:callq({rax}))/binary>>
         end,
     % Unalign stack: combine call + unalign-pop into one append when needed
     CallAndUnalign =
         case PushOdds of
-            1 -> Call;
-            0 -> <<Call/binary, (jit_x86_64_asm:popq(?NATIVE_INTERFACE_REG))/binary>>
+            1 -> <<WB/binary, Call/binary>>;
+            0 -> <<WB/binary, Call/binary, (jit_x86_64_asm:popq(r11))/binary>>
         end,
     Stream7 = StreamModule:append(Stream5, CallAndUnalign),
     % If rax is in used regs, save it to another temporary register
@@ -1696,7 +1644,18 @@ call_func_ptr(
                 {StreamModule:append(Stream7, jit_x86_64_asm:movq(rax, Temp)), Temp}
         end,
     PopBin = iolist_to_binary([jit_x86_64_asm:popq(R) || R <- lists:reverse(SavedRegs)]),
-    Stream9 = StreamModule:append(Stream8, PopBin),
+    %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
+    RL =
+        case Pure of
+            true ->
+                <<>>;
+            false ->
+                <<
+                    (jit_x86_64_asm:movq(?HEAP_PTR, ?HP_REG))/binary,
+                    (jit_x86_64_asm:movq(?Y_REGS, ?E_REG))/binary
+                >>
+        end,
+    Stream9 = StreamModule:append(Stream8, <<PopBin/binary, RL/binary>>),
     ResultBit = reg_bit(ResultReg),
     AvailableRegs2 = (AvailableRegs1 band (bnot ResultBit)) band ?AVAILABLE_REGS_MASK,
     UsedRegs2 = UsedRegs1 bor ResultBit,
@@ -1787,6 +1746,12 @@ replace_reg0([Reg | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
 replace_reg0([{free, Reg} | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
+%% Pointer arguments reference the register too: the dereference happens off
+%% the replacement register.
+replace_reg0([{ptr, Reg} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{ptr, Replacement} | T]);
+replace_reg0([{free, {ptr, Reg}} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{free, {ptr, Replacement}} | T]);
 replace_reg0([Other | T], Reg, Replacement, Acc) ->
     replace_reg0(T, Reg, Replacement, [Other | Acc]).
 
@@ -1806,29 +1771,29 @@ set_args0([], [], [], _AvailGP, _LoadedImm, Acc) ->
     list_to_binary(lists:reverse(Acc));
 set_args0([{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc) ->
     set_args0([FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
-set_args0([ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
+%% ctx/jit_state materialize from the pinned registers (r14/r13): like
+%% immediates they have no swappable source register, so when the parameter
+%% register is still occupied by a later argument, defer to the end of the
+%% queue instead of xchg-ing (which would clobber a pinned register).
 set_args0(
-    [jit_state | ArgsT],
-    [?JITSTATE_REG | ArgsRegs],
-    [?JITSTATE_REG | ParamRegs],
-    AvailGP,
-    LoadedImm,
-    Acc
-) ->
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, Acc);
-set_args0(
-    [jit_state | ArgsT], [?JITSTATE_REG | ArgsRegs], [ParamReg | ParamRegs], AvailGP, LoadedImm, Acc
-) ->
-    false = lists:member(ParamReg, ArgsRegs),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [
-        jit_x86_64_asm:movq(?JITSTATE_REG, ParamReg) | Acc
-    ]);
-% ctx is special as we need it to access x_reg/y_reg/fp_reg
-set_args0([Arg | ArgsT], [_ArgReg | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, LoadedImm, Acc) ->
-    false = lists:member(?CTX_REG, ArgsRegs),
-    J = set_args1(Arg, ?CTX_REG),
-    set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [J | Acc]);
+    [Special | ArgsT], [SpecialReg | ArgsRegs], [ParamReg | ParamRegs], AvailGP, LoadedImm, Acc
+) when
+    Special =:= ctx orelse Special =:= jit_state
+->
+    case lists:member(ParamReg, ArgsRegs) of
+        false ->
+            J = set_args1(Special, ParamReg),
+            set_args0(ArgsT, ArgsRegs, ParamRegs, AvailGP, LoadedImm, [J | Acc]);
+        true ->
+            set_args0(
+                ArgsT ++ [Special],
+                ArgsRegs ++ [SpecialReg],
+                ParamRegs ++ [ParamReg],
+                AvailGP,
+                LoadedImm,
+                Acc
+            )
+    end;
 set_args0(
     [Arg | ArgsT],
     [ArgReg | ArgsRegs],
@@ -1879,6 +1844,10 @@ set_args0(
 
 set_args1(Reg, Reg) ->
     [];
+set_args1(ctx, Reg) ->
+    jit_x86_64_asm:movq(?CTX_REG, Reg);
+set_args1(jit_state, Reg) ->
+    jit_x86_64_asm:movq(?JITSTATE_REG, Reg);
 set_args1({x_reg, extra}, Reg) ->
     jit_x86_64_asm:movq(?X_REG(?MAX_REG), Reg);
 set_args1({x_reg, X}, Reg) ->
@@ -1886,10 +1855,7 @@ set_args1({x_reg, X}, Reg) ->
 set_args1({ptr, Source}, Reg) ->
     jit_x86_64_asm:movq({0, Source}, Reg);
 set_args1({y_reg, X}, Reg) ->
-    [
-        jit_x86_64_asm:movq(?Y_REGS, Reg),
-        jit_x86_64_asm:movq({X * 8, Reg}, Reg)
-    ];
+    jit_x86_64_asm:movq({X * 8, ?E_REG}, Reg);
 set_args1(ArgReg, Reg) when ?IS_GPR(ArgReg) ->
     jit_x86_64_asm:movq(ArgReg, Reg);
 set_args1(0, Reg) ->
@@ -1988,14 +1954,10 @@ move_to_vm_register_emit(State, 0, {ptr, Reg}) ->
     I1 = jit_x86_64_asm:andq(0, {0, Reg}),
     Stream1 = (State#state.stream_module):append(State#state.stream, I1),
     State#state{stream = Stream1};
-move_to_vm_register_emit(#state{regs = Regs0} = State, 0, {y_reg, Y}) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-    I2 = jit_x86_64_asm:andq(0, {Y * 8, Temp}),
-    Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    State#state{stream = Stream1, regs = Regs1};
+move_to_vm_register_emit(#state{} = State, 0, {y_reg, Y}) ->
+    I2 = jit_x86_64_asm:andq(0, {Y * 8, ?E_REG}),
+    Stream1 = (State#state.stream_module):append(State#state.stream, I2),
+    State#state{stream = Stream1};
 % ?IS_SINT32_T(Src), we can use movq to set the value
 move_to_vm_register_emit(State, N, {x_reg, X}) when X < ?MAX_REG andalso ?IS_SINT32_T(N) ->
     Stream1 = (State#state.stream_module):append(
@@ -2012,16 +1974,12 @@ move_to_vm_register_emit(State, N, {ptr, Reg}) when ?IS_SINT32_T(N) ->
         State#state.stream, jit_x86_64_asm:movq(N, {0, Reg})
     ),
     State#state{stream = Stream1};
-move_to_vm_register_emit(#state{regs = Regs0} = State, N, {y_reg, Y}) when
+move_to_vm_register_emit(#state{} = State, N, {y_reg, Y}) when
     ?IS_SINT32_T(N)
 ->
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-    I2 = jit_x86_64_asm:movq(N, {Y * 8, Temp}),
-    Stream1 = (State#state.stream_module):append(State#state.stream, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    State#state{stream = Stream1, regs = Regs1};
+    I2 = jit_x86_64_asm:movq(N, {Y * 8, ?E_REG}),
+    Stream1 = (State#state.stream_module):append(State#state.stream, I2),
+    State#state{stream = Stream1};
 % ?is_integer(Src), we need to use movabsq
 move_to_vm_register_emit(#state{regs = Regs0} = State, N, {x_reg, X}) when
     X < ?MAX_REG andalso is_integer(N)
@@ -2059,15 +2017,13 @@ move_to_vm_register_emit(#state{regs = Regs0} = State, N, {y_reg, Y}) when
     is_integer(N)
 ->
     Avail = jit_regs:available_regs(Regs0),
-    Temp1 = first_avail(Avail),
-    Temp2 = first_avail(Avail band (bnot reg_bit(Temp1))),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp1),
+    Temp2 = first_avail(Avail),
     I2 = jit_x86_64_asm:movabsq(N, Temp2),
-    I3 = jit_x86_64_asm:movq(Temp2, {Y * 8, Temp1}),
+    I3 = jit_x86_64_asm:movq(Temp2, {Y * 8, ?E_REG}),
     Stream1 = (State#state.stream_module):append(
-        State#state.stream, <<I1/binary, I2/binary, I3/binary>>
+        State#state.stream, <<I2/binary, I3/binary>>
     ),
-    Regs1 = jit_regs:set_contents(jit_regs:invalidate_reg(Regs0, Temp1), Temp2, {imm, N}),
+    Regs1 = jit_regs:set_contents(Regs0, Temp2, {imm, N}),
     State#state{stream = Stream1, regs = Regs1};
 % is_atom(Src) (native register)
 move_to_vm_register_emit(State, Reg, {x_reg, X}) when is_atom(Reg) andalso X < ?MAX_REG ->
@@ -2082,17 +2038,12 @@ move_to_vm_register_emit(State, Reg, {ptr, Dest}) when is_atom(Reg) ->
     I1 = jit_x86_64_asm:movq(Reg, {0, Dest}),
     Stream1 = (State#state.stream_module):append(State#state.stream, I1),
     State#state{stream = Stream1};
-move_to_vm_register_emit(#state{regs = Regs0} = State, Reg, {y_reg, Y}) when
+move_to_vm_register_emit(#state{} = State, Reg, {y_reg, Y}) when
     is_atom(Reg)
 ->
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-    I2 = jit_x86_64_asm:movq(Reg, {Y * 8, Temp}),
-    Code = <<I1/binary, I2/binary>>,
-    Stream1 = (State#state.stream_module):append(State#state.stream, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    State#state{stream = Stream1, regs = Regs1};
+    I2 = jit_x86_64_asm:movq(Reg, {Y * 8, ?E_REG}),
+    Stream1 = (State#state.stream_module):append(State#state.stream, I2),
+    State#state{stream = Stream1};
 % Src is x_reg, store in temporary register and call move_to_vm_register_emit for the four cases
 move_to_vm_register_emit(
     #state{regs = Regs0} = State0, {x_reg, X}, Dest
@@ -2117,9 +2068,8 @@ move_to_vm_register_emit(#state{regs = Regs0} = State0, {ptr, Reg}, Dest) ->
     end);
 move_to_vm_register_emit(#state{regs = Regs0} = State0, {y_reg, Y}, Dest) ->
     with_temp(State0, Dest, fun(Temp) ->
-        I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-        I2 = jit_x86_64_asm:movq({Y * 8, Temp}, Temp),
-        {<<I1/binary, I2/binary>>, jit_regs:set_contents(Regs0, Temp, {y_reg, Y})}
+        I2 = jit_x86_64_asm:movq({Y * 8, ?E_REG}, Temp),
+        {I2, jit_regs:set_contents(Regs0, Temp, {y_reg, Y})}
     end);
 % term_to_float
 move_to_vm_register_emit(
@@ -2218,16 +2168,13 @@ move_array_element(
     {y_reg, Y}
 ) when is_integer(Index) ->
     Avail = jit_regs:available_regs(Regs0),
-    Temp1 = first_avail(Avail),
-    Temp2 = first_avail(Avail band (bnot reg_bit(Temp1))),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp1),
+    Temp2 = first_avail(Avail),
     I2 = jit_x86_64_asm:movq({Index * 8, Reg}, Temp2),
-    I3 = jit_x86_64_asm:movq(Temp2, {Y * 8, Temp1}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    I3 = jit_x86_64_asm:movq(Temp2, {Y * 8, ?E_REG}),
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Temp1),
-    Regs3 = jit_regs:invalidate_reg(Regs2, Temp2),
+    Regs3 = jit_regs:invalidate_reg(Regs1, Temp2),
     State#state{stream = Stream1, regs = Regs3};
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
@@ -2293,20 +2240,16 @@ move_array_element(
     {free, IndexReg},
     {y_reg, Y}
 ) when ?IS_GPR(IndexReg) ->
-    AvailableRegs0 = jit_regs:available_regs(Regs0),
-    Temp = first_avail(AvailableRegs0),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
     I2 = jit_x86_64_asm:shlq(3, IndexReg),
     I3 = jit_x86_64_asm:addq(Reg, IndexReg),
     I4 = jit_x86_64_asm:movq({0, IndexReg}, IndexReg),
-    I5 = jit_x86_64_asm:movq(IndexReg, {Y * 8, Temp}),
+    I5 = jit_x86_64_asm:movq(IndexReg, {Y * 8, ?E_REG}),
     IndexBit = reg_bit(IndexReg),
     Stream1 = StreamModule:append(
-        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+        Stream0, <<I2/binary, I3/binary, I4/binary, I5/binary>>
     ),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
-    Regs3 = jit_regs:invalidate_reg(Regs2, IndexReg),
+    Regs3 = jit_regs:invalidate_reg(Regs1, IndexReg),
     State#state{
         stream = Stream1,
         regs = jit_regs:free_reg(Regs3, IndexBit)
@@ -2417,10 +2360,9 @@ move_to_array_element(
 ) when ?IS_GPR(Reg) andalso is_integer(Index) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-    I2 = jit_x86_64_asm:movq({Y * 8, Temp}, Temp),
+    I2 = jit_x86_64_asm:movq({Y * 8, ?E_REG}, Temp),
     I3 = jit_x86_64_asm:movq(Temp, {Index * 8, Reg}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Temp, {y_reg, Y}),
     State#state{stream = Stream1, regs = Regs1};
@@ -2497,10 +2439,9 @@ move_to_array_element(
 ) when ?IS_GPR(BaseReg) andalso ?IS_GPR(IndexReg) andalso is_integer(Offset) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Temp),
-    I2 = jit_x86_64_asm:movq({Y * 8, Temp}, Temp),
+    I2 = jit_x86_64_asm:movq({Y * 8, ?E_REG}, Temp),
     I3 = jit_x86_64_asm:movq(Temp, {Offset * ?WORD_SIZE, BaseReg, IndexReg, 8}),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Stream1 = StreamModule:append(Stream0, <<I2/binary, I3/binary>>),
     Regs1 = jit_regs:set_contents(Regs0, Temp, {y_reg, Y}),
     State#state{stream = Stream1, regs = Regs1};
 move_to_array_element(
@@ -2681,9 +2622,7 @@ move_to_native_register_emit(
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
     Bit = reg_bit(Reg),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
-    I2 = jit_x86_64_asm:movq({Y * 8, Reg}, Reg),
-    Code = <<I1/binary, I2/binary>>,
+    Code = jit_x86_64_asm:movq({Y * 8, ?E_REG}, Reg),
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
@@ -2772,10 +2711,9 @@ move_to_cp(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
-    I2 = jit_x86_64_asm:movq({Y * 8, Reg}, Reg),
+    I2 = jit_x86_64_asm:movq({Y * 8, ?E_REG}, Reg),
     I3 = jit_x86_64_asm:movq(Reg, ?CP),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:set_contents(Regs0, Reg, {y_reg, Y}),
     State#state{stream = Stream1, regs = Regs1}.
@@ -2783,25 +2721,11 @@ move_to_cp(
 increment_sp(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     Offset
-) when Offset >= 0 andalso Offset < 16 ->
-    %% Single read-modify-write, no scratch register.
-    I1 = jit_x86_64_asm:addq(Offset * 8, ?Y_REGS),
-    Stream1 = StreamModule:append(Stream0, I1),
-    State#state{stream = Stream1};
-increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
-        State,
-    Offset
 ) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Avail),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
-    I2 = jit_x86_64_asm:addq(Offset * 8, Reg),
-    I3 = jit_x86_64_asm:movq(Reg, ?Y_REGS),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    %% e is pinned: bump the register directly.
+    I1 = jit_x86_64_asm:addq(Offset * 8, ?E_REG),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State#state{stream = Stream1}.
 
 set_continuation_to_label(
     StateP,
@@ -3576,13 +3500,13 @@ term_from_float_inline(
     %% = (1 << 6) | 16#18 on 64-bit, then the raw double (term.hrl is not
     %% included here, so use the literals directly).
     FloatHeader = (1 bsl 6) bor 16#18,
-    I1 = jit_x86_64_asm:movq(?HEAP_PTR, HpReg),
+    I1 = jit_x86_64_asm:movq(?HP_REG, HpReg),
     I2 = jit_x86_64_asm:movq(FloatHeader, {0, HpReg}),
     I3 = jit_x86_64_asm:movq(?FP_REGS, Tmp),
     I4 = jit_x86_64_asm:movq({?FP_REG_OFFSET(State0, FPRegIndex), Tmp}, Tmp),
     I5 = jit_x86_64_asm:movq(Tmp, {8, HpReg}),
-    I6 = jit_x86_64_asm:leaq({16, HpReg}, Tmp),
-    I7 = jit_x86_64_asm:movq(Tmp, ?HEAP_PTR),
+    I6 = jit_x86_64_asm:addq(16, ?HP_REG),
+    I7 = <<>>,
     %% TERM_PRIMARY_BOXED = 2
     I8 = jit_x86_64_asm:orq(2, HpReg),
     Code =
@@ -3610,12 +3534,10 @@ read_avail_heap_memory(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
-    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
-    I2 = jit_x86_64_asm:movq(?HEAP_PTR, Tmp),
-    I3 = jit_x86_64_asm:subq(Tmp, Reg),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    I1 = jit_x86_64_asm:movq(?E_REG, Reg),
+    I3 = jit_x86_64_asm:subq(?HP_REG, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
@@ -3637,12 +3559,10 @@ heap_bump_alloc(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
-    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
-    I1 = jit_x86_64_asm:movq(?HEAP_PTR, Reg),
-    I2 = jit_x86_64_asm:leaq({NWords * ?WORD_SIZE, Reg}, Tmp),
-    I3 = jit_x86_64_asm:movq(Tmp, ?HEAP_PTR),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    I1 = jit_x86_64_asm:movq(?HP_REG, Reg),
+    I2 = jit_x86_64_asm:addq(NWords * ?WORD_SIZE, ?HP_REG),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
@@ -3683,17 +3603,14 @@ allocate_frame_fast(
     StackNeed
 ) ->
     Avail = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Avail),
-    Tmp = first_avail(Avail band (bnot reg_bit(Reg))),
-    I1 = jit_x86_64_asm:movq(?Y_REGS, Reg),
-    I2 = jit_x86_64_asm:subq((StackNeed + 1) * ?WORD_SIZE, Reg),
-    I3 = jit_x86_64_asm:movq(Reg, ?Y_REGS),
+    Tmp = first_avail(Avail),
+    I2 = jit_x86_64_asm:subq((StackNeed + 1) * ?WORD_SIZE, ?E_REG),
     I4 = jit_x86_64_asm:movq(?CP, Tmp),
-    I5 = jit_x86_64_asm:movq(Tmp, {StackNeed * ?WORD_SIZE, Reg}),
+    I5 = jit_x86_64_asm:movq(Tmp, {StackNeed * ?WORD_SIZE, ?E_REG}),
     Stream1 = StreamModule:append(
-        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+        Stream0, <<I2/binary, I4/binary, I5/binary>>
     ),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Tmp),
     State#state{stream = Stream1, regs = Regs1}.
 
 %% Load the fp register array pointer (jit_state->fr) into a freshly allocated
@@ -3947,7 +3864,12 @@ reg_bit(rdi) -> ?REG_BIT_RDI;
 reg_bit(r8) -> ?REG_BIT_R8;
 reg_bit(r9) -> ?REG_BIT_R9;
 reg_bit(r10) -> ?REG_BIT_R10;
-reg_bit(r11) -> ?REG_BIT_R11.
+reg_bit(r11) -> ?REG_BIT_R11;
+reg_bit(rbx) -> ?REG_BIT_RBX;
+reg_bit(r12) -> ?REG_BIT_R12;
+reg_bit(r13) -> ?REG_BIT_R13;
+reg_bit(r14) -> ?REG_BIT_R14;
+reg_bit(r15) -> ?REG_BIT_R15.
 
 %%-----------------------------------------------------------------------------
 %% @doc Add a label at the current offset
@@ -4039,5 +3961,10 @@ dwarf_register_number(rdi) -> 5;
 dwarf_register_number(r8) -> 8;
 dwarf_register_number(r9) -> 9;
 dwarf_register_number(r10) -> 10;
-dwarf_register_number(r11) -> 11.
+dwarf_register_number(r11) -> 11;
+dwarf_register_number(rbx) -> 3;
+dwarf_register_number(r12) -> 12;
+dwarf_register_number(r13) -> 13;
+dwarf_register_number(r14) -> 14;
+dwarf_register_number(r15) -> 15.
 -endif.
