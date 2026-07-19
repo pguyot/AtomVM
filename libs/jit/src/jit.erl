@@ -256,16 +256,27 @@ compile(
 %% Emit + finalize, with the buffered-stream backtrack loop. Backends that fuse
 %% forward guard branches optimistically (see jump_to_label_cond) report any
 %% that overflowed their reservation via take_overflows/1; we then re-emit from
-%% the post-jump_table checkpoint (MSt1/State0 are pure terms on a buffered
-%% stream) with those branches pinned to the size they needed. Pinning only
-%% grows reservations and the maximum form fits any distance, so this converges;
-%% MaxAttempts is a backstop against a bug, never expected to bind. Backends
-%% without the hooks run a single pass identical to the previous behaviour.
+%% the post-jump_table checkpoint (MSt1/State0 are pure terms) with those
+%% branches pinned to the size they needed. An externally stateful stream
+%% (mmap) additionally has its write cursor rewound to the checkpoint through
+%% the backend's rewind_stream/2 before each re-emit; buffered streams need
+%% nothing (the checkpoint term is the stream). Pinning only grows reservations
+%% and the maximum form fits any distance, so this converges; MaxAttempts is a
+%% backstop against a bug, never expected to bind. Backends without the hooks
+%% run a single pass identical to the previous behaviour.
 emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt) ->
+    emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, MMod:offset(MSt1)).
+
+emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, CheckpointOffset) ->
+    MSt1a =
+        case Attempt > 0 andalso erlang:function_exported(MMod, rewind_stream, 2) of
+            true -> MMod:rewind_stream(MSt1, CheckpointOffset);
+            false -> MSt1
+        end,
     MSt1b =
         case erlang:function_exported(MMod, set_branch_hints, 2) of
-            true -> MMod:set_branch_hints(MSt1, Hints);
-            false -> MSt1
+            true -> MMod:set_branch_hints(MSt1a, Hints);
+            false -> MSt1a
         end,
     {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1b, State0),
     MSt3 = finalize_pass(MMod, MSt2, State1),
@@ -280,7 +291,13 @@ emit_finalize_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt) ->
             MMod:flush(MSt3);
         _ when Attempt < MaxAttempts ->
             emit_finalize_loop(
-                Opcodes, MMod, MSt1, State0, maps:merge(Hints, Overflows), Attempt + 1
+                Opcodes,
+                MMod,
+                MSt1,
+                State0,
+                maps:merge(Hints, Overflows),
+                Attempt + 1,
+                CheckpointOffset
             );
         _ ->
             error({jit_branch_relaxation_did_not_converge, Attempt, map_size(Overflows)})
