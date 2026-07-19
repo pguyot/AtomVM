@@ -806,6 +806,16 @@ take_overflows(#state{overflows = Overflows}) ->
     Overflows.
 
 %% @private
+%% Rewind an externally stateful stream (mmap) to the checkpoint offset before
+%% a backtrack re-emit. Buffered streams (no reset/2) need nothing: the
+%% checkpoint state term is the stream.
+rewind_stream(#state{stream_module = StreamModule, stream = Stream} = State, Offset) ->
+    case erlang:function_exported(StreamModule, reset, 2) of
+        true -> State#state{stream = StreamModule:reset(Stream, Offset)};
+        false -> State
+    end.
+
+%% @private
 %% Resolve the recorded forward fused branches at finalize (all label offsets
 %% known). A branch that fits its reservation is written (padded with nops);
 %% one that does not is reported in overflows and left as its 0xFF placeholder.
