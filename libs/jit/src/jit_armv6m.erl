@@ -41,6 +41,8 @@
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
     jump_to_label_cond/3,
+    set_branch_hints/2,
+    take_overflows/1,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -174,7 +176,6 @@
 -type branch_type() ::
     {adr, armv6m_register()}
     | b_w
-    | {cond_branch_w, jit_armv6m_asm:cc()}
     | {far_branch, non_neg_integer(), armv6m_register()}.
 
 -record(state, {
@@ -195,7 +196,17 @@
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
     pending_x = #{} ::
         #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
-    cond_depth = 0 :: non_neg_integer()
+    cond_depth = 0 :: non_neg_integer(),
+    %% Forward fused guard branches (jump_to_label_cond, thumb2 only, on a
+    %% backtrackable stream): emitted optimistically at the size from
+    %% branch_hints (default 4), resolved at finalize, and any that overflow
+    %% their reservation are reported in overflows so jit:compile can re-emit
+    %% them pinned larger. branch_counter gives each a stable id across
+    %% re-emits.
+    branch_hints = #{} :: #{non_neg_integer() => pos_integer()},
+    branch_counter = 0 :: non_neg_integer(),
+    fused_branches = [] :: [tuple()],
+    overflows = #{} :: #{non_neg_integer() => pos_integer()}
 }).
 
 -type state() :: #state{}.
@@ -491,11 +502,6 @@ patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
             {adr, Reg} when Rel rem 4 =:= 2 -> jit_armv6m_asm:adr(Reg, Rel + 2);
             b_w ->
                 jit_armv7m_asm:b_w(Rel - 4);
-            {cond_branch_w, CC} ->
-                %% Fused conditional guard jump (thumb2 only): a single
-                %% B<cc>.W straight to the label, ±1MB. Emitted by
-                %% jump_to_label_cond in place of a skip-branch + far jump.
-                jit_armv7m_asm:b_w(CC, Rel - 4);
             {far_branch, Size, TempReg} ->
                 % Check if branch can now be optimized to near branch
                 if
@@ -613,7 +619,8 @@ update_branches(
         stream_module = StreamModule,
         stream = Stream0,
         branches = Branches,
-        labels = Labels
+        labels = Labels,
+        fused_branches = Fused
     } = State
 ) ->
     Stream1 = maps:fold(
@@ -630,7 +637,10 @@ update_branches(
         Stream0,
         Branches
     ),
-    State#state{stream = Stream1, branches = #{}}.
+    %% Resolve forward fused guard branches now that every label offset is
+    %% known; oversized ones are collected in overflows for the backtrack loop.
+    {Stream2, Overflows} = resolve_fused_branches(StreamModule, Stream1, Fused, Labels, #{}),
+    State#state{stream = Stream2, branches = #{}, fused_branches = [], overflows = Overflows}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Generate code to load a primitive function pointer into a register
@@ -1211,92 +1221,166 @@ if_else_block(
 %% (the happy path falls through) -- the fused form of
 %% `if_block(Cond, fun(S) -> jump_to_label(S, Label) end)'.
 %%
-%% Only ARMv7-M (thumb2) can do this: it has B<cond>.W with a ±1MB reach, so a
-%% guard fail-jump collapses from a skip-branch plus a heavyweight far-jump
-%% sequence (12..20 bytes) to one 4-byte instruction. On ARMv6-M (no wide
-%% conditional branch) and for the zero-compare conditions that compile to
-%% cbz/cbnz (forward-only, non-invertible), we keep the two-branch if_block
-%% form. Like aarch64, forward reach is estimated from a label-progress proxy;
-%% out-of-range jumps also fall back. `{'and', _}' guards keep if_block.
+%% Only ARMv7-M (thumb2) does this: it has B<cond>.W with a ±1MB reach and the
+%% wide unconditional B.W (±16MB) for the skip form, so a guard fail-jump
+%% collapses from a skip-branch plus a far-jump sequence to 2..6 bytes. For a
+%% *backward* label the distance is known exactly, so the minimal correct form
+%% is emitted directly. A *forward* label's distance is unknown at emit time:
+%% on a backtrackable (buffered) stream we emit optimistically at a size taken
+%% from branch_hints (default 4 = one B<cond>.W), record it, and let
+%% update_branches resolve it at finalize once every label offset is known; a
+%% branch that overflows its reservation is reported in overflows so
+%% jit:compile re-emits pinned larger (see the backtrack loop). On a
+%% non-backtrackable stream we keep the safe two-branch if_block form. The
+%% zero-compare conditions that compile to cbz/cbnz (forward-only, 4..130
+%% bytes) fuse via inversion when the resolved distance fits, else as a
+%% cbz/cbnz skip over a narrow b or B.W. On ARMv6-M (no wide branches) and for
+%% `{'and', _}' guards we keep the two-branch if_block form.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec jump_to_label_cond(state(), condition() | {'and', [condition()]}, integer() | reference()) ->
     state().
-jump_to_label_cond(#state{stream_module = StreamModule, thumb2 = Thumb2} = State0, Cond, Label) ->
-    Offset0 = StreamModule:offset(State0#state.stream),
-    case Thumb2 andalso widenable_cond(Cond) andalso wide_cond_in_range(State0, Label, Offset0) of
-        true ->
-            %% Commit the label's live-in stores before the branch so the taken
-            %% edge sees them (committing early is safe on the fall-through edge
-            %% too, and is idempotent with jump_to_label's own filtering).
-            State1 = pending_filter_label(State0, Label),
-            Offset1 = StreamModule:offset(State1#state.stream),
+jump_to_label_cond(#state{thumb2 = false} = State0, Cond, Label) ->
+    if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end);
+jump_to_label_cond(State0, {'and', _} = Cond, Label) ->
+    if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end);
+jump_to_label_cond(#state{labels = Labels} = State0, Cond, Label) ->
+    case Labels of
+        #{Label := LabelOffset} ->
+            %% Backward: commit the label's live-ins first (ordering, and safe
+            %% on the fall-through edge), then emit the exact minimal branch.
+            #state{stream_module = StreamModule} =
+                State1 = pending_filter_label(State0, Label),
+            Offset0 = StreamModule:offset(State1#state.stream),
             {State2, CC, BranchDelta} = if_block_cond(State1, Cond),
-            %% widenable_cond guarantees an atom CC (a 2-byte bcc placeholder).
-            true = is_atom(CC),
-            fuse_wide_cond_branch(State2, invert_cc(CC), Label, Offset1 + BranchDelta);
-        false ->
-            if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end)
-    end.
-
-%% @private
-%% The conditions that if_block_cond compiles to a plain flag-based bcc (a
-%% 2-byte placeholder with an atom CC) -- i.e. everything except the zero
-%% compares, which yield cbz/cbnz (forward-only, not widenable), and the
-%% multi-condition `{'and', _}' form. Conservative: anything unrecognised
-%% falls back to the two-branch form, which is always correct.
-widenable_cond({_, '==', 0}) -> false;
-widenable_cond({_, '!=', 0}) -> false;
-widenable_cond({'(int)', _, '==', 0}) -> false;
-widenable_cond({'(int)', _, '!=', 0}) -> false;
-widenable_cond({'and', _}) -> false;
-widenable_cond(_) -> true.
-
-%% @private
-%% Is Label reachable by a single B<cond>.W (±1MB) from a branch emitted around
-%% Offset? Backward labels use the exact known distance; forward labels use the
-%% same label-progress proxy as aarch64 (average bytes-per-label so far times
-%% the number of labels still to come), kept well under 1MB for margin. Stub
-%% references (rare) are not fused.
-wide_cond_in_range(#state{labels = Labels}, Label, Offset) ->
-    case Labels of
-        #{Label := LabelOffset} ->
-            Rel = LabelOffset - Offset,
-            Rel >= -16#F0000 andalso Rel =< 16#F0000;
-        _ when is_integer(Label) ->
-            Emitted = maps:size(Labels),
-            Emitted > 0 andalso (Label - Emitted) * (Offset div Emitted) < 16#60000;
+            BranchOffset = Offset0 + BranchDelta,
+            Code = fused_branch_bytes(CC, LabelOffset - BranchOffset),
+            grow_reservation_and_replace(State2, BranchOffset, Code, 2);
         _ ->
-            false
+            case backtrack_enabled(State0) of
+                true -> fuse_cond_branch_forward(State0, Cond, Label);
+                false -> if_block(State0, Cond, fun(BSt0) -> jump_to_label(BSt0, Label) end)
+            end
     end.
 
 %% @private
-%% Turn the 2-byte bcc placeholder if_block_cond just appended at BranchOffset
-%% into a 4-byte B<cond>.W to Label: append two filler bytes to reserve the
-%% width, then patch it now for a known (backward) label or record a
-%% {cond_branch_w, CC} relocation for a forward one.
-fuse_wide_cond_branch(
-    #state{stream_module = StreamModule, stream = Stream0, labels = Labels, branches = Branches} =
-        State,
-    TakeCC,
-    Label,
-    BranchOffset
+%% The compile-time backtrack loop can re-emit forward fused branches only on a
+%% stream that exposes its commit horizon (see committed_offset/1); otherwise we
+%% cannot recover from an under-sized optimistic reservation, so we stay safe.
+backtrack_enabled(#state{stream_module = StreamModule}) ->
+    erlang:function_exported(StreamModule, committed_offset, 1).
+
+%% @private
+%% Emit a forward fused branch optimistically: reserve branch_hints size
+%% (default 4; if_block_cond appended a 2-byte placeholder, grow it with 0xFF
+%% filler) and record the branch for finalize resolution in update_branches.
+fuse_cond_branch_forward(State0, Cond, Label) ->
+    #state{stream_module = StreamModule, branch_counter = BId, branch_hints = Hints} =
+        State1 = pending_filter_label(State0, Label),
+    AssumedSize = maps:get(BId, Hints, 4),
+    Offset0 = StreamModule:offset(State1#state.stream),
+    {State2, CC, BranchDelta} = if_block_cond(State1, Cond),
+    BranchOffset = Offset0 + BranchDelta,
+    Stream1 = StreamModule:append(
+        State2#state.stream, binary:copy(<<16#FF>>, AssumedSize - 2)
+    ),
+    Fused = {BId, BranchOffset, Label, CC, AssumedSize},
+    State2#state{
+        stream = Stream1,
+        branch_counter = BId + 1,
+        fused_branches = [Fused | State2#state.fused_branches]
+    }.
+
+%% @private
+%% Set the forward-branch size hints used by the next emission pass (backtrack
+%% loop). Also resets the per-pass accumulators so re-emits start clean.
+set_branch_hints(#state{} = State, Hints) ->
+    State#state{branch_hints = Hints, branch_counter = 0, fused_branches = [], overflows = #{}}.
+
+%% @private
+%% Return the forward fused branches that overflowed their reservation in the
+%% last pass, as #{branch_id => needed_size}.
+take_overflows(#state{overflows = Overflows}) ->
+    Overflows.
+
+%% @private
+%% Resolve the recorded forward fused branches at finalize (all label offsets
+%% known). A branch that fits its reservation is written (padded with nops);
+%% one that does not is reported in overflows and left as its placeholder.
+resolve_fused_branches(_StreamModule, Stream, [], _Labels, Overflows) ->
+    {Stream, Overflows};
+resolve_fused_branches(
+    StreamModule,
+    Stream,
+    [{BId, BranchOffset, Label, CC, AssumedSize} | Rest],
+    Labels,
+    Overflows
 ) ->
-    Stream1 = StreamModule:append(Stream0, <<16#FFFF:16>>),
-    case Labels of
-        #{Label := LabelOffset} ->
-            Instr = jit_armv7m_asm:b_w(TakeCC, LabelOffset - BranchOffset - 4),
-            Stream2 = StreamModule:replace(Stream1, BranchOffset, Instr),
-            State#state{stream = Stream2};
-        _ ->
-            ExistingBrs = maps:get(Label, Branches, []),
-            State#state{
-                stream = Stream1,
-                branches = Branches#{
-                    Label => [{BranchOffset, {cond_branch_w, TakeCC}} | ExistingBrs]
-                }
-            }
+    #{Label := LabelOffset} = Labels,
+    Code = fused_branch_bytes(CC, LabelOffset - BranchOffset),
+    case byte_size(Code) =< AssumedSize of
+        true ->
+            Padded = pad_reservation(Code, AssumedSize),
+            Stream1 = StreamModule:replace(Stream, BranchOffset, Padded),
+            resolve_fused_branches(StreamModule, Stream1, Rest, Labels, Overflows);
+        false ->
+            resolve_fused_branches(
+                StreamModule, Stream, Rest, Labels, Overflows#{BId => byte_size(Code)}
+            )
     end.
+
+%% @private
+%% Pad Code to Size with 2-byte nops on the fall-through side of the branch.
+pad_reservation(Code, Size) when byte_size(Code) =:= Size ->
+    Code;
+pad_reservation(Code, Size) ->
+    Nops = binary:copy(jit_armv6m_asm:nop(), (Size - byte_size(Code)) div 2),
+    <<Code/binary, Nops/binary>>.
+
+%% @private
+%% Overwrite the reserved placeholder at BranchOffset with Code, growing the
+%% reservation (0xFF filler) when Code exceeds Reserved.
+grow_reservation_and_replace(
+    #state{stream_module = StreamModule, stream = Stream0} = State, BranchOffset, Code, Reserved
+) ->
+    Stream1 =
+        case byte_size(Code) - Reserved of
+            Extra when Extra > 0 -> StreamModule:append(Stream0, binary:copy(<<16#FF>>, Extra));
+            _ -> Stream0
+        end,
+    Stream2 = StreamModule:replace(Stream1, BranchOffset, Code),
+    State#state{stream = Stream2}.
+
+%% @private
+%% Minimal branch-to-label byte sequence for the exact distance Rel (from the
+%% branch instruction address). Atom conditions: a 2-byte Thumb-1 bcc within
+%% its ±256B window, a 4-byte B<cond>.W within ±1MB, else a 2-byte skip over a
+%% 4-byte unconditional B.W (±16MB, always fits). cbz/cbnz conditions
+%% (forward-only, 4..130 from the instruction): the fused inverted 2-byte form
+%% when in range, else the skip over a narrow b (±2KB) or B.W. CC is
+%% branch-if-false as returned by if_block_cond; single-branch forms invert it.
+fused_branch_bytes(CC, Rel) when is_atom(CC), Rel >= -252, Rel =< 258, Rel rem 2 =:= 0 ->
+    jit_armv6m_asm:bcc(invert_cc(CC), Rel);
+fused_branch_bytes(CC, Rel) when is_atom(CC), Rel - 4 >= -1048576, Rel - 4 =< 1048574 ->
+    jit_armv7m_asm:b_w(invert_cc(CC), Rel - 4);
+fused_branch_bytes(CC, Rel) when is_atom(CC) ->
+    %% Skip branch (2 bytes) over an unconditional B.W at BranchOffset + 2.
+    <<(jit_armv6m_asm:bcc(CC, 6))/binary, (jit_armv7m_asm:b_w(Rel - 6))/binary>>;
+fused_branch_bytes({CbOp, Reg}, Rel) when Rel >= 4, Rel =< 130, Rel rem 2 =:= 0 ->
+    cb_branch(invert_cb(CbOp), Reg, Rel);
+fused_branch_bytes({CbOp, Reg}, Rel) when Rel - 2 >= -2044, Rel - 2 =< 2050 ->
+    <<(cb_branch(CbOp, Reg, 4))/binary, (jit_armv6m_asm:b(Rel - 2))/binary>>;
+fused_branch_bytes({CbOp, Reg}, Rel) ->
+    <<(cb_branch(CbOp, Reg, 6))/binary, (jit_armv7m_asm:b_w(Rel - 6))/binary>>.
+
+%% @private
+cb_branch(cbz, Reg, Offset) -> jit_armv7m_asm:cbz(Reg, Offset);
+cb_branch(cbnz, Reg, Offset) -> jit_armv7m_asm:cbnz(Reg, Offset).
+
+%% @private
+%% Invert the register-test branch ops (branch-if-false -> branch-if-true).
+invert_cb(cbz) -> cbnz;
+invert_cb(cbnz) -> cbz.
 
 %% @private
 %% ARM condition-code inversion: flips the low bit of the 4-bit encoding.
