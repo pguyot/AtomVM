@@ -141,15 +141,34 @@ x86_64_xmm_reg(xmm15) -> {1, 7}.
 rex_opt(0, 0, 0, 0) -> <<>>;
 rex_opt(W, R, X, B) -> <<4:4, W:1, R:1, X:1, B:1>>.
 
+% ModRM (+ SIB) + displacement for the memory operand [Base + Disp], valid for
+% every base register: rm=100 (rsp/r12) needs a SIB byte (index=none), and
+% rm=101 (rbp/r13) at mod=00 would mean RIP-relative, so those bases always
+% carry at least a disp8.
+modrm_mem(RegField, BaseRm, Disp) ->
+    SIB =
+        case BaseRm of
+            4 -> <<16#24>>;
+            _ -> <<>>
+        end,
+    if
+        Disp =:= 0 andalso BaseRm =/= 5 ->
+            <<0:2, RegField:3, BaseRm:3, SIB/binary>>;
+        ?IS_SINT8_T(Disp) ->
+            <<1:2, RegField:3, BaseRm:3, SIB/binary, Disp>>;
+        true ->
+            <<2:2, RegField:3, BaseRm:3, SIB/binary, Disp:32/little>>
+    end.
+
 % ModRM + displacement for the memory operand [Base + Disp]. The x86_64 backend
 % only ever uses rax/rcx/rdx/rsi/rdi/r8..r11 as a base, none of which is rsp/r12
 % (SIB) or rbp/r13 (rm 5 / RIP-relative), so the simple form is always valid.
 sse_modrm_mem(RegField, BaseRm, 0) ->
-    <<0:2, RegField:3, BaseRm:3>>;
+    <<(modrm_mem(RegField, BaseRm, 0))/binary>>;
 sse_modrm_mem(RegField, BaseRm, Disp) when ?IS_SINT8_T(Disp) ->
-    <<1:2, RegField:3, BaseRm:3, Disp>>;
+    <<(modrm_mem(RegField, BaseRm, Disp))/binary>>;
 sse_modrm_mem(RegField, BaseRm, Disp) when ?IS_SINT32_T(Disp) ->
-    <<2:2, RegField:3, BaseRm:3, Disp:32/little>>.
+    <<(modrm_mem(RegField, BaseRm, Disp))/binary>>.
 
 % movsd xmm, [Base+Disp]  (F2 0F 10 /r): load a double into an xmm register.
 movsd(XmmDst, {Disp, Base}) when is_atom(XmmDst), is_atom(Base) ->
@@ -205,31 +224,31 @@ setne(Reg) when is_atom(Reg) ->
 movq({0, SrcReg}, DestReg) when is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, 0:2, MODRM_REG:3, MODRM_RM:3>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
 movq({Offset, SrcReg}, DestReg) when is_atom(DestReg) andalso ?IS_SINT8_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     % disp8
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, 1:2, MODRM_REG:3, MODRM_RM:3, Offset>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
 movq({Offset, SrcReg}, DestReg) when is_atom(DestReg) andalso ?IS_SINT32_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     % disp32
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, 2:2, MODRM_REG:3, MODRM_RM:3, Offset:32/little>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8B, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
 movq(DestReg, {0, SrcReg}) when is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
 movq(DestReg, {Offset, SrcReg}) when is_atom(DestReg) andalso ?IS_SINT8_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     % disp8
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, 1:2, MODRM_REG:3, MODRM_RM:3, Offset>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
 movq(DestReg, {Offset, SrcReg}) when is_atom(DestReg) andalso ?IS_SINT32_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     % disp32
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, 2:2, MODRM_REG:3, MODRM_RM:3, Offset:32/little>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#89, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
 movq(SrcReg, DestReg) when is_atom(SrcReg) andalso is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
@@ -239,10 +258,10 @@ movq(Imm, DestReg) when is_integer(Imm) andalso is_atom(DestReg) ->
     <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, 3:2, 0:3, MODRM_RM:3, Imm:32/little>>;
 movq(Imm, {Offset, DestReg}) when is_integer(Imm) andalso ?IS_SINT8_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, 1:2, 0:3, MODRM_RM:3, Offset, Imm:32/little>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, (modrm_mem(0, MODRM_RM, Offset))/binary, Imm:32/little>>;
 movq(Imm, {Offset, DestReg}) when is_integer(Imm) andalso ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, 2:2, 0:3, MODRM_RM:3, Offset:32/little, Imm:32/little>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, (modrm_mem(0, MODRM_RM, Offset))/binary, Imm:32/little>>;
 % movq reg, {0, base, index, scale} - SIB with no displacement
 movq(RegA, {0, RegB, RegC, Scale}) when
     is_atom(RegA),
@@ -405,21 +424,21 @@ movl({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     (case {REX_R, REX_B} of
-        {0, 0} -> <<16#8B, 0:2, MODRM_REG:3, MODRM_RM:3>>;
-        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#8B, 0:2, MODRM_REG:3, MODRM_RM:3>>
+        {0, 0} -> <<16#8B, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
+        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#8B, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
     end).
 
 % movzx byte ptr [SrcReg], DestReg (zero-extended to 64 bits)
 movzbq({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B6, 0:2, MODRM_REG:3, MODRM_RM:3>>.
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B6, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>.
 
 % movzx word ptr [SrcReg], DestReg (zero-extended to 64 bits)
 movzwq({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B7, 0:2, MODRM_REG:3, MODRM_RM:3>>.
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#0F, 16#B7, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>.
 
 % bswap on the 32-bit register (upper 32 bits are zeroed)
 bswapl(Reg) when is_atom(Reg) ->
@@ -433,8 +452,8 @@ movb_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
     case {REX_R, REX_B} of
-        {0, 0} -> <<16#88, 0:2, MODRM_REG:3, MODRM_RM:3>>;
-        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#88, 0:2, MODRM_REG:3, MODRM_RM:3>>
+        {0, 0} -> <<16#88, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
+        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#88, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
     end.
 
 % movw SrcReg(low word), [AddrReg]: store the low 16 bits of SrcReg to memory.
@@ -442,8 +461,11 @@ movw_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
     case {REX_R, REX_B} of
-        {0, 0} -> <<16#66, 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>;
-        _ -> <<16#66, ?X86_64_REX(0, REX_R, 0, REX_B), 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>
+        {0, 0} ->
+            <<16#66, 16#89, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
+        _ ->
+            <<16#66, ?X86_64_REX(0, REX_R, 0, REX_B), 16#89,
+                (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
     end.
 
 % movl SrcReg(low dword), [AddrReg]: store the low 32 bits of SrcReg to memory.
@@ -451,8 +473,8 @@ movl_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
     case {REX_R, REX_B} of
-        {0, 0} -> <<16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>;
-        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#89, 0:2, MODRM_REG:3, MODRM_RM:3>>
+        {0, 0} -> <<16#89, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
+        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#89, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
     end.
 
 % rolw $Imm, Reg: rotate the low 16 bits of Reg left by Imm (used to byte-swap
@@ -627,10 +649,10 @@ andq(Imm, DestReg) when ?IS_SINT8_T(Imm) andalso is_atom(DestReg) ->
     <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 3:2, 4:3, MODRM_RM:3, Imm>>;
 andq(Imm, {Offset, DestReg}) when ?IS_SINT8_T(Imm) andalso ?IS_SINT8_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 1:2, 4:3, MODRM_RM:3, Offset, Imm>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, (modrm_mem(4, MODRM_RM, Offset))/binary, Imm>>;
 andq(Imm, {Offset, DestReg}) when ?IS_SINT8_T(Imm) andalso ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 2:2, 4:3, MODRM_RM:3, Offset:32/little, Imm>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, (modrm_mem(4, MODRM_RM, Offset))/binary, Imm>>;
 andq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
@@ -716,16 +738,16 @@ cmpq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#39, 3:2, MODRM_REG:3, MODRM_RM:3>>;
 cmpq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), is_atom(Reg), ?IS_SINT8_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 1:2, 7:3, MODRM_RM:3, Offset, Imm>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, (modrm_mem(7, MODRM_RM, Offset))/binary, Imm>>;
 cmpq(Imm, {Offset, Reg}) when ?IS_SINT32_T(Imm), is_atom(Reg), ?IS_SINT8_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 1:2, 7:3, MODRM_RM:3, Offset, Imm:32/little>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, (modrm_mem(7, MODRM_RM, Offset))/binary, Imm:32/little>>;
 cmpq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), is_atom(Reg), ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 2:2, 7:3, MODRM_RM:3, Offset:32/little, Imm>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, (modrm_mem(7, MODRM_RM, Offset))/binary, Imm>>;
 cmpq(Imm, {Offset, Reg}) when ?IS_SINT32_T(Imm), is_atom(Reg), ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 2:2, 7:3, MODRM_RM:3, Offset:32/little, Imm:32/little>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, (modrm_mem(7, MODRM_RM, Offset))/binary, Imm:32/little>>;
 cmpq(Imm, Reg) when ?IS_SINT8_T(Imm) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#83, (16#F8 + Index), Imm>>;
@@ -741,7 +763,7 @@ cmpq(Imm, Reg) when ?IS_SINT32_T(Imm), is_atom(Reg) ->
 addq(Imm, {Offset, Reg}) when ?IS_SINT8_T(Imm), ?IS_SINT8_T(Offset), is_atom(Reg) ->
     % Memory-destination read-modify-write: addq $imm8, disp8(reg)
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, 1:2, 0:3, MODRM_RM:3, Offset, Imm>>;
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#83, (modrm_mem(0, MODRM_RM, Offset))/binary, Imm>>;
 addq(Imm, Reg) when ?IS_SINT8_T(Imm), is_atom(Reg) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#83, (16#C0 + Index), Imm>>;
@@ -844,18 +866,19 @@ leaq_rel32({Offset, rip}, Reg) when is_atom(Reg), ?IS_SINT32_T(Offset) ->
 leaq({rip, Offset}, DestReg) when is_atom(DestReg), ?IS_SINT32_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     % RIP-relative addressing: ModRM: mod=00, reg=DestReg, rm=101 (RIP-relative)
+    % (literal bytes, NOT modrm_mem: rm=101 at mod=00 IS the RIP encoding)
     <<?X86_64_REX(1, REX_R, 0, 0), 16#8D, 0:2, MODRM_REG:3, 5:3, Offset:32/little>>;
 leaq({Offset, BaseReg}, DestReg) when is_atom(BaseReg), is_atom(DestReg), ?IS_SINT8_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(BaseReg),
     % ModRM: mod=01 (disp8), reg=DestReg, rm=BaseReg
     % SIB: scale=0, index=100 (none), base=BaseReg
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8D, 1:2, MODRM_REG:3, MODRM_RM:3, Offset>>;
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8D, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
 leaq({Offset, BaseReg}, DestReg) when is_atom(BaseReg), is_atom(DestReg), ?IS_SINT32_T(Offset) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(BaseReg),
     % ModRM: mod=10 (disp32), reg=DestReg, rm=BaseReg
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8D, 2:2, MODRM_REG:3, MODRM_RM:3, Offset:32/little>>.
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#8D, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>.
 
 callq({Reg}) ->
     case x86_64_x_reg(Reg) of
@@ -878,20 +901,20 @@ popq(Reg) ->
 jmpq({0, Reg}) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
     (case {REX_B, MODRM_RM} of
-        {0, RM} -> <<16#FF, 0:2, 4:3, RM:3>>;
-        {1, RM} -> <<16#41, 16#FF, 0:2, 4:3, RM:3>>
+        {0, RM} -> <<16#FF, (modrm_mem(4, RM, 0))/binary>>;
+        {1, RM} -> <<16#41, 16#FF, (modrm_mem(4, RM, 0))/binary>>
     end);
 jmpq({Offset, Reg}) when ?IS_SINT8_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
     (case REX_B of
-        0 -> <<16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>;
-        1 -> <<16#41, 16#FF, 1:2, 4:3, MODRM_RM:3, Offset>>
+        0 -> <<16#FF, (modrm_mem(4, MODRM_RM, Offset))/binary>>;
+        1 -> <<16#41, 16#FF, (modrm_mem(4, MODRM_RM, Offset))/binary>>
     end);
 jmpq({Offset, Reg}) when ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
     (case REX_B of
-        0 -> <<16#FF, 2:2, 4:3, MODRM_RM:3, Offset:32/little>>;
-        1 -> <<16#41, 16#FF, 2:2, 4:3, MODRM_RM:3, Offset:32/little>>
+        0 -> <<16#FF, (modrm_mem(4, MODRM_RM, Offset))/binary>>;
+        1 -> <<16#41, 16#FF, (modrm_mem(4, MODRM_RM, Offset))/binary>>
     end);
 jmpq({Reg}) ->
     case x86_64_x_reg(Reg) of
