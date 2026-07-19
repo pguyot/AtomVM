@@ -44,6 +44,7 @@
     set_branch_hints/2,
     take_overflows/1,
     rewind_stream/2,
+    enable_eager_flush/1,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -211,7 +212,8 @@
     branch_hints = #{} :: #{non_neg_integer() => pos_integer()},
     branch_counter = 0 :: non_neg_integer(),
     fused_branches = [] :: [tuple()],
-    overflows = #{} :: #{non_neg_integer() => pos_integer()}
+    overflows = #{} :: #{non_neg_integer() => pos_integer()},
+    eager_flush = false :: boolean()
 }).
 
 -type state() :: #state{}.
