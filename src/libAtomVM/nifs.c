@@ -8509,6 +8509,27 @@ static term nif_lists_seq(Context *ctx, int argc, term argv[])
 // keypos (1-based, lists:keysort/2); every element is a tuple of arity >=
 // keypos, validated by the caller. Ping-pongs between a and tmp; the sorted
 // result always ends in a. Returns 0, or -1 on a term_compare alloc failure.
+// Term order for two small integers is the arithmetic order of their values,
+// and a small integer is stored as (value << 4) | TERM_INTEGER_TAG — the same
+// constant tag in the low bits for both — so a signed comparison of the raw
+// term words already yields the term order, with no untagging. This keeps the
+// dominant case of a sort out of term_compare's out-of-line call and general
+// type dispatch (BeamAsm inlines the same comparison in lists:sort/1's Erlang
+// loop, which is why the C nif was losing to it on integer lists).
+#define SORT_BOTH_SMALL_INTS(x, y) \
+    (LIKELY(term_is_integer(x) && term_is_integer(y)))
+
+static inline TermCompareResult sort_compare(term x, term y, GlobalContext *glb)
+{
+    if (SORT_BOTH_SMALL_INTS(x, y)) {
+        if (x == y) {
+            return TermEquals;
+        }
+        return ((avm_int_t) x > (avm_int_t) y) ? TermGreaterThan : TermLessThan;
+    }
+    return term_compare(x, y, TermCompareNoOpts, glb);
+}
+
 static int sort_term_array(term *a, term *tmp, size_t n, int keypos, GlobalContext *glb)
 {
     term *src = a;
@@ -8525,7 +8546,7 @@ static int sort_term_array(term *a, term *tmp, size_t n, int keypos, GlobalConte
                     x = term_get_tuple_element(x, keypos - 1);
                     y = term_get_tuple_element(y, keypos - 1);
                 }
-                TermCompareResult c = term_compare(x, y, TermCompareNoOpts, glb);
+                TermCompareResult c = sort_compare(x, y, glb);
                 if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                     return -1;
                 }
@@ -8609,7 +8630,7 @@ static term lists_sort_common(Context *ctx, term list, int keypos, bool uniq)
                 x = term_get_tuple_element(x, keypos - 1);
                 y = term_get_tuple_element(y, keypos - 1);
             }
-            TermCompareResult c = term_compare(x, y, TermCompareNoOpts, glb);
+            TermCompareResult c = sort_compare(x, y, glb);
             if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                 free(a);
                 free(tmp);
@@ -8649,7 +8670,14 @@ static term lists_sort_common(Context *ctx, term list, int keypos, bool uniq)
                 x = term_get_tuple_element(x, keypos - 1);
                 y = term_get_tuple_element(y, keypos - 1);
             }
-            TermCompareResult c = term_compare(x, y, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), glb);
+            // Two small integers are == exactly when their terms are equal.
+            TermCompareResult c;
+            if (SORT_BOTH_SMALL_INTS(x, y)) {
+                c = (x == y) ? TermEquals : TermLessThan;
+            } else {
+                c = term_compare(
+                    x, y, (TermCompareOpts) (TermCompareNoOpts | TermCompareEqualOnly), glb);
+            }
             if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                 free(a);
                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
