@@ -42,19 +42,15 @@ call_primitive_0_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t00063f83          \tld\tt6,0(a2)\n"
-            "   4:\t1101                \taddi\tsp,sp,-32\n"
-            "   6:\te006                \tsd\tra,0(sp)\n"
-            "   8:\te42a                \tsd\ta0,8(sp)\n"
-            "   a:\te82e                \tsd\ta1,16(sp)\n"
-            "   c:\tec32                \tsd\ta2,24(sp)\n"
-            "   e:\t9f82                \tjalr\tt6\n"
-            "  10:\t8faa                \tmv\tt6,a0\n"
-            "  12:\t6082                \tld\tra,0(sp)\n"
-            "  14:\t6522                \tld\ta0,8(sp)\n"
-            "  16:\t65c2                \tld\ta1,16(sp)\n"
-            "  18:\t6662                \tld\ta2,24(sp)\n"
-            "  1a:\t02010113          \taddi\tsp,sp,32"
+            "   0:	0009bf83          	ld	t6,0(s3)\n"
+            "   4:	1141                	addi	sp,sp,-16\n"
+            "   6:	e006                	sd	ra,0(sp)\n"
+            "   8:	0544b823          	sd	s4,80(s1)\n"
+            "   c:	9f82                	jalr	t6\n"
+            "   e:	8faa                	mv	t6,a0\n"
+            "  10:	6082                	ld	ra,0(sp)\n"
+            "  12:	0141                	addi	sp,sp,16\n"
+            "  14:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -65,21 +61,17 @@ call_primitive_1_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t4fa1                \tli\tt6,8\n"
-            "   2:\t9fb2                \tadd\tt6,t6,a2\n"
-            "   4:\t000fbf83          \tld\tt6,0(t6)\n"
-            "   8:\t1101                \taddi\tsp,sp,-32\n"
-            "   a:\te006                \tsd\tra,0(sp)\n"
-            "   c:\te42a                \tsd\ta0,8(sp)\n"
-            "   e:\te82e                \tsd\ta1,16(sp)\n"
-            "  10:\tec32                \tsd\ta2,24(sp)\n"
-            "  12:\t9f82                \tjalr\tt6\n"
-            "  14:\t8faa                \tmv\tt6,a0\n"
-            "  16:\t6082                \tld\tra,0(sp)\n"
-            "  18:\t6522                \tld\ta0,8(sp)\n"
-            "  1a:\t65c2                \tld\ta1,16(sp)\n"
-            "  1c:\t6662                \tld\ta2,24(sp)\n"
-            "  1e:\t02010113          \taddi\tsp,sp,32"
+            "   0:	4fa1                	li	t6,8\n"
+            "   2:	9fce                	add	t6,t6,s3\n"
+            "   4:	000fbf83          	ld	t6,0(t6)\n"
+            "   8:	1141                	addi	sp,sp,-16\n"
+            "   a:	e006                	sd	ra,0(sp)\n"
+            "   c:	0544b823          	sd	s4,80(s1)\n"
+            "  10:	9f82                	jalr	t6\n"
+            "  12:	8faa                	mv	t6,a0\n"
+            "  14:	6082                	ld	ra,0(sp)\n"
+            "  16:	0141                	addi	sp,sp,16\n"
+            "  18:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -90,24 +82,20 @@ call_primitive_2_args_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t4fc1                \tli\tt6,16\n"
-            "   2:\t9fb2                \tadd\tt6,t6,a2\n"
-            "   4:\t000fbf83          \tld\tt6,0(t6)\n"
-            "   8:\t1101                \taddi\tsp,sp,-32\n"
-            "   a:\te006                \tsd\tra,0(sp)\n"
-            "   c:\te42a                \tsd\ta0,8(sp)\n"
-            "   e:\te82e                \tsd\ta1,16(sp)\n"
-            "  10:\tec32                \tsd\ta2,24(sp)\n"
-            "  12:\t02a00593          \tli\ta1,42\n"
-            "  16:\t02b00613          \tli\ta2,43\n"
-            "  1a:\t02c00693          \tli\ta3,44\n"
-            "  1e:\t9f82                \tjalr\tt6\n"
-            "  20:\t8faa                \tmv\tt6,a0\n"
-            "  22:\t6082                \tld\tra,0(sp)\n"
-            "  24:\t6522                \tld\ta0,8(sp)\n"
-            "  26:\t65c2                \tld\ta1,16(sp)\n"
-            "  28:\t6662                \tld\ta2,24(sp)\n"
-            "  2a:\t02010113          \taddi\tsp,sp,32"
+            "   0:	4fc1                	li	t6,16\n"
+            "   2:	9fce                	add	t6,t6,s3\n"
+            "   4:	000fbf83          	ld	t6,0(t6)\n"
+            "   8:	1141                	addi	sp,sp,-16\n"
+            "   a:	e006                	sd	ra,0(sp)\n"
+            "   c:	02a00513          	li	a0,42\n"
+            "  10:	02b00593          	li	a1,43\n"
+            "  14:	02c00613          	li	a2,44\n"
+            "  18:	0544b823          	sd	s4,80(s1)\n"
+            "  1c:	9f82                	jalr	t6\n"
+            "  1e:	8faa                	mv	t6,a0\n"
+            "  20:	6082                	ld	ra,0(sp)\n"
+            "  22:	0141                	addi	sp,sp,16\n"
+            "  24:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -117,13 +105,14 @@ call_primitive_5_args_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t02800f93          \tli\tt6,40\n"
-            "   4:\t9fb2                \tadd\tt6,t6,a2\n"
-            "   6:\t000fbf83          \tld\tt6,0(t6)\n"
-            "   a:\t4641                \tli\ta2,16\n"
-            "   c:\t02000693          \tli\ta3,32\n"
-            "  10:\t4709                \tli\ta4,2\n"
-            "  12:\t8f82                \tjr\tt6"
+            "   0:	02800f93          	li	t6,40\n"
+            "   4:	9fce                	add	t6,t6,s3\n"
+            "   6:	000fbf83          	ld	t6,0(t6)\n"
+            "   a:	4541                	li	a0,16\n"
+            "   c:	02000593          	li	a1,32\n"
+            "  10:	4609                	li	a2,2\n"
+            "  12:	0544b823          	sd	s4,80(s1)\n"
+            "  16:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -141,29 +130,25 @@ call_primitive_6_args_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
             "   4:	ffcfff93          	andi	t6,t6,-4\n"
-            "   8:	06053f03          	ld	t5,96(a0)\n"
+            "   8:	0604bf03          	ld	t5,96(s1)\n"
             "   c:	02e00e93          	li	t4,46\n"
             "  10:	0e8e                	slli	t4,t4,0x3\n"
-            "  12:	9eb2                	add	t4,t4,a2\n"
+            "  12:	9ece                	add	t4,t4,s3\n"
             "  14:	000ebe83          	ld	t4,0(t4)\n"
-            "  18:	1101                	addi	sp,sp,-32\n"
+            "  18:	1141                	addi	sp,sp,-16\n"
             "  1a:	e006                	sd	ra,0(sp)\n"
-            "  1c:	e42a                	sd	a0,8(sp)\n"
-            "  1e:	e82e                	sd	a1,16(sp)\n"
-            "  20:	ec32                	sd	a2,24(sp)\n"
-            "  22:	867e                	mv	a2,t6\n"
-            "  24:	04000693          	li	a3,64\n"
-            "  28:	4721                	li	a4,8\n"
-            "  2a:	87fa                	mv	a5,t5\n"
-            "  2c:	9e82                	jalr	t4\n"
-            "  2e:	8eaa                	mv	t4,a0\n"
-            "  30:	6082                	ld	ra,0(sp)\n"
-            "  32:	6522                	ld	a0,8(sp)\n"
-            "  34:	65c2                	ld	a1,16(sp)\n"
-            "  36:	6662                	ld	a2,24(sp)\n"
-            "  38:	02010113          	addi	sp,sp,32"
+            "  1c:	857e                	mv	a0,t6\n"
+            "  1e:	04000593          	li	a1,64\n"
+            "  22:	4621                	li	a2,8\n"
+            "  24:	86fa                	mv	a3,t5\n"
+            "  26:	0544b823          	sd	s4,80(s1)\n"
+            "  2a:	9e82                	jalr	t4\n"
+            "  2c:	8eaa                	mv	t4,a0\n"
+            "  2e:	6082                	ld	ra,0(sp)\n"
+            "  30:	0141                	addi	sp,sp,16\n"
+            "  32:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -180,80 +165,58 @@ call_primitive_extended_regs_test() ->
     ?BACKEND:assert_all_native_free(State6),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:\t09000f93          \tli\tt6,144\n"
-        "   4:\t9fb2                \tadd\tt6,t6,a2\n"
-        "   6:\t000fbf83          \tld\tt6,0(t6)\n"
-        "   a:\t1101                \taddi\tsp,sp,-32\n"
-        "   c:\te006                \tsd\tra,0(sp)\n"
-        "   e:\te42a                \tsd\ta0,8(sp)\n"
-        "  10:\te82e                \tsd\ta1,16(sp)\n"
-        "  12:\tec32                \tsd\ta2,24(sp)\n"
-        "  14:\t45cd                \tli\ta1,19\n"
-        "  16:\t9f82                \tjalr\tt6\n"
-        "  18:\t8faa                \tmv\tt6,a0\n"
-        "  1a:\t6082                \tld\tra,0(sp)\n"
-        "  1c:\t6522                \tld\ta0,8(sp)\n"
-        "  1e:\t65c2                \tld\ta1,16(sp)\n"
-        "  20:\t6662                \tld\ta2,24(sp)\n"
-        "  22:\t02010113          \taddi\tsp,sp,32\n"
-        "  26:\t09000f13          \tli\tt5,144\n"
-        "  2a:\t9f32                \tadd\tt5,t5,a2\n"
-        "  2c:\t000f3f03          \tld\tt5,0(t5)\n"
-        "  30:\tfd010113          \taddi\tsp,sp,-48\n"
-        "  34:\te006                \tsd\tra,0(sp)\n"
-        "  36:\te42a                \tsd\ta0,8(sp)\n"
-        "  38:\te82e                \tsd\ta1,16(sp)\n"
-        "  3a:\tec32                \tsd\ta2,24(sp)\n"
-        "  3c:\tf07e                \tsd\tt6,32(sp)\n"
-        "  3e:\t45d1                \tli\ta1,20\n"
-        "  40:\t9f02                \tjalr\tt5\n"
-        "  42:\t8f2a                \tmv\tt5,a0\n"
-        "  44:\t6082                \tld\tra,0(sp)\n"
-        "  46:\t6522                \tld\ta0,8(sp)\n"
-        "  48:\t65c2                \tld\ta1,16(sp)\n"
-        "  4a:\t6662                \tld\ta2,24(sp)\n"
-        "  4c:\t7f82                \tld\tt6,32(sp)\n"
-        "  4e:\t03010113          \taddi\tsp,sp,48\n"
-        "  52:\t09000e93          \tli\tt4,144\n"
-        "  56:\t9eb2                \tadd\tt4,t4,a2\n"
-        "  58:\t000ebe83          \tld\tt4,0(t4)\n"
-        "  5c:\tfd010113          \taddi\tsp,sp,-48\n"
-        "  60:\te006                \tsd\tra,0(sp)\n"
-        "  62:\te42a                \tsd\ta0,8(sp)\n"
-        "  64:\te82e                \tsd\ta1,16(sp)\n"
-        "  66:\tec32                \tsd\ta2,24(sp)\n"
-        "  68:\tf07e                \tsd\tt6,32(sp)\n"
-        "  6a:\tf47a                \tsd\tt5,40(sp)\n"
-        "  6c:\t45cd                \tli\ta1,19\n"
-        "  6e:\t9e82                \tjalr\tt4\n"
-        "  70:\t8eaa                \tmv\tt4,a0\n"
-        "  72:\t6082                \tld\tra,0(sp)\n"
-        "  74:\t6522                \tld\ta0,8(sp)\n"
-        "  76:\t65c2                \tld\ta1,16(sp)\n"
-        "  78:\t6662                \tld\ta2,24(sp)\n"
-        "  7a:\t7f82                \tld\tt6,32(sp)\n"
-        "  7c:\t7f22                \tld\tt5,40(sp)\n"
-        "  7e:\t03010113          \taddi\tsp,sp,48\n"
-        "  82:\t06800e13          \tli\tt3,104\n"
-        "  86:\t9e32                \tadd\tt3,t3,a2\n"
-        "  88:\t000e3e03          \tld\tt3,0(t3)\n"
-        "  8c:\tfd010113          \taddi\tsp,sp,-48\n"
-        "  90:\te006                \tsd\tra,0(sp)\n"
-        "  92:\te42a                \tsd\ta0,8(sp)\n"
-        "  94:\te82e                \tsd\ta1,16(sp)\n"
-        "  96:\tec32                \tsd\ta2,24(sp)\n"
-        "  98:\tf076                \tsd\tt4,32(sp)\n"
-        "  9a:\t000fb583          \tld\ta1,0(t6)\n"
-        "  9e:\t000f3603          \tld\ta2,0(t5)\n"
-        "  a2:\t9e02                \tjalr\tt3\n"
-        "  a4:\t8e2a                \tmv\tt3,a0\n"
-        "  a6:\t6082                \tld\tra,0(sp)\n"
-        "  a8:\t6522                \tld\ta0,8(sp)\n"
-        "  aa:\t65c2                \tld\ta1,16(sp)\n"
-        "  ac:\t6662                \tld\ta2,24(sp)\n"
-        "  ae:\t7e82                \tld\tt4,32(sp)\n"
-        "  b0:\t03010113          \taddi\tsp,sp,48\n"
-        "  b4:\t01ceb023          \tsd\tt3,0(t4)"
+        "   0:	09000f93          	li	t6,144\n"
+        "   4:	9fce                	add	t6,t6,s3\n"
+        "   6:	000fbf83          	ld	t6,0(t6)\n"
+        "   a:	1141                	addi	sp,sp,-16\n"
+        "   c:	e006                	sd	ra,0(sp)\n"
+        "   e:	454d                	li	a0,19\n"
+        "  10:	9f82                	jalr	t6\n"
+        "  12:	8faa                	mv	t6,a0\n"
+        "  14:	6082                	ld	ra,0(sp)\n"
+        "  16:	0141                	addi	sp,sp,16\n"
+        "  18:	09000f13          	li	t5,144\n"
+        "  1c:	9f4e                	add	t5,t5,s3\n"
+        "  1e:	000f3f03          	ld	t5,0(t5)\n"
+        "  22:	1141                	addi	sp,sp,-16\n"
+        "  24:	e006                	sd	ra,0(sp)\n"
+        "  26:	e47e                	sd	t6,8(sp)\n"
+        "  28:	4551                	li	a0,20\n"
+        "  2a:	9f02                	jalr	t5\n"
+        "  2c:	8f2a                	mv	t5,a0\n"
+        "  2e:	6082                	ld	ra,0(sp)\n"
+        "  30:	6fa2                	ld	t6,8(sp)\n"
+        "  32:	0141                	addi	sp,sp,16\n"
+        "  34:	09000e93          	li	t4,144\n"
+        "  38:	9ece                	add	t4,t4,s3\n"
+        "  3a:	000ebe83          	ld	t4,0(t4)\n"
+        "  3e:	1101                	addi	sp,sp,-32\n"
+        "  40:	e006                	sd	ra,0(sp)\n"
+        "  42:	e47e                	sd	t6,8(sp)\n"
+        "  44:	e87a                	sd	t5,16(sp)\n"
+        "  46:	454d                	li	a0,19\n"
+        "  48:	9e82                	jalr	t4\n"
+        "  4a:	8eaa                	mv	t4,a0\n"
+        "  4c:	6082                	ld	ra,0(sp)\n"
+        "  4e:	6fa2                	ld	t6,8(sp)\n"
+        "  50:	6f42                	ld	t5,16(sp)\n"
+        "  52:	02010113          	addi	sp,sp,32\n"
+        "  56:	06800e13          	li	t3,104\n"
+        "  5a:	9e4e                	add	t3,t3,s3\n"
+        "  5c:	000e3e03          	ld	t3,0(t3)\n"
+        "  60:	1141                	addi	sp,sp,-16\n"
+        "  62:	e006                	sd	ra,0(sp)\n"
+        "  64:	e476                	sd	t4,8(sp)\n"
+        "  66:	000fb503          	ld	a0,0(t6)\n"
+        "  6a:	000f3583          	ld	a1,0(t5)\n"
+        "  6e:	0544b823          	sd	s4,80(s1)\n"
+        "  72:	9e02                	jalr	t3\n"
+        "  74:	8e2a                	mv	t3,a0\n"
+        "  76:	6082                	ld	ra,0(sp)\n"
+        "  78:	6ea2                	ld	t4,8(sp)\n"
+        "  7a:	0141                	addi	sp,sp,16\n"
+        "  7c:	0504ba03          	ld	s4,80(s1)\n"
+        "  80:	01ceb023          	sd	t3,0(t4)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -271,38 +234,34 @@ call_primitive_few_free_regs_test() ->
     ?BACKEND:assert_all_native_free(State7),
     Stream = ?BACKEND:stream(State7),
     Dump = <<
-        "   0:\t4f85                \tli\tt6,1\n"
-        "   2:\t4f09                \tli\tt5,2\n"
-        "   4:\t4e8d                \tli\tt4,3\n"
-        "   6:\t4e11                \tli\tt3,4\n"
-        "   8:\t4395                \tli\tt2,5\n"
-        "   a:\t03900313          \tli\tt1,57\n"
-        "   e:\t030e                \tslli\tt1,t1,0x3\n"
-        "  10:\t9332                \tadd\tt1,t1,a2\n"
-        "  12:\t00033303          \tld\tt1,0(t1)\n"
-        "  16:\tfc010113          \taddi\tsp,sp,-64\n"
-        "  1a:\te006                \tsd\tra,0(sp)\n"
-        "  1c:\te42a                \tsd\ta0,8(sp)\n"
-        "  1e:\te82e                \tsd\ta1,16(sp)\n"
-        "  20:\tec32                \tsd\ta2,24(sp)\n"
-        "  22:\tf07e                \tsd\tt6,32(sp)\n"
-        "  24:\tf47a                \tsd\tt5,40(sp)\n"
-        "  26:\tf876                \tsd\tt4,48(sp)\n"
-        "  28:\t857a                \tmv\ta0,t5\n"
-        "  2a:\t85fe                \tmv\ta1,t6\n"
-        "  2c:\t8672                \tmv\ta2,t3\n"
-        "  2e:\t86f6                \tmv\ta3,t4\n"
-        "  30:\t871e                \tmv\ta4,t2\n"
-        "  32:\t9302                \tjalr\tt1\n"
-        "  34:\t832a                \tmv\tt1,a0\n"
-        "  36:\t6082                \tld\tra,0(sp)\n"
-        "  38:\t6522                \tld\ta0,8(sp)\n"
-        "  3a:\t65c2                \tld\ta1,16(sp)\n"
-        "  3c:\t6662                \tld\ta2,24(sp)\n"
-        "  3e:\t7f82                \tld\tt6,32(sp)\n"
-        "  40:\t7f22                \tld\tt5,40(sp)\n"
-        "  42:\t7ec2                \tld\tt4,48(sp)\n"
-        "  44:\t04010113          \taddi\tsp,sp,64"
+        "   0:	4f85                	li	t6,1\n"
+        "   2:	4f09                	li	t5,2\n"
+        "   4:	4e8d                	li	t4,3\n"
+        "   6:	4e11                	li	t3,4\n"
+        "   8:	4395                	li	t2,5\n"
+        "   a:	03900313          	li	t1,57\n"
+        "   e:	030e                	slli	t1,t1,0x3\n"
+        "  10:	934e                	add	t1,t1,s3\n"
+        "  12:	00033303          	ld	t1,0(t1)\n"
+        "  16:	1101                	addi	sp,sp,-32\n"
+        "  18:	e006                	sd	ra,0(sp)\n"
+        "  1a:	e47e                	sd	t6,8(sp)\n"
+        "  1c:	e87a                	sd	t5,16(sp)\n"
+        "  1e:	ec76                	sd	t4,24(sp)\n"
+        "  20:	857a                	mv	a0,t5\n"
+        "  22:	85fe                	mv	a1,t6\n"
+        "  24:	8672                	mv	a2,t3\n"
+        "  26:	86f6                	mv	a3,t4\n"
+        "  28:	871e                	mv	a4,t2\n"
+        "  2a:	0544b823          	sd	s4,80(s1)\n"
+        "  2e:	9302                	jalr	t1\n"
+        "  30:	832a                	mv	t1,a0\n"
+        "  32:	6082                	ld	ra,0(sp)\n"
+        "  34:	6fa2                	ld	t6,8(sp)\n"
+        "  36:	6f42                	ld	t5,16(sp)\n"
+        "  38:	6ee2                	ld	t4,24(sp)\n"
+        "  3a:	02010113          	addi	sp,sp,32\n"
+        "  3e:	0504ba03          	ld	s4,80(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -312,26 +271,28 @@ call_ext_only_test() ->
     State2 = ?BACKEND:call_primitive_last(State1, ?PRIM_CALL_EXT, [ctx, jit_state, offset, 2, 2, -1]),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:\t0105af83          \tlw\tt6,16(a1)\n"
-        "   4:\t1ffd                \taddi\tt6,t6,-1\n"
-        "   6:\t01f5a823          \tsw\tt6,16(a1)\n"
-        "   a:\t000f9d63          \tbnez\tt6,0x24\n"
-        "   e:\t00000f97          \tauipc\tt6,0x0\n"
-        "  12:\t0fd9                \taddi\tt6,t6,22 # 0x24\n"
-        "  14:\t0001                \tnop\n"
-        "  16:\t01f5b423          \tsd\tt6,8(a1)\n"
-        "  1a:\t4fc1                \tli\tt6,16\n"
-        "  1c:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  1e:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  22:\t8f82                \tjr\tt6\n"
-        "  24:\t02000f93          \tli\tt6,32\n"
-        "  28:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  2a:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  2e:\t02e00613          \tli\ta2,46\n"
-        "  32:\t4689                \tli\ta3,2\n"
-        "  34:\t4709                \tli\ta4,2\n"
-        "  36:\t57fd                \tli\ta5,-1\n"
-        "  38:\t8f82                \tjr\tt6"
+        "   0:	01092f83          	lw	t6,16(s2)\n"
+        "   4:	1ffd                	addi	t6,t6,-1\n"
+        "   6:	01f92823          	sw	t6,16(s2)\n"
+        "   a:	000f9f63          	bnez	t6,0x28\n"
+        "   e:	00000f97          	auipc	t6,0x0\n"
+        "  12:	0fe9                	addi	t6,t6,26 # 0x28\n"
+        "  14:	0001                	nop\n"
+        "  16:	01f93423          	sd	t6,8(s2)\n"
+        "  1a:	4fc1                	li	t6,16\n"
+        "  1c:	9fce                	add	t6,t6,s3\n"
+        "  1e:	000fbf83          	ld	t6,0(t6)\n"
+        "  22:	0544b823          	sd	s4,80(s1)\n"
+        "  26:	8f82                	jr	t6\n"
+        "  28:	02000f93          	li	t6,32\n"
+        "  2c:	9fce                	add	t6,t6,s3\n"
+        "  2e:	000fbf83          	ld	t6,0(t6)\n"
+        "  32:	03200513          	li	a0,50\n"
+        "  36:	4589                	li	a1,2\n"
+        "  38:	4609                	li	a2,2\n"
+        "  3a:	56fd                	li	a3,-1\n"
+        "  3c:	0544b823          	sd	s4,80(s1)\n"
+        "  40:	8f82                	jr	t6"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -343,14 +304,15 @@ call_primitive_last_5_args_test() ->
     ]),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
         "   4:	09800f13          	li	t5,152\n"
-        "   8:	9f32                	add	t5,t5,a2\n"
+        "   8:	9f4e                	add	t5,t5,s3\n"
         "   a:	000f3f03          	ld	t5,0(t5)\n"
-        "   e:	4639                	li	a2,14\n"
-        "  10:	2cb00693          	li	a3,715\n"
-        "  14:	877e                	mv	a4,t6\n"
-        "  16:	8f02                	jr	t5"
+        "   e:	4539                	li	a0,14\n"
+        "  10:	2cb00593          	li	a1,715\n"
+        "  14:	867e                	mv	a2,t6\n"
+        "  16:	0544b823          	sd	s4,80(s1)\n"
+        "  1a:	8f02                	jr	t5"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -360,26 +322,28 @@ call_ext_last_test() ->
     State2 = ?BACKEND:call_primitive_last(State1, ?PRIM_CALL_EXT, [ctx, jit_state, offset, 2, 2, 10]),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:\t0105af83          \tlw\tt6,16(a1)\n"
-        "   4:\t1ffd                \taddi\tt6,t6,-1\n"
-        "   6:\t01f5a823          \tsw\tt6,16(a1)\n"
-        "   a:\t000f9d63          \tbnez\tt6,0x24\n"
-        "   e:\t00000f97          \tauipc\tt6,0x0\n"
-        "  12:\t0fd9                \taddi\tt6,t6,22 # 0x24\n"
-        "  14:\t0001                \tnop\n"
-        "  16:\t01f5b423          \tsd\tt6,8(a1)\n"
-        "  1a:\t4fc1                \tli\tt6,16\n"
-        "  1c:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  1e:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  22:\t8f82                \tjr\tt6\n"
-        "  24:\t02000f93          \tli\tt6,32\n"
-        "  28:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  2a:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  2e:\t02e00613          \tli\ta2,46\n"
-        "  32:\t4689                \tli\ta3,2\n"
-        "  34:\t4709                \tli\ta4,2\n"
-        "  36:\t47a9                \tli\ta5,10\n"
-        "  38:\t8f82                \tjr\tt6"
+        "   0:	01092f83          	lw	t6,16(s2)\n"
+        "   4:	1ffd                	addi	t6,t6,-1\n"
+        "   6:	01f92823          	sw	t6,16(s2)\n"
+        "   a:	000f9f63          	bnez	t6,0x28\n"
+        "   e:	00000f97          	auipc	t6,0x0\n"
+        "  12:	0fe9                	addi	t6,t6,26 # 0x28\n"
+        "  14:	0001                	nop\n"
+        "  16:	01f93423          	sd	t6,8(s2)\n"
+        "  1a:	4fc1                	li	t6,16\n"
+        "  1c:	9fce                	add	t6,t6,s3\n"
+        "  1e:	000fbf83          	ld	t6,0(t6)\n"
+        "  22:	0544b823          	sd	s4,80(s1)\n"
+        "  26:	8f82                	jr	t6\n"
+        "  28:	02000f93          	li	t6,32\n"
+        "  2c:	9fce                	add	t6,t6,s3\n"
+        "  2e:	000fbf83          	ld	t6,0(t6)\n"
+        "  32:	03200513          	li	a0,50\n"
+        "  36:	4589                	li	a1,2\n"
+        "  38:	4609                	li	a2,2\n"
+        "  3a:	46a9                	li	a3,10\n"
+        "  3c:	0544b823          	sd	s4,80(s1)\n"
+        "  40:	8f82                	jr	t6"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -389,9 +353,10 @@ call_primitive_last_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t00063f83          \tld\tt6,0(a2)\n"
-            "   4:\t02a00613          \tli\ta2,42\n"
-            "   8:\t8f82                \tjr\tt6"
+            "   0:	0009bf83          	ld	t6,0(s3)\n"
+            "   4:	02a00513          	li	a0,42\n"
+            "   8:	0544b823          	sd	s4,80(s1)\n"
+            "   c:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -413,24 +378,20 @@ return_if_not_equal_to_ctx_test_() ->
                     Stream = ?BACKEND:stream(State2),
                     Dump =
                         <<
-                            "   0:\t0a800f93          \tli\tt6,168\n"
-                            "   4:\t9fb2                \tadd\tt6,t6,a2\n"
-                            "   6:\t000fbf83          \tld\tt6,0(t6)\n"
-                            "   a:\t1101                \taddi\tsp,sp,-32\n"
-                            "   c:\te006                \tsd\tra,0(sp)\n"
-                            "   e:\te42a                \tsd\ta0,8(sp)\n"
-                            "  10:\te82e                \tsd\ta1,16(sp)\n"
-                            "  12:\tec32                \tsd\ta2,24(sp)\n"
-                            "  14:\t9f82                \tjalr\tt6\n"
-                            "  16:\t8faa                \tmv\tt6,a0\n"
-                            "  18:\t6082                \tld\tra,0(sp)\n"
-                            "  1a:\t6522                \tld\ta0,8(sp)\n"
-                            "  1c:\t65c2                \tld\ta1,16(sp)\n"
-                            "  1e:\t6662                \tld\ta2,24(sp)\n"
-                            "  20:\t02010113          \taddi\tsp,sp,32\n"
-                            "  24:\t00af8463          \tbeq\tt6,a0,0x2c\n"
-                            "  28:\t857e                \tmv\ta0,t6\n"
-                            "  2a:\t8082                \tret"
+                            "   0:	0a800f93          	li	t6,168\n"
+                            "   4:	9fce                	add	t6,t6,s3\n"
+                            "   6:	000fbf83          	ld	t6,0(t6)\n"
+                            "   a:	1141                	addi	sp,sp,-16\n"
+                            "   c:	e006                	sd	ra,0(sp)\n"
+                            "   e:	0544b823          	sd	s4,80(s1)\n"
+                            "  12:	9f82                	jalr	t6\n"
+                            "  14:	8faa                	mv	t6,a0\n"
+                            "  16:	6082                	ld	ra,0(sp)\n"
+                            "  18:	0141                	addi	sp,sp,16\n"
+                            "  1a:	0504ba03          	ld	s4,80(s1)\n"
+                            "  1e:	009f8463          	beq	t6,s1,0x26\n"
+                            "  22:	857e                	mv	a0,t6\n"
+                            "  24:	8082                	ret"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -447,25 +408,21 @@ return_if_not_equal_to_ctx_test_() ->
                     Stream = ?BACKEND:stream(State3),
                     Dump =
                         <<
-                            "   0:\t0a800f93          \tli\tt6,168\n"
-                            "   4:\t9fb2                \tadd\tt6,t6,a2\n"
-                            "   6:\t000fbf83          \tld\tt6,0(t6)\n"
-                            "   a:\t1101                \taddi\tsp,sp,-32\n"
-                            "   c:\te006                \tsd\tra,0(sp)\n"
-                            "   e:\te42a                \tsd\ta0,8(sp)\n"
-                            "  10:\te82e                \tsd\ta1,16(sp)\n"
-                            "  12:\tec32                \tsd\ta2,24(sp)\n"
-                            "  14:\t9f82                \tjalr\tt6\n"
-                            "  16:\t8faa                \tmv\tt6,a0\n"
-                            "  18:\t6082                \tld\tra,0(sp)\n"
-                            "  1a:\t6522                \tld\ta0,8(sp)\n"
-                            "  1c:\t65c2                \tld\ta1,16(sp)\n"
-                            "  1e:\t6662                \tld\ta2,24(sp)\n"
-                            "  20:\t02010113          \taddi\tsp,sp,32\n"
-                            "  24:\t8f7e                \tmv\tt5,t6\n"
-                            "  26:\t00af0463          \tbeq\tt5,a0,0x2e\n"
-                            "  2a:\t857a                \tmv\ta0,t5\n"
-                            "  2c:\t8082                \tret"
+                            "   0:	0a800f93          	li	t6,168\n"
+                            "   4:	9fce                	add	t6,t6,s3\n"
+                            "   6:	000fbf83          	ld	t6,0(t6)\n"
+                            "   a:	1141                	addi	sp,sp,-16\n"
+                            "   c:	e006                	sd	ra,0(sp)\n"
+                            "   e:	0544b823          	sd	s4,80(s1)\n"
+                            "  12:	9f82                	jalr	t6\n"
+                            "  14:	8faa                	mv	t6,a0\n"
+                            "  16:	6082                	ld	ra,0(sp)\n"
+                            "  18:	0141                	addi	sp,sp,16\n"
+                            "  1a:	0504ba03          	ld	s4,80(s1)\n"
+                            "  1e:	8f7e                	mv	t5,t6\n"
+                            "  20:	009f0463          	beq	t5,s1,0x28\n"
+                            "  24:	857a                	mv	a0,t5\n"
+                            "  26:	8082                	ret"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end)
@@ -478,9 +435,8 @@ move_to_cp_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	05053f03          	ld	t5,80(a0)\n"
-            "   4:	000f3f83          	ld	t6,0(t5)\n"
-            "   8:	0ff53023          	sd	t6,224(a0)"
+            "   0:	000a3f83          	ld	t6,0(s4)\n"
+            "   4:	0ff4b023          	sd	t6,224(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -490,9 +446,7 @@ increment_sp_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:	05053f83          	ld	t6,80(a0)\n"
-            "   4:	038f8f93          	addi	t6,t6,56\n"
-            "   8:	05f53823          	sd	t6,80(a0)"
+            "   0:	038a0a13          	addi	s4,s4,56"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -516,8 +470,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000fd363          	bgez	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -534,8 +488,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	01efd363          	bge	t6,t5,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -552,8 +506,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	02a00e93          	li	t4,42\n"
                         "   c:	01dfd363          	bge	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -572,8 +526,8 @@ if_block_test_() ->
                     State2 = ?BACKEND:jump_to_offset(State1, 16#100),
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	40000e93          	li	t4,1024\n"
                         "   c:	01dfd363          	bge	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2\n"
@@ -592,8 +546,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f9363          	bnez	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -610,8 +564,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f9363          	bnez	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -628,8 +582,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	5efd                	li	t4,-1\n"
                         "   a:	01df9363          	bne	t6,t4,0x10\n"
                         "   e:	0f09                	addi	t5,t5,2"
@@ -647,8 +601,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f9363          	bnez	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -665,8 +619,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f9363          	bnez	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -683,8 +637,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f8363          	beqz	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -701,8 +655,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	000f8363          	beqz	t6,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -719,8 +673,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03b00e93          	li	t4,59\n"
                         "   c:	01df8363          	beq	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -738,8 +692,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03b00e93          	li	t4,59\n"
                         "   c:	01df8363          	beq	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -757,8 +711,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	02a00e93          	li	t4,42\n"
                         "   c:	01df8363          	beq	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -778,8 +732,8 @@ if_block_test_() ->
                     State2 = ?BACKEND:jump_to_offset(State1, 16#100),
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	7cb00e93          	li	t4,1995\n"
                         "   c:	01df8363          	beq	t6,t4,0x12\n"
                         "  10:	0f05                	addi	t5,t5,1\n"
@@ -797,8 +751,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	02a00e93          	li	t4,42\n"
                         "   c:	01df8363          	beq	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -816,8 +770,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03b00e93          	li	t4,59\n"
                         "   c:	01df9363          	bne	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -835,8 +789,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03b00e93          	li	t4,59\n"
                         "   c:	01df9363          	bne	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -854,8 +808,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	02a00e93          	li	t4,42\n"
                         "   c:	01df9363          	bne	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -873,8 +827,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	02a00e93          	li	t4,42\n"
                         "   c:	01df9363          	bne	t6,t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -892,8 +846,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03ff9e93          	slli	t4,t6,0x3f\n"
                         "   c:	000ec363          	bltz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -911,8 +865,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03ff9e93          	slli	t4,t6,0x3f\n"
                         "   c:	000ec363          	bltz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -930,8 +884,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03ff9e93          	slli	t4,t6,0x3f\n"
                         "   c:	000ed363          	bgez	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -949,8 +903,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03ff9e93          	slli	t4,t6,0x3f\n"
                         "   c:	000ed363          	bgez	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -968,8 +922,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	007ffe93          	andi	t4,t6,7\n"
                         "   c:	000e8363          	beqz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -987,8 +941,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	005ffe93          	andi	t4,t6,5\n"
                         "   c:	000e8363          	beqz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1006,8 +960,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	007ffe93          	andi	t4,t6,7\n"
                         "   c:	000e8363          	beqz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1025,8 +979,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	ffffce93          	not	t4,t6\n"
                         "   c:	1ef2                	slli	t4,t4,0x3c\n"
                         "   e:	000e8363          	beqz	t4,0x14\n"
@@ -1045,8 +999,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	ffffcf93          	not	t6,t6\n"
                         "   c:	1ff2                	slli	t6,t6,0x3c\n"
                         "   e:	000f8363          	beqz	t6,0x14\n"
@@ -1065,8 +1019,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	8efe                	mv	t4,t6\n"
                         "   a:	03fefe93          	andi	t4,t4,63\n"
                         "   e:	4e21                	li	t3,8\n"
@@ -1086,8 +1040,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	01efd363          	bge	t6,t5,0xe\n"
                         "   c:	0f09                	addi	t5,t5,2"
                     >>,
@@ -1110,8 +1064,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	03ffff93          	andi	t6,t6,63\n"
                         "   c:	4ea1                	li	t4,8\n"
                         "   e:	01df8363          	beq	t6,t4,0x14\n"
@@ -1131,8 +1085,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	003ffe93          	andi	t4,t6,3\n"
                         "   c:	000e8363          	beqz	t4,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1150,8 +1104,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	06400e93          	li	t4,100\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1169,8 +1123,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	06400e93          	li	t4,100\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1188,8 +1142,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	40000e93          	li	t4,1024\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1207,8 +1161,8 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	06053f03          	ld	t5,96(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	0604bf03          	ld	t5,96(s1)\n"
                         "   8:	40000e93          	li	t4,1024\n"
                         "   c:	01fed363          	bge	t4,t6,0x12\n"
                         "  10:	0f09                	addi	t5,t5,2"
@@ -1236,8 +1190,8 @@ if_else_block_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
             "   8:	03b00e93          	li	t4,59\n"
             "   c:	01df9463          	bne	t6,t4,0x14\n"
             "  10:	0f09                	addi	t5,t5,2\n"
@@ -1255,7 +1209,7 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	05853f83          	ld	t6,88(a0)\n"
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
                     "   4:	003fdf93          	srli	t6,t6,0x3"
                 >>,
             ?assertStream(riscv64, Dump, Stream)
@@ -1268,7 +1222,7 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	05853f83          	ld	t6,88(a0)\n"
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
                     "   4:	003fdf13          	srli	t5,t6,0x3"
                 >>,
             ?assertStream(riscv64, Dump, Stream)
@@ -1282,7 +1236,7 @@ shift_left_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
             "   4:	0f8e                	slli	t6,t6,0x3"
         >>,
     ?assertStream(riscv64, Dump, Stream).
@@ -1301,33 +1255,36 @@ call_only_or_schedule_next_and_label_relocation_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:\t00000697          \tauipc\ta3,0x0\n"
-            "   4:\t04a68067          \tjr\t74(a3) # 0x4a\n"
-            "   8:\t00000697          \tauipc\ta3,0x0\n"
-            "   c:\t01068067          \tjr\t16(a3) # 0x18\n"
-            "  10:\t00000697          \tauipc\ta3,0x0\n"
-            "  14:\t03468067          \tjr\t52(a3) # 0x44\n"
-            "  18:\t0105af83          \tlw\tt6,16(a1)\n"
-            "  1c:\t1ffd                \taddi\tt6,t6,-1\n"
-            "  1e:\t01f5a823          \tsw\tt6,16(a1)\n"
-            "  22:\t000f8663          \tbeqz\tt6,0x2e\n"
-            "  26:\ta839                \tj\t0x44\n"
-            "  28:\t0001                \tnop\n"
-            "  2a:\t00000013          \tnop\n"
-            "  2e:\t00000f97          \tauipc\tt6,0x0\n"
-            "  32:\t0fd9                \taddi\tt6,t6,22 # 0x44\n"
-            "  34:\t0001                \tnop\n"
-            "  36:\t01f5b423          \tsd\tt6,8(a1)\n"
-            "  3a:\t4fc1                \tli\tt6,16\n"
-            "  3c:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  3e:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  42:\t8f82                \tjr\tt6\n"
-            "  44:\t00063f83          \tld\tt6,0(a2)\n"
-            "  48:\t8f82                \tjr\tt6\n"
-            "  4a:\t4fa1                \tli\tt6,8\n"
-            "  4c:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  4e:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  52:\t8f82                \tjr\tt6"
+            "   0:	00000697          	auipc	a3,0x0\n"
+            "   4:	05268067          	jr	82(a3) # 0x52\n"
+            "   8:	00000697          	auipc	a3,0x0\n"
+            "   c:	01068067          	jr	16(a3) # 0x18\n"
+            "  10:	00000697          	auipc	a3,0x0\n"
+            "  14:	03868067          	jr	56(a3) # 0x48\n"
+            "  18:	01092f83          	lw	t6,16(s2)\n"
+            "  1c:	1ffd                	addi	t6,t6,-1\n"
+            "  1e:	01f92823          	sw	t6,16(s2)\n"
+            "  22:	000f8663          	beqz	t6,0x2e\n"
+            "  26:	a00d                	j	0x48\n"
+            "  28:	0001                	nop\n"
+            "  2a:	00000013          	nop\n"
+            "  2e:	00000f97          	auipc	t6,0x0\n"
+            "  32:	0fe9                	addi	t6,t6,26 # 0x48\n"
+            "  34:	0001                	nop\n"
+            "  36:	01f93423          	sd	t6,8(s2)\n"
+            "  3a:	4fc1                	li	t6,16\n"
+            "  3c:	9fce                	add	t6,t6,s3\n"
+            "  3e:	000fbf83          	ld	t6,0(t6)\n"
+            "  42:	0544b823          	sd	s4,80(s1)\n"
+            "  46:	8f82                	jr	t6\n"
+            "  48:	0009bf83          	ld	t6,0(s3)\n"
+            "  4c:	0544b823          	sd	s4,80(s1)\n"
+            "  50:	8f82                	jr	t6\n"
+            "  52:	4fa1                	li	t6,8\n"
+            "  54:	9fce                	add	t6,t6,s3\n"
+            "  56:	000fbf83          	ld	t6,0(t6)\n"
+            "  5a:	0544b823          	sd	s4,80(s1)\n"
+            "  5e:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1345,29 +1302,32 @@ call_only_or_schedule_next_known_label_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:\t00000697          \tauipc\ta3,0x0\n"
-            "   4:\t04068067          \tjr\t64(a3) # 0x40\n"
-            "   8:\t00000697          \tauipc\ta3,0x0\n"
-            "   c:\t01068067          \tjr\t16(a3) # 0x18\n"
-            "  10:\t00000697          \tauipc\ta3,0x0\n"
-            "  14:\t02668067          \tjr\t38(a3) # 0x36\n"
-            "  18:\t0105af83          \tlw\tt6,16(a1)\n"
-            "  1c:\t1ffd                \taddi\tt6,t6,-1\n"
-            "  1e:\t01f5a823          \tsw\tt6,16(a1)\n"
-            "  22:\t000f9a63          \tbnez\tt6,0x36\n"
-            "  26:\t00000f97          \tauipc\tt6,0x0\n"
-            "  2a:\t0fc1                \taddi\tt6,t6,16 # 0x36\n"
-            "  2c:\t01f5b423          \tsd\tt6,8(a1)\n"
-            "  30:\t4fc1                \tli\tt6,16\n"
-            "  32:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  34:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  38:\t8f82                \tjr\tt6\n"
-            "  3a:\t00063f83          \tld\tt6,0(a2)\n"
-            "  3e:\t8f82                \tjr\tt6\n"
-            "  40:\t4fa1                \tli\tt6,8\n"
-            "  42:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  44:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  48:\t8f82                \tjr\tt6"
+            "   0:	00000697          	auipc	a3,0x0\n"
+            "   4:	04868067          	jr	72(a3) # 0x48\n"
+            "   8:	00000697          	auipc	a3,0x0\n"
+            "   c:	01068067          	jr	16(a3) # 0x18\n"
+            "  10:	00000697          	auipc	a3,0x0\n"
+            "  14:	02668067          	jr	38(a3) # 0x36\n"
+            "  18:	01092f83          	lw	t6,16(s2)\n"
+            "  1c:	1ffd                	addi	t6,t6,-1\n"
+            "  1e:	01f92823          	sw	t6,16(s2)\n"
+            "  22:	000f9a63          	bnez	t6,0x36\n"
+            "  26:	00000f97          	auipc	t6,0x0\n"
+            "  2a:	0fc1                	addi	t6,t6,16 # 0x36\n"
+            "  2c:	01f93423          	sd	t6,8(s2)\n"
+            "  30:	4fc1                	li	t6,16\n"
+            "  32:	9fce                	add	t6,t6,s3\n"
+            "  34:	000fbf83          	ld	t6,0(t6)\n"
+            "  38:	0544b823          	sd	s4,80(s1)\n"
+            "  3c:	8f82                	jr	t6\n"
+            "  3e:	0009bf83          	ld	t6,0(s3)\n"
+            "  42:	0544b823          	sd	s4,80(s1)\n"
+            "  46:	8f82                	jr	t6\n"
+            "  48:	4fa1                	li	t6,8\n"
+            "  4a:	9fce                	add	t6,t6,s3\n"
+            "  4c:	000fbf83          	ld	t6,0(t6)\n"
+            "  50:	0544b823          	sd	s4,80(s1)\n"
+            "  54:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1397,27 +1357,30 @@ call_only_or_schedule_next_and_label_relocation_large_gap_test() ->
     % Extract the final section starting at 0x118 (after jump table 24 bytes + 128 loads 256 bytes)
     % RISC-V: Jump table is 3×8=24 bytes, loads are 2 bytes each (compressed)
     Dump = <<
-        "   0:\t0105af83          \tlw\tt6,16(a1)\n"
-        "   4:\t1ffd                \taddi\tt6,t6,-1\n"
-        "   6:\t01f5a823          \tsw\tt6,16(a1)\n"
-        "   a:\t000f8663          \tbeqz\tt6,0x16\n"
-        "   e:\ta839                \tj\t0x2c\n"
-        "  10:\t0001                \tnop\n"
-        "  12:\t00000013          \tnop\n"
-        "  16:\t00000f97          \tauipc\tt6,0x0\n"
-        "  1a:\t0fd9                \taddi\tt6,t6,22 # 0x2c\n"
-        "  1c:\t0001                \tnop\n"
-        "  1e:\t01f5b423          \tsd\tt6,8(a1)\n"
-        "  22:\t4fc1                \tli\tt6,16\n"
-        "  24:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  26:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  2a:\t8f82                \tjr\tt6\n"
-        "  2c:\t00063f83          \tld\tt6,0(a2)\n"
-        "  30:\t8f82                \tjr\tt6\n"
-        "  32:\t4fa1                \tli\tt6,8\n"
-        "  34:\t9fb2                \tadd\tt6,t6,a2\n"
-        "  36:\t000fbf83          \tld\tt6,0(t6)\n"
-        "  3a:\t8f82                \tjr\tt6"
+        "   0:	01092f83          	lw	t6,16(s2)\n"
+        "   4:	1ffd                	addi	t6,t6,-1\n"
+        "   6:	01f92823          	sw	t6,16(s2)\n"
+        "   a:	000f8663          	beqz	t6,0x16\n"
+        "   e:	a00d                	j	0x30\n"
+        "  10:	0001                	nop\n"
+        "  12:	00000013          	nop\n"
+        "  16:	00000f97          	auipc	t6,0x0\n"
+        "  1a:	0fe9                	addi	t6,t6,26 # 0x30\n"
+        "  1c:	0001                	nop\n"
+        "  1e:	01f93423          	sd	t6,8(s2)\n"
+        "  22:	4fc1                	li	t6,16\n"
+        "  24:	9fce                	add	t6,t6,s3\n"
+        "  26:	000fbf83          	ld	t6,0(t6)\n"
+        "  2a:	0544b823          	sd	s4,80(s1)\n"
+        "  2e:	8f82                	jr	t6\n"
+        "  30:	0009bf83          	ld	t6,0(s3)\n"
+        "  34:	0544b823          	sd	s4,80(s1)\n"
+        "  38:	8f82                	jr	t6\n"
+        "  3a:	4fa1                	li	t6,8\n"
+        "  3c:	9fce                	add	t6,t6,s3\n"
+        "  3e:	000fbf83          	ld	t6,0(t6)\n"
+        "  42:	0544b823          	sd	s4,80(s1)\n"
+        "  46:	8f82                	jr	t6"
     >>,
     {_, RelevantBinary} = split_binary(Stream, 16#118),
     ?assertStream(riscv64, Dump, RelevantBinary).
@@ -1439,64 +1402,51 @@ call_bif_with_large_literal_integer_test() ->
     Dump =
         <<
             "   0:	04000f93          	li	t6,64\n"
-            "   4:	9fb2                	add	t6,t6,a2\n"
+            "   4:	9fce                	add	t6,t6,s3\n"
             "   6:	000fbf83          	ld	t6,0(t6)\n"
-            "   a:	1101                	addi	sp,sp,-32\n"
+            "   a:	1141                	addi	sp,sp,-16\n"
             "   c:	e006                	sd	ra,0(sp)\n"
-            "   e:	e42a                	sd	a0,8(sp)\n"
-            "  10:	e82e                	sd	a1,16(sp)\n"
-            "  12:	ec32                	sd	a2,24(sp)\n"
-            "  14:	852e                	mv	a0,a1\n"
-            "  16:	4589                	li	a1,2\n"
-            "  18:	9f82                	jalr	t6\n"
-            "  1a:	8faa                	mv	t6,a0\n"
-            "  1c:	6082                	ld	ra,0(sp)\n"
-            "  1e:	6522                	ld	a0,8(sp)\n"
-            "  20:	65c2                	ld	a1,16(sp)\n"
-            "  22:	6662                	ld	a2,24(sp)\n"
-            "  24:	02010113          	addi	sp,sp,32\n"
-            "  28:	07800f13          	li	t5,120\n"
-            "  2c:	9f32                	add	t5,t5,a2\n"
-            "  2e:	000f3f03          	ld	t5,0(t5)\n"
-            "  32:	fd010113          	addi	sp,sp,-48\n"
-            "  36:	e006                	sd	ra,0(sp)\n"
-            "  38:	e42a                	sd	a0,8(sp)\n"
-            "  3a:	e82e                	sd	a1,16(sp)\n"
-            "  3c:	ec32                	sd	a2,24(sp)\n"
-            "  3e:	f07e                	sd	t6,32(sp)\n"
-            "  40:	3b7ff5b7          	lui	a1,0x3b7ff\n"
-            "  44:	8955859b          	addiw	a1,a1,-1899 # 0x3b7fe895\n"
-            "  48:	9f02                	jalr	t5\n"
-            "  4a:	8f2a                	mv	t5,a0\n"
-            "  4c:	6082                	ld	ra,0(sp)\n"
-            "  4e:	6522                	ld	a0,8(sp)\n"
-            "  50:	65c2                	ld	a1,16(sp)\n"
-            "  52:	6662                	ld	a2,24(sp)\n"
-            "  54:	7f82                	ld	t6,32(sp)\n"
-            "  56:	03010113          	addi	sp,sp,48\n"
-            "  5a:	1101                	addi	sp,sp,-32\n"
-            "  5c:	e006                	sd	ra,0(sp)\n"
-            "  5e:	e42a                	sd	a0,8(sp)\n"
-            "  60:	e82e                	sd	a1,16(sp)\n"
-            "  62:	ec32                	sd	a2,24(sp)\n"
-            "  64:	4581                	li	a1,0\n"
-            "  66:	4605                	li	a2,1\n"
-            "  68:	6d34                	ld	a3,88(a0)\n"
-            "  6a:	877a                	mv	a4,t5\n"
-            "  6c:	9f82                	jalr	t6\n"
-            "  6e:	8faa                	mv	t6,a0\n"
-            "  70:	6082                	ld	ra,0(sp)\n"
-            "  72:	6522                	ld	a0,8(sp)\n"
-            "  74:	65c2                	ld	a1,16(sp)\n"
-            "  76:	6662                	ld	a2,24(sp)\n"
-            "  78:	02010113          	addi	sp,sp,32\n"
-            "  7c:	000f9a63          	bnez	t6,0x90\n"
-            "  80:	03000f93          	li	t6,48\n"
-            "  84:	9fb2                	add	t6,t6,a2\n"
-            "  86:	000fbf83          	ld	t6,0(t6)\n"
-            "  8a:	08a00613          	li	a2,138\n"
-            "  8e:	8f82                	jr	t6\n"
-            "  90:	05f53c23          	sd	t6,88(a0)"
+            "   e:	4509                	li	a0,2\n"
+            "  10:	9f82                	jalr	t6\n"
+            "  12:	8faa                	mv	t6,a0\n"
+            "  14:	6082                	ld	ra,0(sp)\n"
+            "  16:	0141                	addi	sp,sp,16\n"
+            "  18:	07800f13          	li	t5,120\n"
+            "  1c:	9f4e                	add	t5,t5,s3\n"
+            "  1e:	000f3f03          	ld	t5,0(t5)\n"
+            "  22:	1141                	addi	sp,sp,-16\n"
+            "  24:	e006                	sd	ra,0(sp)\n"
+            "  26:	e47e                	sd	t6,8(sp)\n"
+            "  28:	3b7ff537          	lui	a0,0x3b7ff\n"
+            "  2c:	8955051b          	addiw	a0,a0,-1899 # 0x3b7fe895\n"
+            "  30:	0544b823          	sd	s4,80(s1)\n"
+            "  34:	9f02                	jalr	t5\n"
+            "  36:	8f2a                	mv	t5,a0\n"
+            "  38:	6082                	ld	ra,0(sp)\n"
+            "  3a:	6fa2                	ld	t6,8(sp)\n"
+            "  3c:	0141                	addi	sp,sp,16\n"
+            "  3e:	0504ba03          	ld	s4,80(s1)\n"
+            "  42:	1141                	addi	sp,sp,-16\n"
+            "  44:	e006                	sd	ra,0(sp)\n"
+            "  46:	8526                	mv	a0,s1\n"
+            "  48:	4581                	li	a1,0\n"
+            "  4a:	4605                	li	a2,1\n"
+            "  4c:	6cb4                	ld	a3,88(s1)\n"
+            "  4e:	877a                	mv	a4,t5\n"
+            "  50:	0544b823          	sd	s4,80(s1)\n"
+            "  54:	9f82                	jalr	t6\n"
+            "  56:	8faa                	mv	t6,a0\n"
+            "  58:	6082                	ld	ra,0(sp)\n"
+            "  5a:	0141                	addi	sp,sp,16\n"
+            "  5c:	0504ba03          	ld	s4,80(s1)\n"
+            "  60:	000f9c63          	bnez	t6,0x78\n"
+            "  64:	03000f93          	li	t6,48\n"
+            "  68:	9fce                	add	t6,t6,s3\n"
+            "  6a:	000fbf83          	ld	t6,0(t6)\n"
+            "  6e:	06e00513          	li	a0,110\n"
+            "  72:	0544b823          	sd	s4,80(s1)\n"
+            "  76:	8f82                	jr	t6\n"
+            "  78:	05f4bc23          	sd	t6,88(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1511,14 +1461,12 @@ get_list_test() ->
     Stream = ?BACKEND:stream(State5),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
             "   4:	ffcfff93          	andi	t6,t6,-4\n"
             "   8:	008fbe83          	ld	t4,8(t6)\n"
-            "   c:	05053f03          	ld	t5,80(a0)\n"
-            "  10:	01df3423          	sd	t4,8(t5)\n"
-            "  14:	000fbe83          	ld	t4,0(t6)\n"
-            "  18:	05053f03          	ld	t5,80(a0)\n"
-            "  1c:	01df3023          	sd	t4,0(t5)"
+            "   c:	01da3423          	sd	t4,8(s4)\n"
+            "  10:	000fbe83          	ld	t4,0(t6)\n"
+            "  14:	01da3023          	sd	t4,0(s4)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1559,7 +1507,7 @@ is_integer_test() ->
             "   6:	ffff                	.insn	2, 0xffff\n"
             "   8:	00000697          	auipc	a3,0x0\n"
             "   c:	0f868067          	jr	248(a3) # 0x100\n"
-            "  10:	05853f83          	ld	t6,88(a0)\n"
+            "  10:	0584bf83          	ld	t6,88(s1)\n"
             "  14:	ffffcf13          	not	t5,t6\n"
             "  18:	1f72                	slli	t5,t5,0x3c\n"
             "  1a:	020f0963          	beqz	t5,0x4c\n"
@@ -1624,7 +1572,7 @@ is_number_test() ->
             "   6:	ffff                	.insn	2, 0xffff\n"
             "   8:	00000697          	auipc	a3,0x0\n"
             "   c:	0f868067          	jr	248(a3) # 0x100\n"
-            "  10:	05853f83          	ld	t6,88(a0)\n"
+            "  10:	0584bf83          	ld	t6,88(s1)\n"
             "  14:	ffffcf13          	not	t5,t6\n"
             "  18:	1f72                	slli	t5,t5,0x3c\n"
             "  1a:	020f0f63          	beqz	t5,0x58\n"
@@ -1672,7 +1620,7 @@ is_boolean_test() ->
         "   6:	ffff                	.insn	2, 0xffff\n"
         "   8:	00000697          	auipc	a3,0x0\n"
         "   c:	0f868067          	jr	248(a3) # 0x100\n"
-        "  10:	05853f83          	ld	t6,88(a0)\n"
+        "  10:	0584bf83          	ld	t6,88(s1)\n"
         "  14:	04b00f13          	li	t5,75\n"
         "  18:	01ef8963          	beq	t6,t5,0x2a\n"
         "  1c:	4f2d                	li	t5,11\n"
@@ -1706,7 +1654,7 @@ is_boolean_far_test() ->
             "   6:	ffff                	.insn	2, 0xffff\n"
             "   8:	00001697          	auipc	a3,0x1\n"
             "   c:	ff868067          	jr	-8(a3) # 0x1000\n"
-            "  10:	05853f83          	ld	t6,88(a0)\n"
+            "  10:	0584bf83          	ld	t6,88(s1)\n"
             "  14:	04b00f13          	li	t5,75\n"
             "  18:	01ef8963          	beq	t6,t5,0x2a\n"
             "  1c:	4f2d                	li	t5,11\n"
@@ -1739,7 +1687,7 @@ is_boolean_far_known_test() ->
             "   6:	ffff                	.insn	2, 0xffff\n"
             "   8:	00001697          	auipc	a3,0x1\n"
             "   c:	ff868067          	jr	-8(a3) # 0x1000\n"
-            "  10:	05853f83          	ld	t6,88(a0)\n"
+            "  10:	0584bf83          	ld	t6,88(s1)\n"
             "  14:	04b00f13          	li	t5,75\n"
             "  18:	01ef8963          	beq	t6,t5,0x2a\n"
             "  1c:	4f2d                	li	t5,11\n"
@@ -1778,57 +1726,49 @@ wait_timeout_test() ->
     Dump =
         <<
             "   0:	00000f97          	auipc	t6,0x0\n"
-            "   4:	024f8f93          	addi	t6,t6,36 # 0x24\n"
-            "   8:	01f5b423          	sd	t6,8(a1)\n"
+            "   4:	028f8f93          	addi	t6,t6,40 # 0x28\n"
+            "   8:	01f93423          	sd	t6,8(s2)\n"
             "   c:	6f85                	lui	t6,0x1\n"
             "   e:	388f8f9b          	addiw	t6,t6,904 # 0x1388\n"
             "  12:	0f000f13          	li	t5,240\n"
-            "  16:	9f32                	add	t5,t5,a2\n"
+            "  16:	9f4e                	add	t5,t5,s3\n"
             "  18:	000f3f03          	ld	t5,0(t5)\n"
-            "  1c:	867e                	mv	a2,t6\n"
-            "  1e:	02a00693          	li	a3,42\n"
-            "  22:	8f02                	jr	t5\n"
-            "  24:	0a800f93          	li	t6,168\n"
-            "  28:	9fb2                	add	t6,t6,a2\n"
-            "  2a:	000fbf83          	ld	t6,0(t6)\n"
-            "  2e:	1101                	addi	sp,sp,-32\n"
-            "  30:	e006                	sd	ra,0(sp)\n"
-            "  32:	e42a                	sd	a0,8(sp)\n"
-            "  34:	e82e                	sd	a1,16(sp)\n"
-            "  36:	ec32                	sd	a2,24(sp)\n"
-            "  38:	9f82                	jalr	t6\n"
-            "  3a:	8faa                	mv	t6,a0\n"
-            "  3c:	6082                	ld	ra,0(sp)\n"
-            "  3e:	6522                	ld	a0,8(sp)\n"
-            "  40:	65c2                	ld	a1,16(sp)\n"
-            "  42:	6662                	ld	a2,24(sp)\n"
-            "  44:	02010113          	addi	sp,sp,32\n"
-            "  48:	00af8463          	beq	t6,a0,0x50\n"
-            "  4c:	857e                	mv	a0,t6\n"
-            "  4e:	8082                	ret\n"
-            "  50:	02100f93          	li	t6,33\n"
-            "  54:	0f8e                	slli	t6,t6,0x3\n"
-            "  56:	9fb2                	add	t6,t6,a2\n"
-            "  58:	000fbf83          	ld	t6,0(t6)\n"
-            "  5c:	1101                	addi	sp,sp,-32\n"
-            "  5e:	e006                	sd	ra,0(sp)\n"
-            "  60:	e42a                	sd	a0,8(sp)\n"
-            "  62:	e82e                	sd	a1,16(sp)\n"
-            "  64:	ec32                	sd	a2,24(sp)\n"
-            "  66:	4589                	li	a1,2\n"
-            "  68:	9f82                	jalr	t6\n"
-            "  6a:	8faa                	mv	t6,a0\n"
-            "  6c:	6082                	ld	ra,0(sp)\n"
-            "  6e:	6522                	ld	a0,8(sp)\n"
-            "  70:	65c2                	ld	a1,16(sp)\n"
-            "  72:	6662                	ld	a2,24(sp)\n"
-            "  74:	02010113          	addi	sp,sp,32\n"
-            "  78:	000f9a63          	bnez	t6,0x8c\n"
-            "  7c:	0f800f93          	li	t6,248\n"
-            "  80:	9fb2                	add	t6,t6,a2\n"
-            "  82:	000fbf83          	ld	t6,0(t6)\n"
-            "  86:	02a00613          	li	a2,42\n"
-            "  8a:	8f82                	jr	t6"
+            "  1c:	857e                	mv	a0,t6\n"
+            "  1e:	02a00593          	li	a1,42\n"
+            "  22:	0544b823          	sd	s4,80(s1)\n"
+            "  26:	8f02                	jr	t5\n"
+            "  28:	0a800f93          	li	t6,168\n"
+            "  2c:	9fce                	add	t6,t6,s3\n"
+            "  2e:	000fbf83          	ld	t6,0(t6)\n"
+            "  32:	1141                	addi	sp,sp,-16\n"
+            "  34:	e006                	sd	ra,0(sp)\n"
+            "  36:	0544b823          	sd	s4,80(s1)\n"
+            "  3a:	9f82                	jalr	t6\n"
+            "  3c:	8faa                	mv	t6,a0\n"
+            "  3e:	6082                	ld	ra,0(sp)\n"
+            "  40:	0141                	addi	sp,sp,16\n"
+            "  42:	0504ba03          	ld	s4,80(s1)\n"
+            "  46:	009f8463          	beq	t6,s1,0x4e\n"
+            "  4a:	857e                	mv	a0,t6\n"
+            "  4c:	8082                	ret\n"
+            "  4e:	02100f93          	li	t6,33\n"
+            "  52:	0f8e                	slli	t6,t6,0x3\n"
+            "  54:	9fce                	add	t6,t6,s3\n"
+            "  56:	000fbf83          	ld	t6,0(t6)\n"
+            "  5a:	1141                	addi	sp,sp,-16\n"
+            "  5c:	e006                	sd	ra,0(sp)\n"
+            "  5e:	4509                	li	a0,2\n"
+            "  60:	9f82                	jalr	t6\n"
+            "  62:	8faa                	mv	t6,a0\n"
+            "  64:	6082                	ld	ra,0(sp)\n"
+            "  66:	0141                	addi	sp,sp,16\n"
+            "  68:	000f9c63          	bnez	t6,0x80\n"
+            "  6c:	0f800f93          	li	t6,248\n"
+            "  70:	9fce                	add	t6,t6,s3\n"
+            "  72:	000fbf83          	ld	t6,0(t6)\n"
+            "  76:	02a00513          	li	a0,42\n"
+            "  7a:	0544b823          	sd	s4,80(s1)\n"
+            "  7e:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1847,33 +1787,34 @@ wait_test() ->
     Stream = ?BACKEND:stream(State6),
     Dump =
         <<
-            "   0:\tffff                \t.insn\t2, 0xffff\n"
-            "   2:\tffff                \t.insn\t2, 0xffff\n"
-            "   4:\tffff                \t.insn\t2, 0xffff\n"
-            "   6:\tffff                \t.insn\t2, 0xffff\n"
-            "   8:\t00000697          \tauipc\ta3,0x0\n"
-            "   c:\t02868067          \tjr\t40(a3) # 0x30\n"
-            "  10:\t00000697          \tauipc\ta3,0x0\n"
-            "  14:\t0f068067          \tjr\t240(a3) # 0x100\n"
-            "  18:\tffff                \t.insn\t2, 0xffff\n"
-            "  1a:\tffff                \t.insn\t2, 0xffff\n"
-            "  1c:\tffff                \t.insn\t2, 0xffff\n"
-            "  1e:\tffff                \t.insn\t2, 0xffff\n"
-            "  20:\tffff                \t.insn\t2, 0xffff\n"
-            "  22:\tffff                \t.insn\t2, 0xffff\n"
-            "  24:\tffff                \t.insn\t2, 0xffff\n"
-            "  26:\tffff                \t.insn\t2, 0xffff\n"
-            "  28:\tffff                \t.insn\t2, 0xffff\n"
-            "  2a:\tffff                \t.insn\t2, 0xffff\n"
-            "  2c:\tffff                \t.insn\t2, 0xffff\n"
-            "  2e:\tffff                \t.insn\t2, 0xffff\n"
-            "  30:\t00000f97          \tauipc\tt6,0x0\n"
-            "  34:\t0d0f8f93          \taddi\tt6,t6,208 # 0x100\n"
-            "  38:\t01f5b423          \tsd\tt6,8(a1)\n"
-            "  3c:\t0e800f93          \tli\tt6,232\n"
-            "  40:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  42:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  46:\t8f82                \tjr\tt6"
+            "   0:	ffff                	.insn	2, 0xffff\n"
+            "   2:	ffff                	.insn	2, 0xffff\n"
+            "   4:	ffff                	.insn	2, 0xffff\n"
+            "   6:	ffff                	.insn	2, 0xffff\n"
+            "   8:	00000697          	auipc	a3,0x0\n"
+            "   c:	02868067          	jr	40(a3) # 0x30\n"
+            "  10:	00000697          	auipc	a3,0x0\n"
+            "  14:	0f068067          	jr	240(a3) # 0x100\n"
+            "  18:	ffff                	.insn	2, 0xffff\n"
+            "  1a:	ffff                	.insn	2, 0xffff\n"
+            "  1c:	ffff                	.insn	2, 0xffff\n"
+            "  1e:	ffff                	.insn	2, 0xffff\n"
+            "  20:	ffff                	.insn	2, 0xffff\n"
+            "  22:	ffff                	.insn	2, 0xffff\n"
+            "  24:	ffff                	.insn	2, 0xffff\n"
+            "  26:	ffff                	.insn	2, 0xffff\n"
+            "  28:	ffff                	.insn	2, 0xffff\n"
+            "  2a:	ffff                	.insn	2, 0xffff\n"
+            "  2c:	ffff                	.insn	2, 0xffff\n"
+            "  2e:	ffff                	.insn	2, 0xffff\n"
+            "  30:	00000f97          	auipc	t6,0x0\n"
+            "  34:	0d0f8f93          	addi	t6,t6,208 # 0x100\n"
+            "  38:	01f93423          	sd	t6,8(s2)\n"
+            "  3c:	0e800f93          	li	t6,232\n"
+            "  40:	9fce                	add	t6,t6,s3\n"
+            "  42:	000fbf83          	ld	t6,0(t6)\n"
+            "  46:	0544b823          	sd	s4,80(s1)\n"
+            "  4a:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1892,33 +1833,34 @@ wait_known_test() ->
     Stream = ?BACKEND:stream(State6),
     Dump =
         <<
-            "   0:\tffff                \t.insn\t2, 0xffff\n"
-            "   2:\tffff                \t.insn\t2, 0xffff\n"
-            "   4:\tffff                \t.insn\t2, 0xffff\n"
-            "   6:\tffff                \t.insn\t2, 0xffff\n"
-            "   8:\t00000697          \tauipc\ta3,0x0\n"
-            "   c:\t02868067          \tjr\t40(a3) # 0x30\n"
-            "  10:\t00000697          \tauipc\ta3,0x0\n"
-            "  14:\t0f068067          \tjr\t240(a3) # 0x100\n"
-            "  18:\tffff                \t.insn\t2, 0xffff\n"
-            "  1a:\tffff                \t.insn\t2, 0xffff\n"
-            "  1c:\tffff                \t.insn\t2, 0xffff\n"
-            "  1e:\tffff                \t.insn\t2, 0xffff\n"
-            "  20:\tffff                \t.insn\t2, 0xffff\n"
-            "  22:\tffff                \t.insn\t2, 0xffff\n"
-            "  24:\tffff                \t.insn\t2, 0xffff\n"
-            "  26:\tffff                \t.insn\t2, 0xffff\n"
-            "  28:\tffff                \t.insn\t2, 0xffff\n"
-            "  2a:\tffff                \t.insn\t2, 0xffff\n"
-            "  2c:\tffff                \t.insn\t2, 0xffff\n"
-            "  2e:\tffff                \t.insn\t2, 0xffff\n"
-            "  30:\t00000f97          \tauipc\tt6,0x0\n"
-            "  34:\t0d0f8f93          \taddi\tt6,t6,208 # 0x100\n"
-            "  38:\t01f5b423          \tsd\tt6,8(a1)\n"
-            "  3c:\t0e800f93          \tli\tt6,232\n"
-            "  40:\t9fb2                \tadd\tt6,t6,a2\n"
-            "  42:\t000fbf83          \tld\tt6,0(t6)\n"
-            "  46:\t8f82                \tjr\tt6"
+            "   0:	ffff                	.insn	2, 0xffff\n"
+            "   2:	ffff                	.insn	2, 0xffff\n"
+            "   4:	ffff                	.insn	2, 0xffff\n"
+            "   6:	ffff                	.insn	2, 0xffff\n"
+            "   8:	00000697          	auipc	a3,0x0\n"
+            "   c:	02868067          	jr	40(a3) # 0x30\n"
+            "  10:	00000697          	auipc	a3,0x0\n"
+            "  14:	0f068067          	jr	240(a3) # 0x100\n"
+            "  18:	ffff                	.insn	2, 0xffff\n"
+            "  1a:	ffff                	.insn	2, 0xffff\n"
+            "  1c:	ffff                	.insn	2, 0xffff\n"
+            "  1e:	ffff                	.insn	2, 0xffff\n"
+            "  20:	ffff                	.insn	2, 0xffff\n"
+            "  22:	ffff                	.insn	2, 0xffff\n"
+            "  24:	ffff                	.insn	2, 0xffff\n"
+            "  26:	ffff                	.insn	2, 0xffff\n"
+            "  28:	ffff                	.insn	2, 0xffff\n"
+            "  2a:	ffff                	.insn	2, 0xffff\n"
+            "  2c:	ffff                	.insn	2, 0xffff\n"
+            "  2e:	ffff                	.insn	2, 0xffff\n"
+            "  30:	00000f97          	auipc	t6,0x0\n"
+            "  34:	0d0f8f93          	addi	t6,t6,208 # 0x100\n"
+            "  38:	01f93423          	sd	t6,8(s2)\n"
+            "  3c:	0e800f93          	li	t6,232\n"
+            "  40:	9fce                	add	t6,t6,s3\n"
+            "  42:	000fbf83          	ld	t6,0(t6)\n"
+            "  46:	0544b823          	sd	s4,80(s1)\n"
+            "  4a:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -1984,39 +1926,28 @@ gc_bif2_test() ->
     Dump =
         <<
             "   0:	04000f93          	li	t6,64\n"
-            "   4:	9fb2                	add	t6,t6,a2\n"
+            "   4:	9fce                	add	t6,t6,s3\n"
             "   6:	000fbf83          	ld	t6,0(t6)\n"
-            "   a:	1101                	addi	sp,sp,-32\n"
+            "   a:	1141                	addi	sp,sp,-16\n"
             "   c:	e006                	sd	ra,0(sp)\n"
-            "   e:	e42a                	sd	a0,8(sp)\n"
-            "  10:	e82e                	sd	a1,16(sp)\n"
-            "  12:	ec32                	sd	a2,24(sp)\n"
-            "  14:	852e                	mv	a0,a1\n"
-            "  16:	02a00593          	li	a1,42\n"
-            "  1a:	9f82                	jalr	t6\n"
-            "  1c:	8faa                	mv	t6,a0\n"
-            "  1e:	6082                	ld	ra,0(sp)\n"
-            "  20:	6522                	ld	a0,8(sp)\n"
-            "  22:	65c2                	ld	a1,16(sp)\n"
-            "  24:	6662                	ld	a2,24(sp)\n"
-            "  26:	02010113          	addi	sp,sp,32\n"
-            "  2a:	1101                	addi	sp,sp,-32\n"
-            "  2c:	e006                	sd	ra,0(sp)\n"
-            "  2e:	e42a                	sd	a0,8(sp)\n"
-            "  30:	e82e                	sd	a1,16(sp)\n"
-            "  32:	ec32                	sd	a2,24(sp)\n"
-            "  34:	4581                	li	a1,0\n"
-            "  36:	460d                	li	a2,3\n"
-            "  38:	05053f03          	ld	t5,80(a0)\n"
-            "  3c:	000f3683          	ld	a3,0(t5)\n"
-            "  40:	6d38                	ld	a4,88(a0)\n"
-            "  42:	9f82                	jalr	t6\n"
-            "  44:	8faa                	mv	t6,a0\n"
-            "  46:	6082                	ld	ra,0(sp)\n"
-            "  48:	6522                	ld	a0,8(sp)\n"
-            "  4a:	65c2                	ld	a1,16(sp)\n"
-            "  4c:	6662                	ld	a2,24(sp)\n"
-            "  4e:	02010113          	addi	sp,sp,32"
+            "   e:	02a00513          	li	a0,42\n"
+            "  12:	9f82                	jalr	t6\n"
+            "  14:	8faa                	mv	t6,a0\n"
+            "  16:	6082                	ld	ra,0(sp)\n"
+            "  18:	0141                	addi	sp,sp,16\n"
+            "  1a:	1141                	addi	sp,sp,-16\n"
+            "  1c:	e006                	sd	ra,0(sp)\n"
+            "  1e:	8526                	mv	a0,s1\n"
+            "  20:	4581                	li	a1,0\n"
+            "  22:	460d                	li	a2,3\n"
+            "  24:	000a3683          	ld	a3,0(s4)\n"
+            "  28:	6cb8                	ld	a4,88(s1)\n"
+            "  2a:	0544b823          	sd	s4,80(s1)\n"
+            "  2e:	9f82                	jalr	t6\n"
+            "  30:	8faa                	mv	t6,a0\n"
+            "  32:	6082                	ld	ra,0(sp)\n"
+            "  34:	0141                	addi	sp,sp,16\n"
+            "  36:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -2030,26 +1961,21 @@ memory_ensure_free_with_roots_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t02c00f93          \tli\tt6,44\n"
-            "   4:\t0f8e                \tslli\tt6,t6,0x3\n"
-            "   6:\t9fb2                \tadd\tt6,t6,a2\n"
-            "   8:\t000fbf83          \tld\tt6,0(t6)\n"
-            "   c:\t1101                \taddi\tsp,sp,-32\n"
-            "   e:\te006                \tsd\tra,0(sp)\n"
-            "  10:\te42a                \tsd\ta0,8(sp)\n"
-            "  12:\te82e                \tsd\ta1,16(sp)\n"
-            "  14:\tec32                \tsd\ta2,24(sp)\n"
-            "  16:\t8f2e                \tmv\tt5,a1\n"
-            "  18:\t867a                \tmv\ta2,t5\n"
-            "  1a:\t4691                \tli\ta3,4\n"
-            "  1c:\t4705                \tli\ta4,1\n"
-            "  1e:\t9f82                \tjalr\tt6\n"
-            "  20:\t8faa                \tmv\tt6,a0\n"
-            "  22:\t6082                \tld\tra,0(sp)\n"
-            "  24:\t6522                \tld\ta0,8(sp)\n"
-            "  26:\t65c2                \tld\ta1,16(sp)\n"
-            "  28:\t6662                \tld\ta2,24(sp)\n"
-            "  2a:\t02010113          \taddi\tsp,sp,32"
+            "   0:	02c00f93          	li	t6,44\n"
+            "   4:	0f8e                	slli	t6,t6,0x3\n"
+            "   6:	9fce                	add	t6,t6,s3\n"
+            "   8:	000fbf83          	ld	t6,0(t6)\n"
+            "   c:	1141                	addi	sp,sp,-16\n"
+            "   e:	e006                	sd	ra,0(sp)\n"
+            "  10:	852e                	mv	a0,a1\n"
+            "  12:	4591                	li	a1,4\n"
+            "  14:	4605                	li	a2,1\n"
+            "  16:	0544b823          	sd	s4,80(s1)\n"
+            "  1a:	9f82                	jalr	t6\n"
+            "  1c:	8faa                	mv	t6,a0\n"
+            "  1e:	6082                	ld	ra,0(sp)\n"
+            "  20:	0141                	addi	sp,sp,16\n"
+            "  22:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -2061,32 +1987,34 @@ call_ext_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	0105af83          	lw	t6,16(a1)\n"
+            "   0:	01092f83          	lw	t6,16(s2)\n"
             "   4:	1ffd                	addi	t6,t6,-1\n"
-            "   6:	01f5a823          	sw	t6,16(a1)\n"
-            "   a:	000f9d63          	bnez	t6,0x24\n"
+            "   6:	01f92823          	sw	t6,16(s2)\n"
+            "   a:	000f9f63          	bnez	t6,0x28\n"
             "   e:	00000f97          	auipc	t6,0x0\n"
-            "  12:	0fd9                	addi	t6,t6,22 # 0x24\n"
+            "  12:	0fe9                	addi	t6,t6,26 # 0x28\n"
             "  14:	0001                	nop\n"
-            "  16:	01f5b423          	sd	t6,8(a1)\n"
+            "  16:	01f93423          	sd	t6,8(s2)\n"
             "  1a:	4fc1                	li	t6,16\n"
-            "  1c:	9fb2                	add	t6,t6,a2\n"
+            "  1c:	9fce                	add	t6,t6,s3\n"
             "  1e:	000fbf83          	ld	t6,0(t6)\n"
-            "  22:	8f82                	jr	t6\n"
-            "  24:	0005bf03          	ld	t5,0(a1)\n"
-            "  28:	000f2f03          	lw	t5,0(t5)\n"
-            "  2c:	0f62                	slli	t5,t5,0x18\n"
-            "  2e:	14000f93          	li	t6,320\n"
-            "  32:	00000013          	nop\n"
-            "  36:	01ff6f33          	or	t5,t5,t6\n"
-            "  3a:	0fe53023          	sd	t5,224(a0)\n"
-            "  3e:	02000f93          	li	t6,32\n"
-            "  42:	9fb2                	add	t6,t6,a2\n"
-            "  44:	000fbf83          	ld	t6,0(t6)\n"
-            "  48:	4609                	li	a2,2\n"
-            "  4a:	4695                	li	a3,5\n"
-            "  4c:	577d                	li	a4,-1\n"
-            "  4e:	8f82                	jr	t6"
+            "  22:	0544b823          	sd	s4,80(s1)\n"
+            "  26:	8f82                	jr	t6\n"
+            "  28:	00093f03          	ld	t5,0(s2)\n"
+            "  2c:	000f2f03          	lw	t5,0(t5)\n"
+            "  30:	0f62                	slli	t5,t5,0x18\n"
+            "  32:	16000f93          	li	t6,352\n"
+            "  36:	00000013          	nop\n"
+            "  3a:	01ff6f33          	or	t5,t5,t6\n"
+            "  3e:	0fe4b023          	sd	t5,224(s1)\n"
+            "  42:	02000f93          	li	t6,32\n"
+            "  46:	9fce                	add	t6,t6,s3\n"
+            "  48:	000fbf83          	ld	t6,0(t6)\n"
+            "  4c:	4509                	li	a0,2\n"
+            "  4e:	4595                	li	a1,5\n"
+            "  50:	567d                	li	a2,-1\n"
+            "  52:	0544b823          	sd	s4,80(s1)\n"
+            "  56:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -2121,58 +2049,62 @@ call_fun_test() ->
     Stream = ?BACKEND:stream(State9),
     Dump =
         <<
-            "   0:	0105af83          	lw	t6,16(a1)\n"
+            "   0:	01092f83          	lw	t6,16(s2)\n"
             "   4:	1ffd                	addi	t6,t6,-1\n"
-            "   6:	01f5a823          	sw	t6,16(a1)\n"
-            "   a:	000f9d63          	bnez	t6,0x24\n"
+            "   6:	01f92823          	sw	t6,16(s2)\n"
+            "   a:	000f9f63          	bnez	t6,0x28\n"
             "   e:	00000f97          	auipc	t6,0x0\n"
-            "  12:	0fd9                	addi	t6,t6,22 # 0x24\n"
+            "  12:	0fe9                	addi	t6,t6,26 # 0x28\n"
             "  14:	0001                	nop\n"
-            "  16:	01f5b423          	sd	t6,8(a1)\n"
+            "  16:	01f93423          	sd	t6,8(s2)\n"
             "  1a:	4fc1                	li	t6,16\n"
-            "  1c:	9fb2                	add	t6,t6,a2\n"
+            "  1c:	9fce                	add	t6,t6,s3\n"
             "  1e:	000fbf83          	ld	t6,0(t6)\n"
-            "  22:	8f82                	jr	t6\n"
-            "  24:	05853f83          	ld	t6,88(a0)\n"
-            "  28:	8f7e                	mv	t5,t6\n"
-            "  2a:	8efa                	mv	t4,t5\n"
-            "  2c:	003efe93          	andi	t4,t4,3\n"
-            "  30:	4e09                	li	t3,2\n"
-            "  32:	01ce8d63          	beq	t4,t3,0x4c\n"
-            "  36:	09800f93          	li	t6,152\n"
-            "  3a:	9fb2                	add	t6,t6,a2\n"
-            "  3c:	000fbf83          	ld	t6,0(t6)\n"
-            "  40:	04000613          	li	a2,64\n"
-            "  44:	18b00693          	li	a3,395\n"
-            "  48:	877a                	mv	a4,t5\n"
-            "  4a:	8f82                	jr	t6\n"
-            "  4c:	ffcf7f13          	andi	t5,t5,-4\n"
-            "  50:	000f3f03          	ld	t5,0(t5)\n"
-            "  54:	8efa                	mv	t4,t5\n"
-            "  56:	03fefe93          	andi	t4,t4,63\n"
-            "  5a:	4e51                	li	t3,20\n"
-            "  5c:	01ce8d63          	beq	t4,t3,0x76\n"
-            "  60:	09800f93          	li	t6,152\n"
-            "  64:	9fb2                	add	t6,t6,a2\n"
-            "  66:	000fbf83          	ld	t6,0(t6)\n"
-            "  6a:	06a00613          	li	a2,106\n"
-            "  6e:	18b00693          	li	a3,395\n"
-            "  72:	877a                	mv	a4,t5\n"
-            "  74:	8f82                	jr	t6\n"
-            "  76:	0005be83          	ld	t4,0(a1)\n"
-            "  7a:	000eae83          	lw	t4,0(t4)\n"
-            "  7e:	0ee2                	slli	t4,t4,0x18\n"
-            "  80:	28800f13          	li	t5,648\n"
-            "  84:	00000013          	nop\n"
-            "  88:	01eeeeb3          	or	t4,t4,t5\n"
-            "  8c:	0fd53023          	sd	t4,224(a0)\n"
-            "  90:	02000f13          	li	t5,32\n"
-            "  94:	0f0e                	slli	t5,t5,0x3\n"
-            "  96:	9f32                	add	t5,t5,a2\n"
-            "  98:	000f3f03          	ld	t5,0(t5)\n"
-            "  9c:	867e                	mv	a2,t6\n"
-            "  9e:	4681                	li	a3,0\n"
-            "  a0:	8f02                	jr	t5"
+            "  22:	0544b823          	sd	s4,80(s1)\n"
+            "  26:	8f82                	jr	t6\n"
+            "  28:	0584bf83          	ld	t6,88(s1)\n"
+            "  2c:	8f7e                	mv	t5,t6\n"
+            "  2e:	8efa                	mv	t4,t5\n"
+            "  30:	003efe93          	andi	t4,t4,3\n"
+            "  34:	4e09                	li	t3,2\n"
+            "  36:	01ce8f63          	beq	t4,t3,0x54\n"
+            "  3a:	09800f93          	li	t6,152\n"
+            "  3e:	9fce                	add	t6,t6,s3\n"
+            "  40:	000fbf83          	ld	t6,0(t6)\n"
+            "  44:	04400513          	li	a0,68\n"
+            "  48:	18b00593          	li	a1,395\n"
+            "  4c:	867a                	mv	a2,t5\n"
+            "  4e:	0544b823          	sd	s4,80(s1)\n"
+            "  52:	8f82                	jr	t6\n"
+            "  54:	ffcf7f13          	andi	t5,t5,-4\n"
+            "  58:	000f3f03          	ld	t5,0(t5)\n"
+            "  5c:	8efa                	mv	t4,t5\n"
+            "  5e:	03fefe93          	andi	t4,t4,63\n"
+            "  62:	4e51                	li	t3,20\n"
+            "  64:	01ce8f63          	beq	t4,t3,0x82\n"
+            "  68:	09800f93          	li	t6,152\n"
+            "  6c:	9fce                	add	t6,t6,s3\n"
+            "  6e:	000fbf83          	ld	t6,0(t6)\n"
+            "  72:	07200513          	li	a0,114\n"
+            "  76:	18b00593          	li	a1,395\n"
+            "  7a:	867a                	mv	a2,t5\n"
+            "  7c:	0544b823          	sd	s4,80(s1)\n"
+            "  80:	8f82                	jr	t6\n"
+            "  82:	00093e83          	ld	t4,0(s2)\n"
+            "  86:	000eae83          	lw	t4,0(t4)\n"
+            "  8a:	0ee2                	slli	t4,t4,0x18\n"
+            "  8c:	2c800f13          	li	t5,712\n"
+            "  90:	00000013          	nop\n"
+            "  94:	01eeeeb3          	or	t4,t4,t5\n"
+            "  98:	0fd4b023          	sd	t4,224(s1)\n"
+            "  9c:	02000f13          	li	t5,32\n"
+            "  a0:	0f0e                	slli	t5,t5,0x3\n"
+            "  a2:	9f4e                	add	t5,t5,s3\n"
+            "  a4:	000f3f03          	ld	t5,0(t5)\n"
+            "  a8:	857e                	mv	a0,t6\n"
+            "  aa:	4581                	li	a1,0\n"
+            "  ac:	0544b823          	sd	s4,80(s1)\n"
+            "  b0:	8f02                	jr	t5"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -2184,20 +2116,21 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
-        "   4:	0105af83          	lw	t6,16(a1)\n"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
+        "   4:	01092f83          	lw	t6,16(s2)\n"
         "   8:	1ffd                	addi	t6,t6,-1\n"
-        "   a:	01f5a823          	sw	t6,16(a1)\n"
-        "   e:	000f9d63          	bnez	t6,0x28\n"
+        "   a:	01f92823          	sw	t6,16(s2)\n"
+        "   e:	000f9f63          	bnez	t6,0x2c\n"
         "  12:	00000f97          	auipc	t6,0x0\n"
-        "  16:	0fd9                	addi	t6,t6,22 # 0x28\n"
+        "  16:	0fe9                	addi	t6,t6,26 # 0x2c\n"
         "  18:	0001                	nop\n"
-        "  1a:	01f5b423          	sd	t6,8(a1)\n"
+        "  1a:	01f93423          	sd	t6,8(s2)\n"
         "  1e:	4fc1                	li	t6,16\n"
-        "  20:	9fb2                	add	t6,t6,a2\n"
+        "  20:	9fce                	add	t6,t6,s3\n"
         "  22:	000fbf83          	ld	t6,0(t6)\n"
-        "  26:	8f82                	jr	t6\n"
-        "  28:	05853f83          	ld	t6,88(a0)"
+        "  26:	0544b823          	sd	s4,80(s1)\n"
+        "  2a:	8f82                	jr	t6\n"
+        "  2c:	0584bf83          	ld	t6,88(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -2217,14 +2150,14 @@ move_to_vm_register_test_() ->
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {x_reg, 0}, <<
                         "   0:	4f81                	li	t6,0\n"
-                        "   2:	05f53c23          	sd	t6,88(a0)\n"
+                        "   2:	05f4bc23          	sd	t6,88(s1)\n"
                         "   6:	a8ed                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {x_reg, extra}, <<
                         "   0:	4f81                	li	t6,0\n"
-                        "   2:	0df53c23          	sd	t6,216(a0)\n"
+                        "   2:	0df4bc23          	sd	t6,216(s1)\n"
                         "   6:	a8ed                	j	0x100"
                     >>)
                 end),
@@ -2238,48 +2171,44 @@ move_to_vm_register_test_() ->
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {y_reg, 2}, <<
                         "   0:	4f01                	li	t5,0\n"
-                        "   2:	05053f83          	ld	t6,80(a0)\n"
-                        "   6:	01efb823          	sd	t5,16(t6)\n"
-                        "   a:	a8dd                	j	0x100"
+                        "   2:	01ea3823          	sd	t5,16(s4)\n"
+                        "   6:	a8ed                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {y_reg, 20}, <<
                         "   0:	4f01                	li	t5,0\n"
-                        "   2:	05053f83          	ld	t6,80(a0)\n"
-                        "   6:	0befb023          	sd	t5,160(t6)\n"
-                        "   a:	a8dd                	j	0x100"
+                        "   2:	0bea3023          	sd	t5,160(s4)\n"
+                        "   6:	a8ed                	j	0x100"
                     >>)
                 end),
                 %% Test: Immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {x_reg, 0}, <<
                         "   0:	02a00f93          	li	t6,42\n"
-                        "   4:	05f53c23          	sd	t6,88(a0)\n"
+                        "   4:	05f4bc23          	sd	t6,88(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {x_reg, extra}, <<
                         "   0:	02a00f93          	li	t6,42\n"
-                        "   4:	0df53c23          	sd	t6,216(a0)\n"
+                        "   4:	0df4bc23          	sd	t6,216(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {y_reg, 2}, <<
                         "   0:	02a00f13          	li	t5,42\n"
-                        "   4:	05053f83          	ld	t6,80(a0)\n"
-                        "   8:	01efb823          	sd	t5,16(t6)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   4:	01ea3823          	sd	t5,16(s4)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {y_reg, 20}, <<
                         "   0:	02a00f13          	li	t5,42\n"
-                        "   4:	05053f83          	ld	t6,80(a0)\n"
-                        "   8:	0befb023          	sd	t5,160(t6)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   4:	0bea3023          	sd	t5,160(s4)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: Immediate to ptr
@@ -2293,15 +2222,15 @@ move_to_vm_register_test_() ->
                 %% Test: x_reg to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 1}, {x_reg, 2}, <<
-                        "   0:	06053f83          	ld	t6,96(a0)\n"
-                        "   4:	07f53423          	sd	t6,104(a0)\n"
+                        "   0:	0604bf83          	ld	t6,96(s1)\n"
+                        "   4:	07f4b423          	sd	t6,104(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: x_reg to ptr
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 1}, {ptr, a1}, <<
-                        "   0:	06053f83          	ld	t6,96(a0)\n"
+                        "   0:	0604bf83          	ld	t6,96(s1)\n"
                         "   4:	01f5b023          	sd	t6,0(a1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
@@ -2310,47 +2239,44 @@ move_to_vm_register_test_() ->
                 ?_test(begin
                     move_to_vm_register_test0(State0, {ptr, t3}, {x_reg, 3}, <<
                         "   0:	000e3f83          	ld	t6,0(t3)\n"
-                        "   4:	07f53823          	sd	t6,112(a0)\n"
+                        "   4:	07f4b823          	sd	t6,112(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: x_reg to y_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 0}, {y_reg, 1}, <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	05053f03          	ld	t5,80(a0)\n"
-                        "   8:	01ff3423          	sd	t6,8(t5)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	01fa3423          	sd	t6,8(s4)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: y_reg to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {y_reg, 0}, {x_reg, 3}, <<
-                        "   0:	05053f03          	ld	t5,80(a0)\n"
-                        "   4:	000f3f83          	ld	t6,0(t5)\n"
-                        "   8:	07f53823          	sd	t6,112(a0)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   0:	000a3f83          	ld	t6,0(s4)\n"
+                        "   4:	07f4b823          	sd	t6,112(s1)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: y_reg to y_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {y_reg, 1}, {x_reg, 3}, <<
-                        "   0:	05053f03          	ld	t5,80(a0)\n"
-                        "   4:	008f3f83          	ld	t6,8(t5)\n"
-                        "   8:	07f53823          	sd	t6,112(a0)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   0:	008a3f83          	ld	t6,8(s4)\n"
+                        "   4:	07f4b823          	sd	t6,112(s1)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: Native register to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, t4, {x_reg, 0}, <<
-                        "   0:	05d53c23          	sd	t4,88(a0)\n"
+                        "   0:	05d4bc23          	sd	t4,88(s1)\n"
                         "   4:	a8f5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, t5, {x_reg, extra}, <<
-                        "   0:	0de53c23          	sd	t5,216(a0)\n"
+                        "   0:	0de4bc23          	sd	t5,216(s1)\n"
                         "   4:	a8f5                	j	0x100"
                     >>)
                 end),
@@ -2364,9 +2290,8 @@ move_to_vm_register_test_() ->
                 %% Test: Native register to y_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, a1, {y_reg, 0}, <<
-                        "   0:	05053f83          	ld	t6,80(a0)\n"
-                        "   4:	00bfb023          	sd	a1,0(t6)\n"
-                        "   8:	a8e5                	j	0x100"
+                        "   0:	00ba3023          	sd	a1,0(s4)\n"
+                        "   4:	a8f5                	j	0x100"
                     >>)
                 end),
                 %% Test: Large immediate to x_reg (uses lui + addi in RISC-V)
@@ -2374,7 +2299,7 @@ move_to_vm_register_test_() ->
                     move_to_vm_register_test0(State0, 16#12345678, {x_reg, 0}, <<
                         "   0:	12345fb7          	lui	t6,0x12345\n"
                         "   4:	678f8f9b          	addiw	t6,t6,1656 # 0x12345678\n"
-                        "   8:	05f53c23          	sd	t6,88(a0)\n"
+                        "   8:	05f4bc23          	sd	t6,88(s1)\n"
                         "   c:	a8d5                	j	0x100"
                     >>)
                 end),
@@ -2382,7 +2307,7 @@ move_to_vm_register_test_() ->
                     move_to_vm_register_test0(State0, 16#12345678, {x_reg, extra}, <<
                         "   0:	12345fb7          	lui	t6,0x12345\n"
                         "   4:	678f8f9b          	addiw	t6,t6,1656 # 0x12345678\n"
-                        "   8:	0df53c23          	sd	t6,216(a0)\n"
+                        "   8:	0df4bc23          	sd	t6,216(s1)\n"
                         "   c:	a8d5                	j	0x100"
                     >>)
                 end),
@@ -2390,18 +2315,16 @@ move_to_vm_register_test_() ->
                     move_to_vm_register_test0(State0, 16#12345678, {y_reg, 2}, <<
                         "   0:	12345fb7          	lui	t6,0x12345\n"
                         "   4:	678f8f9b          	addiw	t6,t6,1656 # 0x12345678\n"
-                        "   8:	05053f03          	ld	t5,80(a0)\n"
-                        "   c:	01ff3823          	sd	t6,16(t5)\n"
-                        "  10:	a8c5                	j	0x100"
+                        "   8:	01fa3823          	sd	t6,16(s4)\n"
+                        "   c:	a8d5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 16#12345678, {y_reg, 20}, <<
                         "   0:	12345fb7          	lui	t6,0x12345\n"
                         "   4:	678f8f9b          	addiw	t6,t6,1656 # 0x12345678\n"
-                        "   8:	05053f03          	ld	t5,80(a0)\n"
-                        "   c:	0bff3023          	sd	t6,160(t5)\n"
-                        "  10:	a8c5                	j	0x100"
+                        "   8:	0bfa3023          	sd	t6,160(s4)\n"
+                        "   c:	a8d5                	j	0x100"
                     >>)
                 end),
                 %% Test: Large immediate to ptr
@@ -2416,51 +2339,48 @@ move_to_vm_register_test_() ->
                 %% Test: x_reg to y_reg (high index)
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 15}, {y_reg, 31}, <<
-                        "   0:	0d053f83          	ld	t6,208(a0)\n"
-                        "   4:	05053f03          	ld	t5,80(a0)\n"
-                        "   8:	0fff3c23          	sd	t6,248(t5)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   0:	0d04bf83          	ld	t6,208(s1)\n"
+                        "   4:	0ffa3c23          	sd	t6,248(s4)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: y_reg to x_reg (high index)
                 ?_test(begin
                     move_to_vm_register_test0(State0, {y_reg, 31}, {x_reg, 15}, <<
-                        "   0:	05053f03          	ld	t5,80(a0)\n"
-                        "   4:	0f8f3f83          	ld	t6,248(t5)\n"
-                        "   8:	0df53823          	sd	t6,208(a0)\n"
-                        "   c:	a8d5                	j	0x100"
+                        "   0:	0f8a3f83          	ld	t6,248(s4)\n"
+                        "   4:	0df4b823          	sd	t6,208(s1)\n"
+                        "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 %% Test: Large y_reg index (32) that exceeds str immediate offset limit
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {y_reg, 32}, <<
                         "   0:	02a00f13          	li	t5,42\n"
-                        "   4:	05053f83          	ld	t6,80(a0)\n"
-                        "   8:	10000e93          	li	t4,256\n"
-                        "   c:	9efe                	add	t4,t4,t6\n"
-                        "   e:	01eeb023          	sd	t5,0(t4)\n"
-                        "  12:	a0fd                	j	0x100"
+                        "   4:	10000f93          	li	t6,256\n"
+                        "   8:	9fd2                	add	t6,t6,s4\n"
+                        "   a:	01efb023          	sd	t5,0(t6)\n"
+                        "   e:	a8cd                	j	0x100"
                     >>)
                 end),
                 %% Test: Negative immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, -1, {x_reg, 0}, <<
                         "   0:	5ffd                	li	t6,-1\n"
-                        "   2:	05f53c23          	sd	t6,88(a0)\n"
+                        "   2:	05f4bc23          	sd	t6,88(s1)\n"
                         "   6:	a8ed                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, -100, {x_reg, 0}, <<
                         "   0:	f9c00f93          	li	t6,-100\n"
-                        "   4:	05f53c23          	sd	t6,88(a0)\n"
+                        "   4:	05f4bc23          	sd	t6,88(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, -1000, {x_reg, 0}, <<
                         "   0:	c1800f93          	li	t6,-1000\n"
-                        "   4:	05f53c23          	sd	t6,88(a0)\n"
+                        "   4:	05f4bc23          	sd	t6,88(s1)\n"
                         "   8:	a8e5                	j	0x100"
                     >>)
                 end)
@@ -2483,7 +2403,7 @@ move_array_element_test_() ->
                 ?_test(begin
                     move_array_element_test0(State0, a3, 2, {x_reg, 0}, <<
                         "   0:	0106bf83          	ld	t6,16(a3)\n"
-                        "   4:	05f53c23          	sd	t6,88(a0)"
+                        "   4:	05f4bc23          	sd	t6,88(s1)"
                     >>)
                 end),
                 %% move_array_element: reg[x] to ptr
@@ -2497,8 +2417,7 @@ move_array_element_test_() ->
                 ?_test(begin
                     move_array_element_test0(State0, a3, 1, {y_reg, 2}, <<
                         "   0:	0086bf03          	ld	t5,8(a3)\n"
-                        "   4:	05053f83          	ld	t6,80(a0)\n"
-                        "   8:	01efb823          	sd	t5,16(t6)"
+                        "   4:	01ea3823          	sd	t5,16(s4)"
                     >>)
                 end),
                 %% move_array_element: reg[x] to native reg (t4)
@@ -2511,15 +2430,14 @@ move_array_element_test_() ->
                 ?_test(begin
                     move_array_element_test0(State0, a3, 7, {y_reg, 31}, <<
                         "   0:	0386bf03          	ld	t5,56(a3)\n"
-                        "   4:	05053f83          	ld	t6,80(a0)\n"
-                        "   8:	0fefbc23          	sd	t5,248(t6)"
+                        "   4:	0fea3c23          	sd	t5,248(s4)"
                     >>)
                 end),
                 %% move_array_element: reg[x] to x_reg
                 ?_test(begin
                     move_array_element_test0(State0, a3, 7, {x_reg, 15}, <<
                         "   0:	0386bf83          	ld	t6,56(a3)\n"
-                        "   4:	0df53823          	sd	t6,208(a0)"
+                        "   4:	0df4b823          	sd	t6,208(s1)"
                     >>)
                 end),
                 %% move_array_element: reg_x[reg_y] to x_reg
@@ -2530,7 +2448,7 @@ move_array_element_test_() ->
                         "   4:	0f8e                	slli	t6,t6,0x3\n"
                         "   6:	01f68fb3          	add	t6,a3,t6\n"
                         "   a:	000fbf83          	ld	t6,0(t6)\n"
-                        "   e:	07f53423          	sd	t6,104(a0)"
+                        "   e:	07f4b423          	sd	t6,104(s1)"
                     >>)
                 end),
                 %% move_array_element: reg_x[reg_y] to pointer (large x reg)
@@ -2552,17 +2470,16 @@ move_array_element_test_() ->
                         "   4:	0f8e                	slli	t6,t6,0x3\n"
                         "   6:	01f68fb3          	add	t6,a3,t6\n"
                         "   a:	000fbf83          	ld	t6,0(t6)\n"
-                        "   e:	05053f03          	ld	t5,80(a0)\n"
-                        "  12:	0fff3c23          	sd	t6,248(t5)"
+                        "   e:	0ffa3c23          	sd	t6,248(s4)"
                     >>)
                 end),
                 %% move_array_element with integer index and x_reg destination
                 ?_test(begin
                     {State1, BaseReg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
                     move_array_element_test0(State1, BaseReg, 2, {x_reg, 5}, <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
                         "   4:	010fbf03          	ld	t5,16(t6)\n"
-                        "   8:	09e53023          	sd	t5,128(a0)"
+                        "   8:	09e4b023          	sd	t5,128(s1)"
                     >>)
                 end)
             ]
@@ -2600,7 +2517,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, a3, 2),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
                         "   4:	01f6b823          	sd	t6,16(a3)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
@@ -2610,7 +2527,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, a3, t3),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
                         "   4:	8f72                	mv	t5,t3\n"
                         "   6:	0f0e                	slli	t5,t5,0x3\n"
                         "   8:	01e68f33          	add	t5,a3,t5\n"
@@ -2636,12 +2553,11 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {y_reg, 2}, a3, t3),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05053f03          	ld	t5,80(a0)\n"
-                        "   4:	010f3f83          	ld	t6,16(t5)\n"
-                        "   8:	8f72                	mv	t5,t3\n"
-                        "   a:	0f0e                	slli	t5,t5,0x3\n"
-                        "   c:	01e68f33          	add	t5,a3,t5\n"
-                        "  10:	01ff3023          	sd	t6,0(t5)"
+                        "   0:	010a3f83          	ld	t6,16(s4)\n"
+                        "   4:	8f72                	mv	t5,t3\n"
+                        "   6:	0f0e                	slli	t5,t5,0x3\n"
+                        "   8:	01e68f33          	add	t5,a3,t5\n"
+                        "   c:	01ff3023          	sd	t6,0(t5)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -2650,7 +2566,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, a3, 2, 1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
                         "   4:	01f6bc23          	sd	t6,24(a3)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
@@ -2667,7 +2583,7 @@ move_to_array_element_test_() ->
                     State3 = ?BACKEND:move_to_array_element(State2, {x_reg, 0}, a3, t3, 1),
                     Stream = ?BACKEND:stream(State3),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
                         "   4:	001e0f13          	addi	t5,t3,1\n"
                         "   8:	0f0e                	slli	t5,t5,0x3\n"
                         "   a:	01e68f33          	add	t5,a3,t5\n"
@@ -2763,7 +2679,7 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     ?assertEqual(t6, Reg),
                     Dump = <<
-                        "   0:	08053f83          	ld	t6,128(a0)"
+                        "   0:	0804bf83          	ld	t6,128(s1)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -2773,8 +2689,7 @@ move_to_native_register_test_() ->
                     Stream = ?BACKEND:stream(State1),
                     ?assertEqual(t6, Reg),
                     Dump = <<
-                        "   0:	05053f03          	ld	t5,80(a0)\n"
-                        "   4:	018f3f83          	ld	t6,24(t5)"
+                        "   0:	018a3f83          	ld	t6,24(s4)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -2810,7 +2725,7 @@ move_to_native_register_test_() ->
                     State1 = ?BACKEND:move_to_native_register(State0, {x_reg, 2}, a3),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	7534                	ld	a3,104(a0)"
+                        "   0:	74b4                	ld	a3,104(s1)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -2819,8 +2734,7 @@ move_to_native_register_test_() ->
                     State1 = ?BACKEND:move_to_native_register(State0, {y_reg, 2}, a1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	05053f83          	ld	t6,80(a0)\n"
-                        "   4:	010fb583          	ld	a1,16(t6)"
+                        "   0:	010a3583          	ld	a1,16(s4)"
                     >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -2832,8 +2746,8 @@ move_to_native_register_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
-                        "   0:	05853f83          	ld	t6,88(a0)\n"
-                        "   4:	0185bf03          	ld	t5,24(a1)\n"
+                        "   0:	0584bf83          	ld	t6,88(s1)\n"
+                        "   4:	01893f03          	ld	t5,24(s2)\n"
                         "   8:	008fae83          	lw	t4,8(t6)\n"
                         "   c:	01df2c23          	sw	t4,24(t5)\n"
                         "  10:	00cfae83          	lw	t4,12(t6)\n"
@@ -3006,22 +2920,15 @@ set_args1_y_reg_test() ->
     Dump = <<
         "   0:	04300f93          	li	t6,67\n"
         "   4:	0f8e                	slli	t6,t6,0x3\n"
-        "   6:	9fb2                	add	t6,t6,a2\n"
+        "   6:	9fce                	add	t6,t6,s3\n"
         "   8:	000fbf83          	ld	t6,0(t6)\n"
-        "   c:	1101                	addi	sp,sp,-32\n"
+        "   c:	1141                	addi	sp,sp,-16\n"
         "   e:	e006                	sd	ra,0(sp)\n"
-        "  10:	e42a                	sd	a0,8(sp)\n"
-        "  12:	e82e                	sd	a1,16(sp)\n"
-        "  14:	ec32                	sd	a2,24(sp)\n"
-        "  16:	05053f03          	ld	t5,80(a0)\n"
-        "  1a:	028f3503          	ld	a0,40(t5)\n"
-        "  1e:	9f82                	jalr	t6\n"
-        "  20:	8faa                	mv	t6,a0\n"
-        "  22:	6082                	ld	ra,0(sp)\n"
-        "  24:	6522                	ld	a0,8(sp)\n"
-        "  26:	65c2                	ld	a1,16(sp)\n"
-        "  28:	6662                	ld	a2,24(sp)\n"
-        "  2a:	02010113          	addi	sp,sp,32"
+        "  10:	028a3503          	ld	a0,40(s4)\n"
+        "  14:	9f82                	jalr	t6\n"
+        "  16:	8faa                	mv	t6,a0\n"
+        "  18:	6082                	ld	ra,0(sp)\n"
+        "  1a:	0141                	addi	sp,sp,16"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3033,10 +2940,9 @@ large_y_reg_read_test() ->
     Stream = ?BACKEND:stream(State1),
     % Expected: uses helper with temp register for large offset
     Dump = <<
-        "   0:	05053f03          	ld	t5,80(a0)\n"
-        "   4:	3d800f93          	li	t6,984\n"
-        "   8:	9ffa                	add	t6,t6,t5\n"
-        "   a:	000fbf83          	ld	t6,0(t6)"
+        "   0:	3d800f93          	li	t6,984\n"
+        "   4:	9fd2                	add	t6,t6,s4\n"
+        "   6:	000fbf83          	ld	t6,0(t6)"
     >>,
     ?assertStream(riscv64, Dump, Stream),
     ?assertEqual(t6, Reg).
@@ -3050,10 +2956,9 @@ large_y_reg_write_test() ->
     % Expected: uses helper with temp registers for large offset
     Dump = <<
         "   0:	02a00f13          	li	t5,42\n"
-        "   4:	05053f83          	ld	t6,80(a0)\n"
-        "   8:	3d800e93          	li	t4,984\n"
-        "   c:	9efe                	add	t4,t4,t6\n"
-        "   e:	01eeb023          	sd	t5,0(t4)"
+        "   4:	3d800f93          	li	t6,984\n"
+        "   8:	9fd2                	add	t6,t6,s4\n"
+        "   a:	01efb023          	sd	t5,0(t6)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3071,15 +2976,14 @@ large_y_reg_read_register_exhaustion_test() ->
     Stream = ?BACKEND:stream(StateFinal),
     % Expected: uses t0+t1 fallback sequence when temps are exhausted
     Dump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
-        "   4:	06053f03          	ld	t5,96(a0)\n"
-        "   8:	06853e83          	ld	t4,104(a0)\n"
-        "   c:	07053e03          	ld	t3,112(a0)\n"
-        "  10:	07853383          	ld	t2,120(a0)\n"
-        "  14:	05053283          	ld	t0,80(a0)\n"
-        "  18:	11800313          	li	t1,280\n"
-        "  1c:	9316                	add	t1,t1,t0\n"
-        "  1e:	00033303          	ld	t1,0(t1)"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
+        "   4:	0604bf03          	ld	t5,96(s1)\n"
+        "   8:	0684be83          	ld	t4,104(s1)\n"
+        "   c:	0704be03          	ld	t3,112(s1)\n"
+        "  10:	0784b383          	ld	t2,120(s1)\n"
+        "  14:	11800313          	li	t1,280\n"
+        "  18:	9352                	add	t1,t1,s4\n"
+        "  1a:	00033303          	ld	t1,0(t1)"
     >>,
     ?assertStream(riscv64, Dump, Stream),
     ?assertEqual(t1, ResultReg).
@@ -3099,15 +3003,14 @@ large_y_reg_write_register_exhaustion_test() ->
     Stream = ?BACKEND:stream(StateFinal),
     % Expected: uses t1/t0 fallback sequence
     Dump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
-        "   4:	06053f03          	ld	t5,96(a0)\n"
-        "   8:	06853e83          	ld	t4,104(a0)\n"
-        "   c:	07053e03          	ld	t3,112(a0)\n"
-        "  10:	07853383          	ld	t2,120(a0)\n"
-        "  14:	05053303          	ld	t1,80(a0)\n"
-        "  18:	19000293          	li	t0,400\n"
-        "  1c:	929a                	add	t0,t0,t1\n"
-        "  1e:	01f2b023          	sd	t6,0(t0)"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
+        "   4:	0604bf03          	ld	t5,96(s1)\n"
+        "   8:	0684be83          	ld	t4,104(s1)\n"
+        "   c:	0704be03          	ld	t3,112(s1)\n"
+        "  10:	0784b383          	ld	t2,120(s1)\n"
+        "  14:	19000313          	li	t1,400\n"
+        "  18:	9352                	add	t1,t1,s4\n"
+        "  1a:	01f33023          	sd	t6,0(t1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3118,8 +3021,7 @@ y_reg_boundary_direct_test() ->
     Stream = ?BACKEND:stream(State1),
     % Expected: uses direct addressing since 31 * 4 = 124 < 2048
     Dump = <<
-        "   0:	05053f03          	ld	t5,80(a0)\n"
-        "   4:	0f8f3f83          	ld	t6,248(t5)"
+        "   0:	0f8a3f83          	ld	t6,248(s4)"
     >>,
     ?assertStream(riscv64, Dump, Stream),
     ?assertEqual(t6, Reg).
@@ -3147,12 +3049,12 @@ and_register_exhaustion_negative_test() ->
     {StateResult, t6} = ?BACKEND:and_(StateNoRegs, {free, t6}, -4),
     Stream = ?BACKEND:stream(StateResult),
     ExpectedDump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
-        "   4:	06053f03          	ld	t5,96(a0)\n"
-        "   8:	06853e83          	ld	t4,104(a0)\n"
-        "   c:	07053e03          	ld	t3,112(a0)\n"
-        "  10:	07853383          	ld	t2,120(a0)\n"
-        "  14:	08053303          	ld	t1,128(a0)\n"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
+        "   4:	0604bf03          	ld	t5,96(s1)\n"
+        "   8:	0684be83          	ld	t4,104(s1)\n"
+        "   c:	0704be03          	ld	t3,112(s1)\n"
+        "  10:	0784b383          	ld	t2,120(s1)\n"
+        "  14:	0804b303          	ld	t1,128(s1)\n"
         "  18:	ffcfff93          	andi	t6,t6,-4"
     >>,
     ?assertStream(riscv64, ExpectedDump, Stream).
@@ -3170,12 +3072,12 @@ and_register_exhaustion_positive_test() ->
     {StateResult, t6} = ?BACKEND:and_(StateNoRegs, {free, t6}, 16#3F),
     Stream = ?BACKEND:stream(StateResult),
     ExpectedDump = <<
-        "   0:	05853f83          	ld	t6,88(a0)\n"
-        "   4:	06053f03          	ld	t5,96(a0)\n"
-        "   8:	06853e83          	ld	t4,104(a0)\n"
-        "   c:	07053e03          	ld	t3,112(a0)\n"
-        "  10:	07853383          	ld	t2,120(a0)\n"
-        "  14:	08053303          	ld	t1,128(a0)\n"
+        "   0:	0584bf83          	ld	t6,88(s1)\n"
+        "   4:	0604bf03          	ld	t5,96(s1)\n"
+        "   8:	0684be83          	ld	t4,104(s1)\n"
+        "   c:	0704be03          	ld	t3,112(s1)\n"
+        "  10:	0784b383          	ld	t2,120(s1)\n"
+        "  14:	0804b303          	ld	t1,128(s1)\n"
         "  18:	03ffff93          	andi	t6,t6,63"
     >>,
     ?assertStream(riscv64, ExpectedDump, Stream).
@@ -3196,22 +3098,18 @@ alloc_boxed_integer_fragment_small_test() ->
     Stream = ?BACKEND:stream(State1),
     Dump =
         <<
-            "   0:\t07800f93          \tli\tt6,120\n"
-            "   4:\t9fb2                \tadd\tt6,t6,a2\n"
-            "   6:\t000fbf83          \tld\tt6,0(t6)\n"
-            "   a:\t1101                \taddi\tsp,sp,-32\n"
-            "   c:\te006                \tsd\tra,0(sp)\n"
-            "   e:\te42a                \tsd\ta0,8(sp)\n"
-            "  10:\te82e                \tsd\ta1,16(sp)\n"
-            "  12:\tec32                \tsd\ta2,24(sp)\n"
-            "  14:\t02a00593          \tli\ta1,42\n"
-            "  18:\t9f82                \tjalr\tt6\n"
-            "  1a:\t8faa                \tmv\tt6,a0\n"
-            "  1c:\t6082                \tld\tra,0(sp)\n"
-            "  1e:\t6522                \tld\ta0,8(sp)\n"
-            "  20:\t65c2                \tld\ta1,16(sp)\n"
-            "  22:\t6662                \tld\ta2,24(sp)\n"
-            "  24:\t02010113          \taddi\tsp,sp,32"
+            "   0:	07800f93          	li	t6,120\n"
+            "   4:	9fce                	add	t6,t6,s3\n"
+            "   6:	000fbf83          	ld	t6,0(t6)\n"
+            "   a:	1141                	addi	sp,sp,-16\n"
+            "   c:	e006                	sd	ra,0(sp)\n"
+            "   e:	02a00513          	li	a0,42\n"
+            "  12:	0544b823          	sd	s4,80(s1)\n"
+            "  16:	9f82                	jalr	t6\n"
+            "  18:	8faa                	mv	t6,a0\n"
+            "  1a:	6082                	ld	ra,0(sp)\n"
+            "  1c:	0141                	addi	sp,sp,16\n"
+            "  1e:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3229,35 +3127,32 @@ alloc_boxed_integer_fragment_large_test() ->
     Dump =
         <<
             "   0:	07800f93          	li	t6,120\n"
-            "   4:	9fb2                	add	t6,t6,a2\n"
+            "   4:	9fce                	add	t6,t6,s3\n"
             "   6:	000fbf83          	ld	t6,0(t6)\n"
-            "   a:	1101                	addi	sp,sp,-32\n"
+            "   a:	1141                	addi	sp,sp,-16\n"
             "   c:	e006                	sd	ra,0(sp)\n"
-            "   e:	e42a                	sd	a0,8(sp)\n"
-            "  10:	e82e                	sd	a1,16(sp)\n"
-            "  12:	ec32                	sd	a2,24(sp)\n"
-            "  14:	123455b7          	lui	a1,0x12345\n"
-            "  18:	6795859b          	addiw	a1,a1,1657 # 0x12345679\n"
-            "  1c:	05b2                	slli	a1,a1,0xc\n"
-            "  1e:	9ac58593          	addi	a1,a1,-1620\n"
-            "  22:	05b2                	slli	a1,a1,0xc\n"
-            "  24:	cde58593          	addi	a1,a1,-802\n"
-            "  28:	05a2                	slli	a1,a1,0x8\n"
-            "  2a:	0f058593          	addi	a1,a1,240\n"
-            "  2e:	9f82                	jalr	t6\n"
-            "  30:	8faa                	mv	t6,a0\n"
-            "  32:	6082                	ld	ra,0(sp)\n"
-            "  34:	6522                	ld	a0,8(sp)\n"
-            "  36:	65c2                	ld	a1,16(sp)\n"
-            "  38:	6662                	ld	a2,24(sp)\n"
-            "  3a:	02010113          	addi	sp,sp,32\n"
-            "  3e:	09800f13          	li	t5,152\n"
-            "  42:	9f32                	add	t5,t5,a2\n"
-            "  44:	000f3f03          	ld	t5,0(t5)\n"
-            "  48:	04800613          	li	a2,72\n"
-            "  4c:	28b00693          	li	a3,651\n"
-            "  50:	877e                	mv	a4,t6\n"
-            "  52:	8f02                	jr	t5"
+            "   e:	12345537          	lui	a0,0x12345\n"
+            "  12:	6795051b          	addiw	a0,a0,1657 # 0x12345679\n"
+            "  16:	0532                	slli	a0,a0,0xc\n"
+            "  18:	9ac50513          	addi	a0,a0,-1620\n"
+            "  1c:	0532                	slli	a0,a0,0xc\n"
+            "  1e:	cde50513          	addi	a0,a0,-802\n"
+            "  22:	0522                	slli	a0,a0,0x8\n"
+            "  24:	0f050513          	addi	a0,a0,240\n"
+            "  28:	0544b823          	sd	s4,80(s1)\n"
+            "  2c:	9f82                	jalr	t6\n"
+            "  2e:	8faa                	mv	t6,a0\n"
+            "  30:	6082                	ld	ra,0(sp)\n"
+            "  32:	0141                	addi	sp,sp,16\n"
+            "  34:	0504ba03          	ld	s4,80(s1)\n"
+            "  38:	09800f13          	li	t5,152\n"
+            "  3c:	9f4e                	add	t5,t5,s3\n"
+            "  3e:	000f3f03          	ld	t5,0(t5)\n"
+            "  42:	04200513          	li	a0,66\n"
+            "  46:	28b00593          	li	a1,651\n"
+            "  4a:	867e                	mv	a2,t6\n"
+            "  4c:	0544b823          	sd	s4,80(s1)\n"
+            "  50:	8f02                	jr	t5"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3273,29 +3168,25 @@ call_func_ptr_stack_alignment_test() ->
     Stream = ?BACKEND:stream(State5),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
-            "   8:	06853e83          	ld	t4,104(a0)\n"
-            "   c:	07053e03          	ld	t3,112(a0)\n"
-            "  10:	fc010113          	addi	sp,sp,-64\n"
-            "  14:	e006                	sd	ra,0(sp)\n"
-            "  16:	e42a                	sd	a0,8(sp)\n"
-            "  18:	e82e                	sd	a1,16(sp)\n"
-            "  1a:	ec32                	sd	a2,24(sp)\n"
-            "  1c:	f07e                	sd	t6,32(sp)\n"
-            "  1e:	f47a                	sd	t5,40(sp)\n"
-            "  20:	f876                	sd	t4,48(sp)\n"
-            "  22:	02a00513          	li	a0,42\n"
-            "  26:	9e02                	jalr	t3\n"
-            "  28:	8e2a                	mv	t3,a0\n"
-            "  2a:	6082                	ld	ra,0(sp)\n"
-            "  2c:	6522                	ld	a0,8(sp)\n"
-            "  2e:	65c2                	ld	a1,16(sp)\n"
-            "  30:	6662                	ld	a2,24(sp)\n"
-            "  32:	7f82                	ld	t6,32(sp)\n"
-            "  34:	7f22                	ld	t5,40(sp)\n"
-            "  36:	7ec2                	ld	t4,48(sp)\n"
-            "  38:	04010113          	addi	sp,sp,64"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
+            "   8:	0684be83          	ld	t4,104(s1)\n"
+            "   c:	0704be03          	ld	t3,112(s1)\n"
+            "  10:	1101                	addi	sp,sp,-32\n"
+            "  12:	e006                	sd	ra,0(sp)\n"
+            "  14:	e47e                	sd	t6,8(sp)\n"
+            "  16:	e87a                	sd	t5,16(sp)\n"
+            "  18:	ec76                	sd	t4,24(sp)\n"
+            "  1a:	02a00513          	li	a0,42\n"
+            "  1e:	0544b823          	sd	s4,80(s1)\n"
+            "  22:	9e02                	jalr	t3\n"
+            "  24:	8e2a                	mv	t3,a0\n"
+            "  26:	6082                	ld	ra,0(sp)\n"
+            "  28:	6fa2                	ld	t6,8(sp)\n"
+            "  2a:	6f42                	ld	t5,16(sp)\n"
+            "  2c:	6ee2                	ld	t4,24(sp)\n"
+            "  2e:	02010113          	addi	sp,sp,32\n"
+            "  32:	0504ba03          	ld	s4,80(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3327,35 +3218,33 @@ call_func_ptr_register_exhaustion_test_() ->
                     Stream = ?BACKEND:stream(State7),
                     Dump =
                         <<
-                            "   0:	05853f83          	ld	t6,88(a0)\n"
-                            "   4:	06053f03          	ld	t5,96(a0)\n"
-                            "   8:	06853e83          	ld	t4,104(a0)\n"
-                            "   c:	07053e03          	ld	t3,112(a0)\n"
-                            "  10:	07853383          	ld	t2,120(a0)\n"
-                            "  14:	08053303          	ld	t1,128(a0)\n"
-                            "  18:	fc010113          	addi	sp,sp,-64\n"
+                            "   0:	0584bf83          	ld	t6,88(s1)\n"
+                            "   4:	0604bf03          	ld	t5,96(s1)\n"
+                            "   8:	0684be83          	ld	t4,104(s1)\n"
+                            "   c:	0704be03          	ld	t3,112(s1)\n"
+                            "  10:	0784b383          	ld	t2,120(s1)\n"
+                            "  14:	0804b303          	ld	t1,128(s1)\n"
+                            "  18:	fd010113          	addi	sp,sp,-48\n"
                             "  1c:	e006                	sd	ra,0(sp)\n"
-                            "  1e:	e42a                	sd	a0,8(sp)\n"
-                            "  20:	e82e                	sd	a1,16(sp)\n"
-                            "  22:	ec32                	sd	a2,24(sp)\n"
-                            "  24:	f07e                	sd	t6,32(sp)\n"
-                            "  26:	f476                	sd	t4,40(sp)\n"
-                            "  28:	f872                	sd	t3,48(sp)\n"
-                            "  2a:	fc1a                	sd	t1,56(sp)\n"
-                            "  2c:	861e                	mv	a2,t2\n"
-                            "  2e:	468d                	li	a3,3\n"
-                            "  30:	4705                	li	a4,1\n"
-                            "  32:	9f02                	jalr	t5\n"
-                            "  34:	8f2a                	mv	t5,a0\n"
-                            "  36:	6082                	ld	ra,0(sp)\n"
-                            "  38:	6522                	ld	a0,8(sp)\n"
-                            "  3a:	65c2                	ld	a1,16(sp)\n"
-                            "  3c:	6662                	ld	a2,24(sp)\n"
-                            "  3e:	7f82                	ld	t6,32(sp)\n"
-                            "  40:	7ea2                	ld	t4,40(sp)\n"
-                            "  42:	7e42                	ld	t3,48(sp)\n"
-                            "  44:	7362                	ld	t1,56(sp)\n"
-                            "  46:	04010113          	addi	sp,sp,64"
+                            "  1e:	e47e                	sd	t6,8(sp)\n"
+                            "  20:	e876                	sd	t4,16(sp)\n"
+                            "  22:	ec72                	sd	t3,24(sp)\n"
+                            "  24:	f01a                	sd	t1,32(sp)\n"
+                            "  26:	8526                	mv	a0,s1\n"
+                            "  28:	85ca                	mv	a1,s2\n"
+                            "  2a:	861e                	mv	a2,t2\n"
+                            "  2c:	468d                	li	a3,3\n"
+                            "  2e:	4705                	li	a4,1\n"
+                            "  30:	0544b823          	sd	s4,80(s1)\n"
+                            "  34:	9f02                	jalr	t5\n"
+                            "  36:	8f2a                	mv	t5,a0\n"
+                            "  38:	6082                	ld	ra,0(sp)\n"
+                            "  3a:	6fa2                	ld	t6,8(sp)\n"
+                            "  3c:	6ec2                	ld	t4,16(sp)\n"
+                            "  3e:	6e62                	ld	t3,24(sp)\n"
+                            "  40:	7302                	ld	t1,32(sp)\n"
+                            "  42:	03010113          	addi	sp,sp,48\n"
+                            "  46:	0504ba03          	ld	s4,80(s1)"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -3368,35 +3257,33 @@ call_func_ptr_register_exhaustion_test_() ->
                     Stream = ?BACKEND:stream(State7),
                     Dump =
                         <<
-                            "   0:	05853f83          	ld	t6,88(a0)\n"
-                            "   4:	06053f03          	ld	t5,96(a0)\n"
-                            "   8:	06853e83          	ld	t4,104(a0)\n"
-                            "   c:	07053e03          	ld	t3,112(a0)\n"
-                            "  10:	07853383          	ld	t2,120(a0)\n"
-                            "  14:	08053303          	ld	t1,128(a0)\n"
-                            "  18:	fc010113          	addi	sp,sp,-64\n"
+                            "   0:	0584bf83          	ld	t6,88(s1)\n"
+                            "   4:	0604bf03          	ld	t5,96(s1)\n"
+                            "   8:	0684be83          	ld	t4,104(s1)\n"
+                            "   c:	0704be03          	ld	t3,112(s1)\n"
+                            "  10:	0784b383          	ld	t2,120(s1)\n"
+                            "  14:	0804b303          	ld	t1,128(s1)\n"
+                            "  18:	fd010113          	addi	sp,sp,-48\n"
                             "  1c:	e006                	sd	ra,0(sp)\n"
-                            "  1e:	e42a                	sd	a0,8(sp)\n"
-                            "  20:	e82e                	sd	a1,16(sp)\n"
-                            "  22:	ec32                	sd	a2,24(sp)\n"
-                            "  24:	f07e                	sd	t6,32(sp)\n"
-                            "  26:	f476                	sd	t4,40(sp)\n"
-                            "  28:	f872                	sd	t3,48(sp)\n"
-                            "  2a:	fc1a                	sd	t1,56(sp)\n"
-                            "  2c:	861e                	mv	a2,t2\n"
-                            "  2e:	4685                	li	a3,1\n"
-                            "  30:	871a                	mv	a4,t1\n"
-                            "  32:	9f02                	jalr	t5\n"
-                            "  34:	8f2a                	mv	t5,a0\n"
-                            "  36:	6082                	ld	ra,0(sp)\n"
-                            "  38:	6522                	ld	a0,8(sp)\n"
-                            "  3a:	65c2                	ld	a1,16(sp)\n"
-                            "  3c:	6662                	ld	a2,24(sp)\n"
-                            "  3e:	7f82                	ld	t6,32(sp)\n"
-                            "  40:	7ea2                	ld	t4,40(sp)\n"
-                            "  42:	7e42                	ld	t3,48(sp)\n"
-                            "  44:	7362                	ld	t1,56(sp)\n"
-                            "  46:	04010113          	addi	sp,sp,64"
+                            "  1e:	e47e                	sd	t6,8(sp)\n"
+                            "  20:	e876                	sd	t4,16(sp)\n"
+                            "  22:	ec72                	sd	t3,24(sp)\n"
+                            "  24:	f01a                	sd	t1,32(sp)\n"
+                            "  26:	8526                	mv	a0,s1\n"
+                            "  28:	85ca                	mv	a1,s2\n"
+                            "  2a:	861e                	mv	a2,t2\n"
+                            "  2c:	4685                	li	a3,1\n"
+                            "  2e:	871a                	mv	a4,t1\n"
+                            "  30:	0544b823          	sd	s4,80(s1)\n"
+                            "  34:	9f02                	jalr	t5\n"
+                            "  36:	8f2a                	mv	t5,a0\n"
+                            "  38:	6082                	ld	ra,0(sp)\n"
+                            "  3a:	6fa2                	ld	t6,8(sp)\n"
+                            "  3c:	6ec2                	ld	t4,16(sp)\n"
+                            "  3e:	6e62                	ld	t3,24(sp)\n"
+                            "  40:	7302                	ld	t1,32(sp)\n"
+                            "  42:	03010113          	addi	sp,sp,48\n"
+                            "  46:	0504ba03          	ld	s4,80(s1)"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -3409,35 +3296,33 @@ call_func_ptr_register_exhaustion_test_() ->
                     Stream = ?BACKEND:stream(State7),
                     Dump =
                         <<
-                            "   0:	05853f83          	ld	t6,88(a0)\n"
-                            "   4:	06053f03          	ld	t5,96(a0)\n"
-                            "   8:	06853e83          	ld	t4,104(a0)\n"
-                            "   c:	07053e03          	ld	t3,112(a0)\n"
-                            "  10:	07853383          	ld	t2,120(a0)\n"
-                            "  14:	08053303          	ld	t1,128(a0)\n"
-                            "  18:	fc010113          	addi	sp,sp,-64\n"
+                            "   0:	0584bf83          	ld	t6,88(s1)\n"
+                            "   4:	0604bf03          	ld	t5,96(s1)\n"
+                            "   8:	0684be83          	ld	t4,104(s1)\n"
+                            "   c:	0704be03          	ld	t3,112(s1)\n"
+                            "  10:	0784b383          	ld	t2,120(s1)\n"
+                            "  14:	0804b303          	ld	t1,128(s1)\n"
+                            "  18:	fd010113          	addi	sp,sp,-48\n"
                             "  1c:	e006                	sd	ra,0(sp)\n"
-                            "  1e:	e42a                	sd	a0,8(sp)\n"
-                            "  20:	e82e                	sd	a1,16(sp)\n"
-                            "  22:	ec32                	sd	a2,24(sp)\n"
-                            "  24:	f07e                	sd	t6,32(sp)\n"
-                            "  26:	f476                	sd	t4,40(sp)\n"
-                            "  28:	f872                	sd	t3,48(sp)\n"
-                            "  2a:	fc1a                	sd	t1,56(sp)\n"
-                            "  2c:	861e                	mv	a2,t2\n"
-                            "  2e:	869a                	mv	a3,t1\n"
-                            "  30:	4705                	li	a4,1\n"
-                            "  32:	9f02                	jalr	t5\n"
-                            "  34:	8f2a                	mv	t5,a0\n"
-                            "  36:	6082                	ld	ra,0(sp)\n"
-                            "  38:	6522                	ld	a0,8(sp)\n"
-                            "  3a:	65c2                	ld	a1,16(sp)\n"
-                            "  3c:	6662                	ld	a2,24(sp)\n"
-                            "  3e:	7f82                	ld	t6,32(sp)\n"
-                            "  40:	7ea2                	ld	t4,40(sp)\n"
-                            "  42:	7e42                	ld	t3,48(sp)\n"
-                            "  44:	7362                	ld	t1,56(sp)\n"
-                            "  46:	04010113          	addi	sp,sp,64"
+                            "  1e:	e47e                	sd	t6,8(sp)\n"
+                            "  20:	e876                	sd	t4,16(sp)\n"
+                            "  22:	ec72                	sd	t3,24(sp)\n"
+                            "  24:	f01a                	sd	t1,32(sp)\n"
+                            "  26:	8526                	mv	a0,s1\n"
+                            "  28:	85ca                	mv	a1,s2\n"
+                            "  2a:	861e                	mv	a2,t2\n"
+                            "  2c:	869a                	mv	a3,t1\n"
+                            "  2e:	4705                	li	a4,1\n"
+                            "  30:	0544b823          	sd	s4,80(s1)\n"
+                            "  34:	9f02                	jalr	t5\n"
+                            "  36:	8f2a                	mv	t5,a0\n"
+                            "  38:	6082                	ld	ra,0(sp)\n"
+                            "  3a:	6fa2                	ld	t6,8(sp)\n"
+                            "  3c:	6ec2                	ld	t4,16(sp)\n"
+                            "  3e:	6e62                	ld	t3,24(sp)\n"
+                            "  40:	7302                	ld	t1,32(sp)\n"
+                            "  42:	03010113          	addi	sp,sp,48\n"
+                            "  46:	0504ba03          	ld	s4,80(s1)"
                         >>,
                     ?assertStream(riscv64, Dump, Stream),
                     ?assertEqual(t5, ResultReg)
@@ -3451,39 +3336,35 @@ call_func_ptr_register_exhaustion_test_() ->
                     Stream = ?BACKEND:stream(State7),
                     Dump =
                         <<
-                            "   0:	05853f83          	ld	t6,88(a0)\n"
-                            "   4:	06053f03          	ld	t5,96(a0)\n"
-                            "   8:	06853e83          	ld	t4,104(a0)\n"
-                            "   c:	07053e03          	ld	t3,112(a0)\n"
-                            "  10:	07853383          	ld	t2,120(a0)\n"
-                            "  14:	08053303          	ld	t1,128(a0)\n"
-                            "  18:	fb010113          	addi	sp,sp,-80\n"
+                            "   0:	0584bf83          	ld	t6,88(s1)\n"
+                            "   4:	0604bf03          	ld	t5,96(s1)\n"
+                            "   8:	0684be83          	ld	t4,104(s1)\n"
+                            "   c:	0704be03          	ld	t3,112(s1)\n"
+                            "  10:	0784b383          	ld	t2,120(s1)\n"
+                            "  14:	0804b303          	ld	t1,128(s1)\n"
+                            "  18:	fc010113          	addi	sp,sp,-64\n"
                             "  1c:	e006                	sd	ra,0(sp)\n"
-                            "  1e:	e42a                	sd	a0,8(sp)\n"
-                            "  20:	e82e                	sd	a1,16(sp)\n"
-                            "  22:	ec32                	sd	a2,24(sp)\n"
-                            "  24:	f07e                	sd	t6,32(sp)\n"
-                            "  26:	f47a                	sd	t5,40(sp)\n"
-                            "  28:	f876                	sd	t4,48(sp)\n"
-                            "  2a:	fc72                	sd	t3,56(sp)\n"
-                            "  2c:	e09e                	sd	t2,64(sp)\n"
-                            "  2e:	e49a                	sd	t1,72(sp)\n"
-                            "  30:	8fae                	mv	t6,a1\n"
-                            "  32:	857a                	mv	a0,t5\n"
-                            "  34:	85b6                	mv	a1,a3\n"
-                            "  36:	9f82                	jalr	t6\n"
-                            "  38:	e82a                	sd	a0,16(sp)\n"
-                            "  3a:	6082                	ld	ra,0(sp)\n"
-                            "  3c:	6522                	ld	a0,8(sp)\n"
-                            "  3e:	65c2                	ld	a1,16(sp)\n"
-                            "  40:	6662                	ld	a2,24(sp)\n"
-                            "  42:	7f82                	ld	t6,32(sp)\n"
-                            "  44:	7f22                	ld	t5,40(sp)\n"
-                            "  46:	7ec2                	ld	t4,48(sp)\n"
-                            "  48:	7e62                	ld	t3,56(sp)\n"
-                            "  4a:	6386                	ld	t2,64(sp)\n"
-                            "  4c:	6326                	ld	t1,72(sp)\n"
-                            "  4e:	05010113          	addi	sp,sp,80"
+                            "  1e:	e47e                	sd	t6,8(sp)\n"
+                            "  20:	e87a                	sd	t5,16(sp)\n"
+                            "  22:	ec76                	sd	t4,24(sp)\n"
+                            "  24:	f072                	sd	t3,32(sp)\n"
+                            "  26:	f41e                	sd	t2,40(sp)\n"
+                            "  28:	f81a                	sd	t1,48(sp)\n"
+                            "  2a:	8fae                	mv	t6,a1\n"
+                            "  2c:	857a                	mv	a0,t5\n"
+                            "  2e:	85b6                	mv	a1,a3\n"
+                            "  30:	0544b823          	sd	s4,80(s1)\n"
+                            "  34:	9f82                	jalr	t6\n"
+                            "  36:	85aa                	mv	a1,a0\n"
+                            "  38:	6082                	ld	ra,0(sp)\n"
+                            "  3a:	6fa2                	ld	t6,8(sp)\n"
+                            "  3c:	6f42                	ld	t5,16(sp)\n"
+                            "  3e:	6ee2                	ld	t4,24(sp)\n"
+                            "  40:	7e02                	ld	t3,32(sp)\n"
+                            "  42:	73a2                	ld	t2,40(sp)\n"
+                            "  44:	7342                	ld	t1,48(sp)\n"
+                            "  46:	04010113          	addi	sp,sp,64\n"
+                            "  4a:	0504ba03          	ld	s4,80(s1)"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end),
@@ -3497,39 +3378,35 @@ call_func_ptr_register_exhaustion_test_() ->
                     Stream = ?BACKEND:stream(State7),
                     Dump =
                         <<
-                            "   0:	05853f83          	ld	t6,88(a0)\n"
-                            "   4:	06053f03          	ld	t5,96(a0)\n"
-                            "   8:	06853e83          	ld	t4,104(a0)\n"
-                            "   c:	07053e03          	ld	t3,112(a0)\n"
-                            "  10:	07853383          	ld	t2,120(a0)\n"
-                            "  14:	08053303          	ld	t1,128(a0)\n"
-                            "  18:	fb010113          	addi	sp,sp,-80\n"
+                            "   0:	0584bf83          	ld	t6,88(s1)\n"
+                            "   4:	0604bf03          	ld	t5,96(s1)\n"
+                            "   8:	0684be83          	ld	t4,104(s1)\n"
+                            "   c:	0704be03          	ld	t3,112(s1)\n"
+                            "  10:	0784b383          	ld	t2,120(s1)\n"
+                            "  14:	0804b303          	ld	t1,128(s1)\n"
+                            "  18:	fd010113          	addi	sp,sp,-48\n"
                             "  1c:	e006                	sd	ra,0(sp)\n"
-                            "  1e:	e42a                	sd	a0,8(sp)\n"
-                            "  20:	e82e                	sd	a1,16(sp)\n"
-                            "  22:	ec32                	sd	a2,24(sp)\n"
-                            "  24:	f07e                	sd	t6,32(sp)\n"
-                            "  26:	f476                	sd	t4,40(sp)\n"
-                            "  28:	f872                	sd	t3,48(sp)\n"
-                            "  2a:	fc1e                	sd	t2,56(sp)\n"
-                            "  2c:	e09a                	sd	t1,64(sp)\n"
-                            "  2e:	4fc1                	li	t6,16\n"
-                            "  30:	9fb2                	add	t6,t6,a2\n"
-                            "  32:	000fbf83          	ld	t6,0(t6)\n"
-                            "  36:	857a                	mv	a0,t5\n"
-                            "  38:	85b6                	mv	a1,a3\n"
-                            "  3a:	9f82                	jalr	t6\n"
-                            "  3c:	8f2a                	mv	t5,a0\n"
-                            "  3e:	6082                	ld	ra,0(sp)\n"
-                            "  40:	6522                	ld	a0,8(sp)\n"
-                            "  42:	65c2                	ld	a1,16(sp)\n"
-                            "  44:	6662                	ld	a2,24(sp)\n"
-                            "  46:	7f82                	ld	t6,32(sp)\n"
-                            "  48:	7ea2                	ld	t4,40(sp)\n"
-                            "  4a:	7e42                	ld	t3,48(sp)\n"
-                            "  4c:	73e2                	ld	t2,56(sp)\n"
-                            "  4e:	6306                	ld	t1,64(sp)\n"
-                            "  50:	05010113          	addi	sp,sp,80"
+                            "  1e:	e47e                	sd	t6,8(sp)\n"
+                            "  20:	e876                	sd	t4,16(sp)\n"
+                            "  22:	ec72                	sd	t3,24(sp)\n"
+                            "  24:	f01e                	sd	t2,32(sp)\n"
+                            "  26:	f41a                	sd	t1,40(sp)\n"
+                            "  28:	4fc1                	li	t6,16\n"
+                            "  2a:	9fce                	add	t6,t6,s3\n"
+                            "  2c:	000fbf83          	ld	t6,0(t6)\n"
+                            "  30:	857a                	mv	a0,t5\n"
+                            "  32:	85b6                	mv	a1,a3\n"
+                            "  34:	0544b823          	sd	s4,80(s1)\n"
+                            "  38:	9f82                	jalr	t6\n"
+                            "  3a:	8f2a                	mv	t5,a0\n"
+                            "  3c:	6082                	ld	ra,0(sp)\n"
+                            "  3e:	6fa2                	ld	t6,8(sp)\n"
+                            "  40:	6ec2                	ld	t4,16(sp)\n"
+                            "  42:	6e62                	ld	t3,24(sp)\n"
+                            "  44:	7382                	ld	t2,32(sp)\n"
+                            "  46:	7322                	ld	t1,40(sp)\n"
+                            "  48:	03010113          	addi	sp,sp,48\n"
+                            "  4c:	0504ba03          	ld	s4,80(s1)"
                         >>,
                     ?assertStream(riscv64, Dump, Stream)
                 end)
@@ -3610,90 +3487,90 @@ add_beam_test() ->
     Dump =
         <<
             "   0:	00000697          	auipc	a3,0x0\n"
-            "   4:	0fa68067          	jr	250(a3) # 0xfa\n"
+            "   4:	10068067          	jr	256(a3) # 0x100\n"
             "   8:	00000697          	auipc	a3,0x0\n"
             "   c:	01868067          	jr	24(a3) # 0x20\n"
             "  10:	00000697          	auipc	a3,0x0\n"
-            "  14:	04c68067          	jr	76(a3) # 0x5c\n"
+            "  14:	05068067          	jr	80(a3) # 0x60\n"
             "  18:	00000697          	auipc	a3,0x0\n"
-            "  1c:	0d868067          	jr	216(a3) # 0xf0\n"
+            "  1c:	0da68067          	jr	218(a3) # 0xf2\n"
             "  20:	09f00f93          	li	t6,159\n"
-            "  24:	07f53023          	sd	t6,96(a0)\n"
+            "  24:	07f4b023          	sd	t6,96(s1)\n"
             "  28:	08f00f93          	li	t6,143\n"
-            "  2c:	05f53c23          	sd	t6,88(a0)\n"
-            "  30:	0105af83          	lw	t6,16(a1)\n"
+            "  2c:	05f4bc23          	sd	t6,88(s1)\n"
+            "  30:	01092f83          	lw	t6,16(s2)\n"
             "  34:	1ffd                	addi	t6,t6,-1\n"
-            "  36:	01f5a823          	sw	t6,16(a1)\n"
+            "  36:	01f92823          	sw	t6,16(s2)\n"
             "  3a:	000f8663          	beqz	t6,0x46\n"
-            "  3e:	a839                	j	0x5c\n"
+            "  3e:	a00d                	j	0x60\n"
             "  40:	0001                	nop\n"
             "  42:	00000013          	nop\n"
             "  46:	00000f97          	auipc	t6,0x0\n"
-            "  4a:	0fd9                	addi	t6,t6,22 # 0x5c\n"
+            "  4a:	0fe9                	addi	t6,t6,26 # 0x60\n"
             "  4c:	0001                	nop\n"
-            "  4e:	01f5b423          	sd	t6,8(a1)\n"
+            "  4e:	01f93423          	sd	t6,8(s2)\n"
             "  52:	4fc1                	li	t6,16\n"
-            "  54:	9fb2                	add	t6,t6,a2\n"
+            "  54:	9fce                	add	t6,t6,s3\n"
             "  56:	000fbf83          	ld	t6,0(t6)\n"
-            "  5a:	8f82                	jr	t6\n"
-            "  5c:	02800f93          	li	t6,40\n"
-            "  60:	9fb2                	add	t6,t6,a2\n"
-            "  62:	000fbf83          	ld	t6,0(t6)\n"
-            "  66:	1101                	addi	sp,sp,-32\n"
-            "  68:	e006                	sd	ra,0(sp)\n"
-            "  6a:	e42a                	sd	a0,8(sp)\n"
-            "  6c:	e82e                	sd	a1,16(sp)\n"
-            "  6e:	ec32                	sd	a2,24(sp)\n"
-            "  70:	4605                	li	a2,1\n"
-            "  72:	4681                	li	a3,0\n"
-            "  74:	4705                	li	a4,1\n"
-            "  76:	9f82                	jalr	t6\n"
-            "  78:	8faa                	mv	t6,a0\n"
-            "  7a:	6082                	ld	ra,0(sp)\n"
-            "  7c:	6522                	ld	a0,8(sp)\n"
-            "  7e:	65c2                	ld	a1,16(sp)\n"
-            "  80:	6662                	ld	a2,24(sp)\n"
-            "  82:	02010113          	addi	sp,sp,32\n"
-            "  86:	03ff9f13          	slli	t5,t6,0x3f\n"
-            "  8a:	000f4a63          	bltz	t5,0x9e\n"
-            "  8e:	03000f93          	li	t6,48\n"
-            "  92:	9fb2                	add	t6,t6,a2\n"
-            "  94:	000fbf83          	ld	t6,0(t6)\n"
-            "  98:	09800613          	li	a2,152\n"
-            "  9c:	8f82                	jr	t6\n"
-            "  9e:	03b00f13          	li	t5,59\n"
-            "  a2:	05053f83          	ld	t6,80(a0)\n"
-            "  a6:	01efb023          	sd	t5,0(t6)\n"
-            "  aa:	0005bf03          	ld	t5,0(a1)\n"
-            "  ae:	000f2f03          	lw	t5,0(t5)\n"
-            "  b2:	0f62                	slli	t5,t5,0x18\n"
-            "  b4:	3c000f93          	li	t6,960\n"
-            "  b8:	00000013          	nop\n"
-            "  bc:	01ff6f33          	or	t5,t5,t6\n"
-            "  c0:	0fe53023          	sd	t5,224(a0)\n"
-            "  c4:	0105af83          	lw	t6,16(a1)\n"
-            "  c8:	1ffd                	addi	t6,t6,-1\n"
-            "  ca:	01f5a823          	sw	t6,16(a1)\n"
-            "  ce:	000f8663          	beqz	t6,0xda\n"
-            "  d2:	a839                	j	0xf0\n"
-            "  d4:	0001                	nop\n"
-            "  d6:	00000013          	nop\n"
-            "  da:	00000f97          	auipc	t6,0x0\n"
-            "  de:	0fd9                	addi	t6,t6,22 # 0xf0\n"
-            "  e0:	0001                	nop\n"
-            "  e2:	01f5b423          	sd	t6,8(a1)\n"
-            "  e6:	4fc1                	li	t6,16\n"
-            "  e8:	9fb2                	add	t6,t6,a2\n"
-            "  ea:	000fbf83          	ld	t6,0(t6)\n"
-            "  ee:	8f82                	jr	t6\n"
-            "  f0:	4fa1                	li	t6,8\n"
-            "  f2:	9fb2                	add	t6,t6,a2\n"
-            "  f4:	000fbf83          	ld	t6,0(t6)\n"
-            "  f8:	8f82                	jr	t6\n"
-            "  fa:	4fa1                	li	t6,8\n"
-            "  fc:	9fb2                	add	t6,t6,a2\n"
-            "  fe:	000fbf83          	ld	t6,0(t6)\n"
-            " 102:	8f82                	jr	t6"
+            "  5a:	0544b823          	sd	s4,80(s1)\n"
+            "  5e:	8f82                	jr	t6\n"
+            "  60:	02800f93          	li	t6,40\n"
+            "  64:	9fce                	add	t6,t6,s3\n"
+            "  66:	000fbf83          	ld	t6,0(t6)\n"
+            "  6a:	1141                	addi	sp,sp,-16\n"
+            "  6c:	e006                	sd	ra,0(sp)\n"
+            "  6e:	4505                	li	a0,1\n"
+            "  70:	4581                	li	a1,0\n"
+            "  72:	4605                	li	a2,1\n"
+            "  74:	0544b823          	sd	s4,80(s1)\n"
+            "  78:	9f82                	jalr	t6\n"
+            "  7a:	8faa                	mv	t6,a0\n"
+            "  7c:	6082                	ld	ra,0(sp)\n"
+            "  7e:	0141                	addi	sp,sp,16\n"
+            "  80:	0504ba03          	ld	s4,80(s1)\n"
+            "  84:	03ff9f13          	slli	t5,t6,0x3f\n"
+            "  88:	000f4c63          	bltz	t5,0xa0\n"
+            "  8c:	03000f93          	li	t6,48\n"
+            "  90:	9fce                	add	t6,t6,s3\n"
+            "  92:	000fbf83          	ld	t6,0(t6)\n"
+            "  96:	09600513          	li	a0,150\n"
+            "  9a:	0544b823          	sd	s4,80(s1)\n"
+            "  9e:	8f82                	jr	t6\n"
+            "  a0:	03b00f13          	li	t5,59\n"
+            "  a4:	01ea3023          	sd	t5,0(s4)\n"
+            "  a8:	00093f03          	ld	t5,0(s2)\n"
+            "  ac:	000f2f03          	lw	t5,0(t5)\n"
+            "  b0:	0f62                	slli	t5,t5,0x18\n"
+            "  b2:	3c800f93          	li	t6,968\n"
+            "  b6:	00000013          	nop\n"
+            "  ba:	01ff6f33          	or	t5,t5,t6\n"
+            "  be:	0fe4b023          	sd	t5,224(s1)\n"
+            "  c2:	01092f83          	lw	t6,16(s2)\n"
+            "  c6:	1ffd                	addi	t6,t6,-1\n"
+            "  c8:	01f92823          	sw	t6,16(s2)\n"
+            "  cc:	000f8663          	beqz	t6,0xd8\n"
+            "  d0:	a00d                	j	0xf2\n"
+            "  d2:	0001                	nop\n"
+            "  d4:	00000013          	nop\n"
+            "  d8:	00000f97          	auipc	t6,0x0\n"
+            "  dc:	0fe9                	addi	t6,t6,26 # 0xf2\n"
+            "  de:	0001                	nop\n"
+            "  e0:	01f93423          	sd	t6,8(s2)\n"
+            "  e4:	4fc1                	li	t6,16\n"
+            "  e6:	9fce                	add	t6,t6,s3\n"
+            "  e8:	000fbf83          	ld	t6,0(t6)\n"
+            "  ec:	0544b823          	sd	s4,80(s1)\n"
+            "  f0:	8f82                	jr	t6\n"
+            "  f2:	4fa1                	li	t6,8\n"
+            "  f4:	9fce                	add	t6,t6,s3\n"
+            "  f6:	000fbf83          	ld	t6,0(t6)\n"
+            "  fa:	0544b823          	sd	s4,80(s1)\n"
+            "  fe:	8f82                	jr	t6\n"
+            " 100:	4fa1                	li	t6,8\n"
+            " 102:	9fce                	add	t6,t6,s3\n"
+            " 104:	000fbf83          	ld	t6,0(t6)\n"
+            " 108:	0544b823          	sd	s4,80(s1)\n"
+            " 10c:	8f82                	jr	t6"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3709,12 +3586,12 @@ and_positive_imm_invalidates_temp_cache_test() ->
     Stream = ?BACKEND:stream(State5),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
             "   8:	6f11                	lui	t5,0x4\n"
             "   a:	f00f0f1b          	addiw	t5,t5,-256 # 0x3f00\n"
             "   e:	01efffb3          	and	t6,t6,t5\n"
-            "  12:	06053f03          	ld	t5,96(a0)"
+            "  12:	0604bf03          	ld	t5,96(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3727,7 +3604,7 @@ fixed_dst_x_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	06853f83          	ld	t6,104(a0)"
+        "   0:	0684bf83          	ld	t6,104(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3740,8 +3617,7 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	05053f83          	ld	t6,80(a0)\n"
-        "   4:	010fbf03          	ld	t5,16(t6)"
+        "   0:	010a3f03          	ld	t5,16(s4)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3758,13 +3634,13 @@ if_block_cond_free_reg_invalidates_cache_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
             "   8:	ffffcf93          	not	t6,t6\n"
             "   c:	1ff2                	slli	t6,t6,0x3c\n"
             "   e:	000f8363          	beqz	t6,0x14\n"
             "  12:	0f09                	addi	t5,t5,2\n"
-            "  14:	05853f83          	ld	t6,88(a0)"
+            "  14:	0584bf83          	ld	t6,88(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3777,12 +3653,12 @@ jump_to_label_invalidates_cache_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
             "   4:	ffff                	.insn	2, 0xffff\n"
             "   6:	ffff                	.insn	2, 0xffff\n"
             "   8:	ffff                	.insn	2, 0xffff\n"
             "   a:	ffff                	.insn	2, 0xffff\n"
-            "   c:	05853f83          	ld	t6,88(a0)"
+            "   c:	0584bf83          	ld	t6,88(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3813,10 +3689,11 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	05853f03          	ld	t5,88(a0)\n"
-        "   6:	000f9563          	bnez	t6,0x10\n"
-        "   a:	00063f83          	ld	t6,0(a2)\n"
-        "   e:	8f82                	jr	t6"
+        "   2:	0584bf03          	ld	t5,88(s1)\n"
+        "   6:	000f9763          	bnez	t6,0x14\n"
+        "   a:	0009bf83          	ld	t6,0(s3)\n"
+        "   e:	0544b823          	sd	s4,80(s1)\n"
+        "  12:	8f82                	jr	t6"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3827,7 +3704,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	05853f03          	ld	t5,88(a0)\n"
+        "   2:	0584bf03          	ld	t5,88(s1)\n"
         "   6:	000f9663          	bnez	t6,0x12\n"
         "   a:	ffff                	.insn	2, 0xffff\n"
         "   c:	ffff                	.insn	2, 0xffff\n"
@@ -3843,7 +3720,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	4f85                	li	t6,1\n"
-        "   2:	05853f03          	ld	t5,88(a0)\n"
+        "   2:	0584bf03          	ld	t5,88(s1)\n"
         "   6:	000f9363          	bnez	t6,0xc\n"
         "   a:	a8dd                	j	0x100"
     >>,
@@ -3864,7 +3741,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	10000f93          	li	t6,256\n"
         "   4:	4f05                	li	t5,1\n"
-        "   6:	05853e83          	ld	t4,88(a0)\n"
+        "   6:	0584be83          	ld	t4,88(s1)\n"
         "   a:	000f1763          	bnez	t5,0x18\n"
         "   e:	00000f17          	auipc	t5,0x0\n"
         "  12:	1f49                	addi	t5,t5,-14 # 0x0\n"
@@ -3881,10 +3758,10 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {State4, _Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 5}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	08053f83          	ld	t6,128(a0)\n"
-        "   4:	05853f03          	ld	t5,88(a0)\n"
+        "   0:	0804bf83          	ld	t6,128(s1)\n"
+        "   4:	0584bf03          	ld	t5,88(s1)\n"
         "   8:	000f3e83          	ld	t4,0(t5)\n"
-        "   c:	09d53023          	sd	t4,128(a0)"
+        "   c:	09d4b023          	sd	t4,128(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3899,12 +3776,11 @@ ldr_y_reg_invalidates_hidden_temp_cache_test() ->
     Stream = ?BACKEND:stream(State6),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
-            "   8:	06853e83          	ld	t4,104(a0)\n"
-            "   c:	05053e83          	ld	t4,80(a0)\n"
-            "  10:	000ebf03          	ld	t5,0(t4)\n"
-            "  14:	06853e83          	ld	t4,104(a0)"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
+            "   8:	0684be83          	ld	t4,104(s1)\n"
+            "   c:	000a3f03          	ld	t5,0(s4)\n"
+            "  10:	0684be83          	ld	t4,104(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3920,14 +3796,13 @@ y_reg_load_last_available_register_test() ->
     Stream = ?BACKEND:stream(State7),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)\n"
-            "   4:	06053f03          	ld	t5,96(a0)\n"
-            "   8:	06853e83          	ld	t4,104(a0)\n"
-            "   c:	07053e03          	ld	t3,112(a0)\n"
-            "  10:	07853383          	ld	t2,120(a0)\n"
-            "  14:	08053303          	ld	t1,128(a0)\n"
-            "  18:	05053283          	ld	t0,80(a0)\n"
-            "  1c:	0002b283          	ld	t0,0(t0)"
+            "   0:	0584bf83          	ld	t6,88(s1)\n"
+            "   4:	0604bf03          	ld	t5,96(s1)\n"
+            "   8:	0684be83          	ld	t4,104(s1)\n"
+            "   c:	0704be03          	ld	t3,112(s1)\n"
+            "  10:	0784b383          	ld	t2,120(s1)\n"
+            "  14:	0804b303          	ld	t1,128(s1)\n"
+            "  18:	000a3283          	ld	t0,0(s4)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3940,7 +3815,7 @@ cached_load_after_free_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	05853f83          	ld	t6,88(a0)"
+            "   0:	0584bf83          	ld	t6,88(s1)"
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3952,8 +3827,8 @@ cached_move_to_vm_x_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	06053f83          	ld	t6,96(a0)\n"
-        "   4:	05f53c23          	sd	t6,88(a0)"
+        "   0:	0604bf83          	ld	t6,96(s1)\n"
+        "   4:	05f4bc23          	sd	t6,88(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3965,9 +3840,8 @@ cached_move_to_vm_y_reg_reuse_test() ->
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	05053f03          	ld	t5,80(a0)\n"
-        "   4:	000f3f83          	ld	t6,0(t5)\n"
-        "   8:	05f53c23          	sd	t6,88(a0)"
+        "   0:	000a3f83          	ld	t6,0(s4)\n"
+        "   4:	05f4bc23          	sd	t6,88(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
 
@@ -3980,6 +3854,6 @@ cached_move_to_vm_imm_reuse_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump = <<
         "   0:	02a00f93          	li	t6,42\n"
-        "   4:	05f53c23          	sd	t6,88(a0)"
+        "   4:	05f4bc23          	sd	t6,88(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
