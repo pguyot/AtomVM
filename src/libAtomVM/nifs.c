@@ -7993,6 +7993,68 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         return map;
     }
 
+    // Flat map: the keys are sorted, so binary-search the key and, if present,
+    // build the result with block copies of the unchanged head and tail ranges
+    // (the mirror of the insert path in jit_put_map_assoc_one). The generic
+    // path below instead compares the key against EVERY entry and rebuilds
+    // through map_build_from_sorted_kv.
+    if (!term_is_map_tree(map)) {
+        int lo = 0;
+        int hi = n - 1;
+        int found = -1;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            term k = term_get_map_key(map, mid);
+            if (k == key) {
+                found = mid;
+                break;
+            }
+            TermCompareResult c = term_compare(k, key, TermCompareExact, glb);
+            if (c == TermLessThan) {
+                lo = mid + 1;
+            } else if (c == TermGreaterThan) {
+                hi = mid - 1;
+            } else if (LIKELY(c == TermEquals)) {
+                found = mid;
+                break;
+            } else {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+        }
+        if (found < 0) {
+            // Key absent: the map is returned unchanged (no allocation).
+            return map;
+        }
+        if (n == 1) {
+            if (UNLIKELY(memory_ensure_free_with_roots(ctx, TERM_MAP_SIZE(0), 2, argv,
+                             MEMORY_CAN_SHRINK)
+                    != MEMORY_GC_OK)) {
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            return term_alloc_map_maybe_shared(0, term_invalid_term(), &ctx->heap);
+        }
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, TERM_MAP_SIZE(n - 1), 2, argv,
+                         MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        // argv[1] may have moved during the collection above.
+        map = argv[1];
+        term result = term_alloc_map((avm_uint_t) (n - 1), &ctx->heap);
+        term *dst_keys = term_to_term_ptr(term_get_map_keys(result));
+        const term *src_keys = term_to_const_term_ptr(term_get_map_keys(map));
+        term *dst_vals = term_to_term_ptr(result) + term_get_map_value_offset();
+        const term *src_vals = term_to_const_term_ptr(map) + term_get_map_value_offset();
+        size_t at = (size_t) found;
+        size_t tail = (size_t) (n - 1) - at;
+        // tuple elements start at offset 1 (after the arity header)
+        memcpy(&dst_keys[1], &src_keys[1], at * sizeof(term));
+        memcpy(dst_vals, src_vals, at * sizeof(term));
+        memcpy(&dst_keys[1 + at], &src_keys[1 + at + 1], tail * sizeof(term));
+        memcpy(&dst_vals[at], &src_vals[at + 1], tail * sizeof(term));
+        return result;
+    }
+
     // Materialize a tree-backed map once (O(n)) so the walk is O(1) per entry.
     bool oom = false;
     term *arr = map_tree_array(map, n, &oom);
