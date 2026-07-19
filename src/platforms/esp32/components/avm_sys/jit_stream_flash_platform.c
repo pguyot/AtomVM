@@ -50,6 +50,45 @@ static uintptr_t g_dbus_base = 0;
 static bool g_xtensa_mmap_initialized = false;
 #endif
 
+// qemu compatibility: force a resync of the emulated flash cache after SPI
+// writes/erases by reprogramming the affected MMU entry (transiently invalid,
+// then the original value). espressif qemu (hw/misc/esp32c3_cache.c,
+// esp32s3_cache.c) copies flash content into the modeled cache only when an
+// MMU entry value CHANGES and ignores cache invalidate/sync operations, so
+// freshly written JIT code would otherwise be invisible to both data reads
+// and instruction fetches (runtime JIT then crashes with an illegal
+// instruction on 0xFFFFFFFF). On real hardware this is a no-op: ESP-IDF
+// already invalidates the cache after flash mutations
+// (spi_flash_check_and_flush_cache), and rewriting an MMU entry with its own
+// value has no effect. Not implemented for the original esp32 (lx6 legacy
+// flash MMU; no qemu runtime-JIT coverage there).
+#ifndef CONFIG_IDF_TARGET_ESP32
+#include <hal/mmu_ll.h>
+static void jsf_platform_resync_mmu_page(uintptr_t vaddr)
+{
+    uint32_t entry_id = mmu_ll_get_entry_id(0, (uint32_t) vaddr);
+    volatile uint32_t *entry = (volatile uint32_t *) (DR_REG_MMU_TABLE + entry_id * 4);
+    uint32_t val = *entry;
+    *entry = val | SOC_MMU_INVALID;
+    *entry = val;
+}
+#endif
+
+static void jsf_platform_resync_cache(uintptr_t addr)
+{
+#ifdef CONFIG_IDF_TARGET_ESP32
+    (void) addr;
+#else
+    jsf_platform_resync_mmu_page(addr);
+#ifndef CONFIG_IDF_TARGET_ARCH_RISCV
+    // The IBUS mapping of the JIT partition uses separate MMU entries.
+    if (g_xtensa_mmap_initialized) {
+        jsf_platform_resync_mmu_page(g_ibus_base + (addr - g_dbus_base));
+    }
+#endif
+#endif
+}
+
 struct JSFlashPlatformContext *jit_stream_flash_platform_init(void)
 {
     const esp_partition_t *partition = esp_partition_find_first(
@@ -125,6 +164,7 @@ bool jit_stream_flash_platform_erase_sector(struct JSFlashPlatformContext *ctx, 
         return false;
     }
 
+    jsf_platform_resync_cache(addr);
     return true;
 }
 
@@ -147,6 +187,7 @@ bool jit_stream_flash_platform_write_page(struct JSFlashPlatformContext *ctx, ui
         return false;
     }
 
+    jsf_platform_resync_cache(addr);
     return true;
 }
 
