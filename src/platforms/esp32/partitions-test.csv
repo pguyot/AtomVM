@@ -25,7 +25,7 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,       0x9000,     0x6000,
 phy_init, data, phy,       0xf000,     0x1000,
-factory,  app,  factory,  0x10000,   0x500000,
-lib.avm,  data, phy,     0x510000,    0x80000,
-main.avm, data, phy,     0x590000,    0x40000,
-data,     data, phy,     0x5d0000,    0x10000
+factory,  app,  factory,  0x10000,   0x580000,
+lib.avm,  data, phy,     0x590000,    0x80000,
+main.avm, data, phy,     0x610000,    0x40000,
+data,     data, phy,     0x650000,    0x10000
