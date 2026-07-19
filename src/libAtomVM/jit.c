@@ -209,6 +209,8 @@ _Static_assert(offsetof(JITState, fr) == 0x18, "jit_state->fr is 0x18 in jit/src
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 // Offset for the inline cross-module return fast path.
 _Static_assert(offsetof(Module, native_code) == 0x78, "module->native_code is 0x78 in jit/src/jit_aarch64.erl");
+// Offset for the inline call_fun fast path.
+_Static_assert(offsetof(Module, fun_table) == 0x30, "module->fun_table is 0x30 in jit/src/jit_aarch64.erl");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");

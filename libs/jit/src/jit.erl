@@ -1472,19 +1472,7 @@ emit_pass(<<?OP_CALL_FUN, Rest0/binary>>, MMod, MSt0, State0) ->
     State1a = record_continuation_line(MMod, MSt1, State0),
     {MSt2, FuncReg} = read_any_xreg(ArgsCount, MMod, MSt1),
     {MSt3, Reg} = verify_is_function(FuncReg, MMod, MSt2),
-    MSt4 =
-        case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
-            true ->
-                %% Local funs branch straight to the callee's native entry
-                %% instead of bouncing through the scheduler loop.
-                MMod:call_primitive_with_cp_direct(MSt3, ?PRIM_CALL_FUN_DIRECT, [
-                    ctx, jit_state, offset, {free, Reg}, ArgsCount
-                ]);
-            false ->
-                MMod:call_primitive_with_cp(MSt3, ?PRIM_CALL_FUN, [
-                    ctx, jit_state, offset, {free, Reg}, ArgsCount
-                ])
-        end,
+    MSt4 = op_call_fun(MMod, MSt3, Reg, ArgsCount),
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
     emit_pass(Rest1, MMod, MSt4, State1a);
 % 77
@@ -2989,9 +2977,7 @@ emit_pass(<<?OP_CALL_FUN2, Rest0/binary>>, MMod, MSt0, State0) ->
     State1 = record_continuation_line(MMod, MSt3, State0),
     {MSt4, Fun, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt3, State1),
     {MSt5, Reg} = verify_is_function(Fun, MMod, MSt4),
-    MSt6 = MMod:call_primitive_with_cp(MSt5, ?PRIM_CALL_FUN, [
-        ctx, jit_state, offset, {free, Reg}, ArgsCount
-    ]),
+    MSt6 = op_call_fun(MMod, MSt5, Reg, ArgsCount),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
     emit_pass(Rest3, MMod, MSt6, State1);
 % 179
@@ -3768,7 +3754,10 @@ emit_pass_bs_create_bin_insert_integer_inline(
                     end
                 )
         end,
-    emit_pass_bs_create_bin_insert_value_increment_offset(MMod, MSt1, Offset, NumBits, 1).
+    {MSt2, NewOffset} = emit_pass_bs_create_bin_insert_value_increment_offset(
+        MMod, MSt1, Offset, NumBits, 1
+    ),
+    {MSt2, NewOffset, CreatedBin}.
 
 emit_pass_bs_create_bin_insert_value_increment_offset(_MMod, MSt0, Offset, Size, Unit) when
     is_integer(Offset) andalso is_integer(Size) andalso is_integer(Unit)
@@ -5419,6 +5408,29 @@ call_ext_last(MMod, MSt0, Arity, Index, NWords) ->
             MMod:call_primitive_last(MSt0, ?PRIM_CALL_EXT, [
                 ctx, jit_state, offset, Arity, Index, NWords
             ])
+    end.
+
+%% OP_CALL_FUN / OP_CALL_FUN2 common tail: backends with an inline local-fun
+%% fast path (call_fun_with_cp_direct) resolve the fun and branch to its native
+%% entry in generated code; otherwise local funs still branch directly via the
+%% *_direct primitive where available, or bounce through the scheduler loop.
+op_call_fun(MMod, MSt0, Reg, ArgsCount) ->
+    case erlang:function_exported(MMod, call_fun_with_cp_direct, 3) of
+        true ->
+            MMod:call_fun_with_cp_direct(MSt0, ?PRIM_CALL_FUN_DIRECT, [
+                ctx, jit_state, offset, {free, Reg}, ArgsCount
+            ]);
+        false ->
+            case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
+                true ->
+                    MMod:call_primitive_with_cp_direct(MSt0, ?PRIM_CALL_FUN_DIRECT, [
+                        ctx, jit_state, offset, {free, Reg}, ArgsCount
+                    ]);
+                false ->
+                    MMod:call_primitive_with_cp(MSt0, ?PRIM_CALL_FUN, [
+                        ctx, jit_state, offset, {free, Reg}, ArgsCount
+                    ])
+            end
     end.
 
 op_test_heap_call(MMod, MSt0, HeapNeed, Live) ->
