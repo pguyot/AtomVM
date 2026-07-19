@@ -5,6 +5,8 @@
 % split/2 function Copyright Ericsson AB 1996-2023.
 % keytake/3 function Copyright Ericsson AB 1996-2024.
 % append/1, append/2 functions Copyright Ericsson AB 1996-2025.
+% sort/2, usort/2 and their merge-sort helpers, and the any/2 loop
+% Copyright Ericsson AB 1996-2025.
 %
 % Licensed under the Apache License, Version 2.0 (the "License");
 % you may not use this file except in compliance with the License.
@@ -327,6 +329,326 @@ keyreplace(Key, N, [H | Tail], _OrigL, NewTuple, Acc) when element(N, H) =:= Key
 keyreplace(Key, N, [H | Tail], OrigL, NewTuple, Acc) ->
     keyreplace(Key, N, Tail, OrigL, NewTuple, [H | Acc]).
 
+%% @private
+%% The sort/2 and usort/2 engine below is Ericsson's natural merge sort
+%% (bottom-up, with ascending/descending run detection), imported from
+%% OTP stdlib lists.erl. The previous top-down split-and-merge was ~5x
+%% slower on random input and did not exploit ordered runs at all.
+fsplit_1(Y, X, Fun, [Z | L], R, Rs) ->
+    case Fun(Y, Z) of
+        true ->
+            fsplit_1(Z, Y, Fun, L, [X | R], Rs);
+        false ->
+            case Fun(X, Z) of
+                true ->
+                    fsplit_1(Y, Z, Fun, L, [X | R], Rs);
+                false when R == [] ->
+                    fsplit_1(Y, X, Fun, L, [Z], Rs);
+                false ->
+                    fsplit_1_1(Y, X, Fun, L, R, Rs, Z)
+            end
+    end;
+fsplit_1(Y, X, Fun, [], R, Rs) ->
+    rfmergel([[Y, X | R] | Rs], [], Fun, asc).
+
+fsplit_1_1(Y, X, Fun, [Z | L], R, Rs, S) ->
+    case Fun(Y, Z) of
+        true ->
+            fsplit_1_1(Z, Y, Fun, L, [X | R], Rs, S);
+        false ->
+            case Fun(X, Z) of
+                true ->
+                    fsplit_1_1(Y, Z, Fun, L, [X | R], Rs, S);
+                false ->
+                    case Fun(S, Z) of
+                        true ->
+                            fsplit_1(Z, S, Fun, L, [], [[Y, X | R] | Rs]);
+                        false ->
+                            fsplit_1(S, Z, Fun, L, [], [[Y, X | R] | Rs])
+                    end
+            end
+    end;
+fsplit_1_1(Y, X, Fun, [], R, Rs, S) ->
+    rfmergel([[S], [Y, X | R] | Rs], [], Fun, asc).
+
+fsplit_2(Y, X, Fun, [Z | L], R, Rs) ->
+    case Fun(Y, Z) of
+        false ->
+            fsplit_2(Z, Y, Fun, L, [X | R], Rs);
+        true ->
+            case Fun(X, Z) of
+                false ->
+                    fsplit_2(Y, Z, Fun, L, [X | R], Rs);
+                true when R == [] ->
+                    fsplit_2(Y, X, Fun, L, [Z], Rs);
+                true ->
+                    fsplit_2_1(Y, X, Fun, L, R, Rs, Z)
+            end
+    end;
+fsplit_2(Y, X, Fun, [], R, Rs) ->
+    fmergel([[Y, X | R] | Rs], [], Fun, desc).
+
+fsplit_2_1(Y, X, Fun, [Z | L], R, Rs, S) ->
+    case Fun(Y, Z) of
+        false ->
+            fsplit_2_1(Z, Y, Fun, L, [X | R], Rs, S);
+        true ->
+            case Fun(X, Z) of
+                false ->
+                    fsplit_2_1(Y, Z, Fun, L, [X | R], Rs, S);
+                true ->
+                    case Fun(S, Z) of
+                        false ->
+                            fsplit_2(Z, S, Fun, L, [], [[Y, X | R] | Rs]);
+                        true ->
+                            fsplit_2(S, Z, Fun, L, [], [[Y, X | R] | Rs])
+                    end
+            end
+    end;
+fsplit_2_1(Y, X, Fun, [], R, Rs, S) ->
+    fmergel([[S], [Y, X | R] | Rs], [], Fun, desc).
+
+fmergel([T1, [H2 | T2] | L], Acc, Fun, asc) ->
+    fmergel(L, [fmerge2_1(T1, H2, Fun, T2, []) | Acc], Fun, asc);
+fmergel([[H2 | T2], T1 | L], Acc, Fun, desc) ->
+    fmergel(L, [fmerge2_1(T1, H2, Fun, T2, []) | Acc], Fun, desc);
+fmergel([L], [], _Fun, _O) ->
+    L;
+fmergel([L], Acc, Fun, O) ->
+    rfmergel([lists:reverse(L, []) | Acc], [], Fun, O);
+fmergel([], Acc, Fun, O) ->
+    rfmergel(Acc, [], Fun, O).
+
+rfmergel([[H2 | T2], T1 | L], Acc, Fun, asc) ->
+    rfmergel(L, [rfmerge2_1(T1, H2, Fun, T2, []) | Acc], Fun, asc);
+rfmergel([T1, [H2 | T2] | L], Acc, Fun, desc) ->
+    rfmergel(L, [rfmerge2_1(T1, H2, Fun, T2, []) | Acc], Fun, desc);
+rfmergel([L], Acc, Fun, O) ->
+    fmergel([lists:reverse(L, []) | Acc], [], Fun, O);
+rfmergel([], Acc, Fun, O) ->
+    fmergel(Acc, [], Fun, O).
+
+fmerge2_1([H1 | T1], H2, Fun, T2, M) ->
+    case Fun(H1, H2) of
+        true ->
+            fmerge2_1(T1, H2, Fun, T2, [H1 | M]);
+        false ->
+            fmerge2_2(H1, T1, Fun, T2, [H2 | M])
+    end;
+fmerge2_1([], H2, _Fun, T2, M) ->
+    lists:reverse(T2, [H2 | M]).
+
+fmerge2_2(H1, T1, Fun, [H2 | T2], M) ->
+    case Fun(H1, H2) of
+        true ->
+            fmerge2_1(T1, H2, Fun, T2, [H1 | M]);
+        false ->
+            fmerge2_2(H1, T1, Fun, T2, [H2 | M])
+    end;
+fmerge2_2(H1, T1, _Fun, [], M) ->
+    lists:reverse(T1, [H1 | M]).
+
+rfmerge2_1([H1 | T1], H2, Fun, T2, M) ->
+    case Fun(H1, H2) of
+        true ->
+            rfmerge2_2(H1, T1, Fun, T2, [H2 | M]);
+        false ->
+            rfmerge2_1(T1, H2, Fun, T2, [H1 | M])
+    end;
+rfmerge2_1([], H2, _Fun, T2, M) ->
+    lists:reverse(T2, [H2 | M]).
+
+rfmerge2_2(H1, T1, Fun, [H2 | T2], M) ->
+    case Fun(H1, H2) of
+        true ->
+            rfmerge2_2(H1, T1, Fun, T2, [H2 | M]);
+        false ->
+            rfmerge2_1(T1, H2, Fun, T2, [H1 | M])
+    end;
+rfmerge2_2(H1, T1, _Fun, [], M) ->
+    lists:reverse(T1, [H1 | M]).
+
+usort_1(Fun, X, [Y | L]) ->
+    case Fun(X, Y) of
+        true ->
+            case Fun(Y, X) of
+                % X equal to Y
+                true ->
+                    case L of
+                        [] ->
+                            [X];
+                        _ ->
+                            usort_1(Fun, X, L)
+                    end;
+                false ->
+                    ufsplit_1(Y, X, Fun, L, [], [])
+            end;
+        false ->
+            ufsplit_2(Y, L, Fun, [X])
+    end.
+
+ufsplit_1(Y, X, Fun, [Z | L], R, Rs) ->
+    case Fun(Y, Z) of
+        true ->
+            case Fun(Z, Y) of
+                % Z equal to Y
+                true ->
+                    ufsplit_1(Y, X, Fun, L, R, Rs);
+                false ->
+                    ufsplit_1(Z, Y, Fun, L, [X | R], Rs)
+            end;
+        false ->
+            case Fun(X, Z) of
+                true ->
+                    case Fun(Z, X) of
+                        % Z equal to X
+                        true ->
+                            ufsplit_1(Y, X, Fun, L, R, Rs);
+                        false ->
+                            ufsplit_1(Y, Z, Fun, L, [X | R], Rs)
+                    end;
+                false when R == [] ->
+                    ufsplit_1(Y, X, Fun, L, [Z], Rs);
+                false ->
+                    ufsplit_1_1(Y, X, Fun, L, R, Rs, Z)
+            end
+    end;
+ufsplit_1(Y, X, Fun, [], R, Rs) ->
+    rufmergel([[Y, X | R] | Rs], [], Fun).
+
+ufsplit_1_1(Y, X, Fun, [Z | L], R, Rs, S) ->
+    case Fun(Y, Z) of
+        true ->
+            case Fun(Z, Y) of
+                % Z equal to Y
+                true ->
+                    ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
+                false ->
+                    ufsplit_1_1(Z, Y, Fun, L, [X | R], Rs, S)
+            end;
+        false ->
+            case Fun(X, Z) of
+                true ->
+                    case Fun(Z, X) of
+                        % Z equal to X
+                        true ->
+                            ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
+                        false ->
+                            ufsplit_1_1(Y, Z, Fun, L, [X | R], Rs, S)
+                    end;
+                false ->
+                    case Fun(S, Z) of
+                        true ->
+                            case Fun(Z, S) of
+                                % Z equal to S
+                                true ->
+                                    ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
+                                false ->
+                                    ufsplit_1(Z, S, Fun, L, [], [[Y, X | R] | Rs])
+                            end;
+                        false ->
+                            ufsplit_1(S, Z, Fun, L, [], [[Y, X | R] | Rs])
+                    end
+            end
+    end;
+ufsplit_1_1(Y, X, Fun, [], R, Rs, S) ->
+    rufmergel([[S], [Y, X | R] | Rs], [], Fun).
+
+ufsplit_2(Y, [Z | L], Fun, R) ->
+    case Fun(Y, Z) of
+        true ->
+            case Fun(Z, Y) of
+                % Z equal to Y
+                true ->
+                    ufsplit_2(Y, L, Fun, R);
+                false ->
+                    ufsplit_1(Z, Y, Fun, L, [], [lists:reverse(R, [])])
+            end;
+        false ->
+            ufsplit_2(Z, L, Fun, [Y | R])
+    end;
+ufsplit_2(Y, [], _Fun, R) ->
+    [Y | R].
+
+ufmergel([[H1 | T1], T2 | L], Acc, Fun) ->
+    ufmergel(L, [ufmerge2_2(H1, T1, Fun, T2, []) | Acc], Fun);
+ufmergel([L], [], _Fun) ->
+    L;
+ufmergel([L], Acc, Fun) ->
+    rufmergel([lists:reverse(L, []) | Acc], [], Fun);
+ufmergel([], Acc, Fun) ->
+    rufmergel(Acc, [], Fun).
+
+rufmergel([[H2 | T2], T1 | L], Acc, Fun) ->
+    rufmergel(L, [rufmerge2_1(T1, H2, Fun, T2, []) | Acc], Fun);
+rufmergel([L], Acc, Fun) ->
+    ufmergel([lists:reverse(L, []) | Acc], [], Fun);
+rufmergel([], Acc, Fun) ->
+    ufmergel(Acc, [], Fun).
+
+ufmerge2_1([H1 | T1], H2, Fun, T2, M, HdM) ->
+    case Fun(H1, H2) of
+        true ->
+            ufmerge2_1(T1, H2, Fun, T2, [H1 | M], H1);
+        false ->
+            case Fun(H2, HdM) of
+                % HdM equal to H2
+                true ->
+                    ufmerge2_2(H1, T1, Fun, T2, M);
+                false ->
+                    ufmerge2_2(H1, T1, Fun, T2, [H2 | M])
+            end
+    end;
+ufmerge2_1([], H2, Fun, T2, M, HdM) ->
+    case Fun(H2, HdM) of
+        % HdM equal to H2
+        true ->
+            lists:reverse(T2, M);
+        false ->
+            lists:reverse(T2, [H2 | M])
+    end.
+
+ufmerge2_2(H1, T1, Fun, [H2 | T2], M) ->
+    case Fun(H1, H2) of
+        true ->
+            ufmerge2_1(T1, H2, Fun, T2, [H1 | M], H1);
+        false ->
+            ufmerge2_2(H1, T1, Fun, T2, [H2 | M])
+    end;
+ufmerge2_2(H1, T1, _Fun, [], M) ->
+    lists:reverse(T1, [H1 | M]).
+
+rufmerge2_1([H1 | T1], H2, Fun, T2, M) ->
+    case Fun(H1, H2) of
+        true ->
+            rufmerge2_2(H1, T1, Fun, T2, M, H2);
+        false ->
+            rufmerge2_1(T1, H2, Fun, T2, [H1 | M])
+    end;
+rufmerge2_1([], H2, _Fun, T2, M) ->
+    lists:reverse(T2, [H2 | M]).
+
+rufmerge2_2(H1, T1, Fun, [H2 | T2], M, H2M) ->
+    case Fun(H1, H2) of
+        true ->
+            rufmerge2_2(H1, T1, Fun, T2, [H2M | M], H2);
+        false ->
+            case Fun(H2M, H1) of
+                % H2M equal to H1
+                true ->
+                    rufmerge2_1(T1, H2, Fun, T2, [H1 | M]);
+                false ->
+                    rufmerge2_1(T1, H2, Fun, T2, [H1, H2M | M])
+            end
+    end;
+rufmerge2_2(H1, T1, Fun, [], M, H2M) ->
+    case Fun(H2M, H1) of
+        true ->
+            lists:reverse(T1, [H1 | M]);
+        false ->
+            lists:reverse(T1, [H1, H2M | M])
+    end.
+
 %%-----------------------------------------------------------------------------
 %% @param   N           the position in the tuple to compare (1..tuple_size)
 %% @param   L           the list to sort
@@ -483,8 +805,25 @@ all(Fun, [H | T]) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec any(Fun :: fun((Elem :: term()) -> boolean()), List :: list()) -> boolean().
-any(Fun, L) ->
-    not all(fun(E) -> not Fun(E) end, L).
+any(Fun, List) when is_function(Fun, 1) ->
+    case List of
+        [Hd | Tail] ->
+            case Fun(Hd) of
+                true -> true;
+                false -> any_1(Fun, Tail)
+            end;
+        [] ->
+            false
+    end.
+
+%% @private
+any_1(Fun, [Hd | Tail]) ->
+    case Fun(Hd) of
+        true -> true;
+        false -> any_1(Fun, Tail)
+    end;
+any_1(_Fun, []) ->
+    false.
 
 %%-----------------------------------------------------------------------------
 %% @param   L the list to flatten
@@ -695,6 +1034,16 @@ merge_sort_default(List) ->
     {H1, H2} = merge_sort_split(List, List, []),
     merge_default(merge_sort_default(H1), merge_sort_default(H2), []).
 
+%% @private
+%% Halve a list for merge_sort_default/1 (sort/1's Erlang fallback; sort/1
+%% itself is a nif). sort/2 uses the natural merge sort below instead.
+merge_sort_split([], Half1, Half2) ->
+    {lists:reverse(Half2), Half1};
+merge_sort_split([_], Half1, Half2) ->
+    {lists:reverse(Half2), Half1};
+merge_sort_split([_, _ | T], [H | Half1T], Half2) ->
+    merge_sort_split(T, Half1T, [H | Half2]).
+
 merge_default([], Right, Acc) ->
     lists:reverse(Acc, Right);
 merge_default(Left, [], Acc) ->
@@ -715,23 +1064,17 @@ merge_default([A | As] = Left, [B | Bs] = Right, Acc) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec sort(Fun :: fun((T, T) -> boolean()), List :: [T]) -> [T].
-sort(Fun, List) when is_function(Fun, 2), is_list(List) ->
-    merge_sort(Fun, List).
-
-merge_sort(_Fun, []) ->
+sort(Fun, []) when is_function(Fun, 2) ->
     [];
-merge_sort(_Fun, [_] = L) ->
+sort(Fun, [_] = L) when is_function(Fun, 2) ->
     L;
-merge_sort(Fun, List) ->
-    {H1, H2} = merge_sort_split(List, List, []),
-    merge(Fun, merge_sort(Fun, H1), merge_sort(Fun, H2), []).
-
-merge_sort_split([], Half1, Half2) ->
-    {lists:reverse(Half2), Half1};
-merge_sort_split([_], Half1, Half2) ->
-    {lists:reverse(Half2), Half1};
-merge_sort_split([_, _ | T], [H | Half1T], Half2) ->
-    merge_sort_split(T, Half1T, [H | Half2]).
+sort(Fun, [X, Y | T]) when is_function(Fun, 2) ->
+    case Fun(X, Y) of
+        true ->
+            fsplit_1(Y, X, Fun, T, [], []);
+        false ->
+            fsplit_2(Y, X, Fun, T, [], [])
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   N elements non negative Integer
@@ -823,9 +1166,12 @@ usort(List) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec usort(Fun :: fun((T, T) -> boolean()), List :: [T]) -> [T].
-usort(Fun, List) ->
-    Sorted = sort(Fun, List),
-    unique(Sorted, Fun).
+usort(Fun, [_] = L) when is_function(Fun, 2) ->
+    L;
+usort(Fun, [] = L) when is_function(Fun, 2) ->
+    L;
+usort(Fun, [X | L]) when is_function(Fun, 2) ->
+    usort_1(Fun, X, L).
 
 %% @private
 %% Direct-comparison clone of unique/2 for usort/1: two elements are
@@ -838,19 +1184,6 @@ unique_default([_] = L) ->
     L;
 unique_default([]) ->
     [].
-
-%% @private
-unique([], _Fun) ->
-    [];
-unique([X], _Fun) ->
-    [X];
-unique([X, Y | Tail], Fun) ->
-    case Fun(X, Y) andalso Fun(Y, X) of
-        true ->
-            unique([Y | Tail], Fun);
-        false ->
-            [X | unique([Y | Tail], Fun)]
-    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   N           the position in the tuple to compare (1..tuple_size)
