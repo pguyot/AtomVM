@@ -311,6 +311,8 @@ static term nif_maps_from_keys(Context *ctx, int argc, term argv[]);
 static term nif_maps_from_list(Context *ctx, int argc, term argv[]);
 static term nif_maps_merge(Context *ctx, int argc, term argv[]);
 static term nif_maps_remove(Context *ctx, int argc, term argv[]);
+static term nif_maps_keys(Context *ctx, int argc, term argv[]);
+static term nif_maps_values(Context *ctx, int argc, term argv[]);
 static term nif_maps_next(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]);
@@ -1003,6 +1005,14 @@ static const struct Nif jit_variant_nif = {
 static const struct Nif lists_reverse_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_lists_reverse
+};
+static const struct Nif maps_keys_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_maps_keys
+};
+static const struct Nif maps_values_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_maps_values
 };
 static const struct Nif maps_from_keys_nif = {
     .base.type = NIFFunctionType,
@@ -7886,6 +7896,80 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     return result;
+}
+
+// maps:keys/1 and maps:values/1. The estdlib versions walked the map through
+// the Erlang iterator protocol, paying a maps:next/1 call (and for tree maps a
+// materialized kv list) per entry; these build the result in one C pass with a
+// single heap reservation. maps:to_list/1 stays in Erlang (it also accepts an
+// iterator) and is built from these two.
+enum MapsProjection
+{
+    MapsProjectKeys,
+    MapsProjectValues
+};
+
+static term maps_project(Context *ctx, term map, enum MapsProjection what)
+{
+    if (UNLIKELY(!term_is_map(map))) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, 3, 1, &map, MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        term err = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(err, 0, BADMAP_ATOM);
+        term_put_tuple_element(err, 1, map);
+        RAISE_ERROR(err);
+    }
+
+    int n = term_get_map_size(map);
+    if (n == 0) {
+        return term_nil();
+    }
+
+    // A tree-backed map is materialized once (O(n)); a flat map is read in
+    // place.
+    bool oom = false;
+    term *arr = map_tree_array(map, n, &oom);
+    if (UNLIKELY(oom)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    size_t need = (size_t) n * CONS_SIZE;
+    // The map itself is the gc root: the collected element terms live in it,
+    // so they are updated by a collection only through this root, and arr is
+    // refilled afterwards.
+    if (context_avail_free_memory(ctx) < need) {
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 1, &map, MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            free(arr);
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        if (arr != NULL) {
+            termtree_fill_array(term_get_map_tree_root(map), arr);
+        }
+    }
+
+    term result = term_nil();
+    for (int i = n - 1; i >= 0; i--) {
+        term element = (what == MapsProjectKeys) ? merge_key_at(map, arr, i)
+                                                 : merge_value_at(map, arr, i);
+        result = term_list_prepend(element, result, &ctx->heap);
+    }
+    free(arr);
+    return result;
+}
+
+static term nif_maps_keys(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return maps_project(ctx, argv[0], MapsProjectKeys);
+}
+
+static term nif_maps_values(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return maps_project(ctx, argv[0], MapsProjectValues);
 }
 
 static term nif_maps_next(Context *ctx, int argc, term argv[])
