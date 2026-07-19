@@ -97,6 +97,10 @@ endfunction()
 
 compile_erlang(test_jit_compile)
 compile_erlang(test_jit_simple)
+compile_erlang(test_jit_runtime)
+# Plain BEAM, no AOT precompilation: JIT-compiled at runtime on the device by
+# code_server via jit_stream_flash (triggered by test_jit_runtime).
+compile_erlang_no_jit(test_jit_runtime_guarded)
 compile_erlang(test_esp_partition)
 compile_erlang(test_esp_timer_get_time)
 compile_erlang(test_file)
@@ -125,6 +129,7 @@ compile_erlang(test_wifi_scan)
 set(erlang_test_beams
     test_jit_compile.beam
     test_jit_simple.beam
+    test_jit_runtime.beam
     test_esp_partition.beam
     test_esp_timer_get_time.beam
     test_file.beam
@@ -162,7 +167,12 @@ if(NOT AVM_DISABLE_JIT)
     # In AVM_NO_EMU mode (JIT-only) tests need AOT-compiled estdlib/eavmlib/avm_esp32
     # to resolve calls like erlang:md5/1 (which is an estdlib wrapper around crypto:hash/2).
     # esp32boot-${arch}.avm packages exactly those, AOT-compiled for the target arch.
-    set(atomvmlib_avm "HostAtomVM-prefix/src/HostAtomVM-build/libs/esp32boot/esp32boot-${AVM_JIT_TARGET_ARCH}.avm")
+    # jit-${arch}.avm is the AOT-compiled JIT compiler itself (jit, jit_${arch},
+    # jit_${arch}_asm, jit_stream_flash, ...): code_server needs it on-device to
+    # runtime-JIT plain BEAM modules such as test_jit_runtime_guarded.
+    set(atomvmlib_avm
+        "HostAtomVM-prefix/src/HostAtomVM-build/libs/esp32boot/esp32boot-${AVM_JIT_TARGET_ARCH}.avm"
+        "HostAtomVM-prefix/src/HostAtomVM-build/libs/jit/src/jit-${AVM_JIT_TARGET_ARCH}.avm")
 else()
     set(erlang_test_beams_to_package ${erlang_test_beams})
     set(erlang_test_beams_depends ${erlang_test_beams})
@@ -199,3 +209,34 @@ add_custom_command(
 set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES "${CMAKE_CURRENT_BINARY_DIR}/esp32_test_modules.avm.S")
 
 target_sources(esp32_test_modules PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/esp32_test_modules.avm.S)
+
+if(NOT AVM_DISABLE_JIT)
+    # Runtime-JIT test payload: pack the PLAIN (non-AOT) test_jit_runtime_guarded
+    # bytecode into its own small avm and flash it into the main.avm partition,
+    # which doubles as the JIT flash cache (JIT_PARTITION_NAME). The on-device
+    # JIT native-code cache starts right after the last avm pack's END section:
+    # the pack that anchors the cache must live inside the writable/mappable
+    # JIT partition, not inside the app image (where the embedded
+    # esp32_test_modules.avm is). test_main.c mmaps this partition and registers
+    # it as a second avm pack for the test_jit_runtime test case.
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/test_jit_runtime_guarded.avm"
+        COMMAND HostAtomVM-prefix/src/HostAtomVM-build/tools/packbeam/packbeam create --lib test_jit_runtime_guarded.avm
+            test_jit_runtime_guarded.beam
+        DEPENDS
+            HostAtomVM
+            test_jit_runtime_guarded.beam
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        VERBATIM
+    )
+    add_custom_target(test_jit_runtime_guarded_avm ALL
+        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/test_jit_runtime_guarded.avm"
+    )
+    set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES "${CMAKE_CURRENT_BINARY_DIR}/test_jit_runtime_guarded.avm")
+
+    # Register the avm in the standard flash arguments (flash_args /
+    # flasher_args.json) so idf.py flash, CI pytest-embedded and qemu flash
+    # images all place it in the main.avm partition.
+    esptool_py_flash_to_partition(flash "main.avm" "${CMAKE_CURRENT_BINARY_DIR}/test_jit_runtime_guarded.avm")
+    add_dependencies(flash test_jit_runtime_guarded_avm)
+endif()

@@ -42,6 +42,7 @@
 
 #include <esp_eth.h>
 #include <esp_event.h>
+#include <esp_partition.h>
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_vfs.h>
@@ -223,6 +224,104 @@ TEST_CASE("test_jit_compile", "[test_run]")
     nif_collection_destroy_all(glb);
     port_driver_destroy_all(glb);
     globalcontext_destroy(glb);
+
+    TEST_ASSERT(ret_value == OK_ATOM);
+}
+
+// On-device runtime JIT: test_jit_runtime (AOT) boots the kernel supervisor
+// so code_server is registered, then makes a plain remote call into
+// test_jit_runtime_guarded, which is packaged as plain BEAM bytecode only.
+// The call traps (jit_trap_and_load) to code_server, which JIT-compiles the
+// module on the device via jit_stream_flash (look for the serial line
+// "Compilation of test_jit_runtime_guarded... (bytecode: N bytes, native
+// code: M bytes)"), then resumes the caller.
+//
+// The plain bytecode lives in its own small avm pack flashed into the
+// main.avm partition (the JIT flash cache partition): the on-device JIT
+// native-code cache starts right after the last avm pack's END section, so
+// the pack anchoring the cache must be inside the JIT partition, not inside
+// the app image like the embedded esp32_test_modules.avm. This mirrors a
+// real deployment (app avm pack in main.avm, JIT cache after it).
+//
+// Not run on the original esp32 (lx6): it uses the legacy flash MMU (no
+// qemu cache-resync support) and cannot read data through the IROM window,
+// which the Xtensa INST-first mapping below relies on.
+#ifndef CONFIG_IDF_TARGET_ESP32
+TEST_CASE("test_jit_runtime", "[test_run]")
+{
+    esp32_sys_queue_init();
+
+    GlobalContext *glb = globalcontext_new();
+    TEST_ASSERT(glb != NULL);
+
+    port_driver_init_all(glb);
+    nif_collection_init_all(glb);
+
+    // Embedded pack: AOT driver + AOT estdlib (esp32boot) + AOT JIT compiler.
+    TEST_ASSERT(avmpack_is_valid(main_avm, size) != 0);
+    struct ConstAVMPack *avmpack_data = malloc(sizeof(struct ConstAVMPack));
+    TEST_ASSERT(avmpack_data != NULL);
+    avmpack_data_init(&avmpack_data->base, &const_avm_pack_info);
+    avmpack_data->base.in_use = true;
+    avmpack_data->base.data = main_avm;
+    synclist_append(&glb->avmpack_data, &avmpack_data->base.avmpack_head);
+
+#ifndef CONFIG_IDF_TARGET_ARCH_RISCV
+    // On Xtensa, map the JIT partition through the INSTRUCTION bus first.
+    // esp_mmu_map refuses to create a second mapping for a paddr block that
+    // is already mapped (the "enclosed" check returns the existing vaddr
+    // regardless of ESP_MMU_MMAP_FLAG_PADDR_SHARED), so if the partition were
+    // DATA-mapped first, the later SPI_FLASH_MMAP_INST requests made by
+    // jit_stream_flash_platform_init would silently receive the
+    // non-executable DROM vaddr and runtime-JIT execution would crash.
+    // Mapping INST first makes every later request (data reads included)
+    // reuse the executable IROM vaddr, and the DBUS->IBUS translation
+    // becomes the identity.
+    const esp_partition_t *jit_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "main.avm");
+    TEST_ASSERT(jit_partition != NULL);
+    const void *jit_part_inst_ptr = NULL;
+    spi_flash_mmap_handle_t jit_part_inst_handle;
+    TEST_ASSERT(esp_partition_mmap(jit_partition, 0, jit_partition->size,
+                    SPI_FLASH_MMAP_INST, &jit_part_inst_ptr, &jit_part_inst_handle)
+        == ESP_OK);
+#endif
+
+    // Partition pack: plain test_jit_runtime_guarded bytecode, flashed into
+    // the main.avm (JIT cache) partition and mapped like a normal boot does.
+    spi_flash_mmap_handle_t part_handle;
+    int part_size = 0;
+    const void *part_avm = esp32_sys_mmap_partition("main.avm", &part_handle, &part_size);
+    TEST_ASSERT(part_avm != NULL);
+    TEST_ASSERT(avmpack_is_valid(part_avm, part_size) != 0);
+    struct ConstAVMPack *part_pack = malloc(sizeof(struct ConstAVMPack));
+    TEST_ASSERT(part_pack != NULL);
+    avmpack_data_init(&part_pack->base, &const_avm_pack_info);
+    part_pack->base.in_use = true;
+    part_pack->base.data = part_avm;
+    synclist_append(&glb->avmpack_data, &part_pack->base.avmpack_head);
+
+    Module *mod = globalcontext_load_module_from_avm(glb, "test_jit_runtime.beam");
+    TEST_ASSERT(mod != NULL);
+    globalcontext_insert_module(glb, mod);
+
+    Context *ctx = context_new(glb);
+    TEST_ASSERT(ctx != NULL);
+    ctx->leader = 1;
+
+    ESP_LOGI(TAG, "Running start/0 from test_jit_runtime.beam...\n");
+    context_execute_loop(ctx, mod, "start", 0);
+    term ret_value = ctx->x[0];
+
+    fprintf(stdout, "AtomVM finished with return value: ");
+    term_display(stdout, ret_value, ctx);
+    fprintf(stdout, "\n");
+
+    context_destroy(ctx);
+    nif_collection_destroy_all(glb);
+    port_driver_destroy_all(glb);
+    globalcontext_destroy(glb);
+    spi_flash_munmap(part_handle);
 
     TEST_ASSERT(ret_value == OK_ATOM);
 }
