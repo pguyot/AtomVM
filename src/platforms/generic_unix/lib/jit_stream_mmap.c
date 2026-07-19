@@ -191,6 +191,27 @@ static term nif_jit_stream_mmap_replace(Context *ctx, int argc, term argv[])
     return argv[0];
 }
 
+static term nif_jit_stream_mmap_reset(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[1], term_is_integer);
+    void *js_obj_ptr;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], jit_stream_mmap_resource_type, &js_obj_ptr))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    struct JITStreamMMap *js_obj = (struct JITStreamMMap *) js_obj_ptr;
+
+    avm_int_t offset = term_to_int(argv[1]);
+    if (UNLIKELY(offset < 0 || (size_t) offset > js_obj->stream_offset)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    js_obj->stream_offset = offset;
+
+    return argv[0];
+}
+
 static term nif_jit_stream_mmap_read(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
@@ -268,6 +289,10 @@ static const struct Nif jit_stream_mmap_replace_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_jit_stream_mmap_replace
 };
+static const struct Nif jit_stream_mmap_reset_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_jit_stream_mmap_reset
+};
 static const struct Nif jit_stream_mmap_read_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_jit_stream_mmap_read
@@ -334,6 +359,9 @@ const struct Nif *jit_stream_mmap_get_nif(const char *nifname)
         }
         if (strcmp("replace/3", rest) == 0) {
             return &jit_stream_mmap_replace_nif;
+        }
+        if (strcmp("reset/2", rest) == 0) {
+            return &jit_stream_mmap_reset_nif;
         }
         if (strcmp("read/3", rest) == 0) {
             return &jit_stream_mmap_read_nif;
