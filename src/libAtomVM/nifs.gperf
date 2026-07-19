@@ -266,6 +266,8 @@ jit:backend_module/0, IF_HAVE_JIT(&jit_backend_module_nif)
 jit:variant/0, IF_HAVE_JIT(&jit_variant_nif)
 lists:reverse/1, &lists_reverse_nif
 lists:reverse/2, &lists_reverse_nif
+maps:keys/1, &maps_keys_nif
+maps:values/1, &maps_values_nif
 maps:from_keys/2, &maps_from_keys_nif
 maps:from_list/1, &maps_from_list_nif
 maps:merge/2, &maps_merge_nif
