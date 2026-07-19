@@ -96,6 +96,13 @@ void jit_stream_flash_platform_destroy(struct JSFlashPlatformContext *ctx)
     free(ctx);
 }
 
+bool jit_stream_flash_platform_is_jit_addr(uintptr_t addr)
+{
+    // The mock flash is one flat region; everything participates.
+    UNUSED(addr);
+    return true;
+}
+
 bool jit_stream_flash_platform_erase_sector(struct JSFlashPlatformContext *ctx, uintptr_t addr)
 {
     assert(ctx);
