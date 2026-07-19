@@ -2778,6 +2778,34 @@ uint32_t module_label_code_offset(Module *mod, int label)
 #ifndef AVM_NO_JIT
 void module_set_native_code(Module *mod, uint32_t labels_count, ModuleNativeEntryPoint entry_point)
 {
+    // AVM_DEBUG_NATIVE_MAP=1 prints one line per native module with its entry
+    // point, so profiler samples in anonymous executable mappings can be
+    // attributed back to modules (sys_map_native_code copies code out of the
+    // avm file).
+    static int debug_native_map = -1;
+    if (UNLIKELY(debug_native_map < 0)) {
+        debug_native_map = getenv("AVM_DEBUG_NATIVE_MAP") != NULL;
+    }
+    if (UNLIKELY(debug_native_map)) {
+        // The module name is the first atom of the AT8U chunk: 8-byte IFF
+        // header, u32 count, then atoms with the nibble-encoded length
+        // scheme of atom_table.c read_encoded_len.
+        const uint8_t *at = (const uint8_t *) mod->atom_table;
+        int name_len = 0;
+        const char *name = "";
+        if (at) {
+            const uint8_t *p = at + 12;
+            if ((p[0] & 0x8) == 0) {
+                name_len = p[0] >> 4;
+                name = (const char *) p + 1;
+            } else if ((p[0] & 0x10) == 0) {
+                name_len = ((p[0] >> 5) << 8) | p[1];
+                name = (const char *) p + 2;
+            }
+        }
+        fprintf(stderr, "native-map: %.*s base=%p labels=%u\n", name_len, name,
+            (const void *) entry_point, (unsigned) labels_count);
+    }
     mod->native_code = entry_point;
     // Extra function is OP_INT_CALL_END
     mod->end_instruction_ii = JIT_JUMPTABLE_OFFSET + JIT_JUMPTABLE_ENTRY_SIZE * labels_count;
