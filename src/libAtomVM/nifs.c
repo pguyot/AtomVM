@@ -7500,37 +7500,91 @@ static term nif_lists_reverse(Context *ctx, int argc, term argv[])
 }
 
 // assumption: size is at least 1
-static int sort_keys_uniq(term *keys, int size, GlobalContext *global)
+// Bottom-up merge sort of map keys in term order (exact: 1 and 1.0 are
+// distinct keys). Was a selection sort, i.e. O(n^2) term_compare calls, which
+// dominated maps:from_keys/2 on the large literal maps of generated modules.
+// Identical encodings and two small integers are resolved without the call
+// (the tag is a shared constant, so the signed word order is the term order).
+static int sort_keys_exact(term *a, term *tmp, size_t n, GlobalContext *global)
 {
-    int k = size;
-    while (1 < k) {
-        int max_pos = 0;
-        for (int i = 1; i < k; i++) {
-            term t_max = keys[max_pos];
-            term t = keys[i];
-            // TODO: not sure if exact is the right choice here
-            TermCompareResult result = term_compare(t, t_max, TermCompareExact, global);
-            if (result == TermGreaterThan) {
-                max_pos = i;
-            } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
-                return -1;
+    term *src = a;
+    term *dst = tmp;
+    for (size_t width = 1; width < n; width *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * width) {
+            size_t mid = (lo + width < n) ? lo + width : n;
+            size_t hi = (lo + 2 * width < n) ? lo + 2 * width : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                term x = src[i];
+                term y = src[j];
+                bool take_y;
+                if (LIKELY(term_is_integer(x) && term_is_integer(y))) {
+                    take_y = ((avm_int_t) x > (avm_int_t) y);
+                } else {
+                    TermCompareResult c = term_compare(x, y, TermCompareExact, global);
+                    if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                        return -1;
+                    }
+                    take_y = (c == TermGreaterThan);
+                }
+                if (take_y) {
+                    dst[k++] = src[j++];
+                } else {
+                    dst[k++] = src[i++];
+                }
+            }
+            while (i < mid) {
+                dst[k++] = src[i++];
+            }
+            while (j < hi) {
+                dst[k++] = src[j++];
             }
         }
-        if (max_pos != k - 1) {
-            term tmp = keys[k - 1];
-            keys[k - 1] = keys[max_pos];
-            keys[max_pos] = tmp;
+        term *swap = src;
+        src = dst;
+        dst = swap;
+    }
+    if (src != a) {
+        memcpy(a, src, n * sizeof(term));
+    }
+    return 0;
+}
+
+static int sort_keys_uniq(term *keys, int size, GlobalContext *global)
+{
+    if (size > 1) {
+        term *tmp = malloc(sizeof(term) * (size_t) size);
+        if (IS_NULL_PTR(tmp)) {
+            return -1;
         }
-        k--;
-        // keys[k..size] sorted
+        int rc = sort_keys_exact(keys, tmp, (size_t) size, global);
+        free(tmp);
+        if (UNLIKELY(rc < 0)) {
+            return -1;
+        }
     }
 
-    int j = 1;
-    term last_seen = keys[0];
+    // Drop duplicate keys, which are adjacent after the sort. Two keys are the
+    // same map key when they are exactly equal, not merely identical: equal
+    // tuples, bignums or lists built separately are distinct words but one key
+    // (maps:from_keys([{a,1},{a,1}], v) is a one-entry map).
+    int j = size > 0 ? 1 : 0;
     for (int i = 1; i < size; i++) {
-        if (keys[i] != last_seen) {
-            last_seen = keys[i];
-            keys[j] = last_seen;
+        term prev = keys[j - 1];
+        term cur = keys[i];
+        bool same;
+        if (prev == cur) {
+            same = true;
+        } else {
+            TermCompareResult c = term_compare(
+                prev, cur, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly), global);
+            if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                return -1;
+            }
+            same = (c == TermEquals);
+        }
+        if (!same) {
+            keys[j] = cur;
             j++;
         }
     }
