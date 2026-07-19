@@ -1898,7 +1898,7 @@ move_to_vm_register_test_() ->
                 end),
                 ?_test(begin
                     move_to_vm_register_test0(State0, 0, {ptr, r10}, <<
-                        "   0:	49 83 62 00 00       	andq   $0x0,0x0(%r10)"
+                        "   0:	49 83 22 00          	andq   $0x0,(%r10)"
                     >>)
                 end),
                 ?_test(begin
@@ -1944,8 +1944,7 @@ move_to_vm_register_test_() ->
                 %% Test: Immediate to ptr
                 ?_test(begin
                     move_to_vm_register_test0(State0, 99, {ptr, r10}, <<
-                        "   0:	49 c7 42 00 63 00 00 	movq   $0x63,0x0(%r10)\n"
-                        "   7:	00 "
+                        "   0:	49 c7 02 63 00 00 00 	movq   $0x63,(%r10)"
                     >>)
                 end),
                 %% Test: x_reg to x_reg
