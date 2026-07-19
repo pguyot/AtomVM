@@ -44,6 +44,8 @@
     ldr/2,
     ldr_w/2,
     ldrb/2,
+    strb/2,
+    strh/2,
     ldrh/2,
     rev16/2,
     rev32_w/2,
@@ -325,6 +327,37 @@ ldr_w(Dst, {BaseReg, Offset}) when
 %% Emit a load register byte (LDRB) instruction, zero-extending one byte from
 %% memory into the 32-bit (and thus zeroed 64-bit) Dst register.
 -spec ldrb(aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) -> binary().
+%% STRB Wt, [Xn, #imm] — byte store, unsigned immediate offset.
+-spec strb(aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) -> binary().
+strb(Src, {BaseReg, Offset}) when
+    is_atom(Src),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 4095
+->
+    SrcNum = reg_to_num(Src),
+    BaseRegNum = reg_to_num(BaseReg),
+    <<
+        (16#39000000 bor (Offset bsl 10) bor (BaseRegNum bsl 5) bor SrcNum):32/little
+    >>.
+
+%% STRH Wt, [Xn, #imm] — halfword store, unsigned immediate offset (scaled).
+-spec strh(aarch64_gpr_register(), {aarch64_gpr_register(), integer()}) -> binary().
+strh(Src, {BaseReg, Offset}) when
+    is_atom(Src),
+    is_atom(BaseReg),
+    is_integer(Offset),
+    Offset >= 0,
+    Offset =< 8190,
+    (Offset rem 2) =:= 0
+->
+    SrcNum = reg_to_num(Src),
+    BaseRegNum = reg_to_num(BaseReg),
+    <<
+        (16#79000000 bor ((Offset div 2) bsl 10) bor (BaseRegNum bsl 5) bor SrcNum):32/little
+    >>.
+
 ldrb(Dst, {BaseReg, Offset}) when
     is_atom(Dst),
     is_atom(BaseReg),
