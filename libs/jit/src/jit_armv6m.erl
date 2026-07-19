@@ -43,6 +43,7 @@
     jump_to_label_cond/3,
     set_branch_hints/2,
     take_overflows/1,
+    rewind_stream/2,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -1302,6 +1303,16 @@ set_branch_hints(#state{} = State, Hints) ->
 %% last pass, as #{branch_id => needed_size}.
 take_overflows(#state{overflows = Overflows}) ->
     Overflows.
+
+%% @private
+%% Rewind an externally stateful stream (mmap) to the checkpoint offset before
+%% a backtrack re-emit. Buffered streams (no reset/2) need nothing: the
+%% checkpoint state term is the stream.
+rewind_stream(#state{stream_module = StreamModule, stream = Stream} = State, Offset) ->
+    case erlang:function_exported(StreamModule, reset, 2) of
+        true -> State#state{stream = StreamModule:reset(Stream, Offset)};
+        false -> State
+    end.
 
 %% @private
 %% Resolve the recorded forward fused branches at finalize (all label offsets
