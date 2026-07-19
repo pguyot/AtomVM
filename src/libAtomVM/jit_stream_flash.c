@@ -145,6 +145,12 @@ static struct JITEntry *globalcontext_find_first_jit_entry(GlobalContext *global
     struct ListHead *avmpack_data = synclist_rdlock(&global->avmpack_data);
     LIST_FOR_EACH (item, avmpack_data) {
         struct AVMPackData *avmpack_data = GET_LIST_ENTRY(item, struct AVMPackData, avmpack_head);
+        // Only packs inside the JIT partition anchor the cache: packs mapped
+        // from elsewhere (embedded in the app image, other partitions) live in
+        // unrelated address ranges and their end marker cannot be rewritten.
+        if (!jit_stream_flash_platform_is_jit_addr((uintptr_t) avmpack_data->data)) {
+            continue;
+        }
         if (!avmpack_find_section_by_flag(avmpack_data->data, avmpack_data->size, END_OF_FILE_MASK,
                 END_OF_FILE, &end_offset, &end_size, &end_name)) {
             valid_cache = false;
@@ -159,7 +165,8 @@ static struct JITEntry *globalcontext_find_first_jit_entry(GlobalContext *global
     synclist_unlock(&global->avmpack_data);
 
     if (IS_NULL_PTR(max_end_offset)) {
-        // No pack has a terminator, so there is no place to append
+        // No avm pack inside the JIT partition: nothing anchors the cache.
+        TRACE("globalcontext_find_first_jit_entry: no pack in the JIT partition\n");
         *is_valid = false;
         return NULL;
     }
@@ -195,6 +202,11 @@ static void globalcontext_set_cache_valid(GlobalContext *global)
         struct ListHead *avmpack_data = synclist_rdlock(&global->avmpack_data);
         LIST_FOR_EACH (item, avmpack_data) {
             struct AVMPackData *avmpack_data = GET_LIST_ENTRY(item, struct AVMPackData, avmpack_head);
+            // Packs outside the JIT partition do not participate in the
+            // cache-validity protocol (their marker is not rewritable here).
+            if (!jit_stream_flash_platform_is_jit_addr((uintptr_t) avmpack_data->data)) {
+                continue;
+            }
             if (!avmpack_find_section_by_flag(avmpack_data->data, avmpack_data->size,
                     END_OF_FILE_MASK, END_OF_FILE, &end_offset, &end_size, &end_name)) {
                 found_end = false;
@@ -418,7 +430,9 @@ static term nif_jit_stream_flash_new(Context *ctx, int argc, term argv[])
         bool is_valid;
         new_entry = globalcontext_find_first_jit_entry(ctx->global, &is_valid);
         if (IS_NULL_PTR(new_entry)) {
-            fprintf(stderr, "No valid position to append JIT code to\n");
+            // The cache anchors after the last avm pack inside the JIT
+            // partition; without one there is nowhere to write native code.
+            fprintf(stderr, "JIT flash cache requires an avm pack in the JIT partition\n");
             RAISE_ERROR(BADARG_ATOM);
         }
     } else {
