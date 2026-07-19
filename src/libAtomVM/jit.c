@@ -2362,35 +2362,71 @@ static void *jit_malloc(Context *ctx, JITState *jit_state, size_t sz)
     return ptr;
 }
 
+// Bottom-up merge sort of the (key, value) pairs of a multi-key map update,
+// in exact term order. Was a selection sort: O(n^2) term_compare calls.
+// Identical encodings and two small integers are resolved without the call.
 static bool sort_kv_pairs(term *kv, int size, GlobalContext *global)
 {
-    int k = size;
-    while (1 < k) {
-        int max_pos = 0;
-        for (int i = 1; i < k; i++) {
-            term t_max = kv[max_pos * 2];
-            term t = kv[i * 2];
-            // TODO: not sure if exact is the right choice here
-            TermCompareResult result = term_compare(t, t_max, TermCompareExact, global);
-            if (result == TermGreaterThan) {
-                max_pos = i;
-            } else if (UNLIKELY(result == TermCompareMemoryAllocFail)) {
-                return false;
+    if (size < 2) {
+        return true;
+    }
+    term *tmp = malloc(sizeof(term) * 2 * (size_t) size);
+    if (IS_NULL_PTR(tmp)) {
+        return false;
+    }
+    term *src = kv;
+    term *dst = tmp;
+    size_t n = (size_t) size;
+    bool ok = true;
+    for (size_t width = 1; width < n && ok; width *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * width) {
+            size_t mid = (lo + width < n) ? lo + width : n;
+            size_t hi = (lo + 2 * width < n) ? lo + 2 * width : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                term x = src[i * 2];
+                term y = src[j * 2];
+                bool take_y;
+                if (LIKELY(term_is_integer(x) && term_is_integer(y))) {
+                    take_y = ((avm_int_t) x > (avm_int_t) y);
+                } else {
+                    TermCompareResult c = term_compare(x, y, TermCompareExact, global);
+                    if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+                        ok = false;
+                        break;
+                    }
+                    take_y = (c == TermGreaterThan);
+                }
+                size_t from = take_y ? j++ : i++;
+                dst[k * 2] = src[from * 2];
+                dst[(k * 2) + 1] = src[(from * 2) + 1];
+                k++;
+            }
+            while (i < mid) {
+                dst[k * 2] = src[i * 2];
+                dst[(k * 2) + 1] = src[(i * 2) + 1];
+                k++;
+                i++;
+            }
+            while (j < hi) {
+                dst[k * 2] = src[j * 2];
+                dst[(k * 2) + 1] = src[(j * 2) + 1];
+                k++;
+                j++;
+            }
+            if (!ok) {
+                break;
             }
         }
-        if (max_pos != k - 1) {
-            term i_key = kv[(k - 1) * 2];
-            term i_val = kv[((k - 1) * 2) + 1];
-            kv[(k - 1) * 2] = kv[max_pos * 2];
-            kv[((k - 1) * 2) + 1] = kv[(max_pos * 2) + 1];
-            kv[max_pos * 2] = i_key;
-            kv[(max_pos * 2) + 1] = i_val;
-        }
-        k--;
-        // kv[k..size] sorted
+        term *swap = src;
+        src = dst;
+        dst = swap;
     }
-
-    return true;
+    if (ok && src != kv) {
+        memcpy(kv, src, 2 * n * sizeof(term));
+    }
+    free(tmp);
+    return ok;
 }
 
 // Number of free heap words jit_put_map_assoc may need. The codegen reserves
