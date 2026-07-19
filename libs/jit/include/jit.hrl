@@ -18,7 +18,7 @@
 % SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %
 
--define(JIT_FORMAT_VERSION, 6).
+-define(JIT_FORMAT_VERSION, 7).
 
 % Before adding any new platform to the list below:
 % Is it 64-bit big endian? if so, `put_digits` function in jit.erl must be updated to support
