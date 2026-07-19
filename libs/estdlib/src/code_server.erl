@@ -200,17 +200,58 @@ load(Module) ->
                         end,
                         {StreamModule, Stream0} = jit:stream(jit_mmap_size(byte_size(Code))),
                         {BackendModule, BackendState0} = jit:backend(StreamModule, Stream0),
-                        {LabelsCount, BackendState1} = jit:compile(
-                            Code,
-                            AtomResolver,
-                            LiteralResolver,
-                            TypeResolver,
-                            ImportResolver,
-                            DebugInfoResolver,
-                            RecordResolver,
-                            BackendModule,
-                            BackendState0
-                        ),
+                        {LabelsCount, BackendState1} =
+                            case
+                                erlang:function_exported(StreamModule, flush_upto, 2) andalso
+                                    erlang:function_exported(BackendModule, enable_eager_flush, 1)
+                            of
+                                true ->
+                                    % Flash stream: two-pass compile. The sizing
+                                    % pass converges the fused-branch size hints
+                                    % and final label offsets on a counting
+                                    % stream; the emission pass then emits final
+                                    % jump-table entries, resolves fused
+                                    % branches eagerly and flushes as it goes,
+                                    % bounding the RAM held by the flash stream.
+                                    {SizeBackend, SizeState} = jit:backend(
+                                        jit_stream_size, jit_stream_size:new(0)
+                                    ),
+                                    {_LC, Plan} = jit:compile_sizing(
+                                        Code,
+                                        AtomResolver,
+                                        LiteralResolver,
+                                        TypeResolver,
+                                        ImportResolver,
+                                        DebugInfoResolver,
+                                        RecordResolver,
+                                        SizeBackend,
+                                        SizeState
+                                    ),
+                                    jit:compile_emit(
+                                        Code,
+                                        AtomResolver,
+                                        LiteralResolver,
+                                        TypeResolver,
+                                        ImportResolver,
+                                        DebugInfoResolver,
+                                        RecordResolver,
+                                        BackendModule,
+                                        BackendState0,
+                                        Plan
+                                    );
+                                false ->
+                                    jit:compile(
+                                        Code,
+                                        AtomResolver,
+                                        LiteralResolver,
+                                        TypeResolver,
+                                        ImportResolver,
+                                        DebugInfoResolver,
+                                        RecordResolver,
+                                        BackendModule,
+                                        BackendState0
+                                    )
+                            end,
                         Stream1 = BackendModule:stream(BackendState1),
                         Stream2 = StreamModule:flush(Stream1),
                         code_server:set_native_code(Module, LabelsCount, Stream2),
