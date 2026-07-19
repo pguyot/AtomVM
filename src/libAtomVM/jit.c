@@ -2415,6 +2415,23 @@ size_t jit_put_map_heap_need(Context *ctx, term src, size_t new_entries, size_t 
         + (TERM_MAP_TREE_BOXED_ARITY + 1);
 }
 
+// Worst-case free heap words for a single-key maps:put, assuming the key is
+// new (a found-key update needs less). Unlike jit_put_map_heap_need this needs
+// no new_entries pre-count, so the codegen can skip the sizing lookup — with
+// two navigations (find_map_pos then the put) collapsed into one, at the cost
+// of a bounded over-reservation.
+size_t jit_put_map_one_heap_need(Context *ctx, term src)
+{
+    UNUSED(ctx);
+    size_t src_size = term_get_map_size(src);
+    size_t new_size = src_size + 1;
+    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)) {
+        return TERM_MAP_SIZE(new_size);
+    }
+    size_t base = term_is_map_tree(src) ? 0 : termtree_from_sorted_heap_size(src_size);
+    return base + termtree_put_heap_size(new_size) + (TERM_MAP_TREE_BOXED_ARITY + 1);
+}
+
 // Build/extend the persistent tree backing a large map and wrap it. The caller
 // has reserved jit_put_map_heap_need(...) words.
 static term jit_map_build_tree(Context *ctx, term src, size_t src_size, size_t num_elements, term *kv)
@@ -2596,6 +2613,71 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
             }
         }
     }
+    return map;
+}
+
+// Single-key maps:put with no pre-counted new_entries: the caller reserved
+// jit_put_map_one_heap_need(...) words (the worst case), and update-vs-insert
+// is decided here from the one binary search / tree walk — the sizing
+// find_map_pos pass and the per-call kv scratch array both disappear.
+static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, term key, term value)
+{
+    TRACE("jit_put_map_assoc_one: src=%p\n", (void *) src);
+    size_t src_size = term_get_map_size(src);
+
+    if (src_size + 1 > TERM_MAP_TREE_THRESHOLD || term_is_map_tree(src)) {
+        term kv[2] = { key, value };
+        return jit_map_build_tree(ctx, src, src_size, 1, kv);
+    }
+
+    // Flat map: binary-search the position, then block-copy (same layout
+    // tricks as the num_elements == 1 path of jit_put_map_assoc).
+    int low = 0;
+    int high = (int) src_size - 1;
+    int found = -1;
+    while (low <= high) {
+        int mid = low + (high - low) / 2;
+        term k = term_get_map_key(src, mid);
+        if (k == key) {
+            found = mid;
+            break;
+        }
+        TermCompareResult cmp = term_compare(k, key, TermCompareExact, ctx->global);
+        if (cmp == TermLessThan) {
+            low = mid + 1;
+        } else if (cmp == TermGreaterThan) {
+            high = mid - 1;
+        } else if (LIKELY(cmp == TermEquals)) {
+            found = mid;
+            break;
+        } else {
+            set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+            return term_invalid_term();
+        }
+    }
+    if (found >= 0) {
+        // Update: share the keys tuple, bulk-copy values, overwrite one.
+        term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
+        term *dst_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+        const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+        memcpy(dst_vals, src_vals, src_size * sizeof(term));
+        dst_vals[found] = value;
+        return map;
+    }
+    // Insert at the binary-search insertion point `low`.
+    size_t at = (size_t) low;
+    term map = term_alloc_map(src_size + 1, &ctx->heap);
+    term *dst_keys = term_to_term_ptr(term_get_map_keys(map));
+    const term *src_keys = term_to_const_term_ptr(term_get_map_keys(src));
+    term *dst_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+    const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
+    // tuple elements start at offset 1 (after the arity header)
+    memcpy(&dst_keys[1], &src_keys[1], at * sizeof(term));
+    memcpy(dst_vals, src_vals, at * sizeof(term));
+    dst_keys[1 + at] = key;
+    dst_vals[at] = value;
+    memcpy(&dst_keys[1 + at + 1], &src_keys[1 + at], (src_size - at) * sizeof(term));
+    memcpy(&dst_vals[at + 1], &src_vals[at], (src_size - at) * sizeof(term));
     return map;
 }
 
@@ -3179,6 +3261,19 @@ static void jit_set_tuple_element_pin(term a1, uint32_t a2, term a3)
     jit_set_tuple_element(ctx, a1, a2, a3);
 }
 
+static size_t jit_put_map_one_heap_need_pin(term a1)
+{
+    CTX_READ();
+    return jit_put_map_one_heap_need(ctx, a1);
+}
+
+static term jit_put_map_assoc_one_pin(term a1, term a2, term a3)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_put_map_assoc_one(ctx, jit_state, a1, a2, a3);
+}
+
 static size_t jit_put_map_heap_need_pin(term a1, size_t a2, size_t a3)
 {
     CTX_READ();
@@ -3380,7 +3475,9 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_term_get_map_assoc_miss),
     JS_ENTRY(jit_call_fun_direct),
     JS_ENTRY(jit_call_ext_direct),
-    JS_ENTRY(jit_return_direct)
+    JS_ENTRY(jit_return_direct),
+    JS_ENTRY(jit_put_map_one_heap_need),
+    JS_ENTRY(jit_put_map_assoc_one)
 };
 
 #endif

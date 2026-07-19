@@ -372,6 +372,9 @@ struct ModuleNativeInterface
     uintptr_t (*call_fun_direct)(CTXP_ JSP_ int offset, term fun, unsigned int args_count);
     uintptr_t (*call_ext_direct)(CTXP_ JSP_ int offset, int arity, int index, int n_words);
     uintptr_t (*return_direct)(CTX_JS_PARAMS);
+
+    size_t (*put_map_one_heap_need)(CTXP_ term src);
+    term (*put_map_assoc_one)(CTXP_ JSP_ term src, term key, term value);
 };
 
 extern const ModuleNativeInterface module_native_interface;
