@@ -135,15 +135,49 @@ jump_table(#state{stream_module = StreamModule, stream = Stream0} = State, Label
 jump_table0(State, N, LabelsCount) when N > LabelsCount ->
     State;
 jump_table0(
-    #state{stream_module = StreamModule, stream = Stream0} = State,
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        jump_table_start = JumpTableStart,
+        preset_labels = PresetLabels
+    } = State,
     N,
     LabelsCount
 ) ->
-    % Create jump table entry: AUIPC + JALR (8 bytes total)
-    % This will be patched in add_label when the label offset is known
-    JumpEntry = <<16#FFFFFFFF:32, 16#FFFFFFFF:32>>,
+    % Create jump table entry: AUIPC + JALR (8 bytes total).
+    % With preset labels (emission pass of the two-pass flash compile, see
+    % jit:compile_emit) the final entry is emitted directly -- written once,
+    % never re-patched, so the flash flush horizon may pass the table.
+    % Otherwise a placeholder is emitted and patched in add_label.
+    JumpEntry =
+        case PresetLabels of
+            undefined ->
+                <<16#FFFFFFFF:32, 16#FFFFFFFF:32>>;
+            #{N := LabelOffset} ->
+                jump_table_entry_code(JumpTableStart, N, LabelOffset)
+        end,
     Stream1 = StreamModule:append(Stream0, JumpEntry),
     jump_table0(State#state{stream = Stream1}, N + 1, LabelsCount).
+
+%% @private
+%% Final 8-byte jump table entry (AUIPC + JALR, padded) for a label offset.
+jump_table_entry_code(JumpTableStart, Label, LabelOffset) ->
+    JumpTableEntryOffset = JumpTableStart + Label * 8,
+    PCRelOffset = LabelOffset - JumpTableEntryOffset,
+    Upper20 = (PCRelOffset + 16#800) bsr 12,
+    Lower12 = PCRelOffset band 16#FFF,
+    Lower12Signed =
+        if
+            Lower12 >= 16#800 -> Lower12 - 16#1000;
+            true -> Lower12
+        end,
+    I1 = ?ASM:auipc(a3, Upper20),
+    I2 = ?ASM:jalr(zero, a3, Lower12Signed),
+    JumpTableEntry = <<I1/binary, I2/binary>>,
+    case byte_size(JumpTableEntry) of
+        6 -> <<JumpTableEntry/binary, (?ASM:c_nop())/binary>>;
+        8 -> JumpTableEntry
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Patch a single branch in the stream
@@ -265,7 +299,33 @@ update_branches(
     {Stream2, Overflows} = resolve_fused_branches(
         StreamModule, Stream1, Fused, Labels, jit_regs:available_regs(Regs), #{}
     ),
+    %% With preset labels (emission pass of the two-pass compile), the final
+    %% label offsets must match the sizing pass exactly: the jump table was
+    %% emitted from the preset and add_label never re-patched it. Divergence
+    %% means the two passes did not emit identical code -- fail loudly.
+    case State#state.preset_labels of
+        undefined ->
+            ok;
+        Preset ->
+            FinalLabels = maps:filter(fun(K, _) -> is_integer(K) end, Labels),
+            case Preset =:= FinalLabels of
+                true -> ok;
+                false -> error({jit_preset_labels_diverged, Preset, FinalLabels})
+            end
+    end,
     State#state{stream = Stream2, branches = #{}, fused_branches = [], overflows = Overflows}.
+
+%% @private
+%% Final label offsets of a completed pass (used by jit:compile_sizing to
+%% build the emission-pass plan).
+labels(#state{labels = Labels}) ->
+    Labels.
+
+%% @private
+%% Install the sizing pass' final label offsets before the jump table is
+%% emitted (jit:compile_emit): jump_table0 then emits final entries directly.
+set_preset_labels(#state{} = State, Labels) ->
+    State#state{preset_labels = Labels}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Generate code to load a primitive function pointer into a register
@@ -3854,42 +3914,26 @@ add_label(
         stream = Stream0,
         jump_table_start = JumpTableStart,
         branches = Branches,
-        labels = Labels
+        labels = Labels,
+        preset_labels = PresetLabels
     } = State,
     Label,
     LabelOffset
 ) when is_integer(Label) ->
-    % Patch the jump table entry immediately
-    % Each jump table entry is AUIPC + JALR (8 bytes)
-    JumpTableEntryOffset = JumpTableStart + Label * 8,
-
-    % Calculate PC-relative offset from AUIPC instruction to target
-    PCRelOffset = LabelOffset - JumpTableEntryOffset,
-
-    % Split into upper 20 bits and lower 12 bits
-    % RISC-V encodes: target = PC + (upper20 << 12) + sign_ext(lower12)
-    % If lower12 >= 0x800, it's negative when sign-extended, so add 1 to upper
-    Upper20 = (PCRelOffset + 16#800) bsr 12,
-    Lower12 = PCRelOffset band 16#FFF,
-    % Sign-extend lower 12 bits for JALR immediate
-    Lower12Signed =
-        if
-            Lower12 >= 16#800 -> Lower12 - 16#1000;
-            true -> Lower12
+    % Patch the jump table entry immediately (each entry is AUIPC + JALR,
+    % 8 bytes). With preset labels the table was emitted final by jump_table0
+    % and is never re-patched (labels are re-added -- OP_INT_CALL_END,
+    % loop-residency hot entries -- so re-patching would rewrite flashed
+    % content); the final equality with the preset is asserted in
+    % update_branches.
+    Stream1 =
+        case PresetLabels of
+            undefined ->
+                PaddedEntry = jump_table_entry_code(JumpTableStart, Label, LabelOffset),
+                StreamModule:replace(Stream0, JumpTableStart + Label * 8, PaddedEntry);
+            _ ->
+                Stream0
         end,
-
-    % Encode AUIPC and JALR with computed offsets
-    I1 = ?ASM:auipc(a3, Upper20),
-    I2 = ?ASM:jalr(zero, a3, Lower12Signed),
-    % Create 8-byte jump table entry
-    JumpTableEntry = <<I1/binary, I2/binary>>,
-    PaddedEntry =
-        case byte_size(JumpTableEntry) of
-            6 -> <<JumpTableEntry/binary, (?ASM:c_nop())/binary>>;
-            8 -> JumpTableEntry
-        end,
-
-    Stream1 = StreamModule:replace(Stream0, JumpTableEntryOffset, PaddedEntry),
 
     % Eagerly patch any branches targeting this label
     {Stream2, RemainingBranches} = patch_branches_for_label(

@@ -1462,21 +1462,28 @@ sizing_emit_flash_identity_test() ->
         Backend, Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug
     ),
     <<16:32, 0:32, _:32, LabelsCount:32, _:32, _/binary>> = Chunk,
-    %% Pass 1: sizing on the counting stream.
-    SizeState = Backend:new(?JIT_VARIANT_PIC, jit_stream_size, jit_stream_size:new(0)),
-    {LabelsCount, Hints} = jit:compile_sizing(
-        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, SizeState
-    ),
-    ?assert(is_map(Hints)),
-    %% Pass 2: single emission with the hints on the flash-like stream.
     Header = jit:beam_chunk_header(
         LabelsCount, jit_tests_common:backend_to_arch(Backend), ?JIT_VARIANT_PIC
     ),
+    %% Pass 1: sizing on the counting stream. It must start at the same base
+    %% offset as the emission stream (label offsets are absolute).
+    SizeStream0 = jit_stream_size:append(jit_stream_size:new(0), Header),
+    SizeState = Backend:new(?JIT_VARIANT_PIC, jit_stream_size, SizeStream0),
+    {LabelsCount, Plan} = jit:compile_sizing(
+        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, SizeState
+    ),
+    ?assertMatch(#{hints := _, labels := Labels} when is_map(Labels), Plan),
+    %% Pass 2: single emission with the plan on the flash-like stream. The
+    %% preset labels let it emit final jump-table entries (write-once) and
+    %% flush eagerly, so the mock's bit-clear discipline below the advancing
+    %% horizon is actually exercised.
     MockStream0 = jit_stream_flash_mock:append(jit_stream_flash_mock:new(0), Header),
     EmitState0 = Backend:new(?JIT_VARIANT_PIC, jit_stream_flash_mock, MockStream0),
     {LabelsCount, EmitState1} = jit:compile_emit(
-        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, EmitState0, Hints
+        Chunk, Nil, Nil, AnyType, ImportResolver, NoDebug, Nil, Backend, EmitState0, Plan
     ),
+    %% Eager flushing must have advanced the horizon during emission.
+    ?assert(jit_stream_flash_mock:committed_offset(Backend:stream(EmitState1)) > 0),
     {Bytes, _Horizon} = jit_stream_flash_mock:flush(Backend:stream(EmitState1)),
     ?assertEqual(Reference, Bytes).
 
