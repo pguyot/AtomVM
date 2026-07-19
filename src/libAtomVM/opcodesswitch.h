@@ -1824,6 +1824,43 @@ schedule_in:
                       "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
                 new_ctx = asm_result;
             }
+#elif JIT_ARCH_TARGET == JIT_ARCH_ARM32
+            // arm32 pinned-register convention: generated code reads ctx
+            // from r11, jit_state from r10, the primitives table from r9
+            // and keeps ctx->e in r8 (callee-saved, preserved by C
+            // primitives). The boundary also owns saving r4-r7: generated
+            // code uses them as cache registers with no prologue frame, so
+            // they are declared as clobbers here. Only e is seeded (there
+            // are no inline heap operations); generated code writes it
+            // back to ctx before every C call. The entry pointer rides in
+            // r4 (a clobbered-by-variable callee-saved register).
+            Context *new_ctx;
+            {
+                register Context *pin_ctx __asm__("r7") = ctx;
+                register JITState *pin_js __asm__("r10") = &jit_state;
+                register const ModuleNativeInterface *pin_p __asm__("r9") = &module_native_interface;
+                register term *pin_e __asm__("r8") = ctx->e;
+                register ModuleNativeEntryPoint entry_reg __asm__("r4") = native_pc;
+                register Context *result_reg __asm__("r0");
+// Soft-float arm32 builds have no d registers to clobber.
+#if defined(__ARM_FP)
+#define AVM_JIT_ARM32_FP_CLOBBERS                            \
+    "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7",          \
+        "d16", "d17", "d18", "d19", "d20", "d21", "d22",     \
+        "d23", "d24", "d25", "d26", "d27", "d28", "d29",     \
+        "d30", "d31",
+#else
+#define AVM_JIT_ARM32_FP_CLOBBERS
+#endif
+                __asm__ volatile(
+                    "blx r4"
+                    : "=r"(result_reg), "+r"(pin_ctx), "+r"(pin_js), "+r"(pin_p),
+                      "+r"(pin_e), "+r"(entry_reg)
+                    :
+                    : "r1", "r2", "r3", "r5", "r6", "r12", "lr",
+                      AVM_JIT_ARM32_FP_CLOBBERS "memory", "cc");
+                new_ctx = result_reg;
+            }
 #elif JIT_ARCH_TARGET == JIT_ARCH_RISCV32 || JIT_ARCH_TARGET == JIT_ARCH_RISCV64
             // RISC-V pinned-register convention: generated code reads ctx
             // from s1, jit_state from s2, the primitives table from s3 and

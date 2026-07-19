@@ -199,8 +199,21 @@
 
 % ctx->e is 0x28
 % ctx->x is 0x2C
--define(CTX_REG, r0).
--define(NATIVE_INTERFACE_REG, r2).
+%% Pinned-register convention: ctx (r7), jit_state (r10), the primitives
+%% table (r9) and ctx->e (r8) live in callee-saved registers, seeded once
+%% per C->native crossing by the dispatch loop (opcodesswitch.h), which also
+%% takes ownership of saving r4-r10 — so generated code has NO entry
+%% prologue/epilogue frame any more. C primitives preserve the pinned
+%% registers per the AAPCS. r11 is deliberately NOT pinned: it is the ARM
+%% frame pointer, and binding a register variable to it in the jit.c entry
+%% shims is undefined behaviour (GCC drops surrounding memory updates).
+%% There are no inline heap operations on arm32, so hp is not pinned.
+-define(CTX_REG, r7).
+-define(NATIVE_INTERFACE_REG, r9).
+%% ctx->e mutates (allocate/deallocate, GC): written back to ctx before
+%% every C call and reloaded after calls that return, except around
+%% primitives listed in jit_prim_pure.hrl.
+-define(E_REG, r8).
 -define(Y_REGS, {?CTX_REG, 16#28}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 % ctx->cp is a 64-bit cp_t occupying two slots (little-endian targets):
@@ -211,8 +224,9 @@
 -define(JITSTATE_FR_OFFSET, 16#C).
 -define(BS, {?CTX_REG, 16#78}).
 -define(BS_OFFSET, {?CTX_REG, 16#7C}).
-% JITSTATE is on stack, accessed via stack offset
-% These macros now expect a register that contains the jit_state pointer
+% These macros expect a register that contains the jit_state pointer
+% (normally ?JITSTATE_REG, pinned in r10)
+-define(JITSTATE_REG, r10).
 -define(JITSTATE_MODULE(Reg), {Reg, 0}).
 -define(JITSTATE_CONTINUATION(Reg), {Reg, 16#4}).
 -define(JITSTATE_REDUCTIONCOUNT(Reg), {Reg, 16#8}).
@@ -226,13 +240,6 @@
 
 %% IP can be used as an additional scratch register
 -define(IP_REG, r12).
-
-%% Stack offset for function prolog: push {r1,r4,r5,r6,r7,r8,r9,r10,r11,lr}
-%% r1 (JITSTATE_REG) is at SP+0 after push (10 registers = 40 bytes)
--define(STACK_OFFSET_JITSTATE, 0).
-
-%% Offset of LR on the stack (last of 10 pushed registers)
--define(STACK_OFFSET_LR, 36).
 
 -define(IS_SINT8_T(X), is_integer(X) andalso X >= -128 andalso X =< 127).
 -define(IS_SINT32_T(X), is_integer(X) andalso X >= -16#80000000 andalso X < 16#80000000).
@@ -250,9 +257,9 @@
 %% - r12: intra-procedure call scratch
 %% - r13 (SP), r14 (LR), r15 (PC): special purpose
 %% High registers (r8-r11) are fully accessible in ARM mode
--define(AVAILABLE_REGS, [r11, r10, r9, r8, r7, r6, r5, r4, r3, r1]).
+-define(AVAILABLE_REGS, [r6, r5, r4, r3, r2, r1, r0]).
 -define(PARAMETER_REGS, [r0, r1, r2, r3]).
--define(SCRATCH_REGS, [r11, r10, r9, r8, r7, r6, r5, r4, r3, r2, r1, r0, r12]).
+-define(SCRATCH_REGS, [r6, r5, r4, r3, r2, r1, r0, r12]).
 
 -define(REG_BIT_R0, (1 bsl 0)).
 -define(REG_BIT_R1, (1 bsl 1)).
@@ -272,9 +279,8 @@
 -define(REG_BIT_R15, (1 bsl 15)).
 
 -define(AVAILABLE_REGS_MASK,
-    (?REG_BIT_R11 bor ?REG_BIT_R10 bor ?REG_BIT_R9 bor ?REG_BIT_R8 bor
-        ?REG_BIT_R7 bor ?REG_BIT_R6 bor ?REG_BIT_R5 bor ?REG_BIT_R4 bor
-        ?REG_BIT_R3 bor ?REG_BIT_R1)
+    (?REG_BIT_R6 bor ?REG_BIT_R5 bor ?REG_BIT_R4 bor
+        ?REG_BIT_R3 bor ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0)
 ).
 -define(SCRATCH_REGS_MASK,
     (?REG_BIT_R11 bor ?REG_BIT_R10 bor ?REG_BIT_R9 bor ?REG_BIT_R8 bor
@@ -375,6 +381,7 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, jit_state).
 -include("jit_backend_regs_impl.hrl").
+-include("jit_prim_pure.hrl").
 -include("jit_backend_pending_impl.hrl").
 
 %% Receive the per-label live-in x-register masks (jit_liveness pass A) and
@@ -420,8 +427,10 @@ jump_table0(
     N,
     LabelsCount
 ) ->
-    % Create jump table entry: push prolog registers + branch placeholder
-    I1 = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
+    % Jump table entry: nop + branch placeholder. No prologue: the dispatch
+    % loop owns saving r4-r11 and the pinned registers are already live.
+    % The nop keeps the branch at entry+4, where patch_branch expects it.
+    I1 = jit_arm32_asm:nop(),
     I2 = <<16#FFFFFFFF:32>>,
 
     JumpEntry = <<I1/binary, I2/binary>>,
@@ -567,7 +576,11 @@ load_primitive_ptr(Primitive, TargetReg) ->
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec call_primitive(state(), non_neg_integer(), [arg()]) -> {state(), arm32_register()}.
-call_primitive(StateP, Primitive, Args) ->
+call_primitive(StateP, Primitive, Args0) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% r11/r10 and do not take them as parameters. (BIF/computed-pointer
+    %% calls go through call_func_ptr directly and keep their ctx argument.)
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% The callee reads ctx->x: any pending x store must stay.
     call_primitive0(pending_clear_all(StateP), Primitive, Args).
 
@@ -581,9 +594,10 @@ call_primitive0(
     Args
 ) ->
     Available = jit_regs:available_regs(Regs0),
+    Pure = prim_pure(Primitive),
     case Available of
         0 ->
-            call_func_ptr(State, {primitive, Primitive}, Args);
+            call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
         _ ->
             % Use an available register for loading the function pointer
             TempReg = first_avail(Available),
@@ -595,7 +609,7 @@ call_primitive0(
                 stream = Stream1,
                 regs = jit_regs:alloc_reg(Regs1, TempBit)
             },
-            call_func_ptr(StateCall, {free, TempReg}, Args)
+            call_func_ptr0(StateCall, {free, TempReg}, Args, Pure)
     end.
 
 %%-----------------------------------------------------------------------------
@@ -609,7 +623,9 @@ call_primitive0(
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
 -spec call_primitive_last(state(), non_neg_integer(), [arg()]) -> state().
-call_primitive_last(StateP, Primitive, Args) ->
+call_primitive_last(StateP, Primitive, Args0) ->
+    %% Pinned-register convention: drop ctx/jit_state from the arguments.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% Control leaves through the primitive, which reads ctx->x.
     call_primitive_last0(pending_clear_all(StateP), Primitive, Args).
 
@@ -660,22 +676,28 @@ call_primitive_last0(
                             set_stack_args(State1, Arg5, undefined)
                     end,
                 State3 = set_registers_args(State2, [Arg1, Arg2, Arg3, Arg4], 8),
-                #state{stream = Stream2} = State3,
-                % Call the function pointer directly
+
+                % Save lr around the call (ip pads to 8-byte alignment),
+                % write e back to ctx, call, then return to the C dispatcher.
+                #state{stream = Stream2b} = emit_e_writeback(State3),
+                PushLR = jit_arm32_asm:push([r12, lr]),
                 Call = jit_arm32_asm:blx(al, Temp),
-                Stream3 = StreamModule:append(Stream2, Call),
+                Stream3 = StreamModule:append(
+                    Stream2b, <<PushLR/binary, Call/binary>>
+                ),
                 % Deallocate stack space that was allocated for 5+ arguments
+                % and return to the dispatcher (pop lr into pc).
+                PopLR = jit_arm32_asm:pop([r12, lr]),
                 DeallocateArgs = jit_arm32_asm:add(al, sp, sp, 8),
-                Stream4 = StreamModule:append(Stream3, DeallocateArgs),
-                % Return: pop prolog registers and return
-                PopCode = jit_arm32_asm:pop([r1, r4, r5, r6, r7, r8, r9, r10, r11, pc]),
-                Stream5 = StreamModule:append(Stream4, PopCode),
+                Ret = jit_arm32_asm:bx(al, lr),
+                Stream5 = StreamModule:append(
+                    Stream3, <<PopLR/binary, DeallocateArgs/binary, Ret/binary>>
+                ),
                 State3#state{stream = Stream5};
-            [FirstArg, jit_state | ArgsT] ->
+            _ ->
                 % For 4 or fewer args, use tail call
-                ArgsForTailCall = [FirstArg, jit_state_tail_call | ArgsT],
-                State2 = set_registers_args(State1, ArgsForTailCall, 0),
-                tail_call_with_jit_state_registers_only(State2, Temp)
+                State2 = set_registers_args(State1, Args1, 0),
+                tail_call_with_jit_state_registers_only(emit_e_writeback(State2), Temp)
         end,
     State5 = State4#state{
         regs = jit_regs:set_masks(
@@ -699,25 +721,10 @@ tail_call_with_jit_state_registers_only(
     } = State,
     Reg
 ) ->
-    % Standard tail call for 4 or fewer arguments
-    % First restore LR from stack (so target function can return properly)
-    % Choose temp register to avoid conflict with Reg
-    TempReg =
-        case Reg of
-            r7 -> r6;
-            _ -> r7
-        end,
-    % Load saved LR to temp
-    RestoreLRToTemp = jit_arm32_asm:ldr(al, TempReg, {sp, ?STACK_OFFSET_LR}),
-    % Store function pointer (pipeline friendly)
-    OverwriteLR = jit_arm32_asm:str(al, Reg, {sp, ?STACK_OFFSET_LR}),
-    % Move saved LR to LR register
-    RestoreLR = jit_arm32_asm:mov(al, lr, TempReg),
-    % Pop prolog registers: {r1,r4-r11,lr} where lr is now target address
-    % This restores jit_state in r1 and branches to target via pc
-    PopCode = jit_arm32_asm:pop([r1, r4, r5, r6, r7, r8, r9, r10, r11, pc]),
-
-    Code = <<RestoreLRToTemp/binary, OverwriteLR/binary, RestoreLR/binary, PopCode/binary>>,
+    % No frame: lr still holds the C dispatcher return address (calls save
+    % and restore it), so a plain indirect branch tail-calls the primitive,
+    % which returns straight to the dispatcher.
+    Code = jit_arm32_asm:bx(al, Reg),
     Stream1 = StreamModule:append(Stream0, Code),
     State#state{stream = Stream1}.
 
@@ -746,7 +753,7 @@ return_if_not_equal_to_ctx(
             % Move to r0 (return register)
             _ -> jit_arm32_asm:mov(al, r0, Reg)
         end,
-    I4 = jit_arm32_asm:pop([r1, r4, r5, r6, r7, r8, r9, r10, r11, pc]),
+    I4 = jit_arm32_asm:bx(al, lr),
     I2 = jit_arm32_asm:b(eq, 4 + byte_size(I3) + byte_size(I4)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
     RegBit = reg_bit(Reg),
@@ -842,18 +849,11 @@ jump_to_continuation0(
     % Add base offset to get final target address: OffsetReg = OffsetReg + Temp
     I3 = jit_arm32_asm:add(al, OffsetReg, OffsetReg, Temp),
 
-    % Function epilogue pattern:
-    % Load saved LR to temp register (LR is at sp+?STACK_OFFSET_LR)
-    I4 = jit_arm32_asm:ldr(al, Temp, {sp, ?STACK_OFFSET_LR}),
-    % Store target address to LR position on stack
-    I5 = jit_arm32_asm:str(al, OffsetReg, {sp, ?STACK_OFFSET_LR}),
-    % Move saved LR to LR register
-    I6 = jit_arm32_asm:mov(al, lr, Temp),
-    % Pop prolog registers: {r1,r4-r11,lr} where lr is now target address
-    % This restores jit_state in r1 and branches to target via pc
-    I7 = jit_arm32_asm:pop([r1, r4, r5, r6, r7, r8, r9, r10, r11, pc]),
+    % No frame: the pinned registers stay live across this native jump and
+    % lr still holds the C dispatcher return address.
+    I7 = jit_arm32_asm:bx(al, OffsetReg),
 
-    Code = <<I3/binary, I4/binary, I5/binary, I6/binary, I7/binary>>,
+    Code = <<I3/binary, I7/binary>>,
     Stream2 = StreamModule:append(State1#state.stream, Code),
     % Free all registers as this is a terminal instruction
     State2 = State1#state{
@@ -1632,9 +1632,19 @@ shift_left(
 %%-----------------------------------------------------------------------------
 -spec call_func_ptr(state(), {free, arm32_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), arm32_register()}.
+%% Write ctx->e back from its pinned register: the callee — and any GC it
+%% triggers — must see a coherent stack. There are no inline heap operations
+%% on arm32, so hp needs no pinning and no write-back.
+emit_e_writeback(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    Stream1 = StreamModule:append(Stream0, jit_arm32_asm:str(al, ?E_REG, ?Y_REGS)),
+    State#state{stream = Stream1}.
+
 call_func_ptr(StateP, FuncPtrTuple, Args) ->
-    %% The callee reads ctx->x: any pending x store must stay.
-    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args).
+    %% The callee reads ctx->x: any pending x store must stay. ctx/jit_state
+    %% args are NOT filtered here: BIFs and computed function pointers take
+    %% ctx explicitly (set_registers_args materializes it from r11);
+    %% primitive calls are filtered in call_primitive/call_primitive_last.
+    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args, false).
 
 call_func_ptr0(
     #state{
@@ -1643,7 +1653,8 @@ call_func_ptr0(
         regs = Regs0
     } = State0,
     FuncPtrTuple,
-    Args
+    Args,
+    Pure
 ) ->
     AvailableRegs0Mask = jit_regs:available_regs(Regs0),
     UsedRegs0Mask = jit_regs:used_regs(Regs0),
@@ -1658,7 +1669,10 @@ call_func_ptr0(
         [FuncPtrTuple | Args]
     ),
     UsedRegs1 = UsedRegs0 -- FreeRegs,
-    SavedRegsBase = [?CTX_REG, ?NATIVE_INTERFACE_REG | UsedRegs1],
+    %% ctx (r11), jit_state (r10), the table (r9) and e (r8) are
+    %% callee-saved: the callee preserves them, so only lr and live scratch
+    %% regs need saving around the call.
+    SavedRegsBase = [lr | UsedRegs1],
 
     % Calculate available registers for potential padding
     FreeGPRegs = FreeRegs -- (FreeRegs -- ?AVAILABLE_REGS),
@@ -1783,7 +1797,14 @@ call_func_ptr0(
             _ -> length(SavedRegs) * 4 + 8
         end,
     State4 = set_registers_args(State3, RegArgs, ParameterRegs, StackOffset),
-    Stream4 = State4#state.stream,
+    %% Write e back to ctx: the callee — and any GC it triggers — must see a
+    %% coherent stack state. Skipped for pure primitives (prim_pure/1).
+    State4b =
+        case Pure of
+            true -> State4;
+            false -> emit_e_writeback(State4)
+        end,
+    Stream4 = State4b#state.stream,
 
     % Call the function pointer (using BLX for call with return)
     Call = jit_arm32_asm:blx(al, FuncPtrReg),
@@ -1837,7 +1858,13 @@ call_func_ptr0(
                 Stream6
         end,
 
-    Stream8 = pop_registers(lists:reverse(SavedRegs), StreamModule, Stream7),
+    Stream7b = pop_registers(lists:reverse(SavedRegs), StreamModule, Stream7),
+    %% Reload e: the callee (or a GC it triggered) may have moved it.
+    Stream8 =
+        case Pure of
+            true -> Stream7b;
+            false -> StreamModule:append(Stream7b, jit_arm32_asm:ldr(al, ?E_REG, ?Y_REGS))
+        end,
 
     AvailableRegs2 = lists:delete(ResultReg, AvailableRegs1),
     AvailableRegs3 = ?AVAILABLE_REGS -- (?AVAILABLE_REGS -- AvailableRegs2),
@@ -1995,6 +2022,10 @@ parameter_regs0([_Other | T], [Reg | Rest], Acc) ->
 replace_reg(Args, Reg1, Reg2) ->
     replace_reg0(Args, Reg1, Reg2, []).
 
+replace_reg0([{ptr, Reg} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{ptr, Replacement} | T]);
+replace_reg0([{free, {ptr, Reg}} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{free, {ptr, Replacement}} | T]);
 replace_reg0([Reg | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
 replace_reg0([{free, Reg} | T], Reg, Replacement, Acc) ->
@@ -2006,10 +2037,6 @@ set_registers_args0(State, [], [], [], _AvailGP, _StackOffset) ->
     State;
 set_registers_args0(State, [{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, StackOffset) ->
     set_registers_args0(State, [FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, StackOffset);
-set_registers_args0(
-    State, [ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
-) ->
-    set_registers_args0(State, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 % Handle 64-bit arguments that need two registers according to AAPCS32
 set_registers_args0(
     State,
@@ -2059,16 +2086,23 @@ set_registers_args0(
 
 set_registers_args1(State, Reg, Reg, _Offset) ->
     State;
+%% ctx/jit_state as explicit arguments (BIFs, computed function pointers):
+%% materialize from the pinned registers.
 set_registers_args1(
-    #state{stream_module = StreamModule, stream = Stream0} = State, jit_state, ParamReg, StackOffset
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    jit_state,
+    ParamReg,
+    _StackOffset
 ) ->
-    JitStateOffset = ?STACK_OFFSET_JITSTATE + StackOffset,
-    I = jit_arm32_asm:ldr(al, ParamReg, {sp, JitStateOffset}),
+    I = jit_arm32_asm:mov(al, ParamReg, ?JITSTATE_REG),
     Stream1 = StreamModule:append(Stream0, I),
     State#state{stream = Stream1};
-% For tail calls, jit_state will be restored by pop - skip generating load instruction
-set_registers_args1(State, jit_state_tail_call, r1, _StackOffset) ->
-    State;
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State, ctx, ParamReg, _StackOffset
+) ->
+    I = jit_arm32_asm:mov(al, ParamReg, ?CTX_REG),
+    Stream1 = StreamModule:append(Stream0, I),
+    State#state{stream = Stream1};
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {x_reg, extra},
@@ -2290,7 +2324,7 @@ move_to_vm_register_emit(
     Temp1 = first_avail(Avail),
     Temp2 = first_avail(Avail band (bnot reg_bit(Temp1))),
     I1 = <<
-        (jit_arm32_asm:ldr(al, Temp1, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:mov(al, Temp1, ?JITSTATE_REG))/binary,
         (jit_arm32_asm:ldr(al, Temp1, {Temp1, ?JITSTATE_FR_OFFSET}))/binary
     >>,
     I2 = jit_arm32_asm:ldr(al, Temp2, {Reg, 4}),
@@ -2901,7 +2935,7 @@ move_to_native_register_emit(
     BitB = reg_bit(RegB),
     AvailT = Avail1 band (bnot BitB),
     I1 = <<
-        (jit_arm32_asm:ldr(al, RegB, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:mov(al, RegB, ?JITSTATE_REG))/binary,
         (jit_arm32_asm:ldr(al, RegB, {RegB, ?JITSTATE_FR_OFFSET}))/binary
     >>,
     I2 = jit_arm32_asm:ldr(al, RegA, {RegB, F * 8}),
@@ -2972,7 +3006,7 @@ move_to_native_register(
     {fp, RegA, RegB}
 ) ->
     I1 = <<
-        (jit_arm32_asm:ldr(al, RegB, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+        (jit_arm32_asm:mov(al, RegB, ?JITSTATE_REG))/binary,
         (jit_arm32_asm:ldr(al, RegB, {RegB, ?JITSTATE_FR_OFFSET}))/binary
     >>,
     I2 = jit_arm32_asm:ldr(al, RegA, {RegB, F * 8}),
@@ -3047,19 +3081,13 @@ move_to_cp(
     State2#state{stream = Stream2}.
 
 increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
-        State,
+    #state{stream_module = StreamModule, stream = Stream0} = State,
     Offset
 ) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Avail),
-    I1 = jit_arm32_asm:ldr(al, Reg, ?Y_REGS),
-    I2 = jit_arm32_asm:add(al, Reg, Reg, Offset * 4),
-    I3 = jit_arm32_asm:str(al, Reg, ?Y_REGS),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    %% e is pinned: bump the register directly.
+    Code = jit_arm32_asm:add(al, ?E_REG, ?E_REG, Offset * 4),
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    State#state{stream = Stream1}.
 
 set_continuation_to_label(
     StateP,
@@ -3091,7 +3119,7 @@ set_continuation_to_label(
 
     % Add PC + offset, load jit_state, and store continuation
     I2 = jit_arm32_asm:add(al, Temp2, Temp2, Temp1),
-    I3 = jit_arm32_asm:ldr(al, Temp1, {sp, ?STACK_OFFSET_JITSTATE}),
+    I3 = jit_arm32_asm:mov(al, Temp1, ?JITSTATE_REG),
     I4 = jit_arm32_asm:str(al, Temp2, ?JITSTATE_CONTINUATION(Temp1)),
 
     Code = <<I2/binary, I3/binary, I4/binary>>,
@@ -3124,7 +3152,7 @@ set_continuation_to_offset(
     I1 = <<16#FFFFFFFF:32>>,
     BrEntry = {Offset, {add_pc, Temp}},
     % Load jit_state pointer from stack, then store continuation
-    I2 = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I2 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_CONTINUATION(TempJitState)),
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -3144,10 +3172,10 @@ continuation_entry_point(
         stream_module = StreamModule,
         stream = Stream0
     } = State = pending_clear_all(StateP),
-    % ARM32: all instructions are 4-byte aligned, no alignment needed
-    Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-    Stream1 = StreamModule:append(Stream0, Prolog),
-    State#state{stream = Stream1}.
+    % No prologue: the dispatch loop owns saving r4-r11 and re-seeds the
+    % pinned registers on re-entry.
+    _ = StreamModule,
+    State#state{stream = Stream0}.
 
 get_module_index(
     #state{
@@ -3162,7 +3190,7 @@ get_module_index(
     Avail1 = Avail band (bnot RegBit),
     TempJitState = first_avail(Avail1),
     % Load jit_state pointer from stack, then load module
-    I1a = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
     I2 = jit_arm32_asm:ldr(al, Reg, ?MODULE_INDEX(Reg)),
     Code = <<I1a/binary, I1b/binary, I2/binary>>,
@@ -3187,7 +3215,7 @@ get_module(
     RegBit = reg_bit(Reg),
     Avail1 = Avail band (bnot RegBit),
     TempJitState = first_avail(Avail1),
-    I1a = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
     Code = <<I1a/binary, I1b/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -3238,7 +3266,7 @@ get_module_atom_index(
     Avail1 = Avail band (bnot RegBit),
     TempJitState = first_avail(Avail1),
     % Load jit_state pointer from stack, then Reg = jit_state->module
-    I1a = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
     % Reg = module->local_atoms_to_global_table
     I2 = jit_arm32_asm:ldr(al, Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
@@ -3801,7 +3829,7 @@ decrement_reductions_and_maybe_schedule_next(
     Temp = first_avail(Avail),
     TempJitState = first_avail(Avail band (bnot reg_bit(Temp))),
     % Load jit_state pointer from stack
-    I0 = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I0 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     % Load reduction count
     I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
     % Decrement reduction count
@@ -3822,14 +3850,12 @@ decrement_reductions_and_maybe_schedule_next(
     Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary, I6/binary>>),
     State1 = State0#state{stream = Stream2},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
-    % Add the prolog at the continuation point (where scheduled execution resumes)
+    % No prologue at the continuation point: the dispatch loop owns saving
+    % r4-r11 and re-seeds the pinned registers on re-entry.
     #state{stream = Stream3} = State2,
     ContinuationOffset = StreamModule:offset(Stream3),
-    Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-    Stream4 = StreamModule:append(Stream3, Prolog),
-    % Calculate offsets for rewriting
+    Stream4 = Stream3,
     ContinuationAfterPrologOffset = StreamModule:offset(Stream4),
-    % Rewrite the branch to skip over the prolog (branch to continuation_after_prolog)
     NewI4 = jit_arm32_asm:b(ne, ContinuationAfterPrologOffset - BNEOffset),
     % Rewrite the add pc to point to the continuation point (prolog location)
     % ARM32: PC reads as instruction_address + 8
@@ -3862,7 +3888,7 @@ call_only_or_schedule_next(
     Temp = first_avail(Avail),
     TempJitState = first_avail(Avail band (bnot reg_bit(Temp))),
     % Load jit_state pointer from stack
-    I0 = jit_arm32_asm:ldr(al, TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+    I0 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
     % Load reduction count
     I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
     % Decrement reduction count
@@ -3955,15 +3981,14 @@ rewrite_cp_offset(
             PCRelOffset = CurrentOffset - (RewriteOffset + 8),
             LdrInstr = jit_arm32_asm:ldr(al, TempReg, {pc, PCRelOffset}),
             Stream1 = StreamModule:replace(StreamWithLiteral, RewriteOffset, LdrInstr),
-            Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-            Stream2 = StreamModule:append(Stream1, Prolog),
-            State0#state{stream = Stream2, regs = jit_regs:invalidate_all(State0#state.regs)};
+            %% No prologue at the CP resume point: the pinned registers stay
+            %% live across native tail-jumps and the dispatch loop re-seeds
+            %% them on re-entry.
+            State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)};
         _ ->
             MovInstr = jit_arm32_asm:mov(al, TempReg, OffsetImm0),
             Stream1 = StreamModule:replace(Stream0, RewriteOffset, MovInstr),
-            Prolog = jit_arm32_asm:push([r1, r4, r5, r6, r7, r8, r9, r10, r11, lr]),
-            Stream2 = StreamModule:append(Stream1, Prolog),
-            State0#state{stream = Stream2, regs = jit_regs:invalidate_all(State0#state.regs)}
+            State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}
     end.
 
 set_bs(
@@ -4002,11 +4027,11 @@ return_labels_and_lines(
      || {Label, LabelOffset} <- maps:to_list(Labels), is_integer(Label)
     ]),
 
-    % add r0, pc, #0 sets r0 to instruction_address + 8 = address of data after pop
-    % We have: add (4 bytes) + pop (4 bytes) = 8 bytes before data
-    % PC reads as instruction_address + 8, so offset 0 points right after the pop
+    % add r0, pc, #0 sets r0 to instruction_address + 8 = address of data after bx
+    % We have: add (4 bytes) + bx (4 bytes) = 8 bytes before data
+    % PC reads as instruction_address + 8, so offset 0 points right after the bx
     I1 = jit_arm32_asm:add(al, r0, pc, 0),
-    I2 = jit_arm32_asm:pop([r1, r4, r5, r6, r7, r8, r9, r10, r11, pc]),
+    I2 = jit_arm32_asm:bx(al, lr),
     LabelsTable = <<<<Label:16, Offset:32>> || {Label, Offset} <- SortedLabels>>,
     LinesTable = <<<<Line:16, Offset:32>> || {Line, Offset} <- SortedLines>>,
     Stream1 = StreamModule:append(
@@ -4017,81 +4042,45 @@ return_labels_and_lines(
     State#state{stream = Stream1}.
 
 %% Helper function to generate str instruction with y_reg offset, handling large offsets
-str_y_reg(SrcReg, Y, TempReg, _) when Y * 4 =< 4095 ->
-    % Small offset - use immediate addressing
-    I1 = jit_arm32_asm:ldr(al, TempReg, ?Y_REGS),
-    I2 = jit_arm32_asm:str(al, SrcReg, {TempReg, Y * 4}),
-    <<I1/binary, I2/binary>>;
+str_y_reg(SrcReg, Y, _TempReg, _) when Y * 4 =< 4095 ->
+    % Small offset - e is pinned, single store
+    jit_arm32_asm:str(al, SrcReg, {?E_REG, Y * 4});
 str_y_reg(SrcReg, Y, TempReg1, _AvailMask) ->
     % Large offset (Y * 4 > 4095) - split into base + 4080 + remainder
     % 4080 (0xFF0) is the largest ARM-encodable immediate close to the 4095 ldr/str limit
     Offset = Y * 4,
     BaseOffset = 4080,
     Remainder = Offset - BaseOffset,
-    I1 = jit_arm32_asm:ldr(al, TempReg1, ?Y_REGS),
-    I2 = jit_arm32_asm:add(al, TempReg1, TempReg1, BaseOffset),
+    I2 = jit_arm32_asm:add(al, TempReg1, ?E_REG, BaseOffset),
     I3 = jit_arm32_asm:str(al, SrcReg, {TempReg1, Remainder}),
-    <<I1/binary, I2/binary, I3/binary>>.
+    <<I2/binary, I3/binary>>.
 
 %% Helper function to generate ldr instruction with y_reg offset, handling large offsets
 ldr_y_reg(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     DstReg,
     Y,
-    AvailMask
-) when AvailMask =/= 0, Y * 4 =< 4095 ->
-    % Small offset - use immediate addressing
-    TempReg = first_avail(AvailMask),
-    I1 = jit_arm32_asm:ldr(al, TempReg, ?Y_REGS),
-    I2 = jit_arm32_asm:ldr(al, DstReg, {TempReg, Y * 4}),
-    Code = <<I1/binary, I2/binary>>,
+    _AvailMask
+) when Y * 4 =< 4095 ->
+    % Small offset - e is pinned, single load
+    Code = jit_arm32_asm:ldr(al, DstReg, {?E_REG, Y * 4}),
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, DstReg), TempReg),
+    Regs1 = jit_regs:invalidate_reg(Regs0, DstReg),
     State#state{stream = Stream1, regs = Regs1};
 ldr_y_reg(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     DstReg,
     Y,
-    AvailMask
-) when AvailMask =/= 0 ->
+    _AvailMask
+) ->
     % Large offset (Y * 4 > 4095) - split into base + 4080 + remainder
     % 4080 (0xFF0) is the largest ARM-encodable immediate close to the 4095 ldr/str limit
-    TempReg = first_avail(AvailMask),
     Offset = Y * 4,
     BaseOffset = 4080,
     Remainder = Offset - BaseOffset,
-    I1 = jit_arm32_asm:ldr(al, TempReg, ?Y_REGS),
-    I2 = jit_arm32_asm:add(al, TempReg, TempReg, BaseOffset),
-    I3 = jit_arm32_asm:ldr(al, DstReg, {TempReg, Remainder}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, DstReg), TempReg),
-    State#state{stream = Stream1, regs = Regs1};
-ldr_y_reg(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DstReg, Y, 0
-) when
-    Y * 4 =< 4095
-->
-    % Small offset, no registers available - use DstReg as temp
-    I1 = jit_arm32_asm:ldr(al, DstReg, ?Y_REGS),
-    I2 = jit_arm32_asm:ldr(al, DstReg, {DstReg, Y * 4}),
-    Code = <<I1/binary, I2/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, DstReg),
-    State#state{stream = Stream1, regs = Regs1};
-ldr_y_reg(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, DstReg, Y, 0
-) ->
-    % Large offset (Y * 4 > 4095), no registers available
-    % Use DstReg as temp: load Y_REGS base, add 4080, ldr with remainder
-    % 4080 (0xFF0) is the largest ARM-encodable immediate close to the 4095 ldr/str limit
-    Offset = Y * 4,
-    BaseOffset = 4080,
-    Remainder = Offset - BaseOffset,
-    I1 = jit_arm32_asm:ldr(al, DstReg, ?Y_REGS),
-    I2 = jit_arm32_asm:add(al, DstReg, DstReg, BaseOffset),
+    I2 = jit_arm32_asm:add(al, DstReg, ?E_REG, BaseOffset),
     I3 = jit_arm32_asm:ldr(al, DstReg, {DstReg, Remainder}),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    Code = <<I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, DstReg),
     State#state{stream = Stream1, regs = Regs1}.
