@@ -25,8 +25,11 @@
 -export([
     new/1,
     offset/1,
+    committed_offset/1,
     append/2,
     replace/3,
+    reset/2,
+    flush_upto/2,
     map/4,
     flush/1
 ]).
@@ -58,6 +61,49 @@ new(_MaxSize) ->
 %%-----------------------------------------------------------------------------
 -spec offset(stream()) -> non_neg_integer().
 offset(_Stream) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param Stream    stream to get the backtrack horizon from
+%% @returns The flush horizon
+%% @doc     Backtrack horizon of the stream (see jit:compile's backtrack loop):
+%%          the offset below which content has been written to flash and can
+%%          only receive bit-clear (0xFF-placeholder) patches. Content at or
+%%          above the horizon is held in RAM and freely rewritable, so the
+%%          compiler can emit optimistic fused forward branches and resolve
+%%          or re-emit them in-buffer. The horizon advances only through
+%%          flush_upto/2.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec committed_offset(stream()) -> non_neg_integer().
+committed_offset(_Stream) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param Stream    stream to rewind
+%% @param Offset    offset to rewind the write cursor to
+%% @returns The updated stream
+%% @doc     Rewind the write cursor for a backtrack re-emit, restoring the
+%%          erased state of the rewound region. Only possible at or above the
+%%          flush horizon (flushed flash content is immutable). Used by the
+%%          backend's rewind_stream/2.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec reset(stream(), non_neg_integer()) -> stream().
+reset(_Stream, _Offset) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param Stream    stream to flush
+%% @param Offset    offset below which content is final
+%% @returns The updated stream
+%% @doc     Declare every byte below Offset final: fully-appended pages
+%%          entirely below it are written to flash and the flush horizon
+%%          advances, bounding the RAM held by the stream.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec flush_upto(stream(), non_neg_integer()) -> stream().
+flush_upto(_Stream, _Offset) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
