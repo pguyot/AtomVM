@@ -45,6 +45,8 @@
     take_overflows/1,
     rewind_stream/2,
     enable_eager_flush/1,
+    labels/1,
+    set_preset_labels/2,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
@@ -214,7 +216,8 @@
     branch_counter = 0 :: non_neg_integer(),
     fused_branches = [] :: [tuple()],
     overflows = #{} :: #{non_neg_integer() => pos_integer()},
-    eager_flush = false :: boolean()
+    eager_flush = false :: boolean(),
+    preset_labels = undefined :: undefined | #{integer() => non_neg_integer()}
 }).
 
 -type state() :: #state{}.

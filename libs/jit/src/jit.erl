@@ -309,16 +309,29 @@ compile0(
             true -> MMod:set_live_masks(MSt0, {LiveMasks, CallTargets});
             false -> MSt0
         end,
-    MSt1 = MMod:jump_table(MSt0b, LabelsCount),
+    %% The emission pass of the two-pass compile knows every final label
+    %% offset from the sizing pass: give them to the backend before the jump
+    %% table is emitted, so it can emit final (write-once) entries directly.
+    MSt0c =
+        case Mode of
+            {emit, #{labels := PresetLabels}} when PresetLabels =/= undefined ->
+                case erlang:function_exported(MMod, set_preset_labels, 2) of
+                    true -> MMod:set_preset_labels(MSt0b, PresetLabels);
+                    false -> MSt0b
+                end;
+            _ ->
+                MSt0b
+        end,
+    MSt1 = MMod:jump_table(MSt0c, LabelsCount),
     case Mode of
         stream ->
             MSt4 = emit_finalize_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
             {LabelsCount, MSt4};
         sizing ->
-            Hints = sizing_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
-            {LabelsCount, Hints};
-        {emit, Hints} ->
-            MSt4 = emit_with_hints(Opcodes, MMod, MSt1, State0, Hints),
+            Plan = sizing_loop(Opcodes, MMod, MSt1, State0, #{}, 0),
+            {LabelsCount, Plan};
+        {emit, Plan} ->
+            MSt4 = emit_with_hints(Opcodes, MMod, MSt1, State0, Plan),
             {LabelsCount, MSt4}
     end;
 compile0(
@@ -388,7 +401,20 @@ sizing_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, CheckpointOffset) ->
     MaxAttempts = 64,
     case map_size(Overflows) of
         0 ->
-            Hints;
+            %% The plan for the emission pass: the converged size hints, plus
+            %% the final (BEAM-integer) label offsets when the backend can
+            %% report them -- these let the emission pass emit final jump
+            %% table entries directly (write-once) and flush eagerly.
+            Labels =
+                case erlang:function_exported(MMod, labels, 1) of
+                    true ->
+                        maps:filter(
+                            fun(K, _) -> is_integer(K) end, MMod:labels(MSt3)
+                        );
+                    false ->
+                        undefined
+                end,
+            #{hints => Hints, labels => Labels};
         _ when Attempt < MaxAttempts ->
             sizing_loop(
                 Opcodes,
@@ -407,19 +433,26 @@ sizing_loop(Opcodes, MMod, MSt1, State0, Hints, Attempt, CheckpointOffset) ->
 %% backtrack possible. The backend may flush eagerly to a bounded-RAM stream
 %% (enable_eager_flush); an overflow here means the sizing pass and this pass
 %% diverged, which is a bug -- fail loudly rather than emit corrupt code.
-emit_with_hints(Opcodes, MMod, MSt1, State0, Hints) ->
+emit_with_hints(Opcodes, MMod, MSt1, State0, #{hints := Hints} = Plan) ->
     MSt1a =
         case erlang:function_exported(MMod, set_branch_hints, 2) of
             true -> MMod:set_branch_hints(MSt1, Hints);
             false -> MSt1
         end,
-    %% NOTE: eager flushing (MMod:enable_eager_flush, advancing the stream's
-    %% flush horizon as branches resolve) is not activated yet: jump-table
-    %% entries are legitimately patched more than once (OP_INT_CALL_END
-    %% re-adds label LabelsCount; loop-residency hot entries re-patch), so the
-    %% flash stream must first learn to hold the jump-table pages separately
-    %% from the tail window before the horizon may pass them.
-    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1a, State0),
+    %% Eager flushing requires preset labels: jump-table entries are patched
+    %% more than once during a plain emission (OP_INT_CALL_END re-adds label
+    %% LabelsCount; loop-residency hot entries re-patch), so the flush horizon
+    %% may only advance past the table when it was emitted final (write-once)
+    %% from the sizing pass' label offsets.
+    MSt1b =
+        case
+            maps:get(labels, Plan, undefined) =/= undefined andalso
+                erlang:function_exported(MMod, enable_eager_flush, 1)
+        of
+            true -> MMod:enable_eager_flush(MSt1a);
+            false -> MSt1a
+        end,
+    {State1, MSt2} = emit_pass(Opcodes, MMod, MSt1b, State0),
     MSt3 = finalize_pass(MMod, MSt2, State1),
     Overflows =
         case erlang:function_exported(MMod, take_overflows, 1) of
