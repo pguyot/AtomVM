@@ -250,8 +250,20 @@
 % Context offsets (64-bit architecture)
 % ctx->e is 0x50
 % ctx->x is 0x58
--define(CTX_REG, a0).
--define(NATIVE_INTERFACE_REG, a2).
+%% Pinned-register convention: ctx, jit_state, the primitives table and
+%% ctx->e live in callee-saved registers, seeded once per C->native crossing
+%% by the dispatch loop (opcodesswitch.h). C primitives preserve them per
+%% the RISC-V ABI, so generated code never saves, restores or reloads them
+%% around calls; a0/a1/a2 become scratch. ctx takes s1 (x9), the only
+%% RVC-addressable callee-saved base besides the frame pointer, so argument
+%% loads from x registers into a0-a5 keep their compressed encodings. There
+%% are no inline heap operations on RISC-V, so hp is NOT pinned.
+-define(CTX_REG, s1).
+-define(NATIVE_INTERFACE_REG, s3).
+%% ctx->e mutates (allocate/deallocate, GC): written back to ctx before
+%% every C call and reloaded after calls that return, except around
+%% primitives listed in jit_prim_pure.hrl.
+-define(E_REG, s4).
 -define(Y_REGS, {?CTX_REG, 16#50}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * 8)}).
 -define(CP, {?CTX_REG, 16#E0}).
@@ -259,7 +271,7 @@
 -define(BS, {?CTX_REG, 16#E8}).
 -define(BS_OFFSET, {?CTX_REG, 16#F0}).
 % JITSTATE is in a1 register (no prolog needed)
--define(JITSTATE_REG, a1).
+-define(JITSTATE_REG, s2).
 % Return address register
 -define(RA_REG, ra).
 -define(JITSTATE_MODULE_OFFSET, 0).
@@ -311,11 +323,18 @@
 -define(REG_BIT_T4, (1 bsl 12)).
 -define(REG_BIT_T5, (1 bsl 13)).
 -define(REG_BIT_T6, (1 bsl 14)).
+%% Callee-saved pinned registers: never in the available/used masks; the bits
+%% exist so args_regs/regs_to_mask can pass over them.
+-define(REG_BIT_S1, (1 bsl 15)).
+-define(REG_BIT_S2, (1 bsl 16)).
+-define(REG_BIT_S3, (1 bsl 17)).
+-define(REG_BIT_S4, (1 bsl 18)).
 
 %% AVAILABLE_REGS = [t6, t5, t4, t3, t2, t1, t0]
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_T6 bor ?REG_BIT_T5 bor ?REG_BIT_T4 bor ?REG_BIT_T3 bor
-        ?REG_BIT_T2 bor ?REG_BIT_T1 bor ?REG_BIT_T0)
+        ?REG_BIT_T2 bor ?REG_BIT_T1 bor ?REG_BIT_T0 bor
+        ?REG_BIT_A2 bor ?REG_BIT_A1 bor ?REG_BIT_A0)
 ).
 -include("jit_backend_dwarf_impl.hrl").
 -define(ASM, jit_riscv64_asm).
@@ -334,6 +353,7 @@
 -define(ARRAY_OFFSET_FOLD(IndexReg, Offset), IndexReg + Offset).
 
 -include("jit_riscv_impl.hrl").
+-include("jit_prim_pure.hrl").
 
 %% Native-register allocation bookkeeping (used_regs/1, available_regs/1,
 %% free_native_registers/2, free_native_register/2, assert_all_native_free/1)

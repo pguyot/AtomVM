@@ -367,8 +367,12 @@ load_primitive_ptr(Primitive, TargetReg) ->
 call_primitive(
     StateP,
     Primitive,
-    Args
+    Args0
 ) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% s1/s2 and do not take them as parameters. (BIF/computed-pointer calls
+    %% go through call_func_ptr directly and keep their ctx argument.)
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% The callee reads ctx->x: any pending (elidable) x store must stay.
     call_primitive0(pending_clear_all(StateP), Primitive, Args).
 
@@ -382,9 +386,10 @@ call_primitive0(
     Args
 ) ->
     Available = jit_regs:available_regs(Regs0),
+    Pure = prim_pure(Primitive),
     case Available of
         0 ->
-            call_func_ptr(State, {primitive, Primitive}, Args);
+            call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
         _ ->
             TempReg = first_avail(Available),
             TempBit = reg_bit(TempReg),
@@ -396,7 +401,7 @@ call_primitive0(
                 stream = Stream1,
                 regs = jit_regs:alloc_reg(Regs1, TempBit)
             },
-            call_func_ptr(StateCall, {free, TempReg}, Args)
+            call_func_ptr0(StateCall, {free, TempReg}, Args, Pure)
     end.
 
 %%-----------------------------------------------------------------------------
@@ -409,7 +414,10 @@ call_primitive0(
 %% @param Args arguments to pass to the primitive
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-call_primitive_last(StateP, Primitive, Args) ->
+call_primitive_last(StateP, Primitive, Args0) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% s1/s2, drop them from the argument list.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% Control leaves through the primitive, which reads ctx->x.
     call_primitive_last0(pending_clear_all(StateP), Primitive, Args).
 
@@ -449,14 +457,9 @@ call_primitive_last0(
 
     % In RISC-V, all up to 8 arguments fit in registers (a0-a7)
     % Always use tail call when calling primitives in tail position
-    State4 =
-        case Args1 of
-            [FirstArg, jit_state | ArgsT] ->
-                % Use tail call
-                ArgsForTailCall = [FirstArg, jit_state_tail_call | ArgsT],
-                State2 = set_registers_args(State1, ArgsForTailCall, 0),
-                tail_call_with_jit_state_registers_only(State2, Temp)
-        end,
+    State2 = set_registers_args(State1, Args1, 0),
+    %% Write e back to ctx before tail-calling into C (see call_func_ptr0).
+    State4 = tail_call_with_jit_state_registers_only(emit_e_writeback(State2), Temp),
     State4#state{
         regs = jit_regs:set_masks(
             jit_regs:unreachable(State4#state.regs), ?AVAILABLE_REGS_MASK, 0
@@ -1616,9 +1619,20 @@ shift_right_arith(
 %% @param Args arguments to pass to the function
 %% @return Updated backend state and return register
 %%-----------------------------------------------------------------------------
+%% Write ctx->e back from its pinned register: the callee — and any GC it
+%% triggers — must see a coherent stack. There are no inline heap operations
+%% on RISC-V, so hp needs no pinning and no write-back.
+emit_e_writeback(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    {YBase, YOff} = ?Y_REGS,
+    Stream1 = StreamModule:append(Stream0, ?STORE_WORD(YBase, ?E_REG, YOff)),
+    State#state{stream = Stream1}.
+
 call_func_ptr(StateP, FuncPtrTuple, Args) ->
-    %% The callee reads ctx->x: any pending x store must stay.
-    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args).
+    %% The callee reads ctx->x: any pending x store must stay. ctx/jit_state
+    %% args are NOT filtered here: BIFs and computed function pointers take
+    %% ctx explicitly (set_registers_args materializes it from s1);
+    %% primitive calls are filtered in call_primitive/call_primitive_last.
+    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args, false).
 
 call_func_ptr0(
     #state{
@@ -1627,7 +1641,8 @@ call_func_ptr0(
         regs = Regs0
     } = State0,
     FuncPtrTuple,
-    Args
+    Args,
+    Pure
 ) ->
     AvailableRegs0Mask = jit_regs:available_regs(Regs0),
     UsedRegs0Mask = jit_regs:used_regs(Regs0),
@@ -1641,10 +1656,10 @@ call_func_ptr0(
     ),
     FreeMask = regs_to_mask(FreeRegs),
     UsedRegs1Mask = UsedRegs0Mask band (bnot FreeMask),
-    % Save RA so it's preserved across jalr calls
-    SavedRegs = [
-        ?RA_REG, ?CTX_REG, ?JITSTATE_REG, ?NATIVE_INTERFACE_REG | mask_to_list(UsedRegs1Mask)
-    ],
+    %% ctx (s1), jit_state (s2), the table (s3) and e (s4) are callee-saved:
+    %% the callee preserves them, so only ra and live scratch regs need
+    %% saving around the call.
+    SavedRegs = [?RA_REG | mask_to_list(UsedRegs1Mask)],
 
     % Calculate available registers
     FreeGPMask = FreeMask band ?AVAILABLE_REGS_MASK,
@@ -1750,11 +1765,16 @@ call_func_ptr0(
 
     StackOffset = AlignedStackBytes,
     State4 = set_registers_args(State3, RegArgs, ParameterRegs, StackOffset),
-    Stream4 = State4#state.stream,
 
     % Call the function pointer (using JALR for call with return)
+    State4b =
+        case Pure of
+            true -> State4;
+            false -> emit_e_writeback(State4)
+        end,
+    Stream4b = State4b#state.stream,
     Call = ?ASM:jalr(ra, FuncPtrReg, 0),
-    Stream5 = StreamModule:append(Stream4, Call),
+    Stream5 = StreamModule:append(Stream4b, Call),
 
     % For result, we need a free register (including FuncPtrReg).
     % If none are available (all registers were pushed to the stack),
@@ -1799,7 +1819,15 @@ call_func_ptr0(
                 }
         end,
 
-    Stream8 = pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream6),
+    Stream7 = pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream6),
+    Stream8 =
+        case Pure of
+            true ->
+                Stream7;
+            false ->
+                {YBase2, YOff2} = ?Y_REGS,
+                StreamModule:append(Stream7, ?LOAD_WORD(?E_REG, YBase2, YOff2))
+        end,
 
     ResultRegBit = reg_bit(ResultReg),
     AvailableRegs3Mask = (AvailableRegs1Mask band (bnot ResultRegBit)) band ?AVAILABLE_REGS_MASK,
@@ -1906,6 +1934,10 @@ parameter_regs0([_Other | T], [Reg | Rest], Acc) ->
 replace_reg(Args, Reg1, Reg2) ->
     replace_reg0(Args, Reg1, Reg2, []).
 
+replace_reg0([{ptr, Reg} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{ptr, Replacement} | T]);
+replace_reg0([{free, {ptr, Reg}} | T], Reg, Replacement, Acc) ->
+    lists:reverse(Acc, [{free, {ptr, Replacement}} | T]);
 replace_reg0([Reg | T], Reg, Replacement, Acc) ->
     lists:reverse(Acc, [Replacement | T]);
 replace_reg0([{free, Reg} | T], Reg, Replacement, Acc) ->
@@ -1917,10 +1949,6 @@ set_registers_args0(State, [], [], [], _AvailGP, _StackOffset) ->
     State;
 set_registers_args0(State, [{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, StackOffset) ->
     set_registers_args0(State, [FreeVal | ArgsT], ArgsRegs, ParamRegs, AvailGP, StackOffset);
-set_registers_args0(
-    State, [ctx | ArgsT], [?CTX_REG | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
-) ->
-    set_registers_args0(State, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 % Handle 64-bit arguments via backend-specific callback
 set_registers_args0(
     State,
@@ -1931,14 +1959,6 @@ set_registers_args0(
     StackOffset
 ) when is_integer(Value) ->
     handle_avm_int64_t(State, Value, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
-% ctx is special as we need it to access x_reg/y_reg/fp_reg and we don't
-% want to replace it
-set_registers_args0(
-    State, [Arg | ArgsT], [_ArgReg | ArgsRegs], [?CTX_REG | ParamRegs], AvailGP, StackOffset
-) ->
-    false = lists:member(?CTX_REG, ArgsRegs),
-    State1 = set_registers_args1(State, Arg, ?CTX_REG, StackOffset),
-    set_registers_args0(State1, ArgsT, ArgsRegs, ParamRegs, AvailGP, StackOffset);
 set_registers_args0(
     #state{stream_module = StreamModule} = State0,
     [Arg | ArgsT],
@@ -1966,24 +1986,26 @@ set_registers_args0(
 
 set_registers_args1(State, Reg, Reg, _Offset) ->
     State;
+%% ctx/jit_state as explicit arguments (BIFs, computed function pointers):
+%% materialize from the pinned registers.
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     jit_state,
     ParamReg,
     _StackOffset
 ) ->
-    % jit_state is always in a1, so we only need to move it if the param reg is different
-    case ParamReg of
-        a1 ->
-            State;
-        _ ->
-            I = ?ASM:mv(ParamReg, a1),
-            Stream1 = StreamModule:append(Stream0, I),
-            State#state{stream = Stream1}
-    end;
-% For tail calls, jit_state is already in a1
-set_registers_args1(State, jit_state_tail_call, a1, _StackOffset) ->
-    State;
+    I = ?ASM:mv(ParamReg, ?JITSTATE_REG),
+    Stream1 = StreamModule:append(Stream0, I),
+    State#state{stream = Stream1};
+set_registers_args1(
+    #state{stream_module = StreamModule, stream = Stream0} = State,
+    ctx,
+    ParamReg,
+    _StackOffset
+) ->
+    I = ?ASM:mv(ParamReg, ?CTX_REG),
+    Stream1 = StreamModule:append(Stream0, I),
+    State#state{stream = Stream1};
 set_registers_args1(
     #state{stream_module = StreamModule, stream = Stream0} = State,
     {x_reg, extra},
@@ -2911,21 +2933,13 @@ move_to_cp(
 -endif.
 
 increment_sp(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
-        State,
+    #state{stream_module = StreamModule, stream = Stream0} = State,
     Offset
 ) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Avail),
-    {BaseReg1, Off1} = ?Y_REGS,
-    I1 = ?LOAD_WORD(Reg, BaseReg1, Off1),
-    I2 = ?ASM:addi(Reg, Reg, Offset * ?WORD_SIZE_BYTES),
-    {BaseReg2, Off2} = ?Y_REGS,
-    I3 = ?STORE_WORD(BaseReg2, Reg, Off2),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    %% e is pinned: bump the register directly.
+    Code = ?ASM:addi(?E_REG, ?E_REG, Offset * ?WORD_SIZE_BYTES),
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    State#state{stream = Stream1}.
 
 set_continuation_to_label(
     StateP,
@@ -3807,56 +3821,35 @@ pc_relative_address(Rd, Offset) ->
     end.
 
 %% Helper function to generate str instruction with y_reg offset, handling large offsets
-str_y_reg(SrcReg, Y, TempReg, _AvailableMask) when Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT ->
-    % Small offset - use immediate addressing
-    {BaseReg, Off} = ?Y_REGS,
-    I1 = ?LOAD_WORD(TempReg, BaseReg, Off),
-    I2 = ?STORE_WORD(TempReg, SrcReg, Y * ?WORD_SIZE_BYTES),
-    <<I1/binary, I2/binary>>;
-str_y_reg(SrcReg, Y, TempReg1, AvailableMask) when AvailableMask =/= 0 ->
-    % Large offset - use register arithmetic with second available register
-    TempReg2 = first_avail(AvailableMask),
+str_y_reg(SrcReg, Y, _TempReg, _AvailableMask) when Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT ->
+    % Small offset - e is pinned, single store
+    ?STORE_WORD(?E_REG, SrcReg, Y * ?WORD_SIZE_BYTES);
+str_y_reg(SrcReg, Y, TempReg1, _AvailableMask) ->
+    % Large offset - use register arithmetic with the temp register
     Offset = Y * ?WORD_SIZE_BYTES,
-    {BaseReg, Off} = ?Y_REGS,
-    I1 = ?LOAD_WORD(TempReg1, BaseReg, Off),
-    I2 = ?ASM:li(TempReg2, Offset),
-    I3 = ?ASM:add(TempReg2, TempReg2, TempReg1),
-    I4 = ?STORE_WORD(TempReg2, SrcReg, 0),
-    <<I1/binary, I2/binary, I3/binary, I4/binary>>.
+    I2 = ?ASM:li(TempReg1, Offset),
+    I3 = ?ASM:add(TempReg1, TempReg1, ?E_REG),
+    I4 = ?STORE_WORD(TempReg1, SrcReg, 0),
+    <<I2/binary, I3/binary, I4/binary>>.
 
 %% Helper function to generate ldr instruction with y_reg offset, handling large offsets
-ldr_y_reg(DstReg, Y, AvailableMask) when
-    AvailableMask =/= 0 andalso Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT
-->
-    % Small offset - use immediate addressing
-    TempReg = first_avail(AvailableMask),
-    {BaseReg, Off} = ?Y_REGS,
-    I1 = ?LOAD_WORD(TempReg, BaseReg, Off),
-    I2 = ?LOAD_WORD(DstReg, TempReg, Y * ?WORD_SIZE_BYTES),
-    <<I1/binary, I2/binary>>;
-ldr_y_reg(DstReg, Y, AvailableMask) when AvailableMask =/= 0 ->
-    % Large offset - use DstReg as second temp register for arithmetic
-    TempReg = first_avail(AvailableMask),
+ldr_y_reg(DstReg, Y, _AvailableMask) when Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT ->
+    % Small offset - e is pinned, single load
+    ?LOAD_WORD(DstReg, ?E_REG, Y * ?WORD_SIZE_BYTES);
+ldr_y_reg(DstReg, Y, _AvailableMask) ->
+    % Large offset - use DstReg for the address arithmetic
     Offset = Y * ?WORD_SIZE_BYTES,
-    {BaseReg, Off} = ?Y_REGS,
-    I1 = ?LOAD_WORD(TempReg, BaseReg, Off),
     I2 = ?ASM:li(DstReg, Offset),
-    I3 = ?ASM:add(DstReg, DstReg, TempReg),
+    I3 = ?ASM:add(DstReg, DstReg, ?E_REG),
     I4 = ?LOAD_WORD(DstReg, DstReg, 0),
-    <<I1/binary, I2/binary, I3/binary, I4/binary>>;
-ldr_y_reg(DstReg, Y, 0) when Y * ?WORD_SIZE_BYTES =< ?Y_OFFSET_LIMIT ->
-    % Small offset, no registers available - use DstReg as temp
-    {BaseReg, Off} = ?Y_REGS,
-    I1 = ?LOAD_WORD(DstReg, BaseReg, Off),
-    I2 = ?LOAD_WORD(DstReg, DstReg, Y * ?WORD_SIZE_BYTES),
-    <<I1/binary, I2/binary>>.
+    <<I2/binary, I3/binary, I4/binary>>.
 
 %% Scratch-register orderings consumed by jit_backend_regs_impl.hrl. They must be
 %% defined before that file is included by jit_riscv32 / jit_riscv64; since this
 %% file is itself included earlier, defining them here suffices. first_avail uses
 %% only the temporaries (t0-t6); mask_to_list additionally covers the argument
 %% registers (a0-a7), which appear in used masks during calls.
--define(FIRST_AVAIL_REGS, [t6, t5, t4, t3, t2, t1, t0]).
+-define(FIRST_AVAIL_REGS, [t6, t5, t4, t3, t2, t1, t0, a2, a1, a0]).
 -define(MASK_TO_LIST_REGS, [t6, t5, t4, t3, t2, t1, t0, a7, a6, a5, a4, a3, a2, a1, a0]).
 -define(JITSTATE_ARG_REG, jit_state).
 
@@ -3874,7 +3867,11 @@ reg_bit(t2) -> ?REG_BIT_T2;
 reg_bit(t3) -> ?REG_BIT_T3;
 reg_bit(t4) -> ?REG_BIT_T4;
 reg_bit(t5) -> ?REG_BIT_T5;
-reg_bit(t6) -> ?REG_BIT_T6.
+reg_bit(t6) -> ?REG_BIT_T6;
+reg_bit(s1) -> ?REG_BIT_S1;
+reg_bit(s2) -> ?REG_BIT_S2;
+reg_bit(s3) -> ?REG_BIT_S3;
+reg_bit(s4) -> ?REG_BIT_S4.
 
 regs_to_mask([]) -> 0;
 regs_to_mask([ctx | T]) -> regs_to_mask(T);

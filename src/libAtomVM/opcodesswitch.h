@@ -1824,6 +1824,42 @@ schedule_in:
                       "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
                 new_ctx = asm_result;
             }
+#elif JIT_ARCH_TARGET == JIT_ARCH_RISCV32 || JIT_ARCH_TARGET == JIT_ARCH_RISCV64
+            // RISC-V pinned-register convention: generated code reads ctx
+            // from s1, jit_state from s2, the primitives table from s3 and
+            // keeps ctx->e in s4 (callee-saved, so C primitives preserve
+            // them for free). Same contract as the aarch64 block below;
+            // there are no inline heap operations on RISC-V, so hp is not
+            // pinned and only e is seeded (and, like hp/e on aarch64, only
+            // SEEDED: generated code writes e back to ctx before every C
+            // call). The entry pointer rides in s6.
+            Context *new_ctx;
+            {
+                register Context *pin_ctx __asm__("s1") = ctx;
+                register JITState *pin_js __asm__("s2") = &jit_state;
+                register const ModuleNativeInterface *pin_p __asm__("s3") = &module_native_interface;
+                register term *pin_e __asm__("s4") = ctx->e;
+                register ModuleNativeEntryPoint entry_reg __asm__("s6") = native_pc;
+                register Context *result_reg __asm__("a0");
+                __asm__ volatile(
+                    "jalr ra, s6, 0"
+                    : "=r"(result_reg), "+r"(pin_ctx), "+r"(pin_js), "+r"(pin_p),
+                      "+r"(pin_e), "+r"(entry_reg)
+                    :
+// Soft-float targets (e.g. rv32imac on esp32c3) have no f registers.
+#if defined(__riscv_flen) && (__riscv_flen > 0)
+#define AVM_JIT_RISCV_FP_CLOBBERS                                     \
+    "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",           \
+        "fa0", "fa1", "fa2", "fa3", "fa4", "fa5", "fa6", "fa7",       \
+        "ft8", "ft9", "ft10", "ft11",
+#else
+#define AVM_JIT_RISCV_FP_CLOBBERS
+#endif
+                    : "ra", "t0", "t1", "t2", "t3", "t4", "t5", "t6",
+                      "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+                      AVM_JIT_RISCV_FP_CLOBBERS "memory");
+                new_ctx = result_reg;
+            }
 #elif JIT_ARCH_TARGET == JIT_ARCH_AARCH64
             // aarch64 pinned-register convention: generated code reads
             // jit_state from x19, the primitives table from x20 and ctx
