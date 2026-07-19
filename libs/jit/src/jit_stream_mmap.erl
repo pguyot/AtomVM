@@ -25,8 +25,10 @@
 -export([
     new/1,
     offset/1,
+    committed_offset/1,
     append/2,
     replace/3,
+    reset/2,
     map/4,
     flush/1
 ]).
@@ -61,6 +63,20 @@ offset(_Stream) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
+%% @param Stream    stream to get the backtrack horizon from
+%% @returns 0
+%% @doc     Backtrack horizon of the stream (see jit:compile's backtrack loop).
+%%          Nothing is committed until the code is executed after flush, and
+%%          reset/2 can rewind the write cursor, so the whole module can always
+%%          be re-emitted: the horizon is 0. Exporting this opts mmap streams
+%%          into optimistic forward fused branches.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec committed_offset(stream()) -> 0.
+committed_offset(_Stream) ->
+    0.
+
+%%-----------------------------------------------------------------------------
 %% @param Stream    stream to append to
 %% @param Binary    binary to append to the stream
 %% @returns The updated stream
@@ -69,6 +85,20 @@ offset(_Stream) ->
 %%-----------------------------------------------------------------------------
 -spec append(stream(), binary()) -> stream().
 append(_Stream, _Binary) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param Stream    stream to rewind
+%% @param Offset    offset to rewind the write cursor to
+%% @returns The updated stream
+%% @doc     Rewind the write cursor so the stream can be re-emitted from
+%%          Offset (the mmap region is externally stateful, unlike the binary
+%%          stream whose checkpoint term is enough). Used by the backtrack
+%%          loop through the backend's rewind_stream/2.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec reset(stream(), non_neg_integer()) -> stream().
+reset(_Stream, _Offset) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------

@@ -43,6 +43,7 @@
     jump_to_label_cond/3,
     set_branch_hints/2,
     take_overflows/1,
+    rewind_stream/2,
     jump_to_continuation/2,
     jump_to_offset/2,
     if_block/3,
