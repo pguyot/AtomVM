@@ -242,6 +242,8 @@ static term nif_ets_delete(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
+static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
+static term nif_os_cmd(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put_new(Context *ctx, int argc, term argv[]);
@@ -843,6 +845,16 @@ static const struct Nif ets_tab2list_nif = {
 static const struct Nif phash2_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_phash2
+};
+
+static const struct Nif atomvm_module_set_emulated_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_atomvm_module_set_emulated
+};
+
+static const struct Nif os_cmd_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_os_cmd
 };
 
 static const struct Nif persistent_term_get_nif = {
@@ -5003,6 +5015,71 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[])
     }
 }
 
+static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_atom);
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+    Module *mod = globalcontext_get_module(ctx->global, term_to_atom_index(argv[0]));
+    if (IS_NULL_PTR(mod)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    if (mod->native_code == NULL) {
+        // Pins the module to emulated execution when it is still in the
+        // Unknown state; a no-op when it already runs natively.
+        module_enter_emu(mod);
+        return module_is_pinned_emu(mod) ? TRUE_ATOM : FALSE_ATOM;
+    }
+    return FALSE_ATOM;
+#else
+    return FALSE_ATOM;
+#endif
+}
+
+static term nif_os_cmd(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    int ok;
+    char *cmd = interop_term_to_string(argv[0], &ok);
+    if (UNLIKELY(!ok)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    FILE *fp = popen(cmd, "r");
+    free(cmd);
+    if (IS_NULL_PTR(fp)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    size_t capacity = 1024;
+    size_t len = 0;
+    char *out = malloc(capacity);
+    if (IS_NULL_PTR(out)) {
+        pclose(fp);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    size_t r;
+    while ((r = fread(out + len, 1, capacity - len, fp)) > 0) {
+        len += r;
+        if (len == capacity) {
+            capacity *= 2;
+            char *new_out = realloc(out, capacity);
+            if (IS_NULL_PTR(new_out)) {
+                free(out);
+                pclose(fp);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+            out = new_out;
+        }
+    }
+    pclose(fp);
+    if (UNLIKELY(memory_ensure_free_opt(ctx, len * CONS_SIZE, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        free(out);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term result = interop_bytes_to_list(out, len, &ctx->heap);
+    free(out);
+    return result;
+}
+
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[])
 {
     uint32_t hash = phash2_hash(argv[0], ctx->global);
@@ -6918,6 +6995,7 @@ struct CodeAllAvailableAcc
     struct AVMPackData *avmpack_data;
     term result;
     size_t acc_count;
+    size_t acc_name_len;
 };
 
 static void *nif_code_all_available_fold(void *accum, const void *section_ptr, uint32_t section_size, const void *beam_ptr, uint32_t flags, const char *section_name)
@@ -6948,9 +7026,11 @@ static void *nif_code_all_available_fold(void *accum, const void *section_ptr, u
             }
             if (!loaded) {
                 acc->acc_count++;
+                acc->acc_name_len += module_name_len;
                 if (!term_is_invalid_term(acc->result)) {
                     term module_tuple = term_alloc_tuple(3, &acc->ctx->heap);
-                    term_put_tuple_element(module_tuple, 0, term_from_const_binary(section_name, module_name_len, &acc->ctx->heap, acc->ctx->global));
+                    // Module names are strings (charlists) as on Erlang/OTP
+                    term_put_tuple_element(module_tuple, 0, interop_chars_to_list(section_name, module_name_len, &acc->ctx->heap));
                     term_put_tuple_element(module_tuple, 1, UNDEFINED_ATOM);
                     term_put_tuple_element(module_tuple, 2, FALSE_ATOM);
                     acc->result = term_list_prepend(module_tuple, acc->result, &acc->ctx->heap);
@@ -6974,21 +7054,36 @@ static term nif_code_all_available(Context *ctx, int argc, term argv[])
     acc.ctx = ctx;
     acc.result = term_invalid_term();
     acc.acc_count = 0;
+    acc.acc_name_len = 0;
     LIST_FOR_EACH (item, avmpack_data) {
         struct AVMPackData *avmpack_data = GET_LIST_ENTRY(item, struct AVMPackData, avmpack_head);
         acc.avmpack_data = avmpack_data;
         avmpack_fold(&acc, avmpack_data->data, nif_code_all_available_fold);
     }
 
-    size_t available_count = acc.acc_count + ctx->global->loaded_modules_count;
+    size_t loaded_names_len = 0;
+    for (size_t ix = 0; ix < ctx->global->loaded_modules_count; ix++) {
+        Module *module = globalcontext_get_module_by_index(ctx->global, ix);
+        if (IS_NULL_PTR(module)) {
+            continue;
+        }
+        size_t module_atom_len;
+        atom_table_get_atom_string(ctx->global->atom_table, term_to_atom_index(module_get_name(module)), &module_atom_len);
+        loaded_names_len += module_atom_len;
+    }
 
-    if (UNLIKELY(memory_ensure_free(ctx, LIST_SIZE(available_count, TUPLE_SIZE(3) + TERM_BOXED_REFC_BINARY_SIZE)) != MEMORY_GC_OK)) {
+    size_t available_count = acc.acc_count + ctx->global->loaded_modules_count;
+    // module names are built as charlists (2 terms per character)
+    size_t names_size = (acc.acc_name_len + loaded_names_len) * CONS_SIZE;
+
+    if (UNLIKELY(memory_ensure_free(ctx, LIST_SIZE(available_count, TUPLE_SIZE(3)) + names_size) != MEMORY_GC_OK)) {
         synclist_unlock(&ctx->global->avmpack_data);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
     // List may be incomplete if modules are loaded while we are iterating on them
     acc.acc_count = 0;
+    acc.acc_name_len = 0;
     acc.result = term_nil();
     LIST_FOR_EACH (item, avmpack_data) {
         struct AVMPackData *avmpack_data = GET_LIST_ENTRY(item, struct AVMPackData, avmpack_head);
@@ -7012,8 +7107,9 @@ static term nif_code_all_available(Context *ctx, int argc, term argv[])
         atom_index_t module_atom_ix = term_to_atom_index(module_atom);
         size_t module_atom_len;
         const uint8_t *data = atom_table_get_atom_string(ctx->global->atom_table, module_atom_ix, &module_atom_len);
-        term module_name_binary = term_from_const_binary(data, module_atom_len, &ctx->heap, ctx->global);
-        term_put_tuple_element(module_tuple, 0, module_name_binary);
+        // Module names are strings (charlists) as on Erlang/OTP
+        term module_name = interop_chars_to_list((const char *) data, module_atom_len, &ctx->heap);
+        term_put_tuple_element(module_tuple, 0, module_name);
         term_put_tuple_element(module_tuple, 1, UNDEFINED_ATOM);
         term_put_tuple_element(module_tuple, 2, TRUE_ATOM);
         acc.result = term_list_prepend(module_tuple, acc.result, &ctx->heap);

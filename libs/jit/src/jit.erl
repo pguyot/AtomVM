@@ -2912,12 +2912,35 @@ emit_pass(
         end,
     {MSt5, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
     MSt6 = MMod:free_native_registers(MSt5, [TrimResultReg]),
-    %% A non-byte-aligned total yields a bitstring. This also holds when the
-    %% source binary is reused: term_reuse_binary reuses the whole storage of a
-    %% bitstring accumulator, so the trailing bits it already holds are kept and
-    %% the result is wrapped in a sub-binary like any other bitstring.
+    %% A non-byte-aligned total yields a bitstring. The reuse
+    %% (append/private_append) branches size for the ceiling byte count and
+    %% a possible sub-binary wrap: whether the accumulator can actually be
+    %% reused in place is decided at runtime by
+    %% PRIM_TERM_REUSE_OR_CLONE_BINARY (a non-byte-aligned accumulator is
+    %% cloned instead).
     {MSt13, BinaryTotalSizeInBytes, AllocSize, WrapInfo} =
         if
+            ReuseSourceBinary andalso is_integer(BinaryTotalSize) ->
+                RTrailing = BinaryTotalSize rem 8,
+                RByteSize = (BinaryTotalSize + 7) div 8,
+                {RExtra, RWrap} =
+                    case RTrailing of
+                        0 -> {0, no_wrap};
+                        _ -> {?TERM_BOXED_SUB_BINARY_SIZE, {wrap_lit, BinaryTotalSize}}
+                    end,
+                {MSt6, RByteSize, term_binary_heap_size(RByteSize, MMod) + Alloc + RExtra, RWrap};
+            ReuseSourceBinary ->
+                MSt6r = MMod:add(MSt6, BinaryTotalSize, 7),
+                {MSt6s, Bytes} = MMod:shift_right(MSt6r, {free, BinaryTotalSize}, 3),
+                {MSt6t, BytesCopy} = MMod:copy_to_native_register(MSt6s, Bytes),
+                {MSt6u, AllocSizeReg} = term_binary_heap_size({free, BytesCopy}, MMod, MSt6t),
+                MSt6v = MMod:add(MSt6u, AllocSizeReg, ?TERM_BOXED_SUB_BINARY_SIZE),
+                MSt6w =
+                    case Alloc of
+                        0 -> MSt6v;
+                        _ -> MMod:add(MSt6v, AllocSizeReg, Alloc)
+                    end,
+                {MSt6w, Bytes, AllocSizeReg, wrap_dyn};
             is_integer(BinaryTotalSize) ->
                 Trailing = BinaryTotalSize rem 8,
                 ByteSize = (BinaryTotalSize + 7) div 8,
@@ -3654,9 +3677,10 @@ emit_pass_bs_create_bin_insert_value(
     % Special case: first segment is private_append with undefined CreatedBin.
     % Get the original size before reusing, in bits: the accumulator may be a
     % bitstring, whose trailing bits are part of the content appended to.
-    {MSt1, OriginalBits} = term_bit_size(Src, MMod, MSt0),
-    % Reuse the source binary (content is already there, no need to copy)
-    {MSt2, CreatedBin} = MMod:call_primitive(MSt1, ?PRIM_TERM_REUSE_BINARY, [
+    {MSt1a, SrcCopy} = MMod:copy_to_native_register(MSt0, Src),
+    {MSt1, OriginalBits} = term_bit_size({free, SrcCopy}, MMod, MSt1a),
+    % Reuse the source binary in place when byte-aligned; clone it otherwise
+    {MSt2, CreatedBin} = MMod:call_primitive(MSt1, ?PRIM_TERM_REUSE_OR_CLONE_BINARY, [
         ctx, {free, Src}, {free, BinaryTotalSizeInBytes}
     ]),
     MSt3 = raise_out_of_memory_if_invalid(CreatedBin, MMod, MSt2),

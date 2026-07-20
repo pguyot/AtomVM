@@ -501,6 +501,45 @@ void bitstring_copy_bits_incomplete_bytes(uint8_t *dst, size_t bits_offset, cons
 void bitstring_copy_bits_from(uint8_t *dst, const uint8_t *src, size_t src_offset, size_t bits_count);
 
 /**
+ * @brief Insert an arbitrary-precision integer into a binary at any bit
+ * offset, in a field of any bit width.
+ *
+ * @details Negative values are encoded as two's complement over \p n bits
+ * and values wider than the field are truncated, as for the 64-bit insert.
+ * Little-endian fields use the same layout as \c bitstring_insert_any_integer
+ * (whole bytes LSB first, then the remaining high-order bits).
+ * Set bits are OR'd in: the destination field is assumed to be zero-filled.
+ * @param dst destination buffer.
+ * @param offset field offset in bits.
+ * @param digits magnitude digits, least significant first.
+ * @param digits_len number of digits.
+ * @param negative sign of the value.
+ * @param n field width in bits.
+ * @param bs_flags insertion flags (endianness).
+ * @return true.
+ */
+bool bitstring_insert_intn(uint8_t *dst, size_t offset, const intn_digit_t *digits,
+    size_t digits_len, bool negative, size_t n, enum BitstringFlags bs_flags);
+
+/**
+ * @brief Extract an integer of any bit width at any bit offset from a binary,
+ * as an arbitrary-precision sign+magnitude value.
+ *
+ * @param src source buffer.
+ * @param offset field offset in bits.
+ * @param n field width in bits.
+ * @param bs_flags extraction flags (endianness, signedness).
+ * @param out_digits output digit buffer, least significant first.
+ * @param out_digits_cap capacity of out_digits in digits.
+ * @param out_negative set to true when the (signed) value is negative.
+ * @return the number of significant digits written, or -1 when out_digits is
+ * too small.
+ */
+int bitstring_extract_intn(const uint8_t *src, size_t offset, size_t n,
+    enum BitstringFlags bs_flags, intn_digit_t *out_digits, size_t out_digits_cap,
+    bool *out_negative);
+
+/**
  * @brief Copy bits_count bits from src to dst[bits_offset..]
  *
  * @param dst           destination buffer
