@@ -45,6 +45,8 @@
     rewind_stream/2,
     call_primitive_with_cp/3,
     call_primitive_with_cp_direct/3,
+    call_ext_with_cp_direct/4,
+    call_ext_last_direct/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -4304,6 +4306,137 @@ emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) -
         (jit_aarch64_asm:br(T4))/binary
     >>,
     40 * 4 = byte_size(Code),
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%% OP_CALL_EXT with an inline already-resolved fast path. Sets cp like
+%% call_primitive_with_cp_direct, then — when the import at Index has
+%% already been resolved and upgraded to a native target
+%% (ModuleNativeFunction) — switches jit_state to the target module and
+%% branches straight to its native entry point, skipping the C round trip
+%% that costs ~3x a BEAM call. Everything else (first call, BIFs, NIFs,
+%% emulated targets) falls through to the usual resolving primitive.
+-spec call_ext_with_cp_direct(state(), non_neg_integer(), non_neg_integer(), [arg()]) -> state().
+call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
+    {State1, RewriteOffset, RewriteSize} = set_cp(State0),
+    %% The fast path branches away without a C call: deferred vm-register
+    %% stores must be committed first (the callee reads ctx->x[]).
+    #state{regs = Regs1} = State2 = pending_clear_all(State1),
+    Avail = mask_to_list(jit_regs:available_regs(Regs1)),
+    State4 =
+        case length(Avail) >= 4 andalso Index * 8 =< 32760 of
+            true ->
+                [T0, T1, T2, T3 | _] = Avail,
+                emit_call_ext_fast_path(State2, Index, T0, T1, T2, T3);
+            false ->
+                State2
+        end,
+    {State5, ResultReg} = call_primitive(State4, Primitive, Args),
+    #state{stream_module = StreamModule, stream = Stream5} = State5,
+    I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
+    I2 = jit_aarch64_asm:mov(r0, ResultReg),
+    I3 = jit_aarch64_asm:ret(),
+    I4 = jit_aarch64_asm:tbnz(ResultReg, 1, 12),
+    I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
+    I6 = jit_aarch64_asm:br(ResultReg),
+    Stream6 = StreamModule:append(
+        Stream5, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    State6 = free_native_register(State5#state{stream = Stream6}, ResultReg),
+    rewrite_cp_offset(State6, RewriteOffset, RewriteSize).
+
+%% @private
+%% The 13-instruction inline resolved call_ext; every branch to the slow
+%% path targets the first instruction after this block.
+emit_call_ext_fast_path(State0, Index, T0, T1, T2, T3) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    Slow = fun(Idx) -> (13 - Idx) * 4 end,
+    Code = <<
+        % 0-2: func = jit_state->module->imported_funcs[Index]
+        (jit_aarch64_asm:ldr(T0, ?JITSTATE_MODULE))/binary,
+        (jit_aarch64_asm:ldr(T0, {T0, ?MODULE_IMPORTED_FUNCS}))/binary,
+        (jit_aarch64_asm:ldr(T1, {T0, Index * 8}))/binary,
+        % 3-5: func->type must be ModuleNativeFunction (7). The acquire load
+        % pairs with the release store of the in-place
+        % ModuleFunction -> ModuleNativeFunction upgrade in jit.c: seeing the
+        % upgraded type implies seeing the entry_point written before it.
+        (jit_aarch64_asm:ldar_w(T2, T1))/binary,
+        (jit_aarch64_asm:cmp_w(T2, 7))/binary,
+        (jit_aarch64_asm:bcc(ne, Slow(5)))/binary,
+        % 6-7: target Module* and native entry point
+        (jit_aarch64_asm:ldr(T3, {T1, 8}))/binary,
+        (jit_aarch64_asm:ldr(T1, {T1, 16}))/binary,
+        % 8-11: jit_state_set_module: module + cp_base (module_index << 24)
+        (jit_aarch64_asm:str(T3, ?JITSTATE_MODULE))/binary,
+        (jit_aarch64_asm:ldr_w(T2, {T3, 0}))/binary,
+        (jit_aarch64_asm:lsl(T2, T2, 24))/binary,
+        (jit_aarch64_asm:str(T2, ?JITSTATE_CPBASE))/binary,
+        % 12: branch to the callee's native entry
+        (jit_aarch64_asm:br(T1))/binary
+    >>,
+    52 = byte_size(Code),
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%% OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with the same inline resolved fast
+%% path as call_ext_with_cp_direct. Tail position: no cp is set here; for
+%% CALL_EXT_LAST (NWords >= 0) the fast path also pops the frame
+%% (cp = e[NWords], e += NWords + 1) exactly like the primitive would.
+-spec call_ext_last_direct(state(), non_neg_integer(), non_neg_integer(), integer(), [arg()]) ->
+    state().
+call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
+    #state{regs = Regs1} = State1 = pending_clear_all(State0),
+    Avail = mask_to_list(jit_regs:available_regs(Regs1)),
+    State2 =
+        case length(Avail) >= 4 andalso Index * 8 =< 32760 andalso NWords * 8 =< 32760 of
+            true ->
+                [T0, T1, T2, T3 | _] = Avail,
+                emit_call_ext_last_fast_path(State1, Index, NWords, T0, T1, T2, T3);
+            false ->
+                State1
+        end,
+    call_primitive_direct(State2, Primitive, Args).
+
+%% @private
+emit_call_ext_last_fast_path(State0, Index, NWords, T0, T1, T2, T3) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    N =
+        case NWords >= 0 of
+            true -> 16;
+            false -> 13
+        end,
+    Slow = fun(Idx) -> (N - Idx) * 4 end,
+    FramePop =
+        case NWords >= 0 of
+            true ->
+                <<
+                    % 6-8: cp = e[NWords]; e += NWords + CP_SIZE_IN_TERMS
+                    (jit_aarch64_asm:ldr(T2, {?E_REG, NWords * 8}))/binary,
+                    (jit_aarch64_asm:str(T2, ?CP))/binary,
+                    (jit_aarch64_asm:add(?E_REG, ?E_REG, (NWords + 1) * 8))/binary
+                >>;
+            false ->
+                <<>>
+        end,
+    Code = <<
+        % 0-2: func = jit_state->module->imported_funcs[Index]
+        (jit_aarch64_asm:ldr(T0, ?JITSTATE_MODULE))/binary,
+        (jit_aarch64_asm:ldr(T0, {T0, ?MODULE_IMPORTED_FUNCS}))/binary,
+        (jit_aarch64_asm:ldr(T1, {T0, Index * 8}))/binary,
+        % 3-5: func->type must be ModuleNativeFunction (7); acquire pairs
+        % with the in-place upgrade's release store (see jit.c).
+        (jit_aarch64_asm:ldar_w(T2, T1))/binary,
+        (jit_aarch64_asm:cmp_w(T2, 7))/binary,
+        (jit_aarch64_asm:bcc(ne, Slow(5)))/binary,
+        FramePop/binary,
+        % target Module*, native entry, jit_state module + cp_base switch
+        (jit_aarch64_asm:ldr(T3, {T1, 8}))/binary,
+        (jit_aarch64_asm:ldr(T1, {T1, 16}))/binary,
+        (jit_aarch64_asm:str(T3, ?JITSTATE_MODULE))/binary,
+        (jit_aarch64_asm:ldr_w(T2, {T3, 0}))/binary,
+        (jit_aarch64_asm:lsl(T2, T2, 24))/binary,
+        (jit_aarch64_asm:str(T2, ?JITSTATE_CPBASE))/binary,
+        (jit_aarch64_asm:br(T1))/binary
+    >>,
+    true = N * 4 =:= byte_size(Code),
     State0#state{stream = StreamModule:append(Stream0, Code)}.
 
 call_primitive_with_cp_direct(State0, Primitive, Args) ->
