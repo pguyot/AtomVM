@@ -266,6 +266,16 @@ GlobalContext *globalcontext_new(void)
         return NULL;
     }
     glb->online_schedulers = smp_get_online_processors();
+    // AVM_SCHEDULERS overrides the scheduler count (like BEAM's +S), e.g.
+    // for short-lived tools where scheduler wake-up churn costs more than
+    // parallelism buys.
+    const char *schedulers_env = getenv("AVM_SCHEDULERS");
+    if (schedulers_env != NULL) {
+        int requested = atoi(schedulers_env);
+        if (requested > 0) {
+            glb->online_schedulers = requested;
+        }
+    }
     glb->running_schedulers = 0;
     glb->waiting_scheduler = false;
 
