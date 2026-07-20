@@ -404,9 +404,11 @@ static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
         return ctx;
     }
 
-    // Do not print crash dump if reason is normal or shutdown.
+    // Do not print crash dump on exit/1: as on BEAM, a deliberate exit of a
+    // plain process is silent whatever the reason; only error (and nocatch)
+    // classes are reported.
 #ifdef AVM_PRINT_PROCESS_CRASH_DUMPS
-    if (ctx->x[0] != LOWERCASE_EXIT_ATOM || (ctx->x[1] != NORMAL_ATOM && ctx->x[1] != SHUTDOWN_ATOM)) {
+    if (ctx->x[0] != LOWERCASE_EXIT_ATOM) {
         context_dump(ctx);
     }
 #endif

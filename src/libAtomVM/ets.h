@@ -91,6 +91,7 @@ ets_result_t ets_take_maybe_gc(term name_or_ref, term key, term *ret, Context *c
 ets_result_t ets_delete(term name_or_ref, term key, Context *ctx);
 ets_result_t ets_delete_table(term name_or_ref, Context *ctx);
 ets_result_t ets_delete_object(term name_or_ref, term tuple, Context *ctx);
+ets_result_t ets_to_list_maybe_gc(term name_or_ref, term *ret, Context *ctx);
 
 #ifdef __cplusplus
 }

@@ -252,6 +252,33 @@ term externalterm_from_const_literal_to_fragment(const void *external_term, size
 term external_term_to_binary(Context *ctx, term t);
 
 /**
+ * @brief Like \c external_term_to_binary but with an OTP-compatible zlib
+ * compression level (0 means no compression, 1..9 as for
+ * term_to_binary(T, [{compressed, Level}])). Compression requires zlib
+ * support; without it, or when compression does not shrink the binary, the
+ * uncompressed encoding is returned.
+ * WARNING: This function may call the GC, which may render the input binary invalid.
+ * @param ctx the context that owns the memory that will be allocated.
+ * @param t the term to return as binary.
+ * @param compression_level zlib compression level (0 disables compression).
+ * @return the binary, or an invalid term on failure.
+ */
+term external_term_to_binary_with_level(Context *ctx, term t, int compression_level);
+
+/**
+ * @brief Inflate an OTP compressed external term (tag 131,80) to its
+ * uncompressed encoding (starting with the 131 tag). Returns false when the
+ * input is not in the compressed format or zlib support is unavailable.
+ * On success the caller owns the returned malloc'd buffer.
+ * @param data the serialized external term.
+ * @param size size of data.
+ * @param inflated on success, the malloc'd uncompressed encoding.
+ * @param inflated_size on success, size of the uncompressed encoding.
+ * @return true when the term was in compressed format and was inflated.
+ */
+bool external_term_inflate(const uint8_t *data, size_t size, uint8_t **inflated, size_t *inflated_size);
+
+/**
  * @brief Computes the size required for a external term (tag excluded)
  *
  * @details This function should be called in order to calculate the required buffer size to store

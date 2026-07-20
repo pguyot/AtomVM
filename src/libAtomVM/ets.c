@@ -570,6 +570,53 @@ ets_result_t ets_delete_object(term name_or_ref, term tuple, Context *ctx)
     return result;
 }
 
+ets_result_t ets_to_list_maybe_gc(term name_or_ref, term *ret, Context *ctx)
+{
+    assert(ret != NULL);
+
+    struct EtsTable *table = get_table(
+        &ctx->global->ets,
+        name_or_ref,
+        ctx->process_id,
+        TableAccessRead);
+
+    if (table == NULL) {
+        return EtsBadAccess;
+    }
+
+    EtsMultimap *multimap = table->multimap;
+
+    size_t elements_size = 0;
+    for (int bucket = 0; bucket < ETS_MULTIMAP_NUM_BUCKETS; bucket++) {
+        for (struct EtsMultimapNode *node = multimap->buckets[bucket]; node != NULL; node = node->next) {
+            for (struct EtsMultimapEntry *entry = node->entries; entry != NULL; entry = entry->next) {
+                elements_size += memory_estimate_usage(entry->tuple) + CONS_SIZE;
+            }
+        }
+    }
+
+    // Terms come from the ETS heap, copy them to the process heap.
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, elements_size, 0, NULL, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        SMP_UNLOCK(table);
+        return EtsAllocationError;
+    }
+
+    term list = term_nil();
+    for (int bucket = 0; bucket < ETS_MULTIMAP_NUM_BUCKETS; bucket++) {
+        for (struct EtsMultimapNode *node = multimap->buckets[bucket]; node != NULL; node = node->next) {
+            for (struct EtsMultimapEntry *entry = node->entries; entry != NULL; entry = entry->next) {
+                term tuple = memory_copy_term_tree(&ctx->heap, entry->tuple);
+                list = term_list_prepend(tuple, list, &ctx->heap);
+            }
+        }
+    }
+    *ret = list;
+
+    SMP_UNLOCK(table);
+
+    return EtsOk;
+}
+
 void ets_delete_owned_tables(Ets *ets, int32_t process_id, GlobalContext *global)
 {
     struct ListHead *ets_tables = synclist_wrlock(&ets->ets_tables);
