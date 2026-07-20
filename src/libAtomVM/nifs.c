@@ -244,6 +244,8 @@ static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
 static term nif_os_cmd(Context *ctx, int argc, term argv[]);
+static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[]);
+static term nif_re_pcre2_match(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put_new(Context *ctx, int argc, term argv[]);
@@ -855,6 +857,16 @@ static const struct Nif atomvm_module_set_emulated_nif = {
 static const struct Nif os_cmd_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_os_cmd
+};
+
+static const struct Nif re_pcre2_compile_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_re_pcre2_compile
+};
+
+static const struct Nif re_pcre2_match_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_re_pcre2_match
 };
 
 static const struct Nif persistent_term_get_nif = {
@@ -5014,6 +5026,198 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[])
             UNREACHABLE();
     }
 }
+
+#ifdef WITH_PCRE2
+
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+
+// re:pcre2_compile(Source :: binary(), Flags :: integer()) ->
+//   {ok, CaptureCount, NameCount, NameEntrySize, NameTable :: binary(),
+//    Serialized :: binary()} | {error, {Message :: binary(), Position}}
+// Low-level primitive behind re:compile; option atoms are mapped to PCRE2
+// flag bits on the Erlang side.
+static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_binary);
+    VALIDATE_VALUE(argv[1], term_is_integer);
+    uint32_t flags = (uint32_t) term_to_int(argv[1]);
+
+    int errorcode;
+    PCRE2_SIZE erroroffset;
+    pcre2_code *code = pcre2_compile((PCRE2_SPTR) term_binary_data(argv[0]),
+        term_binary_size(argv[0]), flags, &errorcode, &erroroffset, NULL);
+    if (IS_NULL_PTR(code)) {
+        PCRE2_UCHAR message[256];
+        int message_len = pcre2_get_error_message(errorcode, message, sizeof(message));
+        if (message_len < 0) {
+            message_len = 0;
+        }
+        if (UNLIKELY(memory_ensure_free_opt(ctx,
+                TUPLE_SIZE(2) * 2 + term_binary_heap_size(message_len), MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        term message_bin = term_from_literal_binary(message, message_len, &ctx->heap, ctx->global);
+        term reason = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(reason, 0, message_bin);
+        term_put_tuple_element(reason, 1, term_from_int((avm_int_t) erroroffset));
+        term result = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(result, 0, ERROR_ATOM);
+        term_put_tuple_element(result, 1, reason);
+        return result;
+    }
+
+    uint32_t capture_count = 0;
+    uint32_t name_count = 0;
+    uint32_t name_entry_size = 0;
+    PCRE2_SPTR name_table = NULL;
+    pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count);
+    pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &name_count);
+    pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
+    pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, &name_table);
+
+    // The name table points into the pcre2_code block: copy it before the
+    // code is freed (and before any GC below).
+    size_t name_table_size = (size_t) name_count * name_entry_size;
+    uint8_t *name_table_copy = NULL;
+    if (name_table_size > 0) {
+        name_table_copy = malloc(name_table_size);
+        if (IS_NULL_PTR(name_table_copy)) {
+            pcre2_code_free(code);
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        memcpy(name_table_copy, name_table, name_table_size);
+    }
+
+    uint8_t *serialized = NULL;
+    PCRE2_SIZE serialized_size = 0;
+    int32_t ser = pcre2_serialize_encode((const pcre2_code **) &code, 1, &serialized,
+        &serialized_size, NULL);
+    pcre2_code_free(code);
+    if (UNLIKELY(ser < 0)) {
+        free(name_table_copy);
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    size_t heap_size = TUPLE_SIZE(6) + term_binary_heap_size(name_table_size)
+        + term_binary_heap_size(serialized_size);
+    if (UNLIKELY(memory_ensure_free_opt(ctx, heap_size, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        free(name_table_copy);
+        pcre2_serialize_free(serialized);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term name_table_bin
+        = term_from_literal_binary(name_table_copy, name_table_size, &ctx->heap, ctx->global);
+    free(name_table_copy);
+    term serialized_bin
+        = term_from_literal_binary(serialized, serialized_size, &ctx->heap, ctx->global);
+    pcre2_serialize_free(serialized);
+    term result = term_alloc_tuple(6, &ctx->heap);
+    term_put_tuple_element(result, 0, OK_ATOM);
+    term_put_tuple_element(result, 1, term_from_int(capture_count));
+    term_put_tuple_element(result, 2, term_from_int(name_count));
+    term_put_tuple_element(result, 3, term_from_int(name_entry_size));
+    term_put_tuple_element(result, 4, name_table_bin);
+    term_put_tuple_element(result, 5, serialized_bin);
+    return result;
+}
+
+// re:pcre2_match(Subject :: binary(), Serialized :: binary(),
+//                StartOffset :: integer(), Flags :: integer()) ->
+//   {match, [integer()]} | nomatch | {error, integer()}
+// The result list holds start/length byte pairs; unset groups are -1/0.
+static term nif_re_pcre2_match(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_binary);
+    VALIDATE_VALUE(argv[1], term_is_binary);
+    VALIDATE_VALUE(argv[2], term_is_integer);
+    VALIDATE_VALUE(argv[3], term_is_integer);
+
+    pcre2_code *code = NULL;
+    if (UNLIKELY(pcre2_serialize_decode(&code, 1, (const uint8_t *) term_binary_data(argv[1]),
+            NULL) < 0)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(code, NULL);
+    if (IS_NULL_PTR(match_data)) {
+        pcre2_code_free(code);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    int rc = pcre2_match(code, (PCRE2_SPTR) term_binary_data(argv[0]),
+        term_binary_size(argv[0]), (PCRE2_SIZE) term_to_int(argv[2]),
+        (uint32_t) term_to_int(argv[3]), match_data, NULL);
+    if (rc == PCRE2_ERROR_NOMATCH) {
+        pcre2_match_data_free(match_data);
+        pcre2_code_free(code);
+        return globalcontext_make_atom(ctx->global, ATOM_STR("\x7", "nomatch"));
+    }
+    if (UNLIKELY(rc < 0)) {
+        pcre2_match_data_free(match_data);
+        pcre2_code_free(code);
+        if (UNLIKELY(memory_ensure_free_opt(ctx, TUPLE_SIZE(2), MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        term result = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(result, 0, ERROR_ATOM);
+        term_put_tuple_element(result, 1, term_from_int(rc));
+        return result;
+    }
+    uint32_t pair_count = pcre2_get_ovector_count(match_data);
+    PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
+    // 2 ints per pair as {Start, Len} data flattened: [S0, L0, S1, L1, ...]
+    size_t heap_size = TUPLE_SIZE(2) + pair_count * 2 * (CONS_SIZE + BOXED_INT_SIZE + 1);
+    if (UNLIKELY(memory_ensure_free_opt(ctx, heap_size, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        pcre2_match_data_free(match_data);
+        pcre2_code_free(code);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term list = term_nil();
+    for (uint32_t i = pair_count; i > 0; i--) {
+        PCRE2_SIZE start = ovector[2 * (i - 1)];
+        PCRE2_SIZE end = ovector[2 * (i - 1) + 1];
+        avm_int_t s, l;
+        if (start == PCRE2_UNSET) {
+            s = -1;
+            l = 0;
+        } else {
+            s = (avm_int_t) start;
+            l = (avm_int_t) (end - start);
+        }
+        list = term_list_prepend(term_from_int(l), list, &ctx->heap);
+        list = term_list_prepend(term_from_int(s), list, &ctx->heap);
+    }
+    pcre2_match_data_free(match_data);
+    pcre2_code_free(code);
+    term result = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(result, 0, globalcontext_make_atom(ctx->global, ATOM_STR("\x5", "match")));
+    term_put_tuple_element(result, 1, list);
+    return result;
+}
+
+#else
+
+// Without PCRE2, the low-level re primitives behave as undefined functions
+// so re:compile/re:run raise undef like any missing module.
+static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[])
+{
+    UNUSED(ctx);
+    UNUSED(argc);
+    UNUSED(argv);
+    RAISE_ERROR(UNDEF_ATOM);
+}
+
+static term nif_re_pcre2_match(Context *ctx, int argc, term argv[])
+{
+    UNUSED(ctx);
+    UNUSED(argc);
+    UNUSED(argv);
+    RAISE_ERROR(UNDEF_ATOM);
+}
+
+#endif // WITH_PCRE2
 
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[])
 {
