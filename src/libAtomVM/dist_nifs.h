@@ -34,7 +34,10 @@
 extern "C" {
 #endif
 
-#define DIST_OTP_RELEASE "27"
+// Also returned by erlang:system_info(otp_release): version-aware code
+// (e.g. the Elixir compiler) enables its Erlang/OTP 28+ code paths based on
+// this value.
+#define DIST_OTP_RELEASE "29"
 
 struct LinkRemoteMonitor;
 
