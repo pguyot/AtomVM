@@ -3149,7 +3149,7 @@ static inline term term_alloc_map(avm_uint_t size, Heap *heap)
 // An in-order walk of the tree yields keys ascending, preserving the sorted-map
 // invariant flat maps rely on. These helpers (defined in term.c) bridge to
 // termmap_tree.h without pulling it into this header.
-#define TERM_MAP_TREE_THRESHOLD 32
+#define TERM_MAP_TREE_THRESHOLD 128
 #define TERM_MAP_TREE_BOXED_ARITY 3
 #define TERM_MAP_TREE_ROOT_INDEX 2
 #define TERM_MAP_TREE_SIZE_INDEX 3
