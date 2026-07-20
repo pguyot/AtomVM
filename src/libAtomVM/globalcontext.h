@@ -184,9 +184,9 @@ struct GlobalContext
     struct PersistentTerm persistent_term;
 
     // Lazily grown cache of ERTS-compatible atom hashes for erlang:phash2
-    // (see phash2.c). NULL until the first atom is hashed.
-    uint32_t *phash2_atom_cache;
-    size_t phash2_atom_cache_capacity;
+    // (an opaque struct Phash2AtomCache, see phash2.c). NULL until the
+    // first atom is hashed.
+    void *phash2_atom_cache;
 
     int32_t last_process_id;
 
