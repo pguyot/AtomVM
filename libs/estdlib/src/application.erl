@@ -37,13 +37,20 @@
     start_boot/2,
     ensure_all_started/1,
     ensure_all_started/2,
+    ensure_started/2,
     stop/1,
     which_applications/0,
+    which_applications/1,
+    loaded_applications/0,
     get_key/2,
+    get_all_key/1,
     get_env/2,
     get_env/3,
+    set_env/2,
     set_env/3,
+    set_env/4,
     unset_env/2,
+    unset_env/3,
     get_all_env/1,
     get_application/1
 ]).
@@ -156,6 +163,42 @@ which_applications() ->
     application_controller:which_applications().
 
 %%-----------------------------------------------------------------------------
+%% @param   Timeout timeout in milliseconds (ignored)
+%% @returns A list of `{Application, Description, Vsn}' for running applications.
+%% @doc     Return the list of currently running applications, like
+%%          {@link which_applications/0}. The timeout is ignored.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec which_applications(Timeout :: timeout()) -> [{atom(), string(), string()}].
+which_applications(_Timeout) ->
+    which_applications().
+
+%%-----------------------------------------------------------------------------
+%% @returns A list of `{Application, Description, Vsn}' for loaded applications.
+%% @doc     Return the list of loaded applications. On AtomVM only running
+%%          applications are reported.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec loaded_applications() -> [{atom(), string(), string()}].
+loaded_applications() ->
+    which_applications().
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to start
+%% @param   Type restart type
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Start an application unless it is already started.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec ensure_started(Application :: atom(), Type :: restart_type()) -> ok | {error, term()}.
+ensure_started(Application, Type) ->
+    case start(Application, Type) of
+        ok -> ok;
+        {error, {already_started, Application}} -> ok;
+        {error, _Reason} = Error -> Error
+    end.
+
+%%-----------------------------------------------------------------------------
 %% @param   Application application to read the key of
 %% @param   Key resource key
 %% @returns `{ok, Value}' or `undefined'
@@ -167,11 +210,15 @@ get_key(Application, Key) ->
     application_controller:get_key(Application, Key).
 
 %%-----------------------------------------------------------------------------
-%% @param   Application application to get the parameter value of
-%% @param   Parameter parameter to get the value of
-%% @returns `{ok, Value}' or `undefined' if not found.
+%% @param   Application application to read the keys of
+%% @returns `{ok, Keys}' or `undefined'
+%% @doc Compatibility stub; not supported on AtomVM.
 %% @end
 %%-----------------------------------------------------------------------------
+-spec get_all_key(Application :: atom()) -> {ok, [{atom(), term()}]} | undefined.
+get_all_key(_Application) ->
+    erlang:nif_error(undefined).
+
 %%-----------------------------------------------------------------------------
 %% @param   ModuleOrPid a module or a pid
 %% @returns `undefined'
@@ -183,6 +230,13 @@ get_key(Application, Key) ->
 get_application(_ModuleOrPid) ->
     undefined.
 
+%%-----------------------------------------------------------------------------
+%% @param   Application application to get the parameter value of
+%% @param   Parameter parameter to get the value of
+%% @returns `{ok, Value}' or `undefined' if not found.
+%% @doc Get the value of a configuration parameter for an application.
+%% @end
+%%-----------------------------------------------------------------------------
 -spec get_env(Application :: atom(), Parameter :: atom()) -> {ok, term()} | undefined.
 get_env(Application, Parameter) ->
     application_controller:get_env(Application, Parameter).
@@ -210,12 +264,58 @@ set_env(Application, Parameter, Value) ->
     application_controller:set_env(Application, Parameter, Value).
 
 %%-----------------------------------------------------------------------------
+%% @param   Config a list of `{Application, [{Parameter, Value}]}' entries
+%% @param   Opts options (ignored)
+%% @returns `ok'
+%% @doc Set the values of several configuration parameters.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_env(Config :: [{atom(), [{atom(), term()}]}], Opts :: list()) -> ok.
+set_env(Config, _Opts) when is_list(Config) ->
+    lists:foreach(
+        fun({Application, Env}) ->
+            lists:foreach(
+                fun({Parameter, Value}) ->
+                    set_env(Application, Parameter, Value)
+                end,
+                Env
+            )
+        end,
+        Config
+    ).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to set the parameter of
+%% @param   Parameter parameter to set the value of
+%% @param   Value value to set
+%% @param   Opts options (ignored)
+%% @returns `ok'
+%% @doc Set the value of a configuration parameter, like {@link set_env/3}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_env(Application :: atom(), Parameter :: atom(), Value :: term(), Opts :: list()) -> ok.
+set_env(Application, Parameter, Value, _Opts) ->
+    set_env(Application, Parameter, Value).
+
+%%-----------------------------------------------------------------------------
 %% @doc Remove a configuration parameter for an application.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec unset_env(Application :: atom(), Parameter :: atom()) -> ok.
 unset_env(Application, Parameter) ->
     application_controller:unset_env(Application, Parameter).
+
+%%-----------------------------------------------------------------------------
+%% @param   Application application to unset the parameter of
+%% @param   Parameter parameter to remove
+%% @param   Opts options (ignored)
+%% @returns `ok'
+%% @doc Remove a configuration parameter, like {@link unset_env/2}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec unset_env(Application :: atom(), Parameter :: atom(), Opts :: list()) -> ok.
+unset_env(Application, Parameter, _Opts) ->
+    unset_env(Application, Parameter).
 
 %%-----------------------------------------------------------------------------
 %% @returns A list of `{Parameter, Value}' for the application's environment.

@@ -33,7 +33,9 @@
     get_argument/1,
     get_plain_arguments/0,
     get_arguments/0,
-    notify_when_started/1
+    notify_when_started/1,
+    restart/0,
+    stop/1
 ]).
 
 %%-----------------------------------------------------------------------------
@@ -192,3 +194,22 @@ get_arguments() ->
 -spec notify_when_started(Pid :: pid()) -> ok | started.
 notify_when_started(_Pid) ->
     started.
+
+%%-----------------------------------------------------------------------------
+%% @returns `ok'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec restart() -> ok.
+restart() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Status exit status or abort reason
+%% @returns `ok'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stop(Status :: non_neg_integer() | string()) -> ok.
+stop(_Status) ->
+    erlang:nif_error(undefined).

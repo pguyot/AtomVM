@@ -283,7 +283,7 @@ static uint32_t block_hash(const uint8_t *block, size_t block_length, uint32_t i
 /* ERTS atom hash (atom.c:atom_hash): hashpjw over the name bytes with a
  * latin1 clutch that recombines two-byte UTF-8 sequences whose lead byte is
  * C2/C3 into a single latin1 character. */
-static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
+static uint32_t phash2_atom_hash_compute(term t, GlobalContext *glb)
 {
     atom_index_t index = term_to_atom_index(t);
     size_t len;
@@ -306,6 +306,47 @@ static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
             h ^= g;
         }
     }
+    return h;
+}
+
+/* Lazily grown per-atom hash cache: atom hashes are immutable and hashpjw's
+ * xor-folding clears the top nibble, so any value with the top bit set can
+ * serve as the empty sentinel. Sizing/stores are benignly racy: the value
+ * written for an index is always the same, and the array pointer is only
+ * ever swapped after the old contents were copied. */
+#define PHASH2_ATOM_CACHE_EMPTY UINT32_C(0xFFFFFFFF)
+
+static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
+{
+    atom_index_t index = term_to_atom_index(t);
+    uint32_t *cache = glb->phash2_atom_cache;
+    size_t capacity = glb->phash2_atom_cache_capacity;
+    if (LIKELY(cache != NULL && (size_t) index < capacity)) {
+        uint32_t cached = cache[index];
+        if (LIKELY(cached != PHASH2_ATOM_CACHE_EMPTY)) {
+            return cached;
+        }
+        uint32_t h = phash2_atom_hash_compute(t, glb);
+        cache[index] = h;
+        return h;
+    }
+
+    size_t new_capacity = ((size_t) index + 1024) & ~(size_t) 1023;
+    uint32_t *new_cache = malloc(new_capacity * sizeof(uint32_t));
+    if (IS_NULL_PTR(new_cache)) {
+        return phash2_atom_hash_compute(t, glb);
+    }
+    memset(new_cache, 0xFF, new_capacity * sizeof(uint32_t));
+    if (cache != NULL) {
+        memcpy(new_cache, cache, capacity * sizeof(uint32_t));
+    }
+    uint32_t h = phash2_atom_hash_compute(t, glb);
+    new_cache[index] = h;
+    // Publish the grown cache; the previous array is retired, not freed, as
+    // another scheduler may still be reading it (a few KB per growth step,
+    // bounded by the atom count).
+    glb->phash2_atom_cache = new_cache;
+    glb->phash2_atom_cache_capacity = new_capacity;
     return h;
 }
 

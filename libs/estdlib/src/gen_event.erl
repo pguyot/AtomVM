@@ -34,7 +34,8 @@
     add_handler/3,
     delete_handler/3,
     notify/2,
-    sync_notify/2
+    sync_notify/2,
+    which_handlers/1
 ]).
 
 -behavior(gen_server).
@@ -70,6 +71,16 @@ notify(EventMgrRef, Event) ->
 
 sync_notify(EventMgrRef, Event) ->
     gen_server:call(EventMgrRef, {sync_notify, Event}).
+
+%%-----------------------------------------------------------------------------
+%% @param   EventMgrRef a reference to the event manager
+%% @returns the list of installed event handlers
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec which_handlers(EventMgrRef :: pid() | atom()) -> [module() | {module(), term()}].
+which_handlers(_EventMgrRef) ->
+    erlang:nif_error(undefined).
 
 %%
 %% gen_server implementation

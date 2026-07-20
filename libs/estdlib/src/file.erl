@@ -42,12 +42,27 @@
     write/2,
     read_file_info/1,
     read_file_info/2,
+    read_link_info/1,
+    read_link_info/2,
+    read_link/1,
+    write_file_info/3,
     list_dir/1,
+    list_dir_all/1,
     make_dir/1,
+    del_dir/1,
     path_open/3,
     delete/1,
     rename/2,
+    copy/2,
+    copy/3,
+    consult/1,
     change_mode/2,
+    change_owner/2,
+    change_group/2,
+    make_symlink/2,
+    make_link/2,
+    set_cwd/1,
+    get_cwd/1,
     format_error/1
 ]).
 
@@ -58,6 +73,28 @@ native_name_encoding() ->
     utf8.
 
 get_cwd() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Drive a drive letter string (Windows only on Erlang/OTP)
+%% @returns `{error, enotsup}'
+%% @doc     Return the working directory of a drive. Drives do not exist on
+%%          AtomVM platforms, so this always returns `{error, enotsup}', like
+%%          Erlang/OTP on non-Windows systems.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_cwd(Drive :: string()) -> {error, enotsup}.
+get_cwd(_Drive) ->
+    {error, enotsup}.
+
+%%-----------------------------------------------------------------------------
+%% @param   Dirname name of the directory to change to
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_cwd(Dirname :: iodata()) -> ok | {error, any()}.
+set_cwd(_Dirname) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
@@ -168,34 +205,7 @@ read_file(Filename, _Opts) ->
 %%-----------------------------------------------------------------------------
 -spec read_line(IoDevice :: pid()) -> {ok, binary() | string()} | eof | {error, any()}.
 read_line(IoDevice) when is_pid(IoDevice) ->
-    read_line_loop(IoDevice, [], false).
-
-%% @private
-%% read/2 returns one *character* per unit, which may be a multi-byte
-%% binary or a multi-element list depending on the device encoding.
-read_line_loop(IoDevice, Acc, ListMode) ->
-    case read(IoDevice, 1) of
-        {ok, Data} when is_list(Data) ->
-            NewAcc = [Data | Acc],
-            case lists:last(Data) of
-                $\n -> {ok, lists:append(lists:reverse(NewAcc))};
-                _ -> read_line_loop(IoDevice, NewAcc, true)
-            end;
-        {ok, Data} when is_binary(Data) ->
-            NewAcc = [Data | Acc],
-            case binary:at(Data, byte_size(Data) - 1) of
-                $\n -> {ok, list_to_binary(lists:reverse(NewAcc))};
-                _ -> read_line_loop(IoDevice, NewAcc, ListMode)
-            end;
-        eof when Acc =/= [], ListMode ->
-            {ok, lists:append(lists:reverse(Acc))};
-        eof when Acc =/= [] ->
-            {ok, list_to_binary(lists:reverse(Acc))};
-        eof ->
-            eof;
-        {error, _} = Error ->
-            Error
-    end.
+    file_request(IoDevice, read_line).
 
 %%-----------------------------------------------------------------------------
 %% @param   Filename name of the file to write
@@ -477,6 +487,12 @@ device_write(Data, State) ->
 %% @private
 file_request_impl({write, Data}, State) ->
     {reply, device_write(Data, State), State};
+file_request_impl(read_line, State) ->
+    %% Buffered line reads. The line buffer holds raw look-ahead bytes; a
+    %% device should not mix read_line with read/2 or the io protocol (the
+    %% look-ahead is not shared), which matches how it is used (compilers
+    %% read diagnostics snippets line by line and nothing else).
+    read_line_buffered(State);
 file_request_impl({read, Count}, State) ->
     {Data, NewState} = take_chars(Count, State),
     {reply, Data, NewState};
@@ -521,6 +537,33 @@ file_request_impl({position, Location}, State) ->
     end;
 file_request_impl(_Other, State) ->
     {reply, {error, request}, State}.
+
+%% @private
+read_line_buffered(State) ->
+    Buf = maps:get(line_buffer, State, <<>>),
+    case binary:split(Buf, <<"\n">>) of
+        [Line, Rest] ->
+            Data = <<Line/binary, "\n">>,
+            {reply, {ok, line_data(Data, State)}, State#{line_buffer => Rest}};
+        _ ->
+            case atomvm:posix_read(maps:get(fd, State), ?READ_CHUNK) of
+                {ok, Bin} ->
+                    read_line_buffered(State#{line_buffer => <<Buf/binary, Bin/binary>>});
+                eof when Buf =:= <<>> ->
+                    {reply, eof, State};
+                eof ->
+                    {reply, {ok, line_data(Buf, State)}, State#{line_buffer => <<>>}};
+                {error, _} = Error ->
+                    {reply, Error, State}
+            end
+    end.
+
+%% @private
+line_data(Bin, State) ->
+    case maps:get(binary, State) of
+        true -> Bin;
+        false -> binary_to_list(Bin)
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   IoDevice device returned by `open/2' with the `write' mode
@@ -585,6 +628,52 @@ read_file_info(Filename, Opts) ->
             Error
     end.
 
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the link (or file) to stat
+%% @returns `{ok, FileInfo}' or `{error, Reason}'
+%% @doc     Get information about a file or link. Unlike Erlang/OTP, symbolic
+%%          links are followed (AtomVM has no `lstat' wrapper), so this is
+%%          equivalent to {@link read_file_info/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_link_info(Filename :: iodata()) -> {ok, tuple()} | {error, any()}.
+read_link_info(Filename) ->
+    read_file_info(Filename).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the link (or file) to stat
+%% @param   Opts options, see {@link read_file_info/2}
+%% @returns `{ok, FileInfo}' or `{error, Reason}'
+%% @doc     Get information about a file or link, see {@link read_link_info/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_link_info(Filename :: iodata(), Opts :: list()) -> {ok, tuple()} | {error, any()}.
+read_link_info(Filename, Opts) ->
+    read_file_info(Filename, Opts).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the symbolic link to read
+%% @returns `{ok, Target}' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_link(Filename :: iodata()) -> {ok, string()} | {error, any()}.
+read_link(_Filename) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to modify
+%% @param   FileInfo a `#file_info{}' record with the fields to set
+%% @param   Opts options
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec write_file_info(Filename :: iodata(), FileInfo :: tuple(), Opts :: list()) ->
+    ok | {error, any()}.
+write_file_info(_Filename, _FileInfo, _Opts) ->
+    erlang:nif_error(undefined).
+
 %% @private
 file_info_from_stat(Stat, TimeFmt) ->
     #{
@@ -631,6 +720,106 @@ change_mode(_Filename, _Mode) ->
     ok.
 
 %%-----------------------------------------------------------------------------
+%% @param   Filename name of the file
+%% @param   Uid the new owner
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec change_owner(Filename :: iodata(), Uid :: integer()) -> ok | {error, any()}.
+change_owner(_Filename, _Uid) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file
+%% @param   Gid the new group
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec change_group(Filename :: iodata(), Gid :: integer()) -> ok | {error, any()}.
+change_group(_Filename, _Gid) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Existing target of the symbolic link
+%% @param   New name of the symbolic link to create
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec make_symlink(Existing :: iodata(), New :: iodata()) -> ok | {error, any()}.
+make_symlink(_Existing, _New) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Existing target of the hard link
+%% @param   New name of the hard link to create
+%% @returns `ok' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec make_link(Existing :: iodata(), New :: iodata()) -> ok | {error, any()}.
+make_link(_Existing, _New) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Source name of the file to copy
+%% @param   Destination name of the file to copy to
+%% @returns `{ok, BytesCopied}' or `{error, Reason}'
+%% @doc     Copy a file. Unlike Erlang/OTP, only filenames are supported
+%%          (not io devices).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec copy(Source :: iodata(), Destination :: iodata()) ->
+    {ok, non_neg_integer()} | {error, any()}.
+copy(Source, Destination) ->
+    copy(Source, Destination, infinity).
+
+%%-----------------------------------------------------------------------------
+%% @param   Source name of the file to copy
+%% @param   Destination name of the file to copy to
+%% @param   ByteCount maximum number of bytes to copy, or `infinity'
+%% @returns `{ok, BytesCopied}' or `{error, Reason}'
+%% @doc     Copy at most `ByteCount' bytes of a file. Unlike Erlang/OTP, only
+%%          filenames are supported (not io devices).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec copy(Source :: iodata(), Destination :: iodata(), ByteCount :: non_neg_integer() | infinity) ->
+    {ok, non_neg_integer()} | {error, any()}.
+copy(Source, Destination, ByteCount) ->
+    case read_file(Source) of
+        {ok, Bin} ->
+            Data =
+                case ByteCount of
+                    infinity ->
+                        Bin;
+                    N when is_integer(N), N >= 0, N < byte_size(Bin) ->
+                        <<Part:N/binary, _/binary>> = Bin,
+                        Part;
+                    N when is_integer(N), N >= 0 ->
+                        Bin
+                end,
+            case write_file(Destination, Data) of
+                ok -> {ok, byte_size(Data)};
+                {error, _} = WriteError -> WriteError
+            end;
+        {error, _} = ReadError ->
+            ReadError
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to read Erlang terms from
+%% @returns `{ok, Terms}' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM (no `erl_scan' /
+%% `erl_parse' in estdlib).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec consult(Filename :: iodata()) -> {ok, [term()]} | {error, any()}.
+consult(_Filename) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
 %% @param   Dirname name of the directory to list
 %% @returns `{ok, Filenames}' or `{error, Reason}'
 %% @doc     List the files of a directory ("." and ".." excluded).
@@ -646,6 +835,18 @@ list_dir(Dirname) ->
         {error, _} = Error ->
             Error
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Dirname name of the directory to list
+%% @returns `{ok, Filenames}' or `{error, Reason}'
+%% @doc     List the files of a directory, like {@link list_dir/1}. On AtomVM
+%%          all names are returned as strings, so this is equivalent to
+%%          {@link list_dir/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec list_dir_all(Dirname :: iodata()) -> {ok, [string()]} | {error, any()}.
+list_dir_all(Dirname) ->
+    list_dir(Dirname).
 
 %% @private
 list_dir0(Dir, Acc) ->
@@ -671,6 +872,16 @@ list_dir0(Dir, Acc) ->
 -spec make_dir(Dirname :: iodata()) -> ok | {error, any()}.
 make_dir(Dirname) ->
     atomvm:posix_mkdir(Dirname, 8#755).
+
+%%-----------------------------------------------------------------------------
+%% @param   Dirname name of the directory to delete
+%% @returns `ok' or `{error, Reason}'
+%% @doc     Delete a directory. The directory must be empty.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec del_dir(Dirname :: iodata()) -> ok | {error, any()}.
+del_dir(Dirname) ->
+    atomvm:posix_rmdir(Dirname).
 
 %%-----------------------------------------------------------------------------
 %% @param   Path list of directories to search

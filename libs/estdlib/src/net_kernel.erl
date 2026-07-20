@@ -31,11 +31,14 @@
 
 % Public API
 -export([
+    start/1,
     start/2,
     stop/0,
     get_state/0,
     epmd_module/0,
-    get_net_ticktime/0
+    get_net_ticktime/0,
+    connect_node/1,
+    nodename/0
 ]).
 
 % supervised callback
@@ -393,3 +396,32 @@ ticker(Kernel, TickInterval) ->
     end,
     Kernel ! tick,
     ticker(Kernel, TickInterval).
+
+%%-----------------------------------------------------------------------------
+%% @param   Options a list of the node name and, optionally, the name domain
+%% @returns `{ok, Pid}' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM. Use {@link start/2}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec start(Options :: [atom()]) -> {ok, pid()} | {error, term()}.
+start(_Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Node the node to connect to
+%% @returns `true', `false' or `ignored'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec connect_node(Node :: node()) -> boolean() | ignored.
+connect_node(_Node) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, Nodename}' or `{error, Reason}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec nodename() -> {ok, string()} | {error, term()}.
+nodename() ->
+    erlang:nif_error(undefined).

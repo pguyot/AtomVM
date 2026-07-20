@@ -101,7 +101,12 @@ compile(Regexp, Options) ->
                     0 -> 0;
                     _ -> 1
                 end,
-            Data = {NameCount, NameEntrySize, NameTable, Serialized},
+            %% Pack everything into one binary so the mp() shape matches
+            %% Erlang/OTP's {re_pattern, _, _, _, binary()} (version-aware
+            %% callers sniff the shape).
+            Data =
+                <<NameCount:16, NameEntrySize:16, (byte_size(NameTable)):32,
+                    NameTable/binary, Serialized/binary>>,
             {ok, {re_pattern, CaptureCount, Unicode, 0, Data}};
         {error, _} = Error ->
             Error
@@ -129,9 +134,11 @@ run(Subject, RE) ->
     {match, list()} | nomatch | {error, term()}.
 run(Subject, RE, Options) ->
     {MP, RunOptions} = ensure_compiled(RE, Options),
-    {re_pattern, CaptureCount, Unicode, 0, {NameCount, NameEntrySize, NameTable, Serialized}} = MP,
+    {re_pattern, CaptureCount, Unicode, 0, Data} = MP,
+    <<NameCount:16, NameEntrySize:16, TableSize:32, NameTable:TableSize/binary,
+        Serialized/binary>> = Data,
     IsUnicode = Unicode =:= 1,
-    {SubjectBin, ReturnCharlistDefault} = subject_to_binary(Subject, IsUnicode),
+    {SubjectBin, _WasCharlist} = subject_to_binary(Subject, IsUnicode),
     Offset = proplists:get_value(offset, RunOptions, 0),
     MatchFlags = match_flags(RunOptions, 0),
     Global = lists:member(global, RunOptions),
@@ -152,7 +159,7 @@ run(Subject, RE, Options) ->
         {error, _} = RunError ->
             RunError;
         _ ->
-            {CaptureSpec, CaptureType} = capture_options(RunOptions, ReturnCharlistDefault),
+            {CaptureSpec, CaptureType} = capture_options(RunOptions),
             case CaptureSpec of
                 none ->
                     match;
@@ -263,7 +270,8 @@ split(Subject, RE, Options) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec inspect(MP :: tuple(), Item :: namelist) -> {namelist, [binary()]}.
-inspect({re_pattern, _, _, 0, {NameCount, NameEntrySize, NameTable, _}}, namelist) ->
+inspect({re_pattern, _, _, 0, Data}, namelist) ->
+    <<NameCount:16, NameEntrySize:16, TableSize:32, NameTable:TableSize/binary, _/binary>> = Data,
     Names = decode_name_table(NameCount, NameEntrySize, NameTable),
     {namelist, lists:sort([N || {N, _} <- Names])}.
 
@@ -441,16 +449,11 @@ char_size(_SubjectBin, _Offset, _) ->
     1.
 
 %% @private
-capture_options(Options, ReturnCharlistDefault) ->
-    DefaultType =
-        case ReturnCharlistDefault of
-            true -> list;
-            false -> index
-        end,
+capture_options(Options) ->
     case lists:keyfind(capture, 1, Options) of
-        {capture, Spec} -> {Spec, DefaultType};
+        {capture, Spec} -> {Spec, index};
         {capture, Spec, Type} -> {Spec, Type};
-        false -> {all, DefaultType}
+        false -> {all, index}
     end.
 
 %% @private
@@ -477,7 +480,7 @@ trim_nul(Bin) ->
 format_capture(Match, all, Type, SubjectBin, _CaptureCount, _Names) ->
     [capture_value(T, Type, SubjectBin) || T <- Match];
 format_capture(Match, first, Type, SubjectBin, _CaptureCount, _Names) ->
-    capture_value(hd(Match), Type, SubjectBin);
+    [capture_value(hd(Match), Type, SubjectBin)];
 format_capture(Match, all_but_first, Type, SubjectBin, _CaptureCount, _Names) ->
     [capture_value(T, Type, SubjectBin) || T <- tl(Match)];
 format_capture(Match, all_names, Type, SubjectBin, _CaptureCount, Names) ->

@@ -43,6 +43,7 @@
     update_with/4,
     groups_from_list/2,
     intersect/2,
+    intersect_with/3,
     with/2,
     is_key/2,
     put/3,
@@ -732,6 +733,34 @@ groups_from_list(Fun, List) when is_function(Fun, 1), is_list(List) ->
 -spec intersect(Map1 :: map(), Map2 :: map()) -> map().
 intersect(Map1, Map2) when is_map(Map1), is_map(Map2) ->
     maps:filter(fun(K, _V) -> is_map_key(K, Map1) end, Map2).
+
+%%-----------------------------------------------------------------------------
+%% @param   Combiner a function to combine the values of identical keys
+%% @param   Map1 a map
+%% @param   Map2 a map
+%% @returns a map with the keys present in both maps, with combined values
+%% @doc     Intersects two maps, combining the values with
+%%          `Combiner(Key, Value1, Value2)'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec intersect_with(
+    Combiner :: fun((Key :: term(), Value1 :: term(), Value2 :: term()) -> term()),
+    Map1 :: map(),
+    Map2 :: map()
+) -> map().
+intersect_with(Combiner, Map1, Map2) when
+    is_function(Combiner, 3), is_map(Map1), is_map(Map2)
+->
+    maps:fold(
+        fun(K, V1, Acc) ->
+            case Map2 of
+                #{K := V2} -> Acc#{K => Combiner(K, V1, V2)};
+                _ -> Acc
+            end
+        end,
+        #{},
+        Map1
+    ).
 
 %%-----------------------------------------------------------------------------
 %% @param   Ks a list of keys
