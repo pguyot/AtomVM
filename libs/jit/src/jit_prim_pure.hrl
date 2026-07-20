@@ -60,6 +60,10 @@ prim_pure(?PRIM_RECORD_FIELD_POS) -> true;
 prim_pure(?PRIM_IS_RECORD_OF) -> true;
 prim_pure(?PRIM_SET_TUPLE_ELEMENT) -> true;
 prim_pure(?PRIM_PUT_MAP_HEAP_NEED) -> true;
+%% Like PUT_MAP_HEAP_NEED: these only read the map's size to size the
+%% reservation. They allocate nothing, cannot collect, and return a size_t.
+prim_pure(?PRIM_PUT_MAP_ONE_HEAP_NEED) -> true;
+prim_pure(?PRIM_PUT_MAP_EXACT_ONE_HEAP_NEED) -> true;
 prim_pure(?PRIM_MAP_GET_VALUE) -> true;
 prim_pure(?PRIM_TERM_GET_MAP_ASSOC) -> true;
 prim_pure(?PRIM_TERM_GET_MAP_ASSOC_MISS) -> true;
