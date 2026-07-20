@@ -115,7 +115,6 @@ GlobalContext *globalcontext_new(void)
     persistent_term_init(&glb->persistent_term);
 
     glb->phash2_atom_cache = NULL;
-    glb->phash2_atom_cache_capacity = 0;
 
     glb->last_process_id = 0;
 
