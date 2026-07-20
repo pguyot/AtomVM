@@ -43,6 +43,7 @@
     and_/3,
     ldr/2,
     ldr_w/2,
+    ldar_w/2,
     ldrb/2,
     strb/2,
     strh/2,
@@ -323,6 +324,14 @@ ldr_w(Dst, {BaseReg, Offset}) when
     <<
         (16#B9400000 bor ((Offset div 4) bsl 10) bor (BaseRegNum bsl 5) bor DstNum):32/little
     >>.
+
+%% Emit a load-acquire register (LDAR) instruction for a 32-bit load from
+%% [BaseReg] (no offset form exists), zero-extending into the 64-bit Dst.
+-spec ldar_w(aarch64_gpr_register(), aarch64_gpr_register()) -> binary().
+ldar_w(Dst, BaseReg) when is_atom(Dst), is_atom(BaseReg) ->
+    DstNum = reg_to_num(Dst),
+    BaseRegNum = reg_to_num(BaseReg),
+    <<(16#88DFFC00 bor (BaseRegNum bsl 5) bor DstNum):32/little>>.
 
 %% Emit a load register byte (LDRB) instruction, zero-extending one byte from
 %% memory into the 32-bit (and thus zeroed 64-bit) Dst register.
