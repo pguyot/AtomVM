@@ -33,8 +33,10 @@
     open/2,
     close/1,
     read/2,
+    read_line/1,
     position/2,
     read_file/1,
+    read_file/2,
     write_file/2,
     write_file/3,
     write/2,
@@ -141,6 +143,54 @@ read_file(Filename) ->
             Result = read_all(Fd, []),
             _ = atomvm:posix_close(Fd),
             Result;
+        {error, _} = Error ->
+            Error
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename name of the file to read
+%% @param   Opts options; accepted for Erlang/OTP compatibility (the file is
+%%          always read as with an empty option list)
+%% @returns `{ok, Binary}' or `{error, Reason}'
+%% @doc     Read a whole file as a binary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_file(Filename :: iodata(), Opts :: [raw]) -> {ok, binary()} | {error, any()}.
+read_file(Filename, _Opts) ->
+    read_file(Filename).
+
+%%-----------------------------------------------------------------------------
+%% @param   IoDevice device to read a line from
+%% @returns `{ok, Line}', `eof' or `{error, Reason}'
+%% @doc     Read a line from an io device opened with `open/2'. The
+%% terminating newline, if any, is included in the result.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_line(IoDevice :: pid()) -> {ok, binary() | string()} | eof | {error, any()}.
+read_line(IoDevice) when is_pid(IoDevice) ->
+    read_line_loop(IoDevice, [], false).
+
+%% @private
+read_line_loop(IoDevice, Acc, ListMode) ->
+    case read(IoDevice, 1) of
+        {ok, [C]} ->
+            NewAcc = [C | Acc],
+            case C of
+                $\n -> {ok, lists:reverse(NewAcc)};
+                _ -> read_line_loop(IoDevice, NewAcc, true)
+            end;
+        {ok, <<C>>} ->
+            NewAcc = [C | Acc],
+            case C of
+                $\n -> {ok, list_to_binary(lists:reverse(NewAcc))};
+                _ -> read_line_loop(IoDevice, NewAcc, ListMode)
+            end;
+        eof when Acc =/= [], ListMode ->
+            {ok, lists:reverse(Acc)};
+        eof when Acc =/= [] ->
+            {ok, list_to_binary(lists:reverse(Acc))};
+        eof ->
+            eof;
         {error, _} = Error ->
             Error
     end.
