@@ -57,7 +57,8 @@
     debug/1, debug/2, debug/3,
     log/2, log/3, log/4,
     compare/2,
-    macro_log/3, macro_log/4, macro_log/5
+    macro_log/3, macro_log/4, macro_log/5,
+    format_otp_report/1
 ]).
 
 -type level() :: emergency | alert | critical | error | warning | notice | info | debug.
@@ -571,3 +572,13 @@ compare_int_level(Level1, Level2) when Level1 < Level2 ->
     lt;
 compare_int_level(_Level1, _Level2) ->
     gt.
+
+%%-----------------------------------------------------------------------------
+%% @param   Report the OTP report to format
+%% @returns `{Format, Args}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec format_otp_report(Report :: map() | [{atom(), term()}]) -> {io:format(), [term()]}.
+format_otp_report(_Report) ->
+    erlang:nif_error(undefined).

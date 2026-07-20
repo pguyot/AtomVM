@@ -36,6 +36,8 @@
     fwrite/2,
     fwrite/3,
     get_line/1,
+    get_line/2,
+    get_chars/3,
     put_chars/1,
     put_chars/2,
     scan_erl_exprs/4,
@@ -253,6 +255,41 @@ get_line(Prompt) ->
                 {io_reply, Ref, Line} -> Line
             end
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Device device to read from
+%% @param   Prompt prompt for user input
+%% @returns the line read from the device
+%% @doc     Read a line from a device with a prompt.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_line(Device :: device(), Prompt :: string()) ->
+    string() | binary() | eof | {error, any()}.
+get_line(standard_io, Prompt) ->
+    get_line(Prompt);
+get_line(Device, Prompt) when is_pid(Device) ->
+    execute_request(Device, {get_line, unicode, Prompt}).
+
+%%-----------------------------------------------------------------------------
+%% @param   Device device to read from
+%% @param   Prompt prompt for user input
+%% @param   Count number of characters to read
+%% @returns the characters read from the device
+%% @doc     Read a fixed number of characters from a device with a prompt.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_chars(Device :: device(), Prompt :: string(), Count :: non_neg_integer()) ->
+    string() | binary() | eof | {error, any()}.
+get_chars(standard_io, Prompt, Count) ->
+    Self = self(),
+    case erlang:group_leader() of
+        Self ->
+            erlang:throw(no_group_leader);
+        Leader ->
+            execute_request(Leader, {get_chars, unicode, Prompt, Count})
+    end;
+get_chars(Device, Prompt, Count) when is_pid(Device) ->
+    execute_request(Device, {get_chars, unicode, Prompt, Count}).
 
 %%-----------------------------------------------------------------------------
 %% @equiv   put_chars(standard_io, Chars)

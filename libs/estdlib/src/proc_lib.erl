@@ -54,7 +54,11 @@
     init_fail/3,
 
     initial_call/1,
-    translate_initial_call/1
+    translate_initial_call/1,
+    get_label/1,
+    set_label/1,
+    stop/3,
+    hibernate/3
 ]).
 
 -export([
@@ -412,3 +416,49 @@ initial_call(_Process) ->
 -spec translate_initial_call(pid()) -> {module(), atom(), non_neg_integer()}.
 translate_initial_call(_Process) ->
     {proc_lib, init_p, 5}.
+
+%%-----------------------------------------------------------------------------
+%% @param   Process process to get the label of
+%% @returns `undefined'
+%% @doc     Get the label of a process. AtomVM does not store process labels,
+%%          so this always returns `undefined'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_label(Process :: pid()) -> term() | undefined.
+get_label(_Process) ->
+    undefined.
+
+%%-----------------------------------------------------------------------------
+%% @param   Label the label to set for the calling process
+%% @returns `ok'
+%% @doc     Set the label of the calling process. AtomVM does not store
+%%          process labels, so this is a no-op.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_label(Label :: term()) -> ok.
+set_label(_Label) ->
+    ok.
+
+%%-----------------------------------------------------------------------------
+%% @param   Process process to stop
+%% @param   Reason the reason to stop with
+%% @param   Timeout time to wait for the process to terminate
+%% @returns `ok'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stop(Process :: pid() | atom(), Reason :: term(), Timeout :: timeout()) -> ok.
+stop(_Process, _Reason, _Timeout) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module of the function to resume at
+%% @param   Function    name of the function to resume at
+%% @param   Args        arguments of the function to resume at
+%% @returns does not return
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec hibernate(Module :: module(), Function :: atom(), Args :: [any()]) -> no_return().
+hibernate(_Module, _Function, _Args) ->
+    erlang:nif_error(undefined).

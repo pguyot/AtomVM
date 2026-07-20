@@ -114,6 +114,9 @@ GlobalContext *globalcontext_new(void)
     ets_init(&glb->ets);
     persistent_term_init(&glb->persistent_term);
 
+    glb->phash2_atom_cache = NULL;
+    glb->phash2_atom_cache_capacity = 0;
+
     glb->last_process_id = 0;
 
     glb->atom_table = atom_table_new();
@@ -322,6 +325,7 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
 
     ets_destroy(&glb->ets, glb);
     persistent_term_destroy(&glb->persistent_term, glb);
+    free(glb->phash2_atom_cache);
 
     // Destroy refc binaries including resources
     // (this list should be empty if resources were properly refcounted)

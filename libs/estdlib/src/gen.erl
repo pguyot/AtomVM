@@ -32,7 +32,10 @@
     start/6,
     call/4,
     cast/2,
-    reply/2
+    reply/2,
+    stop/3,
+    format_status_header/2,
+    debug_options/2
 ]).
 
 -type server_ref() :: atom() | pid().
@@ -142,3 +145,37 @@ reply({Pid, Ref}, Reply) ->
         _:_ ->
             ok
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   ServerRef the server to stop
+%% @param   Reason the reason to stop with
+%% @param   Timeout time to wait for the server to terminate
+%% @returns `ok'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stop(ServerRef :: server_ref(), Reason :: term(), Timeout :: timeout()) -> ok.
+stop(_ServerRef, _Reason, _Timeout) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   TagLine a header tag line
+%% @param   ProcName the name of the process
+%% @returns a status header
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec format_status_header(TagLine :: string(), ProcName :: term()) -> term().
+format_status_header(_TagLine, _ProcName) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Name the name of the process
+%% @param   Opts start options possibly containing a `debug' entry
+%% @returns debug options
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec debug_options(Name :: term(), Opts :: list()) -> list().
+debug_options(_Name, _Opts) ->
+    erlang:nif_error(undefined).
