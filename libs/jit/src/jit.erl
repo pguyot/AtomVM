@@ -7193,7 +7193,7 @@ try_fuse_tuple_ops(<<?OP_TEST_ARITY, Rest0/binary>>, Arg1, IsTupleLabel, MMod, M
     {TestArityLabel, Rest1} = decode_label(Rest0),
     {MSt1, TestArityArg, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {Arity, Rest3} = decode_literal(Rest2),
-    case TestArityArg =:= unwrap_typed(Arg1) of
+    case TestArityArg =:= Arg1 of
         true ->
             ?TRACE("FUSE: is_tuple + test_arity ~p, ~p\n", [TestArityLabel, Arity]),
             {GetElements, Rest4, MSt2} =
@@ -7237,7 +7237,7 @@ collect_get_tuple_elements(Rest, _SrcArg, _MMod, MSt, _State0) ->
 emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt0) ->
     %% The BEAM Types chunk (versions 2-4, up to OTP 29) does not encode tuple
     %% arity, so {typed, _, t_tuple} never carries an arity to specialize on.
-    {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
     MSt2 = cond_jump_to_label(
         {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
         IsTupleLabel,
