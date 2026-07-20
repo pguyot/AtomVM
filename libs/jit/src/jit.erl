@@ -5524,27 +5524,45 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) ->
 %% the resolved continuation (BIF/NIF returns and cross-module targets)
 %% instead of round-tripping through the scheduler loop.
 call_ext_with_cp(MMod, MSt0, Arity, Index, NWords) ->
-    case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
+    case erlang:function_exported(MMod, call_ext_with_cp_direct, 4) of
         true ->
-            MMod:call_primitive_with_cp_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+            %% Backends with the inline fast path branch straight to an
+            %% already-resolved native target in generated code.
+            MMod:call_ext_with_cp_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, Index, [
                 ctx, jit_state, offset, Arity, Index, NWords
             ]);
         false ->
-            MMod:call_primitive_with_cp(MSt0, ?PRIM_CALL_EXT, [
-                ctx, jit_state, offset, Arity, Index, NWords
-            ])
+            case erlang:function_exported(MMod, call_primitive_with_cp_direct, 3) of
+                true ->
+                    MMod:call_primitive_with_cp_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+                        ctx, jit_state, offset, Arity, Index, NWords
+                    ]);
+                false ->
+                    MMod:call_primitive_with_cp(MSt0, ?PRIM_CALL_EXT, [
+                        ctx, jit_state, offset, Arity, Index, NWords
+                    ])
+            end
     end.
 
 call_ext_last(MMod, MSt0, Arity, Index, NWords) ->
-    case erlang:function_exported(MMod, call_primitive_direct, 3) of
+    case erlang:function_exported(MMod, call_ext_last_direct, 5) of
         true ->
-            MMod:call_primitive_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+            %% Backends with the inline fast path branch straight to an
+            %% already-resolved native target in generated code.
+            MMod:call_ext_last_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, Index, NWords, [
                 ctx, jit_state, offset, Arity, Index, NWords
             ]);
         false ->
-            MMod:call_primitive_last(MSt0, ?PRIM_CALL_EXT, [
-                ctx, jit_state, offset, Arity, Index, NWords
-            ])
+            case erlang:function_exported(MMod, call_primitive_direct, 3) of
+                true ->
+                    MMod:call_primitive_direct(MSt0, ?PRIM_CALL_EXT_DIRECT, [
+                        ctx, jit_state, offset, Arity, Index, NWords
+                    ]);
+                false ->
+                    MMod:call_primitive_last(MSt0, ?PRIM_CALL_EXT, [
+                        ctx, jit_state, offset, Arity, Index, NWords
+                    ])
+            end
     end.
 
 %% OP_CALL_FUN / OP_CALL_FUN2 common tail: backends with an inline local-fun
