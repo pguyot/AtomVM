@@ -38,7 +38,8 @@
     internal_run/4,
     replace/3, replace/4,
     split/2, split/3,
-    inspect/2
+    inspect/2,
+    import/1
 ]).
 
 %% Low-level PCRE2 primitives (NIFs)
@@ -107,9 +108,42 @@ compile(Regexp, Options) ->
             Data =
                 <<NameCount:16, NameEntrySize:16, (byte_size(NameTable)):32,
                     NameTable/binary, Serialized/binary>>,
-            {ok, {re_pattern, CaptureCount, Unicode, 0, Data}};
+            MP = {re_pattern, CaptureCount, Unicode, 0, Data},
+            case lists:member(export, Options) of
+                false ->
+                    {ok, MP};
+                true ->
+                    %% Exported form, as on Erlang/OTP 28.1+: carries the
+                    %% source and options so an incompatible importer can
+                    %% recompile (see import/1).
+                    Exported =
+                        {re_exported_pattern, version(), Source, Options,
+                            <<CaptureCount:32, Unicode:8, Data/binary>>},
+                    {ok, Exported}
+            end;
         {error, _} = Error ->
             Error
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Exported a pattern compiled with the `export' option
+%% @returns the imported pattern, as `mp()'
+%% @doc     Import a regular expression compiled with the `export' option.
+%% When the exporter is not this same engine version, the expression is
+%% recompiled from the carried source and options.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec import(Exported :: tuple()) -> tuple().
+import({re_exported_pattern, Version, Source, Options, ExportData}) ->
+    case Version =:= version() of
+        true ->
+            <<CaptureCount:32, Unicode:8, Data/binary>> = ExportData,
+            {re_pattern, CaptureCount, Unicode, 0, Data};
+        false ->
+            case compile(Source, Options -- [export]) of
+                {ok, MP} -> MP;
+                {error, _} -> erlang:error(badarg)
+            end
     end.
 
 %% @equiv run(Subject, RE, [])
@@ -292,6 +326,8 @@ pcre2_match(_Subject, _Serialized, _Offset, _Flags) ->
 %% @private
 ensure_compiled({re_pattern, _, _, 0, _} = MP, Options) ->
     {MP, Options};
+ensure_compiled({re_exported_pattern, _, _, _, _} = Exported, Options) ->
+    {?MODULE:import(Exported), Options};
 ensure_compiled(Source, Options) ->
     CompileOptions = [O || O <- Options, is_compile_option(O)],
     case compile(Source, CompileOptions) of
