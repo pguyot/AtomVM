@@ -65,6 +65,7 @@ test() ->
     ok = test_foreach(),
     ok = test_map(),
     ok = test_merge(),
+    ok = test_loose_equality(),
     HasMergeWith =
         case erlang:system_info(machine) of
             "BEAM" ->
@@ -363,6 +364,29 @@ test_map() ->
     ok = check_bad_map(fun() -> maps:map(Fun, id(not_a_map)) end),
     ok = check_bad_map_or_badarg(fun() -> maps:map(not_a_function, id(not_a_map)) end),
     ?ASSERT_ERROR(maps:map(not_a_function, maps:new()), badarg),
+    ok.
+
+%% `==' must treat values that are equal without being identical (1 and 1.0)
+%% as equal inside maps, for tree-backed maps as well as flat ones. The
+%% structural-equality fast path decides "differs" with `=:=' semantics, which
+%% only settles an exact comparison; a regression there made `==' report two
+%% equal tree maps as different.
+test_loose_equality() ->
+    ?ASSERT_EQUALS(true, #{a => 1} == #{a => 1.0}),
+    ?ASSERT_EQUALS(false, #{a => 1} =:= #{a => 1.0}),
+    %% Large enough to be tree-backed whatever the flat/tree threshold is, and
+    %% built so the two trees have the same shape (which is what lets the
+    %% structural fast path reach a verdict at all).
+    Base = [{I, I} || I <- lists:seq(1, 300)],
+    T1 = maps:from_list(Base),
+    T2 = maps:from_list([{1, 1.0} | tl(Base)]),
+    ?ASSERT_EQUALS(true, T1 == T2),
+    ?ASSERT_EQUALS(false, T1 =:= T2),
+    %% Same, for a tree produced by path-copying puts rather than from_list.
+    P1 = lists:foldl(fun({K, V}, A) -> A#{K => V} end, #{}, Base),
+    P2 = P1#{1 := 1.0},
+    ?ASSERT_EQUALS(true, P1 == P2),
+    ?ASSERT_EQUALS(false, P1 =:= P2),
     ok.
 
 test_merge() ->
