@@ -1598,6 +1598,31 @@ static term make_fun(Context *ctx, const Module *mod, int fun_index, term argv[]
         return make_bigint_from_digits(ctx, bigint, sign, count);
     }
 
+    // Extract an integer field of any bit width at any bit offset, returning
+    // a properly normalized term (immediate/boxed int64 when it fits, bigint
+    // otherwise).
+    static term extract_intn_bits_integer(
+        Context *ctx, const uint8_t *data, size_t bit_offset, size_t n, enum BitstringFlags flags)
+    {
+        intn_digit_t digits[INTN_MAX_RES_LEN];
+        bool negative;
+        int count = bitstring_extract_intn(data, bit_offset, n, flags, digits, INTN_MAX_RES_LEN, &negative);
+        if (UNLIKELY(count < 0)) {
+            RAISE_ERROR_FROM_HELPER(OVERFLOW_ATOM);
+        }
+        if (count <= 2) {
+            uint64_t mag = (count > 0 ? (uint64_t) digits[0] : 0)
+                | (count == 2 ? ((uint64_t) digits[1]) << 32 : 0);
+            uint64_t max_mag = negative ? ((uint64_t) INT64_MAX) + 1 : (uint64_t) INT64_MAX;
+            if (mag <= max_mag) {
+                int64_t v = negative ? int64_cond_neg_unsigned(true, mag) : (int64_t) mag;
+                return maybe_alloc_boxed_integer_fragment(ctx, v);
+            }
+        }
+        return make_bigint_from_digits(
+            ctx, digits, negative ? IntNNegativeInteger : IntNPositiveInteger, count);
+    }
+
     static size_t decode_nbits_integer(Context *ctx, const uint8_t *encoded, term *out_term)
     {
         const uint8_t *new_encoded = encoded;
@@ -3871,19 +3896,11 @@ schedule_in:
 
                     term_to_bigint(src, &big_src_value, &big_len, &big_sign);
 
-                    intn_from_integer_options_t intn_flags
-                        = bitstring_flags_to_intn_opts(flags_value);
-                    int byte_offset = ctx->bs_offset / 8;
-                    uint8_t *dst = (uint8_t *) term_binary_data(ctx->bs) + byte_offset;
-                    size_t t_capacity = term_binary_size(ctx->bs);
-                    size_t avail = t_capacity - byte_offset;
-
-                    int written = intn_to_integer_bytes(
-                        big_src_value, big_len, big_sign, intn_flags, dst, avail);
-                    if (UNLIKELY(written < 0)) {
-                        TRACE("bs_put_integer: Failed to insert big integer into binary\n");
-                        RAISE_ERROR(BADARG_ATOM);
-                    }
+                    // Bit-granular: any field width and destination offset,
+                    // truncating and two's-complementing like the 64-bit path.
+                    bitstring_insert_intn((uint8_t *) term_binary_data(ctx->bs), ctx->bs_offset,
+                        big_src_value, big_len, big_sign == IntNNegativeInteger,
+                        (size_t) size_value * unit, flags_value);
                 }
 
                 ctx->bs_offset += size_value * unit;
@@ -4687,6 +4704,19 @@ schedule_in:
 
                     t = extract_nbits_integer(ctx, int_bytes + byte_offset, increment / 8,
                         bitstring_flags_to_intn_opts(flags_value));
+                    term_set_match_state_offset(src, bs_offset + increment);
+                    if (term_is_invalid_term(t)) {
+                        HANDLE_ERROR();
+                    }
+                } else if (increment <= INTN_MAX_UNSIGNED_BITS_SIZE) {
+                    // >64-bit field at a non-byte-aligned offset or with a
+                    // non-byte-multiple width: bit-granular extraction.
+                    unsigned long capacity_bits = term_bit_size(bs_bin);
+                    if (capacity_bits - bs_offset < (unsigned long) increment) {
+                        JUMP_TO_ADDRESS(mod->labels[fail]);
+                    }
+                    const uint8_t *bin_data = (const uint8_t *) term_binary_data(bs_bin);
+                    t = extract_intn_bits_integer(ctx, bin_data, bs_offset, increment, flags_value);
                     term_set_match_state_offset(src, bs_offset + increment);
                     if (term_is_invalid_term(t)) {
                         HANDLE_ERROR();
@@ -6015,11 +6045,14 @@ schedule_in:
                                     }
                                 }
                                 if (atom_type == PRIVATE_APPEND_ATOM && j == 0) {
-                                    // The accumulator may be a bitstring: its
-                                    // storage is reused as a whole, so its
-                                    // trailing bits are kept (see
-                                    // term_reuse_binary).
-                                    reuse_binary = true;
+                                    // Reusing the accumulator requires a
+                                    // byte-aligned source; otherwise fall back
+                                    // to the copying path below (semantically
+                                    // identical, private_append is only an
+                                    // optimization hint).
+                                    if (src_bits % 8 == 0) {
+                                        reuse_binary = true;
+                                    }
                                 }
                                 segment_size = src_bits;
                                 segment_unit = 1;
@@ -6071,6 +6104,11 @@ schedule_in:
                 size_t binary_bytes = (binary_size + 7) / 8;
                 if (UNLIKELY(binary_bytes > TERM_MAX_BINARY_SIZE)) {
                     RAISE_ERROR(SYSTEM_LIMIT_ATOM);
+                }
+                if (trailing_bits != 0 && reuse_binary) {
+                    // A bitstring result cannot alias the reused byte-aligned
+                    // accumulator: fall back to the copying path.
+                    reuse_binary = false;
                 }
                 TRIM_LIVE_REGS(live);
                 size_t bs_heap_size = alloc + term_binary_heap_size(binary_bytes);
@@ -6190,25 +6228,13 @@ schedule_in:
                                           "binary\n");
                                     RAISE_ERROR(BADARG_ATOM);
                                 }
-                            } else if ((offset % 8 != 0) || ((size_value * segment_unit) % 8 != 0)) {
-                                TRACE("bs_create_bin/6: non-byte-aligned big integer segment unsupported\n");
-                                RAISE_ERROR(UNSUPPORTED_ATOM);
                             } else {
-                                // when building a binary, `signed` flag is implicit
-                                intn_from_integer_options_t intn_flags
-                                    = bitstring_flags_to_intn_opts(flags_value);
-                                int byte_offset = offset / 8;
-                                uint8_t *dst = (uint8_t *) term_binary_data(t) + byte_offset;
-                                size_t t_capacity = term_binary_size(t);
-                                size_t avail = t_capacity - byte_offset;
-
-                                int written = intn_to_integer_bytes(
-                                    big_src_value, big_len, big_sign, intn_flags, dst, avail);
-                                if (UNLIKELY(written < 0)) {
-                                    TRACE("bs_create_bin/6: Failed to insert integer into "
-                                          "binary\n");
-                                    RAISE_ERROR(BADARG_ATOM);
-                                }
+                                // Bit-granular: any field width and offset,
+                                // truncating and two's-complementing like the
+                                // 64-bit path.
+                                bitstring_insert_intn((uint8_t *) term_binary_data(t), offset,
+                                    big_src_value, big_len, big_sign == IntNNegativeInteger,
+                                    size_value * segment_unit, flags_value);
                             }
                             segment_size = size_value * segment_unit;
                             break;
@@ -6535,6 +6561,20 @@ schedule_in:
 
                                 t = extract_nbits_integer(ctx, int_bytes + byte_offset,
                                     increment / 8, bitstring_flags_to_intn_opts(flags_value));
+                                if (term_is_invalid_term(t)) {
+                                    HANDLE_ERROR();
+                                }
+                            } else if (increment <= INTN_MAX_UNSIGNED_BITS_SIZE) {
+                                // >64-bit field at a non-byte-aligned offset or with
+                                // a non-byte-multiple width: bit-granular extraction.
+                                unsigned long capacity_bits = term_bit_size(bs_bin);
+                                if (capacity_bits - bs_offset < (unsigned long) increment) {
+                                    goto bs_match_jump_to_fail;
+                                }
+                                const uint8_t *bin_data
+                                    = (const uint8_t *) term_binary_data(bs_bin);
+                                t = extract_intn_bits_integer(
+                                    ctx, bin_data, bs_offset, increment, flags_value);
                                 if (term_is_invalid_term(t)) {
                                     HANDLE_ERROR();
                                 }
