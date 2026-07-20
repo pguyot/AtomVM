@@ -313,6 +313,8 @@ if ((${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") OR
         target_compile_definitions(libAtomVM PRIVATE WITH_ZLIB)
         target_link_libraries(libAtomVM PUBLIC ${ZLIB_LIBRARIES})
     endif(ZLIB_FOUND)
+    # Desktop-class platforms favor throughput over footprint (see context.c)
+    target_compile_definitions(libAtomVM PRIVATE AVM_DEFAULT_HEAP_GROWTH_FIBONACCI)
     # Automatically use PCRE2 if present to provide the re module
     find_library(PCRE2_8_LIBRARY pcre2-8)
     find_path(PCRE2_INCLUDE_DIR pcre2.h)
