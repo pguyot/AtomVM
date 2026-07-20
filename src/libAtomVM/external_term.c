@@ -42,6 +42,10 @@
 #include "unicode.h"
 #include "utils.h"
 
+#ifdef WITH_ZLIB
+#include <zlib.h>
+#endif
+
 #define NEW_FLOAT_EXT 70
 #define NEW_PID_EXT 88
 #define NEWER_REFERENCE_EXT 90
@@ -62,6 +66,7 @@
 #define RECORD_EXT 67
 #define MAP_EXT 116
 #define ATOM_UTF8_EXT 118
+#define COMPRESSED_EXT 80
 #define SMALL_ATOM_UTF8_EXT 119
 #define V4_PORT_EXT 120
 #define INVALID_TERM_SIZE -1
@@ -225,12 +230,72 @@ static int external_term_from_term(uint8_t **buf, size_t *len, term t, GlobalCon
 
 term external_term_to_binary(Context *ctx, term t)
 {
+    return external_term_to_binary_with_level(ctx, t, 0);
+}
+
+bool external_term_inflate(const uint8_t *data, size_t size, uint8_t **inflated, size_t *inflated_size)
+{
+    *inflated = NULL;
+    if (size < 6 || data[0] != EXTERNAL_TERM_TAG || data[1] != COMPRESSED_EXT) {
+        return false;
+    }
+#ifdef WITH_ZLIB
+    uint32_t usize = ((uint32_t) data[2] << 24) | ((uint32_t) data[3] << 16)
+        | ((uint32_t) data[4] << 8) | (uint32_t) data[5];
+    uint8_t *buf = malloc((size_t) usize + 1);
+    if (IS_NULL_PTR(buf)) {
+        return false;
+    }
+    uLongf dest_len = usize;
+    if (uncompress(buf + 1, &dest_len, data + 6, size - 6) != Z_OK || dest_len != usize) {
+        free(buf);
+        return false;
+    }
+    buf[0] = EXTERNAL_TERM_TAG;
+    *inflated = buf;
+    *inflated_size = (size_t) usize + 1;
+    return true;
+#else
+    return false;
+#endif
+}
+
+term external_term_to_binary_with_level(Context *ctx, term t, int compression_level)
+{
     //
     // convert
     //
     uint8_t *buf;
     size_t len;
     external_term_from_term(&buf, &len, t, ctx->global);
+#ifdef WITH_ZLIB
+    // OTP-compatible compressed format: 131, 80, UncompressedSize:32,
+    // zlib-deflated payload. Like OTP, keep the uncompressed encoding when
+    // compression does not make the binary smaller.
+    if (compression_level > 0 && len > 1 && len - 1 <= UINT32_MAX) {
+        uLongf dest_len = compressBound(len - 1);
+        uint8_t *zbuf = malloc(dest_len + 6);
+        if (zbuf != NULL) {
+            int zres = compress2(zbuf + 6, &dest_len, buf + 1, len - 1, compression_level);
+            if (zres == Z_OK && dest_len + 6 < len) {
+                zbuf[0] = EXTERNAL_TERM_TAG;
+                zbuf[1] = COMPRESSED_EXT;
+                uint32_t usize = (uint32_t) (len - 1);
+                zbuf[2] = usize >> 24;
+                zbuf[3] = (usize >> 16) & 0xFF;
+                zbuf[4] = (usize >> 8) & 0xFF;
+                zbuf[5] = usize & 0xFF;
+                free(buf);
+                buf = zbuf;
+                len = dest_len + 6;
+            } else {
+                free(zbuf);
+            }
+        }
+    }
+#else
+    UNUSED(compression_level);
+#endif
     //
     // Ensure enough free space in heap for binary
     //

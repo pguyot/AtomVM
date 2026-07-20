@@ -44,7 +44,8 @@
     get_env/3,
     set_env/3,
     unset_env/2,
-    get_all_env/1
+    get_all_env/1,
+    get_application/1
 ]).
 -export_type([start_type/0]).
 
@@ -171,6 +172,17 @@ get_key(Application, Key) ->
 %% @returns `{ok, Value}' or `undefined' if not found.
 %% @end
 %%-----------------------------------------------------------------------------
+%%-----------------------------------------------------------------------------
+%% @param   ModuleOrPid a module or a pid
+%% @returns `undefined'
+%% @doc     Compatibility stub. AtomVM does not track which application a
+%% module or process belongs to, so this always returns `undefined'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_application(ModuleOrPid :: module() | pid()) -> {ok, atom()} | undefined.
+get_application(_ModuleOrPid) ->
+    undefined.
+
 -spec get_env(Application :: atom(), Parameter :: atom()) -> {ok, term()} | undefined.
 get_env(Application, Parameter) ->
     application_controller:get_env(Application, Parameter).

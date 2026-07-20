@@ -932,7 +932,9 @@ Module *globalcontext_get_module(GlobalContext *global, atom_index_t module_name
             loaded_module = sys_load_module_from_file(global, module_file_name);
         }
         if (UNLIKELY(!loaded_module || (globalcontext_insert_module(global, loaded_module) < 0))) {
-            fprintf(stderr, "Failed load module: %s\n", module_file_name);
+            // A module that cannot be found is a normal outcome of
+            // code:ensure_loaded/1 probes: stay silent like BEAM and let the
+            // caller surface undef.
             free(module_file_name);
             if (loaded_module) {
                 module_destroy(loaded_module);
