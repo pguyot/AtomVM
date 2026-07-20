@@ -3785,6 +3785,13 @@ static term nif_erlang_system_info(Context *ctx, int argc, term argv[])
     if (key == BREAK_IGNORED_ATOM) {
         return TRUE_ATOM;
     }
+    if (globalcontext_is_term_equal_to_atom_string(ctx->global, key, ATOM_STR("\x6", "endian"))) {
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        return globalcontext_make_atom(ctx->global, ATOM_STR("\x3", "big"));
+#else
+        return globalcontext_make_atom(ctx->global, ATOM_STR("\x6", "little"));
+#endif
+    }
     if (key == SCHEDULERS_ATOM) {
 #ifndef AVM_NO_SMP
         return term_from_int11(smp_get_online_processors());
