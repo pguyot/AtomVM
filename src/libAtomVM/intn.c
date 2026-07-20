@@ -1263,17 +1263,12 @@ char *intn_to_string(
     uint32_t tmp_buf1[INTN_DIVMNU_MAX_IN_LEN];
     uint32_t tmp_buf2[INTN_DIVMNU_MAX_IN_LEN];
 
-    // First base is 2, last is 36
-    // Used code:
-    // Enum.map(2..36, fn(x) ->
-    //   ((Integer.pow(2, 256) - 1) |> Integer.to_string(x) |> String.length()) - 1
-    // end)
-    // I did - 1 so they can fit an uint8_t, otherwise max for base 2 is 256
-    static const uint8_t base_max_lens[] = { 255, 161, 127, 110, 99, 91, 85, 80, 77, 74, 71, 69,
-        67, 65, 63, 62, 61, 60, 59, 58, 57, 56, 55, 55, 54, 53, 53, 52, 52, 51, 51, 50, 50, 49, 49 };
-    _Static_assert(INTN_MAX_UNSIGNED_BITS_SIZE == 256, "Assuming INTN_MAX_UNSIGNED_BITS_SIZE is 256");
+    // floor(log2(base)) for bases 2..36: an upper bound for the number of
+    // digits is INTN_MAX_UNSIGNED_BITS_SIZE / floor(log2(base)) + 1.
+    static const uint8_t log2_floor[] = { 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5 };
 
-    size_t outbuf_size = base_max_lens[base - 2] + 1 /* see above */ + 1 /* sign */ + 1 /* \0 */;
+    size_t outbuf_size = INTN_MAX_UNSIGNED_BITS_SIZE / log2_floor[base - 2] + 1 + 1 /* sign */ + 1 /* \0 */;
     char *outbuf = malloc(outbuf_size);
     if (IS_NULL_PTR(outbuf)) {
         return NULL;

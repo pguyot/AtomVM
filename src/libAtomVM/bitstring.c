@@ -742,3 +742,154 @@ bool bitstring_insert_f64(
         return false;
     }
 }
+
+// bit k (0 = LSB) of the two's complement encoding over an unbounded width
+// of the sign-magnitude integer given by digits/negative. lowest_set is the
+// index of the lowest set bit of the magnitude (only used when negative).
+static inline int intn_tc_bit(
+    const intn_digit_t *digits, size_t digits_len, bool negative, size_t lowest_set, size_t k)
+{
+    size_t d = k / 32;
+    int bit = (d < digits_len) ? (int) ((digits[d] >> (k % 32)) & 1) : 0;
+    if (!negative) {
+        return bit;
+    }
+    // -x == ~x + 1: bits strictly below the lowest set bit stay 0, the
+    // lowest set bit stays 1, all higher bits are inverted.
+    if (k < lowest_set) {
+        return 0;
+    }
+    if (k == lowest_set) {
+        return 1;
+    }
+    return !bit;
+}
+
+static size_t intn_lowest_set_bit(const intn_digit_t *digits, size_t digits_len)
+{
+    for (size_t d = 0; d < digits_len; d++) {
+        if (digits[d] != 0) {
+            intn_digit_t v = digits[d];
+            size_t b = 0;
+            while ((v & 1) == 0) {
+                v >>= 1;
+                b++;
+            }
+            return d * 32 + b;
+        }
+    }
+    return 0;
+}
+
+static inline void set_bit_msb_first(uint8_t *dst, size_t bit_pos)
+{
+    dst[bit_pos >> 3] |= (uint8_t) (0x80 >> (bit_pos & 7));
+}
+
+bool bitstring_insert_intn(uint8_t *dst, size_t offset, const intn_digit_t *digits,
+    size_t digits_len, bool negative, size_t n, enum BitstringFlags bs_flags)
+{
+    size_t lowest_set = negative ? intn_lowest_set_bit(digits, digits_len) : 0;
+    if (bs_flags & LittleEndianIntegerMask) {
+        // Bytes LSB first, then the remaining high-order bits, matching
+        // bitstring_insert_any_integer.
+        size_t whole_bytes = n >> 3;
+        size_t rem = n & 0x7;
+        for (size_t j = 0; j < whole_bytes; j++) {
+            for (size_t b = 0; b < 8; b++) {
+                // value bits 8j+7 .. 8j written MSB first
+                size_t k = 8 * j + 7 - b;
+                if (intn_tc_bit(digits, digits_len, negative, lowest_set, k)) {
+                    set_bit_msb_first(dst, offset + 8 * j + b);
+                }
+            }
+        }
+        if (rem != 0) {
+            for (size_t b = 0; b < rem; b++) {
+                size_t k = n - 1 - b;
+                if (intn_tc_bit(digits, digits_len, negative, lowest_set, k)) {
+                    set_bit_msb_first(dst, offset + 8 * whole_bytes + b);
+                }
+            }
+        }
+    } else {
+        // Big-endian: bit i of the field (0 = MSB) is value bit n-1-i.
+        for (size_t i = 0; i < n; i++) {
+            if (intn_tc_bit(digits, digits_len, negative, lowest_set, n - 1 - i)) {
+                set_bit_msb_first(dst, offset + i);
+            }
+        }
+    }
+    return true;
+}
+
+int bitstring_extract_intn(const uint8_t *src, size_t offset, size_t n,
+    enum BitstringFlags bs_flags, intn_digit_t *out_digits, size_t out_digits_cap,
+    bool *out_negative)
+{
+    size_t needed = (n + 31) / 32;
+    if (UNLIKELY(needed > out_digits_cap)) {
+        return -1;
+    }
+    memset(out_digits, 0, needed * sizeof(intn_digit_t));
+
+    if (bs_flags & LittleEndianIntegerMask) {
+        // Inverse of the insertion layout above.
+        size_t whole_bytes = n >> 3;
+        size_t rem = n & 0x7;
+        for (size_t j = 0; j < whole_bytes; j++) {
+            for (size_t b = 0; b < 8; b++) {
+                size_t bit_pos = offset + 8 * j + b;
+                if (src[bit_pos >> 3] & (0x80 >> (bit_pos & 7))) {
+                    size_t k = 8 * j + 7 - b;
+                    out_digits[k / 32] |= ((intn_digit_t) 1) << (k % 32);
+                }
+            }
+        }
+        for (size_t b = 0; b < rem; b++) {
+            size_t bit_pos = offset + 8 * whole_bytes + b;
+            if (src[bit_pos >> 3] & (0x80 >> (bit_pos & 7))) {
+                size_t k = n - 1 - b;
+                out_digits[k / 32] |= ((intn_digit_t) 1) << (k % 32);
+            }
+        }
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            size_t bit_pos = offset + i;
+            if (src[bit_pos >> 3] & (0x80 >> (bit_pos & 7))) {
+                size_t k = n - 1 - i;
+                out_digits[k / 32] |= ((intn_digit_t) 1) << (k % 32);
+            }
+        }
+    }
+
+    bool negative = false;
+    if ((bs_flags & SignedInteger) && n > 0
+        && (out_digits[(n - 1) / 32] & (((intn_digit_t) 1) << ((n - 1) % 32)))) {
+        // Two's complement over n bits: magnitude = 2^n - value, i.e.
+        // invert the n bits and add 1.
+        negative = true;
+        for (size_t d = 0; d < needed; d++) {
+            out_digits[d] = ~out_digits[d];
+        }
+        // Clear bits above n in the top digit
+        size_t top_bits = n % 32;
+        if (top_bits != 0) {
+            out_digits[needed - 1] &= (((intn_digit_t) 1) << top_bits) - 1;
+        }
+        for (size_t d = 0; d < needed; d++) {
+            out_digits[d]++;
+            if (out_digits[d] != 0) {
+                break;
+            }
+        }
+    }
+    *out_negative = negative;
+
+    // Trim leading zero digits
+    size_t count = needed;
+    while (count > 0 && out_digits[count - 1] == 0) {
+        count--;
+    }
+    return (int) count;
+}

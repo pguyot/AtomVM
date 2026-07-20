@@ -36,7 +36,8 @@
     purge/1,
     delete/1,
     add_patha/1,
-    add_pathz/1
+    add_pathz/1,
+    lib_dir/1
 ]).
 
 %%-----------------------------------------------------------------------------
@@ -85,16 +86,54 @@ add_pathz(_Dir) ->
     true.
 
 %%-----------------------------------------------------------------------------
+%% @param   AppName name of the application
+%% @returns the library directory of the application, or `{error, bad_name}'
+%% @doc     Return the library directory of an application inside an
+%% Erlang/OTP installation designated by the `ATOMVM_OTP_LIB_DIR'
+%% environment variable (AtomVM has no code path of its own). This makes
+%% compile-time include resolution (e.g. `-include_lib' and record
+%% extraction) work like on Erlang/OTP when an OTP installation is
+%% available.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec lib_dir(AppName :: atom()) -> string() | {error, bad_name}.
+lib_dir(AppName) when is_atom(AppName) ->
+    case os:getenv("ATOMVM_OTP_LIB_DIR") of
+        false ->
+            {error, bad_name};
+        Root ->
+            Prefix = atom_to_list(AppName) ++ "-",
+            case file:list_dir(Root) of
+                {ok, Entries} ->
+                    Matching = [
+                        E
+                     || E <- Entries,
+                        lists:prefix(Prefix, entry_to_list(E)) orelse
+                            entry_to_list(E) =:= atom_to_list(AppName)
+                    ],
+                    case lists:sort(Matching) of
+                        [] -> {error, bad_name};
+                        Sorted -> Root ++ "/" ++ entry_to_list(lists:last(Sorted))
+                    end;
+                {error, _} ->
+                    {error, bad_name}
+            end
+    end.
+
+%% @private
+entry_to_list(E) when is_binary(E) -> binary_to_list(E);
+entry_to_list(E) when is_list(E) -> E.
+
+%%-----------------------------------------------------------------------------
 %% @returns A list of available modules, including loaded modules
 %% @doc     Return all modules available from loaded avm packs, in addition
 %%          to loaded modules. List of available modules may be incomplete if
 %%          this function is called while a module is loaded.
-%%          Result type differs from Erlang/OTP: names of modules is a binary
-%%          (and not a string), and second term of tuples is currently
-%%          unspecified
+%%          As on Erlang/OTP, module names are strings; the second element of
+%%          each tuple is currently unspecified (`undefined').
 %% @end
 %%-----------------------------------------------------------------------------
--spec all_available() -> [{unicode:unicode_binary(), term(), boolean()}].
+-spec all_available() -> [{string(), term(), boolean()}].
 all_available() ->
     erlang:nif_error(undefined).
 

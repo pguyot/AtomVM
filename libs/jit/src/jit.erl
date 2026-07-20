@@ -2922,40 +2922,36 @@ emit_pass(
                 {MSt3, BinaryRegSize}
         end,
     {MSt5, TrimResultReg} = MMod:call_primitive(MSt4, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt6 = MMod:free_native_registers(MSt5, [TrimResultReg]),
-    %% A reused (append/private_append) binary must stay byte-aligned
-    MSt7 =
-        if
-            ReuseSourceBinary andalso is_integer(BinaryTotalSize) andalso
-                BinaryTotalSize rem 8 =/= 0 ->
-                MMod:call_primitive_last(MSt6, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                ]);
-            ReuseSourceBinary andalso not is_integer(BinaryTotalSize) ->
-                MMod:if_block(MSt6, {BinaryTotalSize, '&', 16#7, '!=', 0}, fun(BlockSt) ->
-                    MMod:call_primitive_last(BlockSt, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?UNSUPPORTED_ATOM
-                    ])
-                end);
-            true ->
-                MSt6
-        end,
-    %% A non-byte-aligned total yields a bitstring
+    MSt7 = MMod:free_native_registers(MSt5, [TrimResultReg]),
+    %% A non-byte-aligned total yields a bitstring. The reuse
+    %% (append/private_append) branches size for the ceiling byte count and
+    %% a possible sub-binary wrap: whether the accumulator can actually be
+    %% reused in place is decided at runtime by
+    %% PRIM_TERM_REUSE_OR_CLONE_BINARY (a non-byte-aligned accumulator is
+    %% cloned instead).
     {MSt14, BinaryTotalSizeInBytes, AllocSize, WrapInfo} =
         if
             ReuseSourceBinary andalso is_integer(BinaryTotalSize) ->
-                {MSt7, (BinaryTotalSize div 8),
-                    term_binary_heap_size((BinaryTotalSize div 8), MMod) + Alloc, no_wrap};
+                RTrailing = BinaryTotalSize rem 8,
+                RByteSize = (BinaryTotalSize + 7) div 8,
+                {RExtra, RWrap} =
+                    case RTrailing of
+                        0 -> {0, no_wrap};
+                        _ -> {?TERM_BOXED_SUB_BINARY_SIZE, {wrap_lit, BinaryTotalSize}}
+                    end,
+                {MSt7, RByteSize, term_binary_heap_size(RByteSize, MMod) + Alloc + RExtra, RWrap};
             ReuseSourceBinary ->
-                {MSt8, Bytes} = MMod:shift_right(MSt7, {free, BinaryTotalSize}, 3),
-                {MSt9, BytesCopy} = MMod:copy_to_native_register(MSt8, Bytes),
-                {MSt10, AllocSizeReg} = term_binary_heap_size({free, BytesCopy}, MMod, MSt9),
+                MSt8 = MMod:add(MSt7, BinaryTotalSize, 7),
+                {MSt9, Bytes} = MMod:shift_right(MSt8, {free, BinaryTotalSize}, 3),
+                {MSt10, BytesCopy} = MMod:copy_to_native_register(MSt9, Bytes),
+                {MSt10b, AllocSizeReg} = term_binary_heap_size({free, BytesCopy}, MMod, MSt10),
+                MSt10c = MMod:add(MSt10b, AllocSizeReg, ?TERM_BOXED_SUB_BINARY_SIZE),
                 MSt11 =
                     case Alloc of
-                        0 -> MSt10;
-                        _ -> MMod:add(MSt10, AllocSizeReg, Alloc)
+                        0 -> MSt10c;
+                        _ -> MMod:add(MSt10c, AllocSizeReg, Alloc)
                     end,
-                {MSt11, Bytes, AllocSizeReg, no_wrap};
+                {MSt11, Bytes, AllocSizeReg, wrap_dyn};
             is_integer(BinaryTotalSize) ->
                 Trailing = BinaryTotalSize rem 8,
                 ByteSize = (BinaryTotalSize + 7) div 8,
@@ -3719,21 +3715,21 @@ emit_pass_bs_create_bin_insert_value(
     MSt0
 ) ->
     % Special case: first segment is private_append with undefined CreatedBin
-    % Get original size before reusing
-    {MSt1, OriginalSize} = term_binary_size(Src, MMod, MSt0),
-    % Reuse the source binary (content is already there, no need to copy)
-    {MSt2, CreatedBin} = MMod:call_primitive(MSt1, ?PRIM_TERM_REUSE_BINARY, [
+    % Get original size in bits before reusing (the accumulator may be a
+    % non-byte-aligned bitstring)
+    {MSt1a, SrcCopy} = MMod:copy_to_native_register(MSt0, Src),
+    {MSt1, OriginalBits} = term_bit_size({free, SrcCopy}, MMod, MSt1a),
+    % Reuse the source binary in place when byte-aligned; clone it otherwise
+    {MSt2, CreatedBin} = MMod:call_primitive(MSt1, ?PRIM_TERM_REUSE_OR_CLONE_BINARY, [
         ctx, {free, Src}, {free, BinaryTotalSizeInBytes}
     ]),
-    MSt3 = MMod:if_block(MSt2, {CreatedBin, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
+    MSt4 = MMod:if_block(MSt2, {CreatedBin, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
         MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
             ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
         ])
     end),
-    % Convert original size to bits and update offset
-    MSt4 = MMod:shift_left(MSt3, OriginalSize, 3),
     {MSt5, NewOffset} = emit_pass_bs_create_bin_insert_value_increment_offset(
-        MMod, MSt4, Offset, OriginalSize, 1
+        MMod, MSt4, Offset, OriginalBits, 1
     ),
     {MSt5, NewOffset, CreatedBin};
 emit_pass_bs_create_bin_insert_value(
@@ -8768,16 +8764,6 @@ term_binary_heap_size({free, Reg}, MMod, MSt0) ->
                 )
         end,
     {MSt1, Reg}.
-
-term_binary_size({free, BinReg}, MMod, MSt0) ->
-    {MSt1, BinReg} = MMod:and_(MSt0, {free, BinReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt2 = MMod:move_array_element(MSt1, BinReg, 1, BinReg),
-    {MSt2, BinReg};
-term_binary_size(Src, MMod, MSt0) ->
-    {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, Src),
-    {MSt2, SrcReg} = MMod:and_(MSt1, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt3 = MMod:move_array_element(MSt2, SrcReg, 1, SrcReg),
-    {MSt3, SrcReg}.
 
 %% Total bit size = binary_size * 8 + sub-binary trailing bit count.
 %% {free, BinReg} takes a tagged boxed term and consumes it; {ptr, PtrReg}

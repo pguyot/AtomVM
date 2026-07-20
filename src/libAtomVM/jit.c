@@ -2012,9 +2012,39 @@ static term jit_bitstring_extract_integer(
 
         return extract_bigint(
             ctx, jit_state, int_bytes + byte_offset, n / 8, bitstring_flags_to_intn_opts(bs_flags));
+    } else if (n <= (int) INTN_MAX_UNSIGNED_BITS_SIZE) {
+        // >64-bit field at a non-byte-aligned offset or with a
+        // non-byte-multiple width: bit-granular extraction.
+        term bs_bin = (term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED);
+        size_t capacity_bits = term_bit_size(bs_bin);
+        if (capacity_bits - offset < (size_t) n) {
+            return FALSE_ATOM;
+        }
+        const uint8_t *bin_data = (const uint8_t *) term_binary_data(bs_bin);
+        intn_digit_t digits[INTN_MAX_RES_LEN];
+        bool negative;
+        int count = bitstring_extract_intn(
+            bin_data, offset, n, bs_flags, digits, INTN_MAX_RES_LEN, &negative);
+        if (UNLIKELY(count < 0)) {
+            set_error(ctx, jit_state, 0, OVERFLOW_ATOM);
+            return term_invalid_term();
+        }
+        if (count <= 2) {
+            uint64_t mag = (count > 0 ? (uint64_t) digits[0] : 0)
+                | (count == 2 ? ((uint64_t) digits[1]) << 32 : 0);
+            uint64_t max_mag = negative ? ((uint64_t) INT64_MAX) + 1 : (uint64_t) INT64_MAX;
+            if (mag <= max_mag) {
+                int64_t v = int64_cond_neg_unsigned(negative, mag);
+                term t = maybe_alloc_boxed_integer_fragment(ctx, v);
+                if (UNLIKELY(term_is_invalid_term(t))) {
+                    set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+                }
+                return t;
+            }
+        }
+        return make_bigint_from_digits(ctx, jit_state, digits,
+            negative ? IntNNegativeInteger : IntNPositiveInteger, count);
     } else {
-        // A >64-bit field at a non-byte-aligned offset (or non-byte-multiple
-        // size) is not extracted yet, as on the construction side.
         set_error(ctx, jit_state, 0, UNSUPPORTED_ATOM);
         return term_invalid_term();
     }
@@ -2068,6 +2098,25 @@ static size_t jit_bitstring_get_tail_heap_size(term *bs_bin_ptr, size_t bs_offse
 {
     term bs_bin = (term) (((uintptr_t) bs_bin_ptr) | TERM_PRIMARY_BOXED);
     return bitstring_get_tail_heap_size(bs_bin, bs_offset);
+}
+
+// First segment of a private_append bs_create_bin: reuse the accumulator
+// in place when it is byte-aligned, otherwise clone it bit-by-bit into a
+// fresh binary (private_append is only an optimization hint; the copy is
+// semantically identical). The caller reserved heap room for a full
+// total_bytes binary in both cases.
+static term jit_term_reuse_or_clone_binary(Context *ctx, term src, size_t total_bytes)
+{
+    size_t src_bits = term_bit_size(src);
+    if (src_bits % 8 == 0) {
+        return term_reuse_binary(src, total_bytes, &ctx->heap, ctx->global);
+    }
+    term t = term_create_empty_binary(total_bytes, &ctx->heap, ctx->global);
+    if (UNLIKELY(term_is_invalid_term(t))) {
+        return t;
+    }
+    bitstring_copy_bits((uint8_t *) term_binary_data(t), 0, (const uint8_t *) term_binary_data(src), src_bits);
+    return t;
 }
 
 static term jit_bs_create_bin_wrap(Context *ctx, term byte_binary, size_t total_bits)
@@ -2229,9 +2278,6 @@ static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, si
         avm_uint64_t int_value = term_maybe_unbox_int64(value);
         return bitstring_insert_integer(bin, offset, int_value, n, flags);
 
-    } else if ((offset % 8 != 0) || (n % 8 != 0)) {
-        // Reject bitstrings for bigint
-        return false;
     } else {
         const intn_digit_t *big_src_value = NULL;
         size_t big_len = 0;
@@ -2239,16 +2285,10 @@ static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, si
 
         term_to_bigint(value, &big_src_value, &big_len, &big_sign);
 
-        // when building a binary, `signed` flag is implicit
-        intn_from_integer_options_t intn_flags = bitstring_flags_to_intn_opts(flags);
-        int byte_offset = offset / 8;
-        uint8_t *dst = (uint8_t *) term_binary_data(bin) + byte_offset;
-        size_t t_capacity = term_binary_size(bin);
-        size_t avail = t_capacity - byte_offset;
-
-        int written
-            = intn_to_integer_bytes(big_src_value, big_len, big_sign, intn_flags, dst, avail);
-        return written > 0;
+        // Bit-granular: any field width and destination offset, truncating
+        // and two's-complementing like the 64-bit path.
+        return bitstring_insert_intn((uint8_t *) term_binary_data(bin), offset, big_src_value,
+            big_len, big_sign == IntNNegativeInteger, n, flags);
     }
 }
 
@@ -3322,6 +3362,12 @@ static term jit_term_reuse_binary_pin(term a1, size_t a2)
     return jit_term_reuse_binary(ctx, a1, a2);
 }
 
+static term jit_term_reuse_or_clone_binary_pin(term a1, size_t a2)
+{
+    CTX_READ();
+    return jit_term_reuse_or_clone_binary(ctx, a1, a2);
+}
+
 static term jit_alloc_big_integer_fragment_pin(size_t a1, term_integer_sign_t a2)
 {
     CTX_READ();
@@ -3577,7 +3623,8 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_put_map_one_heap_need),
     JS_ENTRY(jit_put_map_assoc_one),
     JS_ENTRY(jit_put_map_exact_one_heap_need),
-    JS_ENTRY(jit_put_map_exact_one)
+    JS_ENTRY(jit_put_map_exact_one),
+    JS_ENTRY(jit_term_reuse_or_clone_binary)
 };
 
 #endif

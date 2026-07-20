@@ -19,7 +19,18 @@
 %
 -module(os).
 
--export([getenv/1, system_time/0, system_time/1, type/0]).
+-export([getenv/1, cmd/1, system_time/0, system_time/1, type/0]).
+
+%%-----------------------------------------------------------------------------
+%% @param   Command command to execute in a shell
+%% @returns the standard output of the command as a string
+%% @doc     Execute a command in the default shell and capture its output.
+%% Only available on platforms with popen (generic_unix).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec cmd(Command :: iodata() | atom()) -> string().
+cmd(_Command) ->
+    erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
 %% @param   Name name of the environment variable
