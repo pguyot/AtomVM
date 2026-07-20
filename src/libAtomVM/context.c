@@ -732,6 +732,7 @@ bool context_get_process_info(Context *ctx, term *out, size_t *term_size, term a
         case MEMORY_ATOM:
         case TRAP_EXIT_ATOM:
         case FULLSWEEP_AFTER_ATOM:
+        case ERROR_HANDLER_ATOM:
             ret_size = TUPLE_SIZE(2);
             break;
         case LINKS_ATOM: {
@@ -889,6 +890,13 @@ bool context_get_process_info(Context *ctx, term *out, size_t *term_size, term a
         case FULLSWEEP_AFTER_ATOM: {
             term_put_tuple_element(ret, 0, FULLSWEEP_AFTER_ATOM);
             term_put_tuple_element(ret, 1, term_from_int(ctx->fullsweep_after));
+            break;
+        }
+
+        case ERROR_HANDLER_ATOM: {
+            // Undef handling is built into the VM; report the default handler.
+            term_put_tuple_element(ret, 0, ERROR_HANDLER_ATOM);
+            term_put_tuple_element(ret, 1, ERROR_HANDLER_ATOM);
             break;
         }
 

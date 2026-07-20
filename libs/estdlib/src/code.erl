@@ -32,8 +32,57 @@
     ensure_loaded/1,
     which/1,
     is_loaded/1,
-    get_object_code/1
+    get_object_code/1,
+    purge/1,
+    delete/1,
+    add_patha/1,
+    add_pathz/1
 ]).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module to purge
+%% @returns `false'
+%% @doc     Compatibility stub. AtomVM has no notion of old code: loading a
+%% module that is already loaded makes the new version current for name
+%% lookups and the previous version is simply never reclaimed, so there is
+%% never old code to purge (and no process is ever killed).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec purge(Module :: module()) -> boolean().
+purge(_Module) ->
+    false.
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module to delete
+%% @returns `true'
+%% @doc     Compatibility stub, see {@link purge/1}. The module keeps
+%% resolving by name until a new version is loaded over it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec delete(Module :: module()) -> boolean().
+delete(_Module) ->
+    true.
+
+%%-----------------------------------------------------------------------------
+%% @param   Dir directory to add to the code path
+%% @returns `true'
+%% @doc     Compatibility stub. AtomVM loads modules from avm packs rather
+%% than from a directory search path, so the path is ignored.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_patha(Dir :: string() | binary()) -> true.
+add_patha(_Dir) ->
+    true.
+
+%%-----------------------------------------------------------------------------
+%% @param   Dir directory to add to the code path
+%% @returns `true'
+%% @doc     Compatibility stub, see {@link add_patha/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_pathz(Dir :: string() | binary()) -> true.
+add_pathz(_Dir) ->
+    true.
 
 %%-----------------------------------------------------------------------------
 %% @returns A list of available modules, including loaded modules
