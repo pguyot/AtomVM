@@ -1407,7 +1407,17 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                                 CMP_POP_AND_CONTINUE();
                                 break;
                             }
-                            if (se == 0 && (opts & TermCompareEqualOnly)) {
+                            // se == 0 means a key or value differs under
+                            // EXACT equality, which only settles the
+                            // comparison when the caller asked for exact
+                            // semantics. `==' must still consider values that
+                            // are equal without being identical (1 and 1.0),
+                            // so it falls through to the compare below, which
+                            // uses the caller's opts. (`=:=' never reaches
+                            // here: TermCompareExact|TermCompareEqualOnly is
+                            // answered by term_exact_equals at the top.)
+                            if (se == 0 && (opts & TermCompareEqualOnly)
+                                && (opts & TermCompareExact)) {
                                 result = TermLessThan;
                                 goto unequal;
                             }
