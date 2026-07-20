@@ -38,6 +38,7 @@
     match/2, match/3,
     matches/2, matches/3,
     bin_to_list/1,
+    compile_pattern/1,
     replace/3, replace/4
 ]).
 
@@ -210,6 +211,18 @@ matches_loop(Binary, Pattern, Pos, End, Acc) ->
 -spec bin_to_list(Binary :: binary()) -> [byte()].
 bin_to_list(Binary) ->
     binary_to_list(Binary).
+
+%%-----------------------------------------------------------------------------
+%% @param   Pattern pattern to precompile
+%% @returns the pattern, unchanged
+%% @doc     Compatibility stub. AtomVM's binary matching does not use
+%% precompiled patterns; the pattern itself is returned and accepted by
+%% `match/2,3', `matches/2,3', `split/2,3' and `replace/3,4'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec compile_pattern(Pattern :: binary() | [binary()]) -> binary() | [binary()].
+compile_pattern(Pattern) ->
+    Pattern.
 
 %%-----------------------------------------------------------------------------
 %% @param   Binary binary to extract a subbinary from
