@@ -6780,27 +6780,31 @@ op_select_val_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
 op_select_val_inline_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
     {MSt0, Rest};
 op_select_val_inline_loop(MMod, MSt0, SrcValue, Rest0, N, State) ->
+    %% Load SrcValue ONCE and keep the register reserved across the whole
+    %% chain. Re-materializing per iteration is incorrect for extended
+    %% x-registers: they decode to {ptr, Reg} and move_to_native_register on
+    %% a {ptr, _} is a destructive in-place dereference, so a second
+    %% materialization would dereference the already-loaded value.
+    {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+    {MSt2, Rest} = op_select_val_inline_loop0(MMod, MSt1, SrcReg, Rest0, N, State),
+    {MMod:free_native_registers(MSt2, [SrcReg]), Rest}.
+
+op_select_val_inline_loop0(_MMod, MSt0, _SrcReg, Rest, 0, _State) ->
+    {MSt0, Rest};
+op_select_val_inline_loop0(MMod, MSt0, SrcReg, Rest0, N, State) ->
     {MSt1, CmpValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
     {JmpLabel, Rest2} = decode_label(Rest1),
     ?TRACE(", ~p => ~p", [CmpValue, JmpLabel]),
-    %% Load SrcValue into a register (hits cache after the first iteration).
-    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, unwrap_typed(SrcValue)),
     MSt3 =
         case CmpValue of
             Imm when is_integer(Imm) ->
-                MSta = cond_jump_to_label({SrcReg, '==', Imm}, JmpLabel, MMod, MSt2),
-                %% SrcReg is still reserved; free it so the next iteration's
-                %% move_to_native_register sees it as available and reuses cache.
-                MMod:free_native_registers(MSta, [SrcReg]);
+                cond_jump_to_label({SrcReg, '==', Imm}, JmpLabel, MMod, MSt1);
             _ ->
                 Cmp = unwrap_typed(CmpValue),
-                {MSt2a, CmpReg} = MMod:move_to_native_register(MSt2, Cmp),
-                %% Compare two registers; both get freed by if_block. The cache
-                %% in #regs.contents preserves the SrcValue → SrcReg mapping so
-                %% the next iteration can recover it without re-loading.
-                cond_jump_to_label({{free, CmpReg}, '==', {free, SrcReg}}, JmpLabel, MMod, MSt2a)
+                {MSt2a, CmpReg} = MMod:move_to_native_register(MSt1, Cmp),
+                cond_jump_to_label({{free, CmpReg}, '==', SrcReg}, JmpLabel, MMod, MSt2a)
         end,
-    op_select_val_inline_loop(MMod, MSt3, SrcValue, Rest2, N - 1, State).
+    op_select_val_inline_loop0(MMod, MSt3, SrcReg, Rest2, N - 1, State).
 
 op_select_val_default_loop(_MMod, MSt0, _SrcValue, Rest, 0, _State) ->
     {MSt0, Rest};
