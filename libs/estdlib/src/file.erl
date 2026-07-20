@@ -171,22 +171,24 @@ read_line(IoDevice) when is_pid(IoDevice) ->
     read_line_loop(IoDevice, [], false).
 
 %% @private
+%% read/2 returns one *character* per unit, which may be a multi-byte
+%% binary or a multi-element list depending on the device encoding.
 read_line_loop(IoDevice, Acc, ListMode) ->
     case read(IoDevice, 1) of
-        {ok, [C]} ->
-            NewAcc = [C | Acc],
-            case C of
-                $\n -> {ok, lists:reverse(NewAcc)};
+        {ok, Data} when is_list(Data) ->
+            NewAcc = [Data | Acc],
+            case lists:last(Data) of
+                $\n -> {ok, lists:append(lists:reverse(NewAcc))};
                 _ -> read_line_loop(IoDevice, NewAcc, true)
             end;
-        {ok, <<C>>} ->
-            NewAcc = [C | Acc],
-            case C of
+        {ok, Data} when is_binary(Data) ->
+            NewAcc = [Data | Acc],
+            case binary:at(Data, byte_size(Data) - 1) of
                 $\n -> {ok, list_to_binary(lists:reverse(NewAcc))};
                 _ -> read_line_loop(IoDevice, NewAcc, ListMode)
             end;
         eof when Acc =/= [], ListMode ->
-            {ok, lists:reverse(Acc)};
+            {ok, lists:append(lists:reverse(Acc))};
         eof when Acc =/= [] ->
             {ok, list_to_binary(lists:reverse(Acc))};
         eof ->

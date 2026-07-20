@@ -56,6 +56,7 @@
     all/2,
     any/2,
     flatten/1,
+    flatten/2,
     flatmap/2,
     search/2,
     filter/2,
@@ -834,6 +835,18 @@ any_1(_Fun, []) ->
 -spec flatten(L :: list()) -> list().
 flatten(_L) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   L the list to flatten
+%% @param   Tail list to append to the flattened result
+%% @returns flattened list followed by Tail
+%% @doc     Flattens elements of L into a single list, with Tail appended.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec flatten(L :: list(), Tail :: list()) -> list().
+flatten(L, Tail) ->
+    %% Tail is appended, not flattened
+    ?MODULE:flatten(L) ++ Tail.
 
 %%-----------------------------------------------------------------------------
 %% @param   F the function to apply to elements of L

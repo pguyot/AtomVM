@@ -2080,6 +2080,25 @@ static size_t jit_bitstring_get_tail_heap_size(term *bs_bin_ptr, size_t bs_offse
     return bitstring_get_tail_heap_size(bs_bin, bs_offset);
 }
 
+// First segment of a private_append bs_create_bin: reuse the accumulator
+// in place when it is byte-aligned, otherwise clone it bit-by-bit into a
+// fresh binary (private_append is only an optimization hint; the copy is
+// semantically identical). The caller reserved heap room for a full
+// total_bytes binary in both cases.
+static term jit_term_reuse_or_clone_binary(Context *ctx, term src, size_t total_bytes)
+{
+    size_t src_bits = term_bit_size(src);
+    if (src_bits % 8 == 0) {
+        return term_reuse_binary(src, total_bytes, &ctx->heap, ctx->global);
+    }
+    term t = term_create_empty_binary(total_bytes, &ctx->heap, ctx->global);
+    if (UNLIKELY(term_is_invalid_term(t))) {
+        return t;
+    }
+    bitstring_copy_bits((uint8_t *) term_binary_data(t), 0, (const uint8_t *) term_binary_data(src), src_bits);
+    return t;
+}
+
 static term jit_bs_create_bin_wrap(Context *ctx, term byte_binary, size_t total_bits)
 {
     if (total_bits % 8 == 0) {
@@ -3301,6 +3320,12 @@ static term jit_term_reuse_binary_pin(term a1, size_t a2)
     return jit_term_reuse_binary(ctx, a1, a2);
 }
 
+static term jit_term_reuse_or_clone_binary_pin(term a1, size_t a2)
+{
+    CTX_READ();
+    return jit_term_reuse_or_clone_binary(ctx, a1, a2);
+}
+
 static term jit_alloc_big_integer_fragment_pin(size_t a1, term_integer_sign_t a2)
 {
     CTX_READ();
@@ -3556,7 +3581,8 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_put_map_one_heap_need),
     JS_ENTRY(jit_put_map_assoc_one),
     JS_ENTRY(jit_put_map_exact_one_heap_need),
-    JS_ENTRY(jit_put_map_exact_one)
+    JS_ENTRY(jit_put_map_exact_one),
+    JS_ENTRY(jit_term_reuse_or_clone_binary)
 };
 
 #endif
