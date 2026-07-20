@@ -36,6 +36,8 @@
     part/3,
     split/2, split/3,
     match/2, match/3,
+    matches/2, matches/3,
+    bin_to_list/1,
     replace/3, replace/4
 ]).
 
@@ -155,6 +157,59 @@ match(_Binary, _Pattern, _Options) ->
 -spec list_to_bin(ByteList :: iolist()) -> binary().
 list_to_bin(_ByteList) ->
     erlang:nif_error(undef).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary  binary to search in
+%% @param   Pattern pattern to search for
+%% @returns list of `{Start, Length}' for every non-overlapping match
+%% @doc Find all occurrences of Pattern in Binary, as `match/2' repeated
+%% from the end of the previous match.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec matches(Binary :: binary(), Pattern :: binary() | [binary()]) ->
+    [{non_neg_integer(), non_neg_integer()}].
+matches(Binary, Pattern) ->
+    matches(Binary, Pattern, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary  binary to search in
+%% @param   Pattern pattern to search for
+%% @param   Options options for the match; `{scope, {Start, Length}}' is
+%%          supported
+%% @returns list of `{Start, Length}' for every non-overlapping match
+%% @doc Find all occurrences of Pattern in Binary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec matches(Binary :: binary(), Pattern :: binary() | [binary()], Options :: [term()]) ->
+    [{non_neg_integer(), non_neg_integer()}].
+matches(Binary, Pattern, Options) ->
+    {Start, Length} =
+        case lists:keyfind(scope, 1, Options) of
+            {scope, Scope} -> Scope;
+            false -> {0, byte_size(Binary)}
+        end,
+    matches_loop(Binary, Pattern, Start, Start + Length, []).
+
+%% @private
+matches_loop(_Binary, _Pattern, Pos, End, Acc) when Pos >= End ->
+    lists:reverse(Acc);
+matches_loop(Binary, Pattern, Pos, End, Acc) ->
+    case ?MODULE:match(Binary, Pattern, [{scope, {Pos, End - Pos}}]) of
+        nomatch ->
+            lists:reverse(Acc);
+        {Start, Length} = Match ->
+            matches_loop(Binary, Pattern, Start + Length, End, [Match | Acc])
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary binary to convert to a list
+%% @returns the bytes of the binary as a list
+%% @doc     Works exactly as {@link erlang:binary_to_list/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec bin_to_list(Binary :: binary()) -> [byte()].
+bin_to_list(Binary) ->
+    binary_to_list(Binary).
 
 %%-----------------------------------------------------------------------------
 %% @param   Binary binary to extract a subbinary from
