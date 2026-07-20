@@ -46,6 +46,7 @@
     start_monitor/3, start_monitor/4,
     stop/1, stop/3,
     call/2, call/3,
+    multi_call/4,
     cast/2,
     reply/2,
     enter_loop/3, enter_loop/4
@@ -473,6 +474,20 @@ call(ServerRef, Request, TimeoutMs) ->
 -spec cast(ServerRef :: server_ref(), Request :: term()) -> ok | {error, Reason :: term()}.
 cast(ServerRef, Request) ->
     gen:cast(ServerRef, Request).
+
+%%-----------------------------------------------------------------------------
+%% @param   Nodes the nodes to send the request to
+%% @param   Name the registered name of the gen_server on each node
+%% @param   Request the request to send to the gen_servers
+%% @param   Timeout the amount of time in milliseconds to wait for replies
+%% @returns `{Replies, BadNodes}'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec multi_call(Nodes :: [node()], Name :: atom(), Request :: term(), Timeout :: timeout()) ->
+    {Replies :: [{node(), term()}], BadNodes :: [node()]}.
+multi_call(_Nodes, _Name, _Request, _Timeout) ->
+    erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
 %% @param   From the client to whom to send the reply

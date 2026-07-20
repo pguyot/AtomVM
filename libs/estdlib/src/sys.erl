@@ -49,7 +49,8 @@
 -export([
     debug_options/1,
     handle_debug/4,
-    handle_system_msg/6
+    handle_system_msg/6,
+    handle_system_msg/7
 ]).
 
 -export_type([dbg_opt/0, debug_option/0, system_event/0]).
@@ -323,10 +324,35 @@ handle_debug([], _FormFunc, _State, _Event) ->
     Misc :: any()
 ) -> no_return().
 handle_system_msg(Msg, From, Parent, Module, Debug, Misc) ->
-    handle_system_msg(running, Msg, From, Parent, Module, Debug, Misc).
+    handle_system_msg_state(running, Msg, From, Parent, Module, Debug, Misc).
+
+%%-----------------------------------------------------------------------------
+%% @param   Msg the system message
+%% @param   From the sender of the system message
+%% @param   Parent the parent of the process
+%% @param   Module the callback module
+%% @param   Debug debug options
+%% @param   Misc miscellaneous state
+%% @param   Hib whether the process should hibernate (ignored)
+%% @returns does not return
+%% @doc     Handle a system message, like {@link handle_system_msg/6}. The
+%%          hibernation flag is ignored on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec handle_system_msg(
+    Msg :: any(),
+    From :: {pid(), any()},
+    Parent :: pid(),
+    Module :: module(),
+    Debug :: [dbg_opt()],
+    Misc :: any(),
+    Hib :: boolean()
+) -> no_return().
+handle_system_msg(Msg, From, Parent, Module, Debug, Misc, _Hib) ->
+    handle_system_msg_state(running, Msg, From, Parent, Module, Debug, Misc).
 
 %% @private
-handle_system_msg(SysState, Msg, From, Parent, Module, Debug0, Misc0) ->
+handle_system_msg_state(SysState, Msg, From, Parent, Module, Debug0, Misc0) ->
     case do_handle_system_msg(SysState, Msg, Parent, Module, Debug0, Misc0) of
         {suspended, Reply, Debug1, Misc1} ->
             _ = gen:reply(From, Reply),
@@ -375,7 +401,7 @@ do_handle_system_msg(SysState, Other, _Parent, _Mod, Debug, Misc) ->
 suspend_loop(SysState, Parent, Mod, Debug, Misc) ->
     receive
         {system, From, Msg} ->
-            handle_system_msg(SysState, Msg, From, Parent, Mod, Debug, Misc);
+            handle_system_msg_state(SysState, Msg, From, Parent, Mod, Debug, Misc);
         {'EXIT', Parent, Reason} ->
             Mod:system_terminate(Reason, Parent, Debug, Misc)
     end.

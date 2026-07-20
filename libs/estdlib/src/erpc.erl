@@ -29,7 +29,8 @@
 
 % api
 -export([
-    execute_call/4
+    execute_call/4,
+    call/4
 ]).
 
 %%-----------------------------------------------------------------------------
@@ -57,3 +58,16 @@ execute_call(Reference, Module, Func, Args) ->
                 {Reference, error, Reason, Stack}
         end,
     exit(Reply).
+
+%%-----------------------------------------------------------------------------
+%% @param Node node to call
+%% @param Module module to call
+%% @param Func function to call
+%% @param Args argument of the call
+%% @returns the result of the call
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call(Node :: node(), Module :: module(), Func :: atom(), Args :: [any()]) -> any().
+call(_Node, _Module, _Func, _Args) ->
+    erlang:nif_error(undefined).
