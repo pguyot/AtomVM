@@ -56,6 +56,7 @@
 #include "persistent_term.h"
 #include "platform_nifs.h"
 #include "port.h"
+#include "phash2.h"
 #include "posix_nifs.h"
 #include "scheduler.h"
 #include "smp.h"
@@ -240,6 +241,7 @@ static term nif_ets_take(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
+static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put_new(Context *ctx, int argc, term argv[]);
@@ -836,6 +838,11 @@ static const struct Nif ets_delete_object_nif = {
 static const struct Nif ets_tab2list_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ets_tab2list
+};
+
+static const struct Nif phash2_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_erlang_phash2
 };
 
 static const struct Nif persistent_term_get_nif = {
@@ -4994,6 +5001,31 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[])
         default:
             UNREACHABLE();
     }
+}
+
+static term nif_erlang_phash2(Context *ctx, int argc, term argv[])
+{
+    uint32_t hash = phash2_hash(argv[0], ctx->global);
+    if (argc == 1) {
+        return term_from_int(hash & ((1L << 27) - 1));
+    }
+    // phash2/2: reduce modulo Range; Range = 2^32 is allowed and means the
+    // full 32-bit hash.
+    term range_term = argv[1];
+    uint32_t range = 0;
+    if (term_is_integer(range_term) || term_is_boxed_integer(range_term)) {
+        avm_int64_t range64 = term_maybe_unbox_int64(range_term);
+        if (range64 <= 0 || range64 > UINT32_MAX + INT64_C(1)) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        if (range64 <= UINT32_MAX) {
+            range = (uint32_t) range64;
+        } // else 2^32: range stays 0, meaning full hash
+    } else {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    uint32_t final_hash = range != 0 ? hash % range : hash;
+    return make_maybe_boxed_int64(ctx, (avm_int64_t) final_hash);
 }
 
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[])

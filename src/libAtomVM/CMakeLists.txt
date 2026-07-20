@@ -56,6 +56,7 @@ set(HEADER_FILES
     overflow_helpers.h
     nifs.h
     persistent_term.h
+    phash2.h
     platform_nifs.h
     port.h
     posix_nifs.h
@@ -104,6 +105,7 @@ set(SOURCE_FILES
     module.c
     nifs.c
     persistent_term.c
+    phash2.c
     port.c
     posix_nifs.c
     refc_binary.c
