@@ -130,7 +130,11 @@
  * @def INTN_MAX_IN_LEN
  * @brief Maximum input length in digits (256 bits / 32 bits = 8 digits)
  */
-#define INTN_MAX_IN_LEN 8 // 256 bit / 32 bit = 8 digits
+// 1280 bit / 32 bit = 40 digits. The BEAM compiler accumulates binary
+// string literals into integers of up to 1024+8 bits
+// (v3_core:bin_expand_string), so running the compiler requires at least
+// 1032-bit integers.
+#define INTN_MAX_IN_LEN 40
 
 /**
  * @def INTN_MAX_RES_LEN
@@ -144,7 +148,7 @@
  * @def INTN_BSL_MAX_RES_LEN
  * @brief Maximum result length for bit shift left operations
  */
-#define INTN_BSL_MAX_RES_LEN 8
+#define INTN_BSL_MAX_RES_LEN INTN_MAX_IN_LEN
 
 /**
  * @def MAX_LEN(m, n)
