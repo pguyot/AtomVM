@@ -32,7 +32,11 @@
     characters_to_list/2,
     characters_to_binary/1,
     characters_to_binary/2,
-    characters_to_binary/3
+    characters_to_binary/3,
+    characters_to_nfc_binary/1,
+    characters_to_nfd_binary/1,
+    characters_to_nfkc_binary/1,
+    characters_to_nfkd_binary/1
 ]).
 
 %% A UTF-8 encoded binary.
@@ -131,4 +135,36 @@ characters_to_binary(_Data, _InEncoding) ->
     | {error, list(), chardata() | latin1_chardata() | list()}
     | {incomplete, unicode_binary(), chardata() | latin1_chardata()}.
 characters_to_binary(_Data, _InEncoding, _OutEncoding) ->
+    erlang:nif_error(undefined).
+
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @param Data data to normalize
+%% @return an NFC-normalized utf8 binary
+-spec characters_to_nfc_binary(Data :: chardata()) ->
+    unicode_binary() | {error, unicode_binary(), chardata()}.
+characters_to_nfc_binary(_Data) ->
+    erlang:nif_error(undefined).
+
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @param Data data to normalize
+%% @return an NFD-normalized utf8 binary
+-spec characters_to_nfd_binary(Data :: chardata()) ->
+    unicode_binary() | {error, unicode_binary(), chardata()}.
+characters_to_nfd_binary(_Data) ->
+    erlang:nif_error(undefined).
+
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @param Data data to normalize
+%% @return an NFKC-normalized utf8 binary
+-spec characters_to_nfkc_binary(Data :: chardata()) ->
+    unicode_binary() | {error, unicode_binary(), chardata()}.
+characters_to_nfkc_binary(_Data) ->
+    erlang:nif_error(undefined).
+
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @param Data data to normalize
+%% @return an NFKD-normalized utf8 binary
+-spec characters_to_nfkd_binary(Data :: chardata()) ->
+    unicode_binary() | {error, unicode_binary(), chardata()}.
+characters_to_nfkd_binary(_Data) ->
     erlang:nif_error(undefined).

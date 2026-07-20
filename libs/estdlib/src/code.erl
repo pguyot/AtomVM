@@ -30,13 +30,16 @@
     load_abs/1,
     load_binary/3,
     ensure_loaded/1,
+    ensure_modules_loaded/1,
     which/1,
+    where_is_file/1,
     is_loaded/1,
     get_object_code/1,
     purge/1,
     delete/1,
     add_patha/1,
     add_pathz/1,
+    del_path/1,
     lib_dir/1
 ]).
 
@@ -84,6 +87,17 @@ add_patha(_Dir) ->
 -spec add_pathz(Dir :: string() | binary()) -> true.
 add_pathz(_Dir) ->
     true.
+
+%%-----------------------------------------------------------------------------
+%% @param   NameOrDir directory or application name to remove from the code path
+%% @returns `false'
+%% @doc     Compatibility stub, see {@link add_patha/1}. AtomVM has no code
+%% path, so there is never a directory to delete and `false' is returned.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec del_path(NameOrDir :: atom() | string() | binary()) -> boolean() | {error, bad_name}.
+del_path(_NameOrDir) ->
+    false.
 
 %%-----------------------------------------------------------------------------
 %% @param   AppName name of the application
@@ -189,6 +203,41 @@ load_binary(_Module, _Filename, _Binary) ->
     Module :: atom().
 ensure_loaded(_Module) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Modules     modules to load
+%% @returns `ok', or `{error, [{Module, Reason}]}' listing the modules that
+%%          could not be loaded
+%% @doc     Try to load a list of modules, see {@link ensure_loaded/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec ensure_modules_loaded(Modules :: [module()]) -> ok | {error, [{module(), term()}]}.
+ensure_modules_loaded(Modules) when is_list(Modules) ->
+    Errors = lists:foldl(
+        fun(Module, Acc) ->
+            case ?MODULE:ensure_loaded(Module) of
+                {module, Module} -> Acc;
+                {error, Reason} -> [{Module, Reason} | Acc]
+            end
+        end,
+        [],
+        Modules
+    ),
+    case Errors of
+        [] -> ok;
+        _ -> {error, lists:reverse(Errors)}
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Filename    name of the file to search for
+%% @returns `non_existing'
+%% @doc     Compatibility stub, see {@link add_patha/1}. AtomVM has no code
+%% path to search, so this always returns `non_existing'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec where_is_file(Filename :: string()) -> non_existing | string().
+where_is_file(_Filename) ->
+    non_existing.
 
 %%-----------------------------------------------------------------------------
 %% @param   Module      module to test
