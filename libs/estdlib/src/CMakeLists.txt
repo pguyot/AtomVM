@@ -71,6 +71,7 @@ set(ERLANG_MODULES
     logger_std_h
     proplists
     queue
+    re
     records
     sets
     socket
