@@ -47,7 +47,8 @@
     stop/1, stop/3,
     call/2, call/3,
     cast/2,
-    reply/2
+    reply/2,
+    enter_loop/3, enter_loop/4
 ]).
 
 -export([init_it/4, init_it/5]).
@@ -191,6 +192,38 @@ init_it(Starter, Module, Args, Options) ->
         {fail, Return, Exception} ->
             proc_lib:init_fail(Starter, Return, Exception)
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Module the module implementing the gen_server behaviour
+%% @param   Options options (`name' is honored for consistency with init)
+%% @param   ModState the current server state
+%% @returns This function does not return.
+%% @doc     Make the calling process a gen_server. Useful for processes
+%% started with `proc_lib' that completed their own initialization
+%% (typically after `proc_lib:init_ack/1,2').
+%% @end
+%%-----------------------------------------------------------------------------
+-spec enter_loop(Module :: module(), Options :: options(), ModState :: term()) -> no_return().
+enter_loop(Module, Options, ModState) ->
+    State = #state{
+        name = proplists:get_value(name, Options),
+        mod = Module,
+        mod_state = ModState,
+        timeout = infinity
+    },
+    system_continue(self(), [], State).
+
+-spec enter_loop(
+    Module :: module(), Options :: options(), ModState :: term(), Timeout :: timeout()
+) -> no_return().
+enter_loop(Module, Options, ModState, Timeout) ->
+    State = #state{
+        name = proplists:get_value(name, Options),
+        mod = Module,
+        mod_state = ModState,
+        timeout = Timeout
+    },
+    system_continue(self(), [], State).
 
 crash_report(ErrStr, Parent, E, S) ->
     io:format("=============~n"),
