@@ -239,6 +239,7 @@ static term nif_ets_update_counter(Context *ctx, int argc, term argv[]);
 static term nif_ets_take(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
+static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_put_new(Context *ctx, int argc, term argv[]);
@@ -830,6 +831,11 @@ static const struct Nif ets_delete_nif = {
 static const struct Nif ets_delete_object_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ets_delete_object
+};
+
+static const struct Nif ets_tab2list_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ets_tab2list
 };
 
 static const struct Nif persistent_term_get_nif = {
@@ -3424,6 +3430,14 @@ static term nif_erlang_process_flag(Context *ctx, int argc, term argv[])
                 ctx->fullsweep_after = term_to_int(value);
                 return prev;
             }
+            case ERROR_HANDLER_ATOM: {
+                // Undef handling is built into the VM: accept (and ignore) the
+                // default handler so OTP code that saves/restores it works.
+                if (UNLIKELY(!term_is_atom(value))) {
+                    RAISE_ERROR(BADARG_ATOM);
+                }
+                return ERROR_HANDLER_ATOM;
+            }
         }
 
         // TODO: check erlang:process_flag/3 implementation
@@ -3817,12 +3831,22 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
 
     GlobalContext *glb = ctx->global;
 
+    // OTP compressed external format (131, 80, ...): inflate to a temporary
+    // buffer and deserialize from there.
+    uint8_t *inflated = NULL;
+    size_t inflated_size = 0;
+    external_term_inflate((const uint8_t *) term_binary_data(binary), term_binary_size(binary),
+        &inflated, &inflated_size);
+
     size_t required_heap;
     size_t required_stack;
     size_t bytes_read;
-    external_term_read_result_t res = external_term_validate_buf(term_binary_data(binary),
-        term_binary_size(binary), read_opts, &required_heap, &required_stack, &bytes_read, glb);
+    external_term_read_result_t res = external_term_validate_buf(
+        inflated != NULL ? (const char *) inflated : term_binary_data(binary),
+        inflated != NULL ? inflated_size : term_binary_size(binary),
+        read_opts, &required_heap, &required_stack, &bytes_read, glb);
     if (UNLIKELY(res != ExternalTermReadOk)) {
+        free(inflated);
         RAISE_ERROR(BADARG_ATOM);
     }
 
@@ -3831,12 +3855,20 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
     }
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, required_heap, 1, &binary, MEMORY_CAN_SHRINK)
             != MEMORY_GC_OK)) {
+        free(inflated);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
     term dst;
-    res = external_term_deserialize_buf(term_binary_data(binary), term_binary_size(binary),
+    res = external_term_deserialize_buf(
+        inflated != NULL ? (const char *) inflated : term_binary_data(binary),
+        inflated != NULL ? inflated_size : term_binary_size(binary),
         read_opts, required_stack, &ctx->heap, &dst, glb);
+    if (inflated != NULL) {
+        // the whole compressed input is consumed
+        bytes_read = term_binary_size(binary);
+        free(inflated);
+    }
     if (UNLIKELY(res != ExternalTermReadOk)) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -3881,11 +3913,21 @@ static bool is_valid_term_to_binary_option(Context *ctx, term opt)
 static term nif_erlang_term_to_binary(Context *ctx, int argc, term argv[])
 {
     term t = argv[0];
+    int compression_level = 0;
     if (argc == 2) {
         term options = argv[1];
         while (term_is_nonempty_list(options)) {
-            if (UNLIKELY(!is_valid_term_to_binary_option(ctx, term_get_list_head(options)))) {
+            term opt = term_get_list_head(options);
+            if (UNLIKELY(!is_valid_term_to_binary_option(ctx, opt))) {
                 RAISE_ERROR(BADARG_ATOM);
+            }
+            if (term_is_atom(opt)
+                && globalcontext_is_term_equal_to_atom_string(ctx->global, opt, ATOM_STR("\xA", "compressed"))) {
+                // 'compressed' is equivalent to {compressed, 6} on OTP
+                compression_level = 6;
+            } else if (term_is_tuple(opt)
+                && globalcontext_is_term_equal_to_atom_string(ctx->global, term_get_tuple_element(opt, 0), ATOM_STR("\xA", "compressed"))) {
+                compression_level = term_to_int(term_get_tuple_element(opt, 1));
             }
             options = term_get_list_tail(options);
         }
@@ -3893,7 +3935,7 @@ static term nif_erlang_term_to_binary(Context *ctx, int argc, term argv[])
             RAISE_ERROR(BADARG_ATOM);
         }
     }
-    term ret = external_term_to_binary(ctx, t);
+    term ret = external_term_to_binary_with_level(ctx, t, compression_level);
     if (term_is_invalid_term(ret)) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -4946,6 +4988,30 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[])
             return TRUE_ATOM;
         case EtsBadAccess:
         case EtsBadEntry:
+            RAISE_ERROR(BADARG_ATOM);
+        case EtsAllocationError:
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        default:
+            UNREACHABLE();
+    }
+}
+
+static term nif_ets_tab2list(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    term name_or_ref = argv[0];
+
+    VALIDATE_VALUE(name_or_ref, is_ets_table_id);
+
+    term ret = term_invalid_term();
+
+    ets_result_t result = ets_to_list_maybe_gc(name_or_ref, &ret, ctx);
+
+    switch (result) {
+        case EtsOk:
+            return ret;
+        case EtsBadAccess:
             RAISE_ERROR(BADARG_ATOM);
         case EtsAllocationError:
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);

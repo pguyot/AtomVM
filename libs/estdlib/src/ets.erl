@@ -39,7 +39,10 @@
     take/2,
     delete/1,
     delete/2,
-    delete_object/2
+    delete_object/2,
+    tab2list/1,
+    select/2,
+    select/3
 ]).
 
 -export_type([
@@ -290,3 +293,219 @@ delete(_Table, _Key) ->
 -spec delete_object(Table :: table(), Object :: tuple()) -> true.
 delete_object(_Table, _Object) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @returns a list of all objects in the table
+%% @doc Return all objects of an ets table. The order is unspecified.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec tab2list(Table :: table()) -> [tuple()].
+tab2list(_Table) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   MatchSpec a match specification
+%% @returns the list of results from applying the match spec to the objects
+%% @doc Match objects of a table against a match specification.
+%%
+%% This is implemented as a full table traversal with the match specification
+%% interpreted in Erlang: a commonly used subset of the match specification
+%% language is supported (patterns with `'$N''/`'_'', guard tests built from
+%% guard BIFs including `andalso'/`orelse', and bodies built from bound
+%% variables, `'$_'', `'$$'', `{const, T}', tuple construction and guard BIF
+%% calls). The result order is unspecified, as for `set' tables on
+%% Erlang/OTP.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec select(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}]) -> [term()].
+select(Table, MatchSpec) when is_list(MatchSpec) ->
+    % fully qualified so the call resolves to the NIF, not this stub module
+    Objects = ?MODULE:tab2list(Table),
+    select_objects(Objects, MatchSpec, []).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   MatchSpec a match specification
+%% @param   Limit maximum number of results to return
+%% @returns `{Matches, Continuation}' or `'$end_of_table''
+%% @doc Like `select/2' but returns at most `Limit' results.
+%%
+%% The whole table is traversed at once: the returned continuation is always
+%% `'$end_of_table'' and only the first `Limit' matches are returned.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec select(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}], Limit :: pos_integer()) ->
+    {[term()], term()} | '$end_of_table'.
+select(Table, MatchSpec, Limit) when is_integer(Limit), Limit > 0 ->
+    case select(Table, MatchSpec) of
+        [] -> '$end_of_table';
+        Results -> {lists_sublist(Results, Limit), '$end_of_table'}
+    end.
+
+%% @private
+select_objects([], _MatchSpec, Acc) ->
+    lists:reverse(Acc);
+select_objects([Object | Tail], MatchSpec, Acc) ->
+    case run_match_spec(MatchSpec, Object) of
+        {ok, Result} -> select_objects(Tail, MatchSpec, [Result | Acc]);
+        nomatch -> select_objects(Tail, MatchSpec, Acc)
+    end.
+
+%% @private
+run_match_spec([], _Object) ->
+    nomatch;
+run_match_spec([{Head, Guards, Body} | Tail], Object) ->
+    case ms_match(Head, Object, #{}) of
+        {ok, Bindings0} ->
+            Bindings = Bindings0#{'$_' => Object},
+            case ms_guards(Guards, Bindings) of
+                true -> {ok, ms_body(Body, Bindings)};
+                false -> run_match_spec(Tail, Object)
+            end;
+        nomatch ->
+            run_match_spec(Tail, Object)
+    end.
+
+%% @private
+%% Pattern matching: patterns are literals, '_', '$N' variables, and
+%% tuples/lists thereof.
+ms_match('_', _Value, Bindings) ->
+    {ok, Bindings};
+ms_match(Pattern, Value, Bindings) when is_atom(Pattern) ->
+    case ms_variable(Pattern) of
+        {ok, Var} ->
+            case Bindings of
+                #{Var := Bound} ->
+                    case Bound =:= Value of
+                        true -> {ok, Bindings};
+                        false -> nomatch
+                    end;
+                _ ->
+                    {ok, Bindings#{Var => Value}}
+            end;
+        not_a_variable ->
+            case Pattern =:= Value of
+                true -> {ok, Bindings};
+                false -> nomatch
+            end
+    end;
+ms_match(Pattern, Value, Bindings) when is_tuple(Pattern) ->
+    case is_tuple(Value) andalso tuple_size(Pattern) =:= tuple_size(Value) of
+        true -> ms_match_tuple(Pattern, Value, tuple_size(Pattern), Bindings);
+        false -> nomatch
+    end;
+ms_match([PH | PT], Value, Bindings) ->
+    case Value of
+        [VH | VT] ->
+            case ms_match(PH, VH, Bindings) of
+                {ok, NewBindings} -> ms_match(PT, VT, NewBindings);
+                nomatch -> nomatch
+            end;
+        _ ->
+            nomatch
+    end;
+ms_match(Pattern, Value, Bindings) ->
+    case Pattern =:= Value of
+        true -> {ok, Bindings};
+        false -> nomatch
+    end.
+
+%% @private
+ms_match_tuple(_Pattern, _Value, 0, Bindings) ->
+    {ok, Bindings};
+ms_match_tuple(Pattern, Value, N, Bindings) ->
+    case ms_match(element(N, Pattern), element(N, Value), Bindings) of
+        {ok, NewBindings} -> ms_match_tuple(Pattern, Value, N - 1, NewBindings);
+        nomatch -> nomatch
+    end.
+
+%% @private
+ms_variable(Atom) ->
+    case atom_to_list(Atom) of
+        [$$ | Digits] when Digits =/= [] ->
+            case ms_all_digits(Digits) of
+                true -> {ok, Atom};
+                false -> not_a_variable
+            end;
+        _ ->
+            not_a_variable
+    end.
+
+%% @private
+ms_all_digits([]) -> true;
+ms_all_digits([C | T]) when C >= $0, C =< $9 -> ms_all_digits(T);
+ms_all_digits(_) -> false.
+
+%% @private
+ms_guards([], _Bindings) ->
+    true;
+ms_guards([Guard | Tail], Bindings) ->
+    Result =
+        try
+            ms_expr(Guard, Bindings)
+        catch
+            _:_ -> false
+        end,
+    case Result of
+        true -> ms_guards(Tail, Bindings);
+        _ -> false
+    end.
+
+%% @private
+ms_body(Body, Bindings) ->
+    lists:foldl(fun(Expr, _) -> ms_expr(Expr, Bindings) end, [], Body).
+
+%% @private
+%% Expression evaluation, shared between guards and bodies.
+ms_expr('$_', #{'$_' := Object}) ->
+    Object;
+ms_expr('$$', Bindings) ->
+    Vars = lists:sort(maps:keys(maps:remove('$_', Bindings))),
+    [maps:get(V, Bindings) || V <- Vars];
+ms_expr(Atom, Bindings) when is_atom(Atom) ->
+    case ms_variable(Atom) of
+        {ok, Var} ->
+            case Bindings of
+                #{Var := Value} -> Value;
+                _ -> error({unbound_match_spec_variable, Var})
+            end;
+        not_a_variable ->
+            Atom
+    end;
+ms_expr({const, Term}, _Bindings) ->
+    Term;
+ms_expr({{}}, _Bindings) ->
+    {};
+ms_expr(Tuple, Bindings) when
+    is_tuple(Tuple), tuple_size(Tuple) =:= 1, is_tuple(element(1, Tuple))
+->
+    % {{...}} is the tuple construction syntax
+    Elements = tuple_to_list(element(1, Tuple)),
+    list_to_tuple([ms_expr(E, Bindings) || E <- Elements]);
+ms_expr({'andalso', A, B}, Bindings) ->
+    case ms_expr(A, Bindings) of
+        true -> ms_expr(B, Bindings);
+        _ -> false
+    end;
+ms_expr({'orelse', A, B}, Bindings) ->
+    case ms_expr(A, Bindings) of
+        true -> true;
+        _ -> ms_expr(B, Bindings)
+    end;
+ms_expr(Tuple, Bindings) when is_tuple(Tuple), tuple_size(Tuple) >= 1, is_atom(element(1, Tuple)) ->
+    [Fun | Args] = tuple_to_list(Tuple),
+    EvaledArgs = [ms_expr(A, Bindings) || A <- Args],
+    apply(erlang, Fun, EvaledArgs);
+ms_expr(List, Bindings) when is_list(List) ->
+    [ms_expr(E, Bindings) || E <- List];
+ms_expr(Literal, _Bindings) ->
+    Literal.
+
+%% @private
+%% lists:sublist/2 is not part of AtomVM's lists module on all versions;
+%% keep a local copy.
+lists_sublist(List, Len) when Len >= length(List) -> List;
+lists_sublist(_List, 0) -> [];
+lists_sublist([H | T], Len) -> [H | lists_sublist(T, Len - 1)].
