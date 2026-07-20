@@ -35,6 +35,8 @@ set(ERLANG_MODULES
     dist_util
     erl_epmd
     erpc
+    error_handler
+    error_logger
     erts_debug
     erts_internal
     ets
@@ -50,6 +52,7 @@ set(ERLANG_MODULES
     gen_tcp
     gen_tcp_inet
     gen_tcp_socket
+    global
     supervisor
     kernel
     net_kernel
@@ -63,6 +66,7 @@ set(ERLANG_MODULES
     maps
     math
     net
+    net_adm
     os
     persistent_term
     proc_lib
@@ -83,6 +87,7 @@ set(ERLANG_MODULES
     string
     timer
     unicode
+    uri_string
     erlang
 )
 

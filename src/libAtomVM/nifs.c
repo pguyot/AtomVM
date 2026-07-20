@@ -5077,7 +5077,10 @@ static term nif_re_pcre2_match(Context *ctx, int argc, term argv[])
         term_put_tuple_element(result, 1, term_from_int(rc));
         return result;
     }
-    uint32_t pair_count = pcre2_get_ovector_count(match_data);
+    // rc is the highest captured group + 1: trailing unset groups are not
+    // reported, as on Erlang/OTP. rc == 0 would mean the ovector was too
+    // small, which cannot happen with a match data created from the pattern.
+    uint32_t pair_count = (uint32_t) rc;
     PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
     // 2 ints per pair as {Start, Len} data flattened: [S0, L0, S1, L1, ...]
     size_t heap_size = TUPLE_SIZE(2) + pair_count * 2 * (CONS_SIZE + BOXED_INT_SIZE + 1);

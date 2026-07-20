@@ -30,6 +30,8 @@
     copy/1, copy/2,
     decode_hex/1,
     encode_unsigned/1, encode_unsigned/2,
+    first/1,
+    last/1,
     encode_hex/1, encode_hex/2,
     list_to_bin/1,
     longest_common_prefix/1,
@@ -73,6 +75,33 @@ copy(_Binary) ->
 -spec copy(Binary :: binary(), N :: non_neg_integer()) -> binary().
 copy(_Binary, _N) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary binary to get the first byte of
+%% @returns value of the first byte of the binary
+%% @doc     Get the first byte of a binary. Raises `badarg' if the binary is
+%%          empty.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec first(Binary :: binary()) -> byte().
+first(Binary) when is_binary(Binary), byte_size(Binary) > 0 ->
+    % fully qualified so the call resolves to the NIF, not this stub module
+    ?MODULE:at(Binary, 0);
+first(_Binary) ->
+    erlang:error(badarg).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary binary to get the last byte of
+%% @returns value of the last byte of the binary
+%% @doc     Get the last byte of a binary. Raises `badarg' if the binary is
+%%          empty.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec last(Binary :: binary()) -> byte().
+last(Binary) when is_binary(Binary), byte_size(Binary) > 0 ->
+    ?MODULE:at(Binary, byte_size(Binary) - 1);
+last(_Binary) ->
+    erlang:error(badarg).
 
 %%-----------------------------------------------------------------------------
 %% @param   Data hex encoded binary to decode

@@ -31,6 +31,8 @@
 #include "termmap_tree.h"
 #include "utils.h"
 
+#include <math.h>
+
 #include <ctype.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -1484,6 +1486,14 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                         avm_float_t t_float = term_to_float(t);
                         avm_float_t other_float = term_to_float(other);
                         if (t_float == other_float) {
+                            // As on OTP 27+, 0.0 and -0.0 are equal for ==
+                            // but distinct for =:= (and exact-ordered with
+                            // -0.0 first, giving map keys a total order).
+                            if (UNLIKELY((opts & TermCompareExact)
+                                    && signbit(t_float) != signbit(other_float))) {
+                                result = signbit(t_float) ? TermLessThan : TermGreaterThan;
+                                goto unequal;
+                            }
                             CMP_POP_AND_CONTINUE();
                             break;
                         } else {

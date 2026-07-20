@@ -42,7 +42,11 @@
     delete_object/2,
     tab2list/1,
     select/2,
-    select/3
+    select/3,
+    select_count/2,
+    select_delete/2,
+    match_delete/2,
+    info/2
 ]).
 
 -export_type([
@@ -343,6 +347,73 @@ select(Table, MatchSpec, Limit) when is_integer(Limit), Limit > 0 ->
         [] -> '$end_of_table';
         Results -> {lists_sublist(Results, Limit), '$end_of_table'}
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   MatchSpec a match specification
+%% @returns the number of objects matched by the match specification
+%% @doc Count the objects of a table matching a match specification.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec select_count(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}]) ->
+    non_neg_integer().
+select_count(Table, MatchSpec) ->
+    length(select(Table, MatchSpec)).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   MatchSpec a match specification
+%% @returns the number of objects deleted
+%% @doc Delete the objects of a table for which the match specification
+%% returns `true'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec select_delete(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}]) ->
+    non_neg_integer().
+select_delete(Table, MatchSpec) when is_list(MatchSpec) ->
+    % fully qualified so the call resolves to the NIF, not this stub module
+    Objects = ?MODULE:tab2list(Table),
+    select_delete0(Objects, Table, MatchSpec, 0).
+
+%% @private
+select_delete0([], _Table, _MatchSpec, Count) ->
+    Count;
+select_delete0([Object | Tail], Table, MatchSpec, Count) ->
+    case run_match_spec(MatchSpec, Object) of
+        {ok, true} ->
+            ?MODULE:delete_object(Table, Object),
+            select_delete0(Tail, Table, MatchSpec, Count + 1);
+        _ ->
+            select_delete0(Tail, Table, MatchSpec, Count)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   Pattern a match pattern, as used in `match/2'
+%% @returns `true'
+%% @doc Delete all objects of a table matching a pattern.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec match_delete(Table :: table(), Pattern :: term()) -> true.
+match_delete(Table, Pattern) ->
+    _ = select_delete(Table, [{Pattern, [], [true]}]),
+    true.
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   Item the information item to query
+%% @returns the value of the item, or `undefined' for unsupported items
+%% @doc Return information about a table.
+%%
+%% Only `size' is currently supported (computed by a full table traversal);
+%% any other item returns `undefined'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec info(Table :: table(), Item :: atom()) -> term() | undefined.
+info(Table, size) ->
+    length(?MODULE:tab2list(Table));
+info(_Table, _Item) ->
+    undefined.
 
 %% @private
 select_objects([], _MatchSpec, Acc) ->

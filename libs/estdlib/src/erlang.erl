@@ -30,7 +30,11 @@
     apply/3,
     start_timer/3, start_timer/4,
     cancel_timer/1,
+    cancel_timer/2,
+    read_timer/1,
     send_after/3,
+    send_after/4,
+    process_info/1,
     process_info/2,
     system_info/1,
     system_flag/2,
@@ -94,17 +98,26 @@
     unregister/1,
     whereis/1,
     spawn/1,
+    spawn/2,
     spawn/3,
+    spawn/4,
     spawn_link/1,
+    spawn_link/2,
     spawn_link/3,
+    spawn_link/4,
     spawn_monitor/1,
+    spawn_monitor/2,
     spawn_monitor/3,
+    spawn_monitor/4,
     spawn_opt/2,
+    spawn_opt/3,
     spawn_opt/4,
+    spawn_opt/5,
     link/1,
     unlink/1,
     make_ref/0,
     send/2,
+    send/3,
     monitor/2,
     monitor/3,
     demonitor/1,
@@ -184,7 +197,34 @@
     tuple_to_list/1,
     alias/0,
     alias/1,
-    unalias/1
+    unalias/1,
+    phash2/1,
+    phash2/2,
+    nodes/0,
+    nodes/1,
+    make_fun/3,
+    'xor'/2,
+    time_offset/0,
+    time_offset/1,
+    registered/0,
+    process_flag/3,
+    ports/0,
+    port_info/1,
+    port_info/2,
+    port_connect/2,
+    port_command/3,
+    port_close/1,
+    monitor_node/2,
+    monitor_node/3,
+    hibernate/3,
+    halt/1,
+    get_keys/0,
+    get_keys/1,
+    fun_info_mfa/1,
+    disconnect_node/1,
+    binary_to_existing_atom/2,
+    insert_element/3,
+    append_element/2
 ]).
 
 -export_type([
@@ -312,6 +352,47 @@ cancel_timer(TimerRef) ->
     timer_manager:cancel_timer(TimerRef).
 
 %%-----------------------------------------------------------------------------
+%% @param   TimerRef a timer reference returned from {@link start_timer/3} or
+%%          {@link send_after/3}.
+%% @param   Options cancel options: `{async, boolean()}' and `{info, boolean()}'
+%% @returns with `{async, false}' (the default), the remaining time or `false'
+%%          (or `ok' with `{info, false}'); with `{async, true}', `ok'
+%% @doc     Cancel a timer, like {@link cancel_timer/1}, with options.
+%%
+%%          With `{async, true}' and `{info, true}', a
+%%          `{cancel_timer, TimerRef, Result}' message is sent to the caller.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec cancel_timer(TimerRef :: reference(), Options :: [{async | info, boolean()}]) ->
+    ok | false | non_neg_integer().
+cancel_timer(TimerRef, Options) ->
+    Result = timer_manager:cancel_timer(TimerRef),
+    Async = proplists:get_value(async, Options, false),
+    Info = proplists:get_value(info, Options, true),
+    case {Async, Info} of
+        {false, true} ->
+            Result;
+        {false, false} ->
+            ok;
+        {true, true} ->
+            erlang:self() ! {cancel_timer, TimerRef, Result},
+            ok;
+        {true, false} ->
+            ok
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   TimerRef a timer reference returned from {@link start_timer/3} or
+%%          {@link send_after/3}.
+%% @returns the remaining time in milliseconds, or `false'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_timer(TimerRef :: reference()) -> false | non_neg_integer().
+read_timer(_TimerRef) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
 %% @param   Time time in milliseconds after which to send the message.
 %% @param   Dest Pid or server name to which to send the message.
 %% @param   Msg Message to send to Dest after Time ms.
@@ -321,6 +402,24 @@ cancel_timer(TimerRef) ->
 %%-----------------------------------------------------------------------------
 -spec send_after(Time :: non_neg_integer(), Dest :: pid() | atom(), Msg :: term()) -> reference().
 send_after(Time, Dest, Msg) ->
+    timer_manager:send_after(Time, Dest, Msg).
+
+%%-----------------------------------------------------------------------------
+%% @param   Time time in milliseconds after which to send the message.
+%% @param   Dest Pid or server name to which to send the message.
+%% @param   Msg Message to send to Dest after Time ms.
+%% @param   Options options
+%% @returns a reference that can be used to cancel the timer, if desired.
+%% @doc     Send Msg to Dest after Time ms.
+%%
+%%          <em><b>Note.</b>  The Options argument is currently ignored; in
+%%          particular the `{abs, true}' option is not supported.</em>
+%% @end
+%%-----------------------------------------------------------------------------
+-spec send_after(
+    Time :: non_neg_integer(), Dest :: pid() | atom(), Msg :: term(), _Options :: list()
+) -> reference().
+send_after(Time, Dest, Msg, _Options) ->
     timer_manager:send_after(Time, Dest, Msg).
 
 %%-----------------------------------------------------------------------------
@@ -360,6 +459,44 @@ send_after(Time, Dest, Msg) ->
     (Pid :: pid(), fullsweep_after) -> {fullsweep_after, non_neg_integer()}.
 process_info(_Pid, _Key) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Pid the process pid.
+%% @returns a list of process information key-value pairs, or `undefined' if
+%%          the process is not alive.
+%% @doc     Return information about a process.
+%%
+%% Returns the subset of the keys documented in {@link process_info/2} that
+%% AtomVM supports. As on Erlang/OTP, `registered_name' is omitted from the
+%% result when the process has no registered name.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec process_info(Pid :: pid()) -> [{atom(), any()}] | undefined.
+process_info(Pid) ->
+    case erlang:is_process_alive(Pid) of
+        false ->
+            undefined;
+        true ->
+            lists:filtermap(
+                fun(Key) ->
+                    try erlang:process_info(Pid, Key) of
+                        {Key, _Value} = Pair -> {true, Pair};
+                        _ -> false
+                    catch
+                        _:_ -> false
+                    end
+                end,
+                [
+                    registered_name,
+                    message_queue_len,
+                    links,
+                    heap_size,
+                    total_heap_size,
+                    stack_size,
+                    memory
+                ]
+            )
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @param   Key key used to find system information.
@@ -1362,6 +1499,144 @@ spawn_opt(_Module, _Function, _Args, _Options) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Function    function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process on a given node. Only the local node is
+%%          supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn(Node :: node(), Function :: function()) -> pid().
+spawn(Node, Function) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Function, []);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process on a given node. Only the local node is
+%%          supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn(Node :: node(), Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
+spawn(Node, Module, Function, Args) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Module, Function, Args, []);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Function    function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process on a given node and link it. Only the local
+%%          node is supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Node :: node(), Function :: function()) -> pid().
+spawn_link(Node, Function) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Function, [link]);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @returns pid of the new process
+%% @doc     Create a new process on a given node and link it. Only the local
+%%          node is supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_link(Node :: node(), Module :: module(), Function :: atom(), Args :: [any()]) -> pid().
+spawn_link(Node, Module, Function, Args) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Module, Function, Args, [link]);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Function    function to create a process from
+%% @returns `{Pid, MonitorRef}' of the new process
+%% @doc     Create a new process on a given node and monitor it. Only the
+%%          local node is supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_monitor(Node :: node(), Function :: function()) -> {pid(), reference()}.
+spawn_monitor(Node, Function) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Function, [monitor]);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @returns `{Pid, MonitorRef}' of the new process
+%% @doc     Create a new process on a given node and monitor it. Only the
+%%          local node is supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_monitor(Node :: node(), Module :: module(), Function :: atom(), Args :: [any()]) ->
+    {pid(), reference()}.
+spawn_monitor(Node, Module, Function, Args) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Module, Function, Args, [monitor]);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Function    function to create a process from
+%% @param   Options     additional options, see `spawn_option()'
+%% @returns pid of the new process, or `{Pid, MonitorRef}' when monitoring
+%% @doc     Create a new process on a given node. Only the local node is
+%%          supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_opt(Node :: node(), Function :: function(), Options :: [spawn_option()]) ->
+    pid() | {pid(), reference()}.
+spawn_opt(Node, Function, Options) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Function, Options);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node        node to create the process on
+%% @param   Module      module of the function to create a process from
+%% @param   Function    name of the function to create a process from
+%% @param   Args        arguments to pass to the function to create a process from
+%% @param   Options     additional options, see `spawn_option()'
+%% @returns pid of the new process, or `{Pid, MonitorRef}' when monitoring
+%% @doc     Create a new process on a given node. Only the local node is
+%%          supported: spawning on a remote node raises `notsup'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec spawn_opt(
+    Node :: node(),
+    Module :: module(),
+    Function :: atom(),
+    Args :: [any()],
+    Options :: [spawn_option()]
+) -> pid() | {pid(), reference()}.
+spawn_opt(Node, Module, Function, Args, Options) ->
+    case erlang:node() of
+        Node -> erlang:spawn_opt(Module, Function, Args, Options);
+        _ -> erlang:error(notsup)
+    end.
+
+%%-----------------------------------------------------------------------------
 %% @param   Pid         process to link to
 %% @returns `true'
 %% @doc     Link current process with a given process.
@@ -1401,6 +1676,21 @@ make_ref() ->
 -spec send(Target :: send_destination(), Message :: Message) -> Message.
 send(_Target, _Message) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Target  process, registered name or alias to send the message to
+%% @param   Message message to send
+%% @param   Options send options; ignored on AtomVM
+%% @returns `ok'
+%% @doc     Send a message to a given process, like {@link send/2}. The
+%%          `nosuspend' and `noconnect' options are accepted and ignored.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec send(Target :: send_destination(), Message :: term(), Options :: [nosuspend | noconnect]) ->
+    ok.
+send(Target, Message, _Options) ->
+    _ = erlang:send(Target, Message),
+    ok.
 
 %%-----------------------------------------------------------------------------
 %% @param   Type        type of monitor to create
@@ -2371,3 +2661,308 @@ alias(_Options) ->
 -spec unalias(Alias) -> boolean() when Alias :: reference().
 unalias(_Alias) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Term    the term to hash
+%% @returns the hash of the term, a non-negative integer smaller than 2^27
+%% @doc     Portable hash function that gives the same hash for the same
+%%          Erlang term regardless of machine architecture and ERTS version.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec phash2(Term :: term()) -> non_neg_integer().
+phash2(_Term) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Term    the term to hash
+%% @param   Range   the range of the hash, `1..2^32'
+%% @returns the hash of the term, a non-negative integer smaller than `Range'
+%% @doc     Portable hash function, with an explicit range.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec phash2(Term :: term(), Range :: pos_integer()) -> non_neg_integer().
+phash2(_Term, _Range) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns the list of visible nodes connected to this node
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec nodes() -> [node()].
+nodes() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Arg the kind of nodes to list
+%% @returns the list of nodes of the given kind
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec nodes(Arg :: atom() | [atom()]) -> [node()].
+nodes(_Arg) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module of the function
+%% @param   Function    name of the function
+%% @param   Arity       arity of the function
+%% @returns a fun that calls `Module:Function/Arity'
+%% @doc     Return a fun `fun Module:Function/Arity'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec make_fun(Module :: module(), Function :: atom(), Arity :: arity()) -> function().
+make_fun(_Module, _Function, _Arity) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   A   a boolean
+%% @param   B   a boolean
+%% @returns the exclusive or of `A' and `B'
+%% @doc     Return the exclusive or of two booleans.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec 'xor'(A :: boolean(), B :: boolean()) -> boolean().
+'xor'(_A, _B) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns the current time offset in native time unit
+%% @doc     Return the current time offset between monotonic time and system
+%%          time.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec time_offset() -> integer().
+time_offset() ->
+    erlang:system_time() - erlang:monotonic_time().
+
+%%-----------------------------------------------------------------------------
+%% @param   Unit    the time unit of the result
+%% @returns the current time offset in the given time unit
+%% @doc     Return the current time offset between monotonic time and system
+%%          time, in the given time unit.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec time_offset(Unit :: time_unit()) -> integer().
+time_offset(Unit) ->
+    erlang:system_time(Unit) - erlang:monotonic_time(Unit).
+
+%%-----------------------------------------------------------------------------
+%% @returns the list of names of registered processes
+%% @doc     Return the names of all registered processes.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec registered() -> [atom()].
+registered() ->
+    lists:filtermap(
+        fun(Pid) ->
+            try erlang:process_info(Pid, registered_name) of
+                {registered_name, Name} -> {true, Name};
+                _ -> false
+            catch
+                _:_ -> false
+            end
+        end,
+        erlang:processes()
+    ).
+
+%%-----------------------------------------------------------------------------
+%% @param   Pid     the process to set the flag of
+%% @param   Flag    flag to set
+%% @param   Value   value to set the flag to
+%% @returns the previous value of the flag
+%% @doc     Set a process flag on another process. Only `save_calls' exists
+%%          on Erlang/OTP; specifying an unsupported flag raises `badarg'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec process_flag(Pid :: pid(), Flag :: atom(), Value :: term()) -> term().
+process_flag(_Pid, _Flag, _Value) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns the list of ports on this node
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec ports() -> [port()].
+ports() ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Port    the port to get information about
+%% @returns a list of port information key-value pairs
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec port_info(Port :: port()) -> [{atom(), any()}] | undefined.
+port_info(_Port) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Port    the port to get information about
+%% @param   Item    the item to get information about
+%% @returns a port information key-value pair
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec port_info(Port :: port(), Item :: atom()) -> {atom(), any()} | undefined.
+port_info(_Port, _Item) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Port    the port to connect
+%% @param   Pid     the new owner of the port
+%% @returns `true'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec port_connect(Port :: port(), Pid :: pid()) -> true.
+port_connect(_Port, _Pid) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Port    the port to send data to
+%% @param   Data    data to send
+%% @param   Options send options
+%% @returns `true'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec port_command(Port :: port(), Data :: iodata(), Options :: [force | nosuspend]) -> boolean().
+port_command(_Port, _Data, _Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Port    the port to close
+%% @returns `true'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec port_close(Port :: port()) -> true.
+port_close(_Port) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Node    node to monitor
+%% @param   Flag    `true' to start monitoring, `false' to stop
+%% @returns `true'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec monitor_node(Node :: node(), Flag :: boolean()) -> true.
+monitor_node(_Node, _Flag) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Node    node to monitor
+%% @param   Flag    `true' to start monitoring, `false' to stop
+%% @param   Options monitor options
+%% @returns `true'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec monitor_node(Node :: node(), Flag :: boolean(), Options :: [allow_passive_connect]) -> true.
+monitor_node(_Node, _Flag, _Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module      module of the function to resume at
+%% @param   Function    name of the function to resume at
+%% @param   Args        arguments of the function to resume at
+%% @returns does not return
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec hibernate(Module :: module(), Function :: atom(), Args :: [any()]) -> no_return().
+hibernate(_Module, _Function, _Args) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Status  exit status or abort reason
+%% @returns does not return
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec halt(Status :: non_neg_integer() | abort | string()) -> no_return().
+halt(_Status) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @returns the list of keys of the process dictionary
+%% @doc     Return all keys of the process dictionary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_keys() -> [term()].
+get_keys() ->
+    [K || {K, _V} <- erlang:get()].
+
+%%-----------------------------------------------------------------------------
+%% @param   Value   the value to search for
+%% @returns the list of keys of the process dictionary that map to `Value'
+%% @doc     Return all keys of the process dictionary with a given value.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_keys(Value :: term()) -> [term()].
+get_keys(Value) ->
+    [K || {K, V} <- erlang:get(), V =:= Value].
+
+%%-----------------------------------------------------------------------------
+%% @param   Fun the fun to get information about
+%% @returns `{Module, Function, Arity}' of the fun
+%% @doc     Return the module, name and arity of a fun. For a local (anonymous)
+%%          fun, the name is generated by the compiler.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec fun_info_mfa(Fun :: function()) -> {module(), atom(), arity()}.
+fun_info_mfa(Fun) ->
+    {module, Module} = erlang:fun_info(Fun, module),
+    {name, Name} = erlang:fun_info(Fun, name),
+    {arity, Arity} = erlang:fun_info(Fun, arity),
+    {Module, Name, Arity}.
+
+%%-----------------------------------------------------------------------------
+%% @param   Node    node to disconnect from
+%% @returns `true', `false' or `ignored'
+%% @doc Compatibility stub; not supported on AtomVM.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec disconnect_node(Node :: node()) -> boolean() | ignored.
+disconnect_node(_Node) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary   the binary to convert
+%% @param   Encoding the encoding of the binary
+%% @returns the atom the binary represents
+%% @doc     Convert a binary to an existing atom, raising `badarg' if the atom
+%%          does not exist.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec binary_to_existing_atom(Binary :: binary(), Encoding :: atom_encoding()) -> atom().
+binary_to_existing_atom(_Binary, _Encoding) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Index   the one-based index at which to insert
+%% @param   Tuple   the original tuple
+%% @param   Value   the value to insert
+%% @returns a new tuple with `Value' inserted at position `Index'
+%% @doc     Return a new tuple with one more element than `Tuple', with
+%%          `Value' inserted at position `Index'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec insert_element(Index :: pos_integer(), Tuple :: tuple(), Value :: term()) -> tuple().
+insert_element(_Index, _Tuple, _Value) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Tuple   the original tuple
+%% @param   Value   the value to append
+%% @returns a new tuple with `Value' appended as the last element
+%% @doc     Return a new tuple with one more element than `Tuple', with
+%%          `Value' as the last element.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec append_element(Tuple :: tuple(), Value :: term()) -> tuple().
+append_element(Tuple, Value) ->
+    erlang:insert_element(erlang:tuple_size(Tuple) + 1, Tuple, Value).
