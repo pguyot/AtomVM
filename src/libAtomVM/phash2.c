@@ -37,6 +37,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HAVE_PLATFORM_ATOMIC_H
+#include "platform_atomic.h"
+#elif defined(HAVE_ATOMIC)
+#include <stdatomic.h>
+#endif
+
 #include "atom_table.h"
 #include "defaultatoms.h"
 #include "globalcontext.h"
@@ -311,42 +317,61 @@ static uint32_t phash2_atom_hash_compute(term t, GlobalContext *glb)
 
 /* Lazily grown per-atom hash cache: atom hashes are immutable and hashpjw's
  * xor-folding clears the top nibble, so any value with the top bit set can
- * serve as the empty sentinel. Sizing/stores are benignly racy: the value
- * written for an index is always the same, and the array pointer is only
- * ever swapped after the old contents were copied. */
+ * serve as the empty sentinel. The capacity travels inside the same
+ * allocation as the entries so a single pointer read yields a consistent
+ * view; entry stores are benignly racy (the value written for an index is
+ * always the same). */
 #define PHASH2_ATOM_CACHE_EMPTY UINT32_C(0xFFFFFFFF)
+
+struct Phash2AtomCache
+{
+    size_t capacity;
+    uint32_t entries[];
+};
 
 static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
 {
     atom_index_t index = term_to_atom_index(t);
-    uint32_t *cache = glb->phash2_atom_cache;
-    size_t capacity = glb->phash2_atom_cache_capacity;
-    if (LIKELY(cache != NULL && (size_t) index < capacity)) {
-        uint32_t cached = cache[index];
+#if defined(HAVE_ATOMIC)
+    struct Phash2AtomCache *cache = atomic_load_explicit(
+        (struct Phash2AtomCache *_Atomic *) &glb->phash2_atom_cache, memory_order_acquire);
+#else
+    struct Phash2AtomCache *cache = glb->phash2_atom_cache;
+#endif
+    if (LIKELY(cache != NULL && (size_t) index < cache->capacity)) {
+        uint32_t cached = cache->entries[index];
         if (LIKELY(cached != PHASH2_ATOM_CACHE_EMPTY)) {
             return cached;
         }
         uint32_t h = phash2_atom_hash_compute(t, glb);
-        cache[index] = h;
+        cache->entries[index] = h;
         return h;
     }
 
     size_t new_capacity = ((size_t) index + 1024) & ~(size_t) 1023;
-    uint32_t *new_cache = malloc(new_capacity * sizeof(uint32_t));
+    struct Phash2AtomCache *new_cache
+        = malloc(sizeof(struct Phash2AtomCache) + new_capacity * sizeof(uint32_t));
     if (IS_NULL_PTR(new_cache)) {
         return phash2_atom_hash_compute(t, glb);
     }
-    memset(new_cache, 0xFF, new_capacity * sizeof(uint32_t));
+    new_cache->capacity = new_capacity;
+    memset(new_cache->entries, 0xFF, new_capacity * sizeof(uint32_t));
     if (cache != NULL) {
-        memcpy(new_cache, cache, capacity * sizeof(uint32_t));
+        memcpy(new_cache->entries, cache->entries, cache->capacity * sizeof(uint32_t));
     }
     uint32_t h = phash2_atom_hash_compute(t, glb);
-    new_cache[index] = h;
-    // Publish the grown cache; the previous array is retired, not freed, as
-    // another scheduler may still be reading it (a few KB per growth step,
-    // bounded by the atom count).
+    new_cache->entries[index] = h;
+    // Publish the grown cache with release semantics (readers use a single
+    // acquire pointer load); racing growers may each publish their own copy
+    // — last one wins, both are valid. The previous array is retired, not
+    // freed, as another scheduler may still be reading it (a few KB per
+    // growth step, bounded by the atom count).
+#if defined(HAVE_ATOMIC)
+    atomic_store_explicit((struct Phash2AtomCache *_Atomic *) &glb->phash2_atom_cache,
+        new_cache, memory_order_release);
+#else
     glb->phash2_atom_cache = new_cache;
-    glb->phash2_atom_cache_capacity = new_capacity;
+#endif
     return h;
 }
 
