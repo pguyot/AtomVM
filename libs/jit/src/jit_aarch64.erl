@@ -4345,11 +4345,11 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     rewrite_cp_offset(State6, RewriteOffset, RewriteSize).
 
 %% @private
-%% The 13-instruction inline resolved call_ext; every branch to the slow
+%% The 14-instruction inline resolved call_ext; every branch to the slow
 %% path targets the first instruction after this block.
 emit_call_ext_fast_path(State0, Index, T0, T1, T2, T3) ->
     #state{stream_module = StreamModule, stream = Stream0} = State0,
-    Slow = fun(Idx) -> (13 - Idx) * 4 end,
+    Slow = fun(Idx) -> (14 - Idx) * 4 end,
     Code = <<
         % 0-2: func = jit_state->module->imported_funcs[Index]
         (jit_aarch64_asm:ldr(T0, ?JITSTATE_MODULE))/binary,
@@ -4362,18 +4362,20 @@ emit_call_ext_fast_path(State0, Index, T0, T1, T2, T3) ->
         (jit_aarch64_asm:ldar_w(T2, T1))/binary,
         (jit_aarch64_asm:cmp_w(T2, 7))/binary,
         (jit_aarch64_asm:bcc(ne, Slow(5)))/binary,
-        % 6-7: target Module* and native entry point
+        % 6: clear any stale continuation, like the *_direct C wrappers
+        (jit_aarch64_asm:str(xzr, ?JITSTATE_CONTINUATION))/binary,
+        % 7-8: target Module* and native entry point
         (jit_aarch64_asm:ldr(T3, {T1, 8}))/binary,
         (jit_aarch64_asm:ldr(T1, {T1, 16}))/binary,
-        % 8-11: jit_state_set_module: module + cp_base (module_index << 24)
+        % 9-12: jit_state_set_module: module + cp_base (module_index << 24)
         (jit_aarch64_asm:str(T3, ?JITSTATE_MODULE))/binary,
         (jit_aarch64_asm:ldr_w(T2, {T3, 0}))/binary,
         (jit_aarch64_asm:lsl(T2, T2, 24))/binary,
         (jit_aarch64_asm:str(T2, ?JITSTATE_CPBASE))/binary,
-        % 12: branch to the callee's native entry
+        % 13: branch to the callee's native entry
         (jit_aarch64_asm:br(T1))/binary
     >>,
-    52 = byte_size(Code),
+    56 = byte_size(Code),
     State0#state{stream = StreamModule:append(Stream0, Code)}.
 
 %% OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with the same inline resolved fast
