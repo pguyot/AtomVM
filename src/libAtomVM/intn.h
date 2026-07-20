@@ -216,15 +216,15 @@
 
 /**
  * @def INTN_MAX_UNSIGNED_BYTES_SIZE
- * @brief Maximum size in bytes for unsigned integer representation (256 bits / 8)
+ * @brief Maximum size in bytes for unsigned integer representation
  */
-#define INTN_MAX_UNSIGNED_BYTES_SIZE 32
+#define INTN_MAX_UNSIGNED_BYTES_SIZE (INTN_MAX_IN_LEN * 4)
 
 /**
  * @def INTN_MAX_UNSIGNED_BITS_SIZE
  * @brief Maximum size in bits for unsigned integer representation
  */
-#define INTN_MAX_UNSIGNED_BITS_SIZE 256
+#define INTN_MAX_UNSIGNED_BITS_SIZE (INTN_MAX_IN_LEN * INTN_DIGIT_BITS)
 
 /**
  * @brief Sign of a multi-precision integer

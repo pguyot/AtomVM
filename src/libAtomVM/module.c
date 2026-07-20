@@ -1898,7 +1898,15 @@ term module_load_literal(Module *mod, int index, Context *ctx)
     term t = externalterm_from_const_literal_to_fragment(entry->data, entry->size, ctx->global, &fragment);
     if (UNLIKELY(term_is_invalid_term(t))) {
         SMP_MODULE_UNLOCK(mod);
-        fprintf(stderr, "Either OOM or invalid term while reading literals_table[%i] from module\n", index);
+        size_t module_name_len;
+        const uint8_t *module_name = atom_table_get_atom_string(
+            ctx->global->atom_table, term_to_atom_index(module_get_name(mod)), &module_name_len);
+        fprintf(stderr, "Either OOM or invalid term while reading literals_table[%i] from module %.*s (size %u):",
+            index, (int) module_name_len, (const char *) module_name, (unsigned) entry->size);
+        for (uint32_t i = 0; i < entry->size && i < 96; i++) {
+            fprintf(stderr, " %u", ((const uint8_t *) entry->data)[i]);
+        }
+        fprintf(stderr, "\n");
         return t;
     }
     // Link the fragment into the module pool, then publish the term with a

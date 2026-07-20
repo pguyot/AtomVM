@@ -35,6 +35,7 @@
     add_avm_pack_file/2,
     close_avm_pack/2,
     get_start_beam/1,
+    module_set_emulated/1,
     get_boot/0,
     posix_open/2,
     posix_open/3,
@@ -267,6 +268,17 @@ close_avm_pack(_Name, _Options) ->
 %%-----------------------------------------------------------------------------
 -spec get_start_beam(AVM :: atom()) -> {ok, binary()} | {error, not_found}.
 get_start_beam(_AVM) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Module  name of a loaded module
+%% @returns `true' if the module is now pinned to emulated execution, `false'
+%%          if it already runs native code or the VM lacks a JIT or emulator
+%% @doc     Pin a loaded module that has no native code yet to the emulator.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec module_set_emulated(Module :: module()) -> boolean().
+module_set_emulated(_Module) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
