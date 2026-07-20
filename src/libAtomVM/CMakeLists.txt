@@ -313,6 +313,14 @@ if ((${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") OR
         target_compile_definitions(libAtomVM PRIVATE WITH_ZLIB)
         target_link_libraries(libAtomVM PUBLIC ${ZLIB_LIBRARIES})
     endif(ZLIB_FOUND)
+    # Automatically use PCRE2 if present to provide the re module
+    find_library(PCRE2_8_LIBRARY pcre2-8)
+    find_path(PCRE2_INCLUDE_DIR pcre2.h)
+    if (PCRE2_8_LIBRARY AND PCRE2_INCLUDE_DIR)
+        target_compile_definitions(libAtomVM PRIVATE WITH_PCRE2)
+        target_include_directories(libAtomVM PRIVATE ${PCRE2_INCLUDE_DIR})
+        target_link_libraries(libAtomVM PUBLIC ${PCRE2_8_LIBRARY})
+    endif()
 endif()
 
 function(gperf_generate input output)
