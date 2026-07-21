@@ -8059,6 +8059,22 @@ static term nif_maps_from_keys(Context *ctx, int argc, term argv[])
 // in-order walk), so each access is O(1); selecting each entry by position would
 // be O(log n), making a full walk O(n log n). For flat maps arr is NULL and the
 // entry is read straight from the map.
+// Scalar-inline exact comparator for map-key loops (merge, from_list,
+// remove): identical terms and two small integers — the dominant compiler
+// key shapes — resolve without the out-of-line term_compare dispatch. Small
+// integers share the same low tag bits, so signed raw-word comparison IS the
+// term order (same trick as sort_compare below).
+static inline TermCompareResult map_key_compare(term x, term y, GlobalContext *glb)
+{
+    if (x == y) {
+        return TermEquals;
+    }
+    if (LIKELY(term_is_integer(x) && term_is_integer(y))) {
+        return ((avm_int_t) x > (avm_int_t) y) ? TermGreaterThan : TermLessThan;
+    }
+    return term_compare(x, y, TermCompareExact, glb);
+}
+
 static inline term merge_key_at(term map, const term *arr, int i)
 {
     return arr ? arr[2 * i] : term_get_map_key(map, i);
@@ -8195,7 +8211,7 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     while (i < n1 && j < n2) {
         term k1 = merge_key_at(m1, a1, i);
         term k2 = merge_key_at(m2, a2, j);
-        TermCompareResult c = term_compare(k1, k2, TermCompareExact, glb);
+        TermCompareResult c = map_key_compare(k1, k2, glb);
         if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
             free(a1);
             free(a2);
@@ -8254,7 +8270,7 @@ static int sort_kv_indices(int *idx, int *tmp, int n, const term *kv, GlobalCont
             int hi = (lo + 2 * width < n) ? lo + 2 * width : n;
             int i = lo, j = mid, k = lo;
             while (i < mid && j < hi) {
-                TermCompareResult c = term_compare(kv[2 * idx[i]], kv[2 * idx[j]], TermCompareExact, glb);
+                TermCompareResult c = map_key_compare(kv[2 * idx[i]], kv[2 * idx[j]], glb);
                 if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                     return -1;
                 }
@@ -8345,8 +8361,7 @@ static term nif_maps_from_list(Context *ctx, int argc, term argv[])
     for (int x = 0; x < (int) len;) {
         int y = x + 1;
         while (y < (int) len) {
-            TermCompareResult c = term_compare(kv[2 * idx[x]], kv[2 * idx[y]],
-                TermCompareExact | TermCompareEqualOnly, glb);
+            TermCompareResult c = map_key_compare(kv[2 * idx[x]], kv[2 * idx[y]], glb);
             if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                 free(kv);
                 free(idx);
@@ -8417,7 +8432,7 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
                 found = mid;
                 break;
             }
-            TermCompareResult c = term_compare(k, key, TermCompareExact, glb);
+            TermCompareResult c = map_key_compare(k, key, glb);
             if (c == TermLessThan) {
                 lo = mid + 1;
             } else if (c == TermGreaterThan) {
