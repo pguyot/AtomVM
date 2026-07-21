@@ -108,23 +108,33 @@ static term make_node(Heap *heap, const term *keys, const term *values, size_t n
 // the child index / insertion point.
 static bool node_find(term node, term key, const struct TermMapProbe *probe, GlobalContext *global, size_t *pos)
 {
+    // Hoist the loop-invariants out of the binary search: the KV tuple
+    // pointer (node_key otherwise re-decodes node_kv every probe) and the
+    // probe key's classification (integer-ness / value, tup2-ness). node_find
+    // is the single hottest function on large-map compiler workloads and runs
+    // ~log2(2*BT_T) probes per call. Keys live at odd slots of the KV tuple
+    // (kvp[0] is the boxed header, element i is kvp[i+1], so key i is
+    // kvp[2*i + 1]).
+    const term *kvp = term_to_const_term_ptr(node_kv(node));
+    size_t hi = term_get_size_from_boxed_header(kvp[0]) / 2;
     size_t lo = 0;
-    size_t hi = node_nkeys(node);
+    bool key_is_int = term_is_integer(key);
+    avm_int_t key_int = key_is_int ? term_to_int(key) : 0;
+    bool key_is_tup2 = term_map_probe_is_tup2(probe);
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        term k = node_key(node, mid);
+        term k = kvp[2 * mid + 1];
         if (k == key) {
             *pos = mid;
             return true;
         }
-        // Small-integer fast path: ~a quarter of the Erlang compiler's large-map
-        // key comparisons are bare small integers (the rest are mostly small
-        // tuples, already handled inline by term_compare's tuple fast path).
-        // term_is_integer is small-int-only, so two such keys -- known unequal
-        // (k == key was just ruled out) -- compare numerically without the
-        // term_compare call and its preamble.
-        if (term_is_integer(key) && term_is_integer(k)) {
-            if (term_to_int(key) < term_to_int(k)) {
+        // Small-integer fast path: ~84% of the compiler's large-map key
+        // comparisons are bare small integers. term_is_integer is
+        // small-int-only, so two such keys -- known unequal (k == key was
+        // just ruled out) -- compare numerically without the term_compare
+        // call and its preamble.
+        if (key_is_int && term_is_integer(k)) {
+            if (key_int < term_to_int(k)) {
                 hi = mid;
             } else {
                 lo = mid + 1;
@@ -133,7 +143,7 @@ static bool node_find(term node, term key, const struct TermMapProbe *probe, Glo
         }
         // 2-tuple-of-immediates probes (#b_var{}-style compiler keys) compare
         // inline against each candidate; see TermMapProbe in term.h.
-        if (term_map_probe_is_tup2(probe)) {
+        if (key_is_tup2) {
             TermCompareResult pr;
             if (term_map_probe_tup2_cmp(probe, k, &pr)) {
                 if (pr == TermLessThan) {
