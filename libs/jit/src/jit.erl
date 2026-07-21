@@ -1367,11 +1367,21 @@ emit_pass(<<?OP_GET_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_GET_LIST ~p, ~p, ~p\n", [List, HeadDest, TailDest]),
     {MSt4, Reg} = MMod:move_to_native_register(MSt3, List),
     {MSt5, Reg} = MMod:and_(MSt4, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
-    MSt6 = MMod:move_array_element(MSt5, Reg, ?LIST_HEAD_INDEX, HeadDest),
-    MSt7 = MMod:free_native_registers(MSt6, [HeadDest]),
-    MSt8 = MMod:move_array_element(MSt7, Reg, ?LIST_TAIL_INDEX, TailDest),
-    MSt9 = MMod:free_native_registers(MSt8, [Reg]),
-    MSt10 = MMod:free_native_registers(MSt9, [TailDest]),
+    %% Backends exporting get_list_head_tail/4 fetch both cells with one
+    %% paired load and keep head and tail in DISTINCT registers (each tracked
+    %% as its destination VM register), so a following read of either elides
+    %% the reload. The generic path reuses one temp and evicts the first.
+    MSt10 =
+        case erlang:function_exported(MMod, get_list_head_tail, 4) of
+            true ->
+                MMod:get_list_head_tail(MSt5, {free, Reg}, HeadDest, TailDest);
+            false ->
+                MSt6 = MMod:move_array_element(MSt5, Reg, ?LIST_HEAD_INDEX, HeadDest),
+                MSt7 = MMod:free_native_registers(MSt6, [HeadDest]),
+                MSt8 = MMod:move_array_element(MSt7, Reg, ?LIST_TAIL_INDEX, TailDest),
+                MSt9 = MMod:free_native_registers(MSt8, [Reg]),
+                MMod:free_native_registers(MSt9, [TailDest])
+        end,
     ?ASSERT_ALL_NATIVE_FREE(MSt10),
     emit_pass(Rest3, MMod, MSt10, State0);
 % 66

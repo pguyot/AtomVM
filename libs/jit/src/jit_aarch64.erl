@@ -71,6 +71,7 @@
     set_bs/2,
     copy_to_native_register/2,
     get_array_element/3,
+    get_list_head_tail/4,
     increment_sp/2,
     set_continuation_to_label/2,
     set_continuation_to_offset/1,
@@ -2490,6 +2491,52 @@ with_temp(
     non_neg_integer() | aarch64_register(),
     vm_register() | aarch64_register()
 ) -> state().
+%% OP_GET_LIST: fetch both cells of a cons with one paired load (a cons cell is
+%% [tail@0, head@1], adjacent) and leave head and tail in DISTINCT registers,
+%% each tracked as its destination VM register, so an immediately-following read
+%% of either is served from the register instead of reloading from memory (the
+%% pervasive tail-recursive list loop reads head/tail right after the match).
+%% ListReg (the already-unboxed cons pointer) is consumed. Both x-reg fast form
+%% and a fallback for y_reg / {ptr,_} destinations.
+-spec get_list_head_tail(state(), {free, aarch64_register()}, vm_register(), vm_register()) -> state().
+get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
+    H < ?MAX_REG, T < ?MAX_REG, H =/= T
+->
+    #state{stream_module = SM, regs = Regs0} =
+        State1 = pending_elide_prev(pending_elide_prev(State0, H), T),
+    %% Two distinct scratch regs, neither being ListReg (it is used/allocated,
+    %% so available_regs already excludes it).
+    Avail0 = jit_regs:available_regs(Regs0),
+    TailReg = first_avail(Avail0),
+    Avail1 = Avail0 band (bnot reg_bit(TailReg)),
+    HeadReg = first_avail(Avail1),
+    %% ldp TailReg, HeadReg, [ListReg]  -> TailReg=cell[0]=tail, HeadReg=cell[1]=head
+    Ldp = jit_aarch64_asm:ldp(TailReg, HeadReg, {ListReg, 0}),
+    StreamA = SM:append(State1#state.stream, Ldp),
+    %% Head store (+ home for x0-3), then note it while its str is the last
+    %% instruction so pending_note_store records the correct offset (it is a
+    %% no-op for the homed x0-3 case). Same for tail.
+    StH = <<(x_home_update(HeadReg, H))/binary, (jit_aarch64_asm:str(HeadReg, ?X_REG(H)))/binary>>,
+    StreamB = SM:append(StreamA, StH),
+    StateB = pending_note_store(State1#state{stream = StreamB}, H),
+    StT = <<(x_home_update(TailReg, T))/binary, (jit_aarch64_asm:str(TailReg, ?X_REG(T)))/binary>>,
+    StreamC = SM:append(StateB#state.stream, StT),
+    StateC = pending_note_store(StateB#state{stream = StreamC}, T),
+    %% ListReg freed; track head/tail in their (free) registers as the dests.
+    Regs1 = jit_regs:free_reg(StateC#state.regs, reg_bit(ListReg)),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, H}),
+    Regs3 = jit_regs:invalidate_vm_loc(Regs2, {x_reg, T}),
+    Regs4 = jit_regs:set_contents(Regs3, HeadReg, {x_reg, H}),
+    Regs5 = jit_regs:set_contents(Regs4, TailReg, {x_reg, T}),
+    StateC#state{regs = Regs5};
+get_list_head_tail(State0, {free, ListReg}, HeadDest, TailDest) ->
+    %% Fallback (y_reg / ptr dests): the generic two-load form.
+    State1 = move_array_element(State0, ListReg, ?LIST_HEAD_INDEX, HeadDest),
+    State2 = free_native_register(State1, HeadDest),
+    State3 = move_array_element(State2, ListReg, ?LIST_TAIL_INDEX, TailDest),
+    State4 = free_native_register(State3, ListReg),
+    free_native_register(State4, TailDest).
+
 move_array_element(
     #state{} =
         State0,
