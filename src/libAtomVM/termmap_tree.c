@@ -106,6 +106,49 @@ static term make_node(Heap *heap, const term *keys, const term *values, size_t n
     return node;
 }
 
+// Value update at an existing key (pos): keys, children and subtree size are
+// all unchanged, so the rebuilt node shares the source KV tuple's... no: only
+// one value changes, so a fresh KV tuple is needed, but the children tuple and
+// the size are shared/reused. Persistent structural sharing -- the source is
+// immutable. Allocates less than make_node (no children copy, no size sum).
+static term node_replace_value(Heap *heap, term node, size_t pos, term value)
+{
+    const term *src_kvp = term_to_const_term_ptr(node_kv(node));
+    size_t kv_arity = term_get_size_from_boxed_header(src_kvp[0]);
+    term new_kv = term_alloc_tuple(kv_arity, heap);
+    for (size_t j = 0; j < kv_arity; j++) {
+        term_put_tuple_element(new_kv, j, src_kvp[j + 1]);
+    }
+    term_put_tuple_element(new_kv, 2 * pos + 1, value);
+    term new_node = term_alloc_tuple(3, heap);
+    term_put_tuple_element(new_node, NODE_SIZE_IDX, term_get_tuple_element(node, NODE_SIZE_IDX));
+    term_put_tuple_element(new_node, NODE_KV_IDX, new_kv);
+    term_put_tuple_element(new_node, NODE_CHILDREN_IDX, node_children(node));
+    return new_node;
+}
+
+// Replace one child (at pos) of an internal node, the node's own keys/values
+// unchanged: share the KV tuple, copy only the children tuple (one slot), and
+// compute the subtree size incrementally (old - old_child + new_child) instead
+// of summing all children. Persistent structural sharing.
+static term node_replace_child(Heap *heap, term node, size_t pos, term new_child)
+{
+    const term *scp = term_to_const_term_ptr(node_children(node));
+    size_t nchildren = term_get_size_from_boxed_header(scp[0]);
+    term old_child = scp[pos + 1];
+    term new_children = term_alloc_tuple(nchildren, heap);
+    for (size_t i = 0; i < nchildren; i++) {
+        term_put_tuple_element(new_children, i, (i == pos) ? new_child : scp[i + 1]);
+    }
+    size_t old_size = (size_t) term_to_int(term_get_tuple_element(node, NODE_SIZE_IDX));
+    size_t new_size = old_size - termtree_size(old_child) + termtree_size(new_child);
+    term new_node = term_alloc_tuple(3, heap);
+    term_put_tuple_element(new_node, NODE_SIZE_IDX, term_from_int((avm_int_t) new_size));
+    term_put_tuple_element(new_node, NODE_KV_IDX, node_kv(node));
+    term_put_tuple_element(new_node, NODE_CHILDREN_IDX, new_children);
+    return new_node;
+}
+
 // Find the position of key in a node's sorted keys. Returns true and sets *pos
 // to the matching index if present; otherwise returns false and sets *pos to
 // the child index / insertion point.
@@ -330,25 +373,10 @@ static term bt_insert(Heap *heap, term node, term key, term value, const struct 
     size_t pos;
     bool found = node_find(node, key, probe, global, &pos);
     if (found) {
-        // Replace the value in place (copy this node only).
+        // Value update: keys/children/size unchanged, share them (see
+        // node_replace_value).
         split->did_split = false;
-        size_t m = node_nkeys(node);
-        const term *kvp = node_kv_ptr(node);
-        term keys[BT_MAX_KEYS];
-        term values[BT_MAX_KEYS];
-        term children[BT_MAX_KEYS + 1];
-        bool leaf = node_is_leaf(node);
-        for (size_t i = 0; i < m; i++) {
-            keys[i] = kvp[2 * i + 1];
-            values[i] = (i == pos) ? value : kvp[2 * i + 2];
-            if (!leaf) {
-                children[i] = node_child(node, i);
-            }
-        }
-        if (!leaf) {
-            children[m] = node_child(node, m);
-        }
-        return make_node(heap, keys, values, m, leaf ? NULL : children);
+        return node_replace_value(heap, node, pos, value);
     }
     if (node_is_leaf(node)) {
         return leaf_insert(heap, node, pos, key, value, split);
@@ -357,20 +385,10 @@ static term bt_insert(Heap *heap, term node, term key, term value, const struct 
     struct BTInsert child_split;
     term new_child = bt_insert(heap, node_child(node, pos), key, value, probe, global, &child_split);
     if (!child_split.did_split) {
-        // Rebuild this node with children[pos] replaced.
+        // Rebuild this node with children[pos] replaced; own keys/values
+        // unchanged, so share the KV tuple (see node_replace_child).
         split->did_split = false;
-        size_t m = node_nkeys(node);
-        term keys[BT_MAX_KEYS];
-        term values[BT_MAX_KEYS];
-        term children[BT_MAX_KEYS + 1];
-        for (size_t i = 0; i < m; i++) {
-            keys[i] = node_key(node, i);
-            values[i] = node_value(node, i);
-        }
-        for (size_t i = 0; i <= m; i++) {
-            children[i] = (i == pos) ? new_child : node_child(node, i);
-        }
-        return make_node(heap, keys, values, m, children);
+        return node_replace_child(heap, node, pos, new_child);
     }
     return internal_insert(heap, node, pos, new_child,
         child_split.median_key, child_split.median_value, child_split.right, split);
