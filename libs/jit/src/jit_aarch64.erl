@@ -196,7 +196,7 @@
     (Reg =:= r0 orelse Reg =:= r1 orelse Reg =:= r2 orelse Reg =:= r3 orelse Reg =:= r4 orelse
         Reg =:= r5 orelse Reg =:= r6 orelse Reg =:= r7 orelse Reg =:= r8 orelse Reg =:= r9 orelse
         Reg =:= r10 orelse Reg =:= r11 orelse Reg =:= r12 orelse Reg =:= r13 orelse Reg =:= r14 orelse
-        Reg =:= r15)
+        Reg =:= r15 orelse Reg =:= r25 orelse Reg =:= r26 orelse Reg =:= r27 orelse Reg =:= r28)
 ).
 
 -type stream() :: any().
@@ -378,12 +378,25 @@
 -define(REG_BIT_R19, (1 bsl 19)).
 -define(REG_BIT_R20, (1 bsl 20)).
 -define(REG_BIT_R21, (1 bsl 21)).
+%% x25-x28: callee-saved allocatable registers. The dispatch loop declares
+%% them as clobbers of the C->native crossing (opcodesswitch.h saves them
+%% once per scheduling slice), so generated code may use them with no
+%% prologue. C primitives preserve them per the AAPCS64: values survive
+%% calls without the push/pop pair, and register-cache contents survive
+%% cache-safe (pure, non-x-writing) primitive calls.
+-define(REG_BIT_R25, (1 bsl 25)).
+-define(REG_BIT_R26, (1 bsl 26)).
+-define(REG_BIT_R27, (1 bsl 27)).
+-define(REG_BIT_R28, (1 bsl 28)).
+-define(CALLEE_SAVED_CACHE_MASK,
+    (?REG_BIT_R25 bor ?REG_BIT_R26 bor ?REG_BIT_R27 bor ?REG_BIT_R28)
+).
 
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
         ?REG_BIT_R12 bor ?REG_BIT_R13 bor ?REG_BIT_R14 bor ?REG_BIT_R15 bor
         ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6 bor
-        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0)
+        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0 bor ?CALLEE_SAVED_CACHE_MASK)
 ).
 -define(SCRATCH_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
@@ -500,7 +513,19 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% free_native_registers/2, free_native_register/2, assert_all_native_free/1,
 %% first_avail/1, mask_to_list/1, args_regs/1, prepare_call_scratch/1) is shared
 %% across the register-based backends and flows through jit_regs.
--define(FIRST_AVAIL_REGS, [r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6, r2, r1, r0]).
+-define(FIRST_AVAIL_REGS, [
+    r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6, r2, r1, r0, r25, r26, r27, r28
+]).
+
+%% Allocation for values worth caching across C calls (VM x/y register
+%% loads): prefer a callee-saved register so the cached copy survives
+%% cache-safe primitive calls (see call_func_ptr0). Falls back to the
+%% caller-saved scratch order under pressure.
+first_avail_cacheable(Avail) ->
+    case Avail band ?CALLEE_SAVED_CACHE_MASK of
+        0 -> first_avail(Avail);
+        M -> first_avail(M)
+    end.
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, ?JITSTATE_REG).
 -include("jit_backend_regs_impl.hrl").
@@ -663,11 +688,14 @@ call_primitive(
     %% calls go through call_func_ptr directly and keep their ctx argument.)
     Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     Pure = prim_pure(Primitive),
+    %% Register-cache contents survive the call only when the primitive
+    %% neither GCs (pure) nor writes VM x registers (trim).
+    CacheSafe = Pure andalso Primitive =/= ?PRIM_TRIM_LIVE_REGS,
     case (State#state.variant band ?JIT_VARIANT_RELOC) =/= 0 of
         true ->
             %% Direct, loader-relocated call: no table load, emit the branch in
             %% call_func_ptr from the {primitive, _} form.
-            call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
+            call_func_ptr0(State, {primitive, Primitive}, Args, {Pure, CacheSafe});
         false ->
             PrepCall =
                 case Primitive of
@@ -678,7 +706,7 @@ call_primitive(
                 end,
             Stream1 = StreamModule:append(Stream0, PrepCall),
             StateCall = State#state{stream = Stream1},
-            call_func_ptr0(StateCall, {free, ?IP0_REG}, Args, Pure)
+            call_func_ptr0(StateCall, {free, ?IP0_REG}, Args, {Pure, CacheSafe})
     end.
 
 %%-----------------------------------------------------------------------------
@@ -1914,20 +1942,20 @@ shift_left(
 -spec call_func_ptr(state(), {free, aarch64_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), aarch64_register()}.
 call_func_ptr(#state{} = StateP, FuncPtrTuple, Args) ->
-    call_func_ptr0(StateP, FuncPtrTuple, Args, false).
+    call_func_ptr0(StateP, FuncPtrTuple, Args, {false, false}).
 
 -spec call_func_ptr0(
     state(),
     {free, aarch64_register()} | {primitive, non_neg_integer()},
     [arg()],
-    boolean()
+    {boolean(), boolean()}
 ) ->
     {state(), aarch64_register()}.
 call_func_ptr0(
     #state{} = StateP,
     FuncPtrTuple,
     Args,
-    Pure
+    {Pure, CacheSafe}
 ) ->
     %% The callee can read any x register from ctx (and clobbers the
     %% register cache): all pending stores must persist. ctx/jit_state args
@@ -1956,7 +1984,9 @@ call_func_ptr0(
     %% callee-saved: the callee preserves them, so only lr and live scratch
     %% regs need saving around the call.
     Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
-    SavedRegs = [?LR_REG | mask_to_list(UsedRegs1)],
+    %% x25-x28 are callee-saved: live values survive the call with no
+    %% push/pop pair.
+    SavedRegs = [?LR_REG | mask_to_list(UsedRegs1 band (bnot ?CALLEE_SAVED_CACHE_MASK))],
     %% If the function pointer lives in a parameter register (r0 is
     %% allocatable and call results may stay there), argument setup below
     %% would overwrite it: park it in IP0 first.
@@ -2066,7 +2096,14 @@ call_func_ptr0(
     ResultBit = reg_bit(ResultReg),
     AvailableRegs2 = AvailableRegs1 band (bnot ResultBit),
     AvailableRegs3 = AvailableRegs2 band avail_mask(State0),
-    Regs1 = jit_regs:invalidate_all(Regs0),
+    %% Cache-safe primitives (pure, no VM x-register writes) cannot move
+    %% terms or change VM registers: contents cached in callee-saved
+    %% registers stay valid across the call. Everything else invalidates.
+    Regs1 =
+        case CacheSafe of
+            true -> jit_regs:invalidate_except(Regs0, ?CALLEE_SAVED_CACHE_MASK, fun reg_bit/1);
+            false -> jit_regs:invalidate_all(Regs0)
+        end,
     UsedRegs2 = UsedRegs1 bor ResultBit,
     {
         State1#state{
@@ -2789,7 +2826,7 @@ move_to_native_register_emit(
     Contents
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Available),
+    Reg = first_avail_cacheable(Available),
     Bit = reg_bit(Reg),
     I1 = jit_aarch64_asm:ldr(Reg, ?X_REG(?MAX_REG)),
     Stream1 = StreamModule:append(Stream0, I1),
@@ -2814,7 +2851,7 @@ move_to_native_register_emit(
         regs = Regs0
     } = State = pending_clear_x(StateP, X),
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Available),
+    Reg = first_avail_cacheable(Available),
     Bit = reg_bit(Reg),
     I1 = jit_aarch64_asm:ldr(Reg, ?X_REG(X)),
     Stream1 = StreamModule:append(Stream0, I1),
@@ -2836,7 +2873,7 @@ move_to_native_register_emit(
     Contents
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Available),
+    Reg = first_avail_cacheable(Available),
     Bit = reg_bit(Reg),
     Code = jit_aarch64_asm:ldr(Reg, {?E_REG, Y * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, Code),
@@ -4605,7 +4642,11 @@ reg_bit(r16) -> ?REG_BIT_R16;
 reg_bit(r17) -> ?REG_BIT_R17;
 reg_bit(r19) -> ?REG_BIT_R19;
 reg_bit(r20) -> ?REG_BIT_R20;
-reg_bit(r21) -> ?REG_BIT_R21.
+reg_bit(r21) -> ?REG_BIT_R21;
+reg_bit(r25) -> ?REG_BIT_R25;
+reg_bit(r26) -> ?REG_BIT_R26;
+reg_bit(r27) -> ?REG_BIT_R27;
+reg_bit(r28) -> ?REG_BIT_R28.
 
 %%-----------------------------------------------------------------------------
 %% @doc Add a label at the current offset
