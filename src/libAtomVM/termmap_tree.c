@@ -51,7 +51,7 @@
 // keys (the root may hold fewer). Nodes are plain tuples, so the garbage
 // collector, term copier and hasher need no special cases.
 
-#define BT_T 8
+#define BT_T 24
 #define BT_MAX_KEYS (2 * BT_T - 1) // 15
 #define BT_SPLIT_KEYS (2 * BT_T) // a node transiently reaching this is split
 
