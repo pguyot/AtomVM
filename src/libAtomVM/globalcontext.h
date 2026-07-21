@@ -187,6 +187,11 @@ struct GlobalContext
     // (an opaque struct Phash2AtomCache, see phash2.c). NULL until the
     // first atom is hashed.
     void *phash2_atom_cache;
+    // When set (atomvm:set_load_binary_emulated/1), modules loaded via
+    // code:load_binary/3 are pinned to emulated execution at load: compiler
+    // output modules are artifacts whose few __info__ calls do not justify a
+    // full runtime JIT compilation.
+    bool load_binary_emulated;
 
     int32_t last_process_id;
 
