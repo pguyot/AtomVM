@@ -4771,7 +4771,7 @@ maybe_emit_loop_preload(
             Mask > 0 andalso Mask < 16#10000 andalso
             not maps:is_key(Label, Branches),
     Xs = [X || X <- lists:seq(0, 15), Mask band (1 bsl X) =/= 0],
-    case Eligible andalso length(Xs) =< 3 of
+    case Eligible andalso length(Xs) =< 5 of
         true ->
             {State1, RevBindings} = lists:foldl(
                 fun(X, {Acc0, Bs}) ->
