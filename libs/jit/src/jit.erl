@@ -6689,6 +6689,20 @@ emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, JumpOn) ->
             equal -> BSt1
         end
     end,
+    %% Backends exporting supports_inline_tuple2_eq/0 also resolve the
+    %% pervasive 2-tuple-record shape (#b_var{} and friends) inline; other
+    %% shapes still fall back to the C comparator.
+    Deep =
+        case erlang:function_exported(MMod, supports_inline_tuple2_eq, 0) of
+            true ->
+                fun(N1) ->
+                    emit_tuple2_exact_eq(
+                        MMod, N1, Arg1Reg, Arg2Reg, Label, JumpOn, Fallback
+                    )
+                end;
+            false ->
+                Fallback
+        end,
     MMod:if_else_block(
         MSt2,
         {Arg1Reg, '==', Arg2Reg},
@@ -6701,7 +6715,7 @@ emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, JumpOn) ->
                     MMod:if_else_block(
                         N0,
                         {Arg2Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_IMMED},
-                        Fallback,
+                        Deep,
                         Unequal
                     )
                 end,
@@ -6709,6 +6723,88 @@ emit_exact_equality_fastpath(MMod, MSt0, Label, Arg1, Arg2, JumpOn) ->
             )
         end
     ).
+
+%% Inline exact (in)equality for two non-immediate operands, resolving the
+%% 2-tuple-of-scalars shape without the C comparator:
+%%   - different primary tags (list vs boxed): never exactly equal
+%%   - both boxed, first is a 2-tuple: a boxed term with a different header
+%%     is never exactly equal to it (tuple headers encode arity; no other
+%%     boxed type shares the tuple header)
+%%   - element pairs that are identical are equal; unequal pairs that are
+%%     BOTH immediates are unequal; anything else defers to the fallback
+%% The equal/unequal outcomes do NOT free the operand registers (the shared
+%% fallback stub still consumes them); they are freed once at the join.
+emit_tuple2_exact_eq(MMod, MSt0, Arg1Reg, Arg2Reg, Label, JumpOn, Fallback) ->
+    Tuple2Header = (2 bsl 6) bor ?TERM_BOXED_TUPLE,
+    ANotBoxedRef = make_ref(),
+    UneqRef = make_ref(),
+    FallRef = make_ref(),
+    DoneRef = make_ref(),
+    Eq1Ref = make_ref(),
+    Eq2Ref = make_ref(),
+    M1 = cond_jump_to_label(
+        {Arg1Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, ANotBoxedRef, MMod, MSt0
+    ),
+    %% Arg1 boxed; a non-boxed Arg2 (list) is never exactly equal.
+    M2 = cond_jump_to_label(
+        {Arg2Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, UneqRef, MMod, M1
+    ),
+    {M3, P1} = MMod:and_(M2, Arg1Reg, ?TERM_PRIMARY_CLEAR_MASK),
+    {M4, H1} = MMod:get_array_element(M3, P1, 0),
+    M5 = cond_jump_to_label({{free, H1}, '!=', Tuple2Header}, FallRef, MMod, M4),
+    {M6, P2} = MMod:and_(M5, Arg2Reg, ?TERM_PRIMARY_CLEAR_MASK),
+    {M7, H2} = MMod:get_array_element(M6, P2, 0),
+    M8 = cond_jump_to_label({{free, H2}, '!=', Tuple2Header}, UneqRef, MMod, M7),
+    %% element 0
+    {M9, E1a} = MMod:get_array_element(M8, P1, 1),
+    {M10, E2a} = MMod:get_array_element(M9, P2, 1),
+    M11 = cond_jump_to_label({E1a, '==', E2a}, Eq1Ref, MMod, M10),
+    %% unequal words: both immediate -> unequal, else fallback
+    {M12, TandA} = MMod:and_(M11, {free, E1a}, E2a),
+    M13 = MMod:free_native_registers(M12, [E2a]),
+    M14 = cond_jump_to_label(
+        {{free, TandA}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_IMMED}, FallRef, MMod, M13
+    ),
+    M15 = MMod:jump_to_label(M14, UneqRef),
+    M16 = MMod:add_label(M15, Eq1Ref),
+    %% element 1
+    {M17, E1b} = MMod:get_array_element(M16, P1, 2),
+    {M18, E2b} = MMod:get_array_element(M17, P2, 2),
+    M19 = MMod:free_native_registers(M18, [P1, P2]),
+    M20 = cond_jump_to_label({E1b, '==', E2b}, Eq2Ref, MMod, M19),
+    {M21, TandB} = MMod:and_(M20, {free, E1b}, E2b),
+    M22 = MMod:free_native_registers(M21, [E2b]),
+    M23 = cond_jump_to_label(
+        {{free, TandB}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_IMMED}, FallRef, MMod, M22
+    ),
+    M24 = MMod:jump_to_label(M23, UneqRef),
+    M25 = MMod:add_label(M24, Eq2Ref),
+    %% EQUAL outcome (operand registers freed at the join)
+    M26 =
+        case JumpOn of
+            equal -> MMod:jump_to_label(M25, Label);
+            not_equal -> M25
+        end,
+    M27 = MMod:jump_to_label(M26, DoneRef),
+    %% Arg1 not boxed (list): a boxed Arg2 is never exactly equal; two lists
+    %% defer to the fallback.
+    M28 = MMod:add_label(M27, ANotBoxedRef),
+    M29 = cond_jump_to_label(
+        {Arg2Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, FallRef, MMod, M28
+    ),
+    %% fall through: list vs boxed -> unequal
+    M30 = MMod:add_label(M29, UneqRef),
+    M31 =
+        case JumpOn of
+            not_equal -> MMod:jump_to_label(M30, Label);
+            equal -> M30
+        end,
+    M32 = MMod:jump_to_label(M31, DoneRef),
+    %% shared fallback stub (consumes the operand registers)
+    M33 = MMod:add_label(M32, FallRef),
+    M34 = Fallback(M33),
+    M35 = MMod:add_label(M34, DoneRef),
+    MMod:free_native_registers(M35, [Arg1Reg, Arg2Reg]).
 
 %% Emit a runtime small-integer fast path wrapping a term_compare fallback,
 %% mirroring how BEAM's JIT inlines tagged-small-int comparison before calling
