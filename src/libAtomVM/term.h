@@ -2632,6 +2632,108 @@ static inline int term_get_tuple_arity(term t)
 }
 
 /*
+ * Sorted-map probe specialization.
+ *
+ * Map descents (flat-map binary search and the B-tree's node search) compare
+ * one probe key against many candidate keys in term_compare(TermCompareExact)
+ * order. The Erlang compiler's hottest maps and sets are keyed by 2-tuples of
+ * immediates (#b_var{}-style records: {b, Int} / {Atom, Int}); classifying the
+ * probe ONCE per operation lets each candidate comparison run inline instead
+ * of through a term_compare call.
+ *
+ * The inline comparator covers: candidate is a 2-tuple whose differing element
+ * pair is identical, two small integers, or an integer against an atom (type
+ * order: number < atom). Everything else — including two distinct atoms, whose
+ * order needs the atom table — reports "not covered" and the caller falls back
+ * to term_compare for that candidate. The order implemented here is exactly
+ * term_compare's: tuple arity first, then leftmost differing element.
+ */
+struct TermMapProbe
+{
+    // Valid (non-invalid e0) only when the probe key is a 2-tuple of
+    // small-integer/atom elements.
+    term e0;
+    term e1;
+};
+
+static inline bool term_map_probe_elem_covered(term t)
+{
+    return term_is_integer(t) || term_is_atom(t);
+}
+
+static inline void term_map_probe_init(struct TermMapProbe *probe, term key)
+{
+    probe->e0 = term_invalid_term();
+    if (term_is_tuple(key) && term_get_tuple_arity(key) == 2) {
+        term a = term_get_tuple_element(key, 0);
+        term b = term_get_tuple_element(key, 1);
+        if (term_map_probe_elem_covered(a) && term_map_probe_elem_covered(b)) {
+            probe->e0 = a;
+            probe->e1 = b;
+        }
+    }
+}
+
+static inline bool term_map_probe_is_tup2(const struct TermMapProbe *probe)
+{
+    return probe->e0 != term_invalid_term();
+}
+
+// Compare one probe element (small integer or atom) against a candidate
+// element. Returns false when the pair is outside the covered domain.
+static inline bool term_map_probe_elem_cmp(term pe, term ke, TermCompareResult *res)
+{
+    if (pe == ke) {
+        *res = TermEquals;
+        return true;
+    }
+    if (term_is_integer(pe)) {
+        if (term_is_integer(ke)) {
+            *res = (term_to_int(pe) > term_to_int(ke)) ? TermGreaterThan : TermLessThan;
+            return true;
+        }
+        if (term_is_atom(ke)) {
+            // numbers sort before atoms
+            *res = TermLessThan;
+            return true;
+        }
+        return false;
+    }
+    // pe is an atom (distinct from ke)
+    if (term_is_integer(ke)) {
+        *res = TermGreaterThan;
+        return true;
+    }
+    // two distinct atoms order by atom-table lookup: not covered here
+    return false;
+}
+
+// Compare the (tup2-classified) probe against candidate key k, probe first:
+// *res = probe <=> k. Returns false when the comparison needs term_compare.
+static inline bool term_map_probe_tup2_cmp(const struct TermMapProbe *probe, term k, TermCompareResult *res)
+{
+    if (!term_is_tuple(k)) {
+        return false;
+    }
+    int k_arity = term_get_tuple_arity(k);
+    if (k_arity != 2) {
+        // tuples order by arity first
+        *res = (2 > k_arity) ? TermGreaterThan : TermLessThan;
+        return true;
+    }
+    const term *kp = term_to_const_term_ptr(k);
+    TermCompareResult r0;
+    if (!term_map_probe_elem_cmp(probe->e0, kp[1], &r0)) {
+        return false;
+    }
+    if (r0 != TermEquals) {
+        *res = r0;
+        return true;
+    }
+    return term_map_probe_elem_cmp(probe->e1, kp[2], res);
+}
+
+/*
  * Native records.
  *
  * Layout of an instance on the heap:
@@ -3150,6 +3252,13 @@ static inline term term_alloc_map(avm_uint_t size, Heap *heap)
 // invariant flat maps rely on. These helpers (defined in term.c) bridge to
 // termmap_tree.h without pulling it into this header.
 #define TERM_MAP_TREE_THRESHOLD 128
+// Asymmetric growth cutoff: a flat map that a single-key insert would GROW
+// past this size converts to the tree form instead of paying the O(n) flat
+// copy. Reads and pure updates keep the flat layout up to
+// TERM_MAP_TREE_THRESHOLD (block copy + shared keys beat tree path copies),
+// but insert-heavy workloads (sets:add_element churn in the Erlang compiler)
+// go quadratic on large flat maps.
+#define TERM_MAP_FLAT_GROW_MAX 48
 #define TERM_MAP_TREE_BOXED_ARITY 3
 #define TERM_MAP_TREE_ROOT_INDEX 2
 #define TERM_MAP_TREE_SIZE_INDEX 3
@@ -3259,6 +3368,8 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
     // below. The compiler's hot maps run to thousands of entries, where this
     // wins even for atom keys (whose comparison is cached, see atom_table).
     if (arity > TERM_MAP_LINEAR_SCAN_MAX) {
+        struct TermMapProbe probe;
+        term_map_probe_init(&probe, key);
         int low = 0;
         int high = arity - 1;
         while (low <= high) {
@@ -3277,6 +3388,21 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
                     high = mid - 1;
                 }
                 continue;
+            }
+            // 2-tuple-of-immediates probes (#b_var{}-style compiler keys)
+            // compare inline; see TermMapProbe.
+            if (term_map_probe_is_tup2(&probe)) {
+                TermCompareResult pr;
+                if (term_map_probe_tup2_cmp(&probe, k, &pr)) {
+                    if (pr == TermGreaterThan) {
+                        low = mid + 1;
+                    } else if (pr == TermLessThan) {
+                        high = mid - 1;
+                    } else {
+                        return mid;
+                    }
+                    continue;
+                }
             }
             TermCompareResult cmp = term_compare(k, key, TermCompareExact, global);
             if (cmp == TermLessThan) {

@@ -613,6 +613,55 @@ static enum TermTypeIndex term_type_to_index(term t)
 // external terms) are delegated per pair to the generic comparator.
 static TermCompareResult term_exact_equals(term t, term other, GlobalContext *global)
 {
+    // Stackless prefix for the dominant shallow cases (the Erlang compiler
+    // compares #b_var{}-style records constantly): identical terms, distinct
+    // immediates/tags, and flat tuples whose element pairs resolve to
+    // identical-or-immediate. Anything needing a deep walk falls through to
+    // the temp-stack loop below.
+    if (t == other) {
+        return TermEquals;
+    }
+    if (((t ^ other) & TERM_PRIMARY_MASK) != 0 || (t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        // Distinct primary tags or two distinct immediates: never exactly
+        // equal (boxed integers are normalized).
+        return TermLessThan;
+    }
+    if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_BOXED) {
+        const term *t_ptr = term_to_const_term_ptr(t);
+        const term *other_ptr = term_to_const_term_ptr(other);
+        term t_header = t_ptr[0];
+        term other_header = other_ptr[0];
+        if (t_header != other_header) {
+            // Headers encode boxed type and size: no tuple/binary/etc. of a
+            // different shape can be exactly equal. (Sub-binaries/heap vs
+            // refc binaries share the same value with different headers only
+            // for binaries, whose tag differs from tuples — conservatively
+            // only conclude here for tuples.)
+            if ((t_header & TERM_BOXED_TAG_MASK) == TERM_BOXED_TUPLE
+                && (other_header & TERM_BOXED_TAG_MASK) == TERM_BOXED_TUPLE) {
+                return TermLessThan;
+            }
+        } else if ((t_header & TERM_BOXED_TAG_MASK) == TERM_BOXED_TUPLE) {
+            int arity = term_get_size_from_boxed_header(t_header);
+            if (arity <= 8) {
+                for (int i = 1; i <= arity; i++) {
+                    term a = t_ptr[i];
+                    term b = other_ptr[i];
+                    if (a == b) {
+                        continue;
+                    }
+                    if (((a ^ b) & TERM_PRIMARY_MASK) != 0
+                        || (a & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+                        return TermLessThan;
+                    }
+                    // compound element pair: needs the deep walk
+                    goto deep;
+                }
+                return TermEquals;
+            }
+        }
+    }
+deep:;
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;
