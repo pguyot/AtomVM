@@ -243,6 +243,7 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
+static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term argv[]);
 static term nif_os_cmd(Context *ctx, int argc, term argv[]);
 static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[]);
 static term nif_re_pcre2_match(Context *ctx, int argc, term argv[]);
@@ -852,6 +853,10 @@ static const struct Nif phash2_nif = {
 static const struct Nif atomvm_module_set_emulated_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_atomvm_module_set_emulated
+};
+static const struct Nif atomvm_set_load_binary_emulated_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_atomvm_set_load_binary_emulated
 };
 
 static const struct Nif os_cmd_nif = {
@@ -5250,6 +5255,16 @@ static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[])
 #endif
 }
 
+static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    if (UNLIKELY(argv[0] != TRUE_ATOM && argv[0] != FALSE_ATOM)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    ctx->global->load_binary_emulated = (argv[0] == TRUE_ATOM);
+    return OK_ATOM;
+}
+
 static term nif_os_cmd(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
@@ -7417,6 +7432,15 @@ static term nif_code_load_binary(Context *ctx, int argc, term argv[])
     if (UNLIKELY(globalcontext_insert_module(ctx->global, new_module) < 0)) {
         return ERROR_ATOM;
     }
+
+#if !defined(AVM_NO_JIT) && !defined(AVM_NO_EMU)
+    // Compiler-style embedders (see atomvm:set_load_binary_emulated/1) pin
+    // freshly loaded modules to emulated execution: their few __info__/hook
+    // calls do not justify JIT-compiling a whole generated module.
+    if (UNLIKELY(ctx->global->load_binary_emulated) && new_module->native_code == NULL) {
+        module_enter_emu(new_module);
+    }
+#endif
 
     if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
