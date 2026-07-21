@@ -146,13 +146,18 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
         use_live_regs = false;
     }
 
+    // OTP truncates backtraces at backtrace_depth frames (default 8); walking
+    // and materializing the whole stack makes throw-as-control-flow (pervasive
+    // in the Erlang compiler) O(stack depth) per raise.
+#define AVM_RAW_STACKTRACE_MAX_FRAMES 8
+
     unsigned int num_frames = 0;
     Module *prev_mod = NULL;
     size_t prev_mod_offset = (size_t) -1;
     term *ct = ctx->e;
     term *stack_base = context_stack_base(ctx);
 
-    while (ct != stack_base) {
+    while (ct != stack_base && num_frames < AVM_RAW_STACKTRACE_MAX_FRAMES) {
         if (term_is_cp(*ct)) {
 
             Module *cp_mod;
@@ -256,7 +261,10 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
     // GC may have moved stack
     ct = ctx->e;
     stack_base = context_stack_base(ctx);
-    while (ct != stack_base) {
+    // Same iteration and cap as the counting walk above: frame 0 is the
+    // raising site prepended above, so stop at num_frames - 1 walked frames.
+    unsigned int built_frames = 0;
+    while (ct != stack_base && built_frames + 1 < num_frames) {
         if (term_is_cp(*ct)) {
             Module *cp_mod;
             size_t mod_offset;
@@ -273,6 +281,7 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
                 term_put_tuple_element(frame_info, 1, term_from_int(mod_offset));
 
                 raw_stacktrace = term_list_prepend(frame_info, raw_stacktrace, &ctx->heap);
+                built_frames++;
             }
         } else if (term_is_catch_label(*ct)) {
 
@@ -291,6 +300,7 @@ term stacktrace_create_raw_mfa(Context *ctx, Module *mod, size_t current_offset,
                 term_put_tuple_element(frame_info, 1, term_from_int(mod_offset));
 
                 raw_stacktrace = term_list_prepend(frame_info, raw_stacktrace, &ctx->heap);
+                built_frames++;
             }
         }
         ct++;

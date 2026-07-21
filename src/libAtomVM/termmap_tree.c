@@ -106,7 +106,7 @@ static term make_node(Heap *heap, const term *keys, const term *values, size_t n
 // Find the position of key in a node's sorted keys. Returns true and sets *pos
 // to the matching index if present; otherwise returns false and sets *pos to
 // the child index / insertion point.
-static bool node_find(term node, term key, GlobalContext *global, size_t *pos)
+static bool node_find(term node, term key, const struct TermMapProbe *probe, GlobalContext *global, size_t *pos)
 {
     size_t lo = 0;
     size_t hi = node_nkeys(node);
@@ -131,6 +131,22 @@ static bool node_find(term node, term key, GlobalContext *global, size_t *pos)
             }
             continue;
         }
+        // 2-tuple-of-immediates probes (#b_var{}-style compiler keys) compare
+        // inline against each candidate; see TermMapProbe in term.h.
+        if (term_map_probe_is_tup2(probe)) {
+            TermCompareResult pr;
+            if (term_map_probe_tup2_cmp(probe, k, &pr)) {
+                if (pr == TermLessThan) {
+                    hi = mid;
+                } else if (pr == TermGreaterThan) {
+                    lo = mid + 1;
+                } else {
+                    *pos = mid;
+                    return true;
+                }
+                continue;
+            }
+        }
         TermCompareResult cmp = term_compare(key, k, TermCompareExact, global);
         if (cmp == TermLessThan) {
             hi = mid;
@@ -147,9 +163,11 @@ static bool node_find(term node, term key, GlobalContext *global, size_t *pos)
 
 term termtree_get(term node, term key, GlobalContext *global)
 {
+    struct TermMapProbe probe;
+    term_map_probe_init(&probe, key);
     while (!term_is_nil(node)) {
         size_t pos;
-        if (node_find(node, key, global, &pos)) {
+        if (node_find(node, key, &probe, global, &pos)) {
             return node_value(node, pos);
         }
         if (node_is_leaf(node)) {
@@ -218,7 +236,7 @@ struct BTInsert
     term right;
 };
 
-static term bt_insert(Heap *heap, term node, term key, term value, GlobalContext *global, struct BTInsert *split);
+static term bt_insert(Heap *heap, term node, term key, term value, const struct TermMapProbe *probe, GlobalContext *global, struct BTInsert *split);
 
 // Insert into a leaf, splitting if it overflows.
 static term leaf_insert(Heap *heap, term node, size_t at, term key, term value, struct BTInsert *split)
@@ -287,7 +305,7 @@ static term internal_insert(Heap *heap, term node, size_t at, term child_left,
     return make_node(heap, keys, values, mid, children);
 }
 
-static term bt_insert(Heap *heap, term node, term key, term value, GlobalContext *global, struct BTInsert *split)
+static term bt_insert(Heap *heap, term node, term key, term value, const struct TermMapProbe *probe, GlobalContext *global, struct BTInsert *split)
 {
     if (term_is_nil(node)) {
         // Empty tree: a one-entry leaf.
@@ -295,7 +313,7 @@ static term bt_insert(Heap *heap, term node, term key, term value, GlobalContext
         return make_node(heap, &key, &value, 1, NULL);
     }
     size_t pos;
-    bool found = node_find(node, key, global, &pos);
+    bool found = node_find(node, key, probe, global, &pos);
     if (found) {
         // Replace the value in place (copy this node only).
         split->did_split = false;
@@ -321,7 +339,7 @@ static term bt_insert(Heap *heap, term node, term key, term value, GlobalContext
     }
     // Descend into child pos.
     struct BTInsert child_split;
-    term new_child = bt_insert(heap, node_child(node, pos), key, value, global, &child_split);
+    term new_child = bt_insert(heap, node_child(node, pos), key, value, probe, global, &child_split);
     if (!child_split.did_split) {
         // Rebuild this node with children[pos] replaced.
         split->did_split = false;
@@ -344,8 +362,10 @@ static term bt_insert(Heap *heap, term node, term key, term value, GlobalContext
 
 term termtree_put(Heap *heap, term node, term key, term value, GlobalContext *global)
 {
+    struct TermMapProbe probe;
+    term_map_probe_init(&probe, key);
     struct BTInsert split;
-    term root = bt_insert(heap, node, key, value, global, &split);
+    term root = bt_insert(heap, node, key, value, &probe, global, &split);
     if (split.did_split) {
         // Grow taller: a new root with the median and the two halves.
         term children[2] = { root, split.right };
@@ -471,10 +491,12 @@ static term build_parent(Heap *heap, const term *keys, const term *values, size_
 
 int termtree_rank(term node, term key, GlobalContext *global)
 {
+    struct TermMapProbe probe;
+    term_map_probe_init(&probe, key);
     int acc = 0;
     while (!term_is_nil(node)) {
         size_t pos;
-        bool found = node_find(node, key, global, &pos);
+        bool found = node_find(node, key, &probe, global, &pos);
         bool leaf = node_is_leaf(node);
         if (!leaf) {
             for (size_t i = 0; i < pos; i++) {
