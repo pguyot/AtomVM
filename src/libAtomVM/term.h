@@ -3370,19 +3370,26 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
     if (arity > TERM_MAP_LINEAR_SCAN_MAX) {
         struct TermMapProbe probe;
         term_map_probe_init(&probe, key);
+        // Hoist the loop-invariants (raw key-tuple pointer, probe key
+        // classification) out of the binary search, as in termmap_tree.c's
+        // node_find. keys element i is keysp[i + 1].
+        const term *keysp = term_to_const_term_ptr(keys);
+        bool key_is_int = term_is_integer(key);
+        avm_int_t key_int = key_is_int ? term_to_int(key) : 0;
+        bool key_is_tup2 = term_map_probe_is_tup2(&probe);
         int low = 0;
         int high = arity - 1;
         while (low <= high) {
             int mid = low + (high - low) / 2;
-            term k = term_get_tuple_element(keys, mid);
+            term k = keysp[mid + 1];
             if (k == key) {
                 return mid;
             }
             // Small-integer probes (hot in the compiler's label/var-indexed
             // maps) compare numerically without the term_compare call; k and
             // key are known unequal here.
-            if (term_is_integer(k) && term_is_integer(key)) {
-                if (term_to_int(k) < term_to_int(key)) {
+            if (key_is_int && term_is_integer(k)) {
+                if (term_to_int(k) < key_int) {
                     low = mid + 1;
                 } else {
                     high = mid - 1;
@@ -3391,7 +3398,7 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
             }
             // 2-tuple-of-immediates probes (#b_var{}-style compiler keys)
             // compare inline; see TermMapProbe.
-            if (term_map_probe_is_tup2(&probe)) {
+            if (key_is_tup2) {
                 TermCompareResult pr;
                 if (term_map_probe_tup2_cmp(&probe, k, &pr)) {
                     if (pr == TermGreaterThan) {
