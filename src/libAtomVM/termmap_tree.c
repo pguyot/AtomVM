@@ -65,6 +65,9 @@ static inline bool node_is_leaf(term n) { return term_is_nil(node_children(n)); 
 static inline size_t node_nkeys(term n) { return (size_t) term_get_tuple_arity(node_kv(n)) / 2; }
 static inline term node_key(term n, size_t i) { return term_get_tuple_element(node_kv(n), 2 * i); }
 static inline term node_value(term n, size_t i) { return term_get_tuple_element(node_kv(n), (2 * i) + 1); }
+// Raw KV pointer for hot copy loops: element j of the kv tuple is kvp[j + 1],
+// so key i is kvp[2*i + 1] and value i is kvp[2*i + 2].
+static inline const term *node_kv_ptr(term n) { return term_to_const_term_ptr(node_kv(n)); }
 static inline term node_child(term n, size_t i) { return term_get_tuple_element(node_children(n), i); }
 
 size_t termtree_size(term node)
@@ -252,17 +255,18 @@ static term bt_insert(Heap *heap, term node, term key, term value, const struct 
 static term leaf_insert(Heap *heap, term node, size_t at, term key, term value, struct BTInsert *split)
 {
     size_t m = node_nkeys(node);
+    const term *kvp = node_kv_ptr(node);
     term keys[BT_SPLIT_KEYS];
     term values[BT_SPLIT_KEYS];
     for (size_t i = 0; i < at; i++) {
-        keys[i] = node_key(node, i);
-        values[i] = node_value(node, i);
+        keys[i] = kvp[2 * i + 1];
+        values[i] = kvp[2 * i + 2];
     }
     keys[at] = key;
     values[at] = value;
     for (size_t i = at; i < m; i++) {
-        keys[i + 1] = node_key(node, i);
-        values[i + 1] = node_value(node, i);
+        keys[i + 1] = kvp[2 * i + 1];
+        values[i + 1] = kvp[2 * i + 2];
     }
     size_t total = m + 1;
     if (total <= BT_MAX_KEYS) {
@@ -285,12 +289,13 @@ static term internal_insert(Heap *heap, term node, size_t at, term child_left,
     term median_key, term median_value, term child_right, struct BTInsert *split)
 {
     size_t m = node_nkeys(node);
+    const term *kvp = node_kv_ptr(node);
     term keys[BT_SPLIT_KEYS];
     term values[BT_SPLIT_KEYS];
     term children[BT_SPLIT_KEYS + 1];
     for (size_t i = 0; i < at; i++) {
-        keys[i] = node_key(node, i);
-        values[i] = node_value(node, i);
+        keys[i] = kvp[2 * i + 1];
+        values[i] = kvp[2 * i + 2];
         children[i] = node_child(node, i);
     }
     keys[at] = median_key;
@@ -298,8 +303,8 @@ static term internal_insert(Heap *heap, term node, size_t at, term child_left,
     children[at] = child_left;
     children[at + 1] = child_right;
     for (size_t i = at; i < m; i++) {
-        keys[i + 1] = node_key(node, i);
-        values[i + 1] = node_value(node, i);
+        keys[i + 1] = kvp[2 * i + 1];
+        values[i + 1] = kvp[2 * i + 2];
         children[i + 2] = node_child(node, i + 1);
     }
     size_t total = m + 1;
@@ -328,13 +333,14 @@ static term bt_insert(Heap *heap, term node, term key, term value, const struct 
         // Replace the value in place (copy this node only).
         split->did_split = false;
         size_t m = node_nkeys(node);
+        const term *kvp = node_kv_ptr(node);
         term keys[BT_MAX_KEYS];
         term values[BT_MAX_KEYS];
         term children[BT_MAX_KEYS + 1];
         bool leaf = node_is_leaf(node);
         for (size_t i = 0; i < m; i++) {
-            keys[i] = node_key(node, i);
-            values[i] = (i == pos) ? value : node_value(node, i);
+            keys[i] = kvp[2 * i + 1];
+            values[i] = (i == pos) ? value : kvp[2 * i + 2];
             if (!leaf) {
                 children[i] = node_child(node, i);
             }
