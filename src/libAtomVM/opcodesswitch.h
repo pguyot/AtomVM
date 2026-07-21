@@ -1958,6 +1958,11 @@ schedule_in:
 #define AVM_JIT_AARCH64_X18_CLOBBER "x18",
 #endif
                 __asm__ volatile(
+                    // Seed the VM x0-x3 home registers (x25-x28) from
+                    // ctx->x[0..3]; generated code keeps them write-through
+                    // current and reloads them after non-cache-safe calls.
+                    "ldp x25, x26, [x21, #88]\n\t"
+                    "ldp x27, x28, [x21, #104]\n\t"
                     "blr x24"
                     : "=r"(result_reg), "+r"(pin_js), "+r"(pin_p), "+r"(pin_ctx),
                       "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
