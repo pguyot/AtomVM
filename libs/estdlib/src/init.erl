@@ -146,7 +146,8 @@ eval_instruction(_Other, _Available) -> ok.
 %% Apply a boot instruction, tolerating modules AtomVM does not provide so a
 %% stock OTP boot script remains usable.
 boot_apply({Module, Function, Args}, Available) ->
-    case lists:member(atom_to_binary(Module, utf8), Available) of
+    %% code:all_available/0 names are charlists (OTP-compatible).
+    case lists:member(atom_to_list(Module), Available) of
         true ->
             _ = apply(Module, Function, Args),
             ok;
