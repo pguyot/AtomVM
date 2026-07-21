@@ -47,6 +47,7 @@
     call_primitive_with_cp_direct/3,
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
+    supports_inline_tuple2_eq/0,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -4425,6 +4426,12 @@ emit_call_ext_last_fast_path(State0, Index, NWords, T0, T1, T2, T3) ->
     >>,
     true = N * 4 =:= byte_size(Code),
     State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%% Capability marker: the generic layer inlines exact 2-tuple (in)equality
+%% (see jit:emit_tuple2_exact_eq/7) on backends exporting this.
+-spec supports_inline_tuple2_eq() -> true.
+supports_inline_tuple2_eq() ->
+    true.
 
 call_primitive_with_cp_direct(State0, Primitive, Args) ->
     {State1, RewriteOffset, RewriteSize} = set_cp(State0),
