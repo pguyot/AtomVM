@@ -120,15 +120,15 @@ call_primitive_6_args_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
-            "   8:	f94032a8 	ldr	x8, [x21, #96]\n"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	927ef739 	and	x25, x25, #0xfffffffffffffffc\n"
+            "   8:	f94032ba 	ldr	x26, [x21, #96]\n"
             "   c:	f940ba90 	ldr	x16, [x20, #368]\n"
             "  10:	f81f0ffe 	str	x30, [sp, #-16]!\n"
-            "  14:	aa0703e0 	mov	x0, x7\n"
+            "  14:	aa1903e0 	mov	x0, x25\n"
             "  18:	d2800801 	mov	x1, #0x40\n"
             "  1c:	d2800102 	mov	x2, #0x8\n"
-            "  20:	aa0803e3 	mov	x3, x8\n"
+            "  20:	aa1a03e3 	mov	x3, x26\n"
             "  24:	f9000eb6 	str	x22, [x21, #24]\n"
             "  28:	f9002ab7 	str	x23, [x21, #80]\n"
             "  2c:	d63f0200 	blr	x16\n"
@@ -146,9 +146,9 @@ add_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-            "   8:	ab0800e7 	adds	x7, x7, x8"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+            "   8:	ab1a0339 	adds	x25, x25, x26"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -160,9 +160,9 @@ sub_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-            "   8:	eb0800e7 	subs	x7, x7, x8"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+            "   8:	eb1a0339 	subs	x25, x25, x26"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -174,15 +174,15 @@ mul_overflow_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-            "   8:	9344fce9 	asr	x9, x7, #4\n"
-            "   c:	9344fd0a 	asr	x10, x8, #4\n"
-            "  10:	9b4a7d2b 	smulh	x11, x9, x10\n"
-            "  14:	9b0a7d2a 	mul	x10, x9, x10\n"
-            "  18:	d37ced47 	lsl	x7, x10, #4\n"
-            "  1c:	937bfd4c 	asr	x12, x10, #59\n"
-            "  20:	eb0c017f 	cmp	x11, x12"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+            "   8:	9344ff27 	asr	x7, x25, #4\n"
+            "   c:	9344ff48 	asr	x8, x26, #4\n"
+            "  10:	9b487ce9 	smulh	x9, x7, x8\n"
+            "  14:	9b087ce8 	mul	x8, x7, x8\n"
+            "  18:	d37ced19 	lsl	x25, x8, #4\n"
+            "  1c:	937bfd0a 	asr	x10, x8, #59\n"
+            "  20:	eb0a013f 	cmp	x9, x10"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -199,11 +199,11 @@ if_block_overflow_set_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-            "   8:	ab0800e7 	adds	x7, x7, x8\n"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+            "   8:	ab1a0339 	adds	x25, x25, x26\n"
             "   c:	54000047 	b.vc	0x14\n"
-            "  10:	f90036a7 	str	x7, [x21, #104]"
+            "  10:	f90036b9 	str	x25, [x21, #104]"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -325,14 +325,14 @@ call_primitive_last_5_args_test() ->
     ]),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   4:	f9404e88 	ldr	x8, [x20, #152]\n"
+        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   4:	f9404e87 	ldr	x7, [x20, #152]\n"
         "   8:	d2800100 	mov	x0, #0x8\n"
         "   c:	d2805961 	mov	x1, #0x2cb\n"
-        "  10:	aa0703e2 	mov	x2, x7\n"
+        "  10:	aa1903e2 	mov	x2, x25\n"
         "  14:	f9000eb6 	str	x22, [x21, #24]\n"
         "  18:	f9002ab7 	str	x23, [x21, #80]\n"
-        "  1c:	d61f0100 	br	x8"
+        "  1c:	d61f00e0 	br	x7"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -442,7 +442,7 @@ call_primitive_last_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9402ea8 	ldr	x8, [x21, #88]\n"
+        "   4:	f9402eb9 	ldr	x25, [x21, #88]\n"
         "   8:	b50000a7 	cbnz	x7, 0x1c\n"
         "   c:	f9400287 	ldr	x7, [x20]\n"
         "  10:	f9000eb6 	str	x22, [x21, #24]\n"
@@ -458,7 +458,7 @@ jump_to_label_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9402ea8 	ldr	x8, [x21, #88]\n"
+        "   4:	f9402eb9 	ldr	x25, [x21, #88]\n"
         "   8:	b5000047 	cbnz	x7, 0x10\n"
         "   c:	14000000 	b	0xc"
     >>,
@@ -471,7 +471,7 @@ jump_to_offset_if_block_preserves_cache_test() ->
     Stream = ?BACKEND:stream(State0),
     Dump = <<
         "   0:	d2800027 	mov	x7, #0x1\n"
-        "   4:	f9402ea8 	ldr	x8, [x21, #88]\n"
+        "   4:	f9402eb9 	ldr	x25, [x21, #88]\n"
         "   8:	b5000047 	cbnz	x7, 0x10\n"
         "   c:	1400003d 	b	0x100"
     >>,
@@ -492,7 +492,7 @@ jump_to_continuation_if_block_preserves_cache_test() ->
     Dump = <<
         "   0:	d2802007 	mov	x7, #0x100\n"
         "   4:	d2800028 	mov	x8, #0x1\n"
-        "   8:	f9402ea9 	ldr	x9, [x21, #88]\n"
+        "   8:	f9402eb9 	ldr	x25, [x21, #88]\n"
         "   c:	b5000088 	cbnz	x8, 0x1c\n"
         "  10:	10ffff88 	adr	x8, 0x0\n"
         "  14:	8b070108 	add	x8, x8, x7\n"
@@ -502,16 +502,16 @@ jump_to_continuation_if_block_preserves_cache_test() ->
 
 move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    {State1, r7} = ?BACKEND:move_to_native_register(State0, {x_reg, 5}),
-    {State2, r8} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
-    State3 = ?BACKEND:move_array_element(State2, r8, 0, {x_reg, 5}),
+    {State1, r25} = ?BACKEND:move_to_native_register(State0, {x_reg, 5}),
+    {State2, r26} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
+    State3 = ?BACKEND:move_array_element(State2, r26, 0, {x_reg, 5}),
     {State4, _Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 5}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	f94042a7 	ldr	x7, [x21, #128]\n"
-        "   4:	f9402ea8 	ldr	x8, [x21, #88]\n"
-        "   8:	f9400109 	ldr	x9, [x8]\n"
-        "   c:	f90042a9 	str	x9, [x21, #128]"
+        "   0:	f94042b9 	ldr	x25, [x21, #128]\n"
+        "   4:	f9402eba 	ldr	x26, [x21, #88]\n"
+        "   8:	f9400347 	ldr	x7, [x26]\n"
+        "   c:	f90042a7 	str	x7, [x21, #128]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -622,10 +622,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	b6f80047 	tbz	x7, #63, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	b6f80059 	tbz	x25, #63, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -640,11 +640,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	eb0800ff 	cmp	x7, x8\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	eb1a033f 	cmp	x25, x26\n"
                         "   c:	5400004a 	b.ge	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -659,10 +659,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	b5000047 	cbnz	x7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	b5000059 	cbnz	x25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -677,10 +677,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	b5000047 	cbnz	x7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	b5000059 	cbnz	x25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -695,10 +695,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	35000047 	cbnz	w7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	35000059 	cbnz	w25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -713,10 +713,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	35000047 	cbnz	w7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	35000059 	cbnz	w25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -731,10 +731,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	b4000047 	cbz	x7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	b4000059 	cbz	x25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -749,10 +749,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	b4000047 	cbz	x7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	b4000059 	cbz	x25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -767,10 +767,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	34000047 	cbz	w7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	34000059 	cbz	w25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -785,10 +785,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	34000047 	cbz	w7, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	34000059 	cbz	w25, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -803,11 +803,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f100ecff 	cmp	x7, #0x3b\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f100ef3f 	cmp	x25, #0x3b\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -822,11 +822,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f100ecff 	cmp	x7, #0x3b\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f100ef3f 	cmp	x25, #0x3b\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -841,11 +841,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	7100a8ff 	cmp	w7, #0x2a\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	7100ab3f 	cmp	w25, #0x2a\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -860,11 +860,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	7100a8ff 	cmp	w7, #0x2a\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	7100ab3f 	cmp	w25, #0x2a\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -881,11 +881,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	6b0800ff 	cmp	w7, w8\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	6b1a033f 	cmp	w25, w26\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -900,11 +900,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	6b0800ff 	cmp	w7, w8\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	6b1a033f 	cmp	w25, w26\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -919,11 +919,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f100ecff 	cmp	x7, #0x3b\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f100ef3f 	cmp	x25, #0x3b\n"
                         "   c:	54000041 	b.ne	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -938,11 +938,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f100ecff 	cmp	x7, #0x3b\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f100ef3f 	cmp	x25, #0x3b\n"
                         "   c:	54000041 	b.ne	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -957,11 +957,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	7100a8ff 	cmp	w7, #0x2a\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	7100ab3f 	cmp	w25, #0x2a\n"
                         "   c:	54000041 	b.ne	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -976,11 +976,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	7100a8ff 	cmp	w7, #0x2a\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	7100ab3f 	cmp	w25, #0x2a\n"
                         "   c:	54000041 	b.ne	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -995,10 +995,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	37000047 	tbnz	w7, #0, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	37000059 	tbnz	w25, #0, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1013,10 +1013,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	37000047 	tbnz	w7, #0, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	37000059 	tbnz	w25, #0, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1031,10 +1031,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	36000047 	tbz	w7, #0, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	36000059 	tbz	w25, #0, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1049,10 +1049,10 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	36000047 	tbz	w7, #0, 0x10\n"
-                        "   c:	91000908 	add	x8, x8, #0x2"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	36000059 	tbz	w25, #0, 0x10\n"
+                        "   c:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1067,11 +1067,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f24008ff 	tst	x7, #0x7\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f2400b3f 	tst	x25, #0x7\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1086,12 +1086,12 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	d28000a9 	mov	x9, #0x5\n"
-                        "   c:	ea0900ff 	tst	x7, x9\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	d28000a7 	mov	x7, #0x5\n"
+                        "   c:	ea07033f 	tst	x25, x7\n"
                         "  10:	54000040 	b.eq	0x18\n"
-                        "  14:	91000908 	add	x8, x8, #0x2"
+                        "  14:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1106,11 +1106,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f24008ff 	tst	x7, #0x7\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f2400b3f 	tst	x25, #0x7\n"
                         "   c:	54000040 	b.eq	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1125,12 +1125,12 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	92400ce9 	and	x9, x7, #0xf\n"
-                        "   c:	f1003d3f 	cmp	x9, #0xf\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	92400f27 	and	x7, x25, #0xf\n"
+                        "   c:	f1003cff 	cmp	x7, #0xf\n"
                         "  10:	54000040 	b.eq	0x18\n"
-                        "  14:	91000908 	add	x8, x8, #0x2"
+                        "  14:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1145,12 +1145,12 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	92400cf0 	and	x16, x7, #0xf\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	92400f30 	and	x16, x25, #0xf\n"
                         "   c:	f1003e1f 	cmp	x16, #0xf\n"
                         "  10:	54000040 	b.eq	0x18\n"
-                        "  14:	91000908 	add	x8, x8, #0x2"
+                        "  14:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1165,11 +1165,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f101933f 	cmp	x25, #0x64\n"
                         "   c:	5400004d 	b.le	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1184,11 +1184,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f101933f 	cmp	x25, #0x64\n"
                         "   c:	5400004d 	b.le	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1203,11 +1203,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f101933f 	cmp	x25, #0x64\n"
                         "   c:	5400004a 	b.ge	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
@@ -1222,11 +1222,11 @@ if_block_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+                        "   8:	f101933f 	cmp	x25, #0x64\n"
                         "   c:	5400004a 	b.ge	0x14\n"
-                        "  10:	91000908 	add	x8, x8, #0x2"
+                        "  10:	91000b5a 	add	x26, x26, #0x2"
                     >>,
                     ?assertStream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
@@ -1251,13 +1251,13 @@ if_else_block_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	f94032a8 	ldr	x8, [x21, #96]\n"
-            "   8:	f100ecff 	cmp	x7, #0x3b\n"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	f94032ba 	ldr	x26, [x21, #96]\n"
+            "   8:	f100ef3f 	cmp	x25, #0x3b\n"
             "   c:	54000061 	b.ne	0x18\n"
-            "  10:	91000908 	add	x8, x8, #0x2\n"
+            "  10:	91000b5a 	add	x26, x26, #0x2\n"
             "  14:	14000002 	b	0x1c\n"
-            "  18:	91001108 	add	x8, x8, #0x4"
+            "  18:	9100135a 	add	x26, x26, #0x4"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1270,8 +1270,8 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                    "   4:	d343fce7 	lsr	x7, x7, #3"
+                    "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                    "   4:	d343ff39 	lsr	x25, x25, #3"
                 >>,
             ?assertStream(aarch64, Dump, Stream)
         end),
@@ -1283,8 +1283,8 @@ shift_right_test_() ->
             Stream = ?BACKEND:stream(State2),
             Dump =
                 <<
-                    "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                    "   4:	d343fce8 	lsr	x8, x7, #3"
+                    "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                    "   4:	d343ff27 	lsr	x7, x25, #3"
                 >>,
             ?assertStream(aarch64, Dump, Stream)
         end)
@@ -1297,8 +1297,8 @@ shift_left_test() ->
     Stream = ?BACKEND:stream(State2),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-            "   4:	d37df0e7 	lsl	x7, x7, #3"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+            "   4:	d37df339 	lsl	x25, x25, #3"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1447,12 +1447,12 @@ get_list_test() ->
     ?BACKEND:assert_all_native_free(State5),
     Stream = ?BACKEND:stream(State5),
     Dump = <<
-        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   4:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
-        "   8:	f94004e8 	ldr	x8, [x7, #8]\n"
-        "   c:	f90006e8 	str	x8, [x23, #8]\n"
-        "  10:	f94000e8 	ldr	x8, [x7]\n"
-        "  14:	f90002e8 	str	x8, [x23]"
+        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   4:	927ef739 	and	x25, x25, #0xfffffffffffffffc\n"
+        "   8:	f9400727 	ldr	x7, [x25, #8]\n"
+        "   c:	f90006e7 	str	x7, [x23, #8]\n"
+        "  10:	f9400327 	ldr	x7, [x25]\n"
+        "  14:	f90002e7 	str	x7, [x23]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -1495,18 +1495,18 @@ is_integer_test() ->
     Dump = <<
         "   0:	14000001 	b	0x4\n"
         "   4:	14000050 	b	0x144\n"
-        "   8:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   c:	92400ce8 	and	x8, x7, #0xf\n"
-        "  10:	f1003d1f 	cmp	x8, #0xf\n"
+        "   8:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   c:	92400f27 	and	x7, x25, #0xf\n"
+        "  10:	f1003cff 	cmp	x7, #0xf\n"
         "  14:	54000180 	b.eq	0x44\n"
-        "  18:	924004e8 	and	x8, x7, #0x3\n"
-        "  1c:	f100091f 	cmp	x8, #0x2\n"
+        "  18:	92400727 	and	x7, x25, #0x3\n"
+        "  1c:	f10008ff 	cmp	x7, #0x2\n"
         "  20:	54000040 	b.eq	0x28\n"
         "  24:	14000048 	b	0x144\n"
-        "  28:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
-        "  2c:	f94000e7 	ldr	x7, [x7]\n"
+        "  28:	927ef739 	and	x25, x25, #0xfffffffffffffffc\n"
+        "  2c:	f9400339 	ldr	x25, [x25]\n"
         "  30:	d2800770 	mov	x16, #0x3b\n"
-        "  34:	8a1000f0 	and	x16, x7, x16\n"
+        "  34:	8a100330 	and	x16, x25, x16\n"
         "  38:	f100221f 	cmp	x16, #0x8\n"
         "  3c:	54000040 	b.eq	0x44\n"
         "  40:	14000041 	b	0x144"
@@ -1551,21 +1551,21 @@ is_number_test() ->
     Dump = <<
         "   0:	14000001 	b	0x4\n"
         "   4:	14000053 	b	0x150\n"
-        "   8:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   c:	92400ce8 	and	x8, x7, #0xf\n"
-        "  10:	f1003d1f 	cmp	x8, #0xf\n"
+        "   8:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   c:	92400f27 	and	x7, x25, #0xf\n"
+        "  10:	f1003cff 	cmp	x7, #0xf\n"
         "  14:	540001e0 	b.eq	0x50\n"
-        "  18:	924004e8 	and	x8, x7, #0x3\n"
-        "  1c:	f100091f 	cmp	x8, #0x2\n"
+        "  18:	92400727 	and	x7, x25, #0x3\n"
+        "  1c:	f10008ff 	cmp	x7, #0x2\n"
         "  20:	54000040 	b.eq	0x28\n"
         "  24:	1400004b 	b	0x150\n"
-        "  28:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
-        "  2c:	f94000e7 	ldr	x7, [x7]\n"
-        "  30:	d2800768 	mov	x8, #0x3b\n"
-        "  34:	8a0800e8 	and	x8, x7, x8\n"
-        "  38:	f100211f 	cmp	x8, #0x8\n"
+        "  28:	927ef739 	and	x25, x25, #0xfffffffffffffffc\n"
+        "  2c:	f9400339 	ldr	x25, [x25]\n"
+        "  30:	d2800767 	mov	x7, #0x3b\n"
+        "  34:	8a070327 	and	x7, x25, x7\n"
+        "  38:	f10020ff 	cmp	x7, #0x8\n"
         "  3c:	540000a0 	b.eq	0x50\n"
-        "  40:	924014f0 	and	x16, x7, #0x3f\n"
+        "  40:	92401730 	and	x16, x25, #0x3f\n"
         "  44:	f100621f 	cmp	x16, #0x18\n"
         "  48:	54000040 	b.eq	0x50\n"
         "  4c:	14000041 	b	0x150"
@@ -1591,10 +1591,10 @@ is_boolean_test() ->
     Dump = <<
         "   0:	14000001 	b	0x4\n"
         "   4:	14000047 	b	0x120\n"
-        "   8:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   c:	f1012cff 	cmp	x7, #0x4b\n"
+        "   8:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   c:	f1012f3f 	cmp	x25, #0x4b\n"
         "  10:	54000080 	b.eq	0x20\n"
-        "  14:	f1002cff 	cmp	x7, #0xb\n"
+        "  14:	f1002f3f 	cmp	x25, #0xb\n"
         "  18:	54000040 	b.eq	0x20\n"
         "  1c:	14000041 	b	0x120"
     >>,
@@ -1983,40 +1983,40 @@ call_fun_test() ->
         "  1c:	f9000eb6 	str	x22, [x21, #24]\n"
         "  20:	f9002ab7 	str	x23, [x21, #80]\n"
         "  24:	d61f00e0 	br	x7\n"
-        "  28:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "  2c:	aa0703e8 	mov	x8, x7\n"
-        "  30:	92400509 	and	x9, x8, #0x3\n"
-        "  34:	f100093f 	cmp	x9, #0x2\n"
+        "  28:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "  2c:	aa1903e7 	mov	x7, x25\n"
+        "  30:	924004e8 	and	x8, x7, #0x3\n"
+        "  34:	f100091f 	cmp	x8, #0x2\n"
         "  38:	54000100 	b.eq	0x58\n"
-        "  3c:	f9404e87 	ldr	x7, [x20, #152]\n"
+        "  3c:	f9404e88 	ldr	x8, [x20, #152]\n"
         "  40:	d2800800 	mov	x0, #0x40\n"
         "  44:	d2803161 	mov	x1, #0x18b\n"
-        "  48:	aa0803e2 	mov	x2, x8\n"
+        "  48:	aa0703e2 	mov	x2, x7\n"
         "  4c:	f9000eb6 	str	x22, [x21, #24]\n"
         "  50:	f9002ab7 	str	x23, [x21, #80]\n"
-        "  54:	d61f00e0 	br	x7\n"
-        "  58:	927ef508 	and	x8, x8, #0xfffffffffffffffc\n"
-        "  5c:	f9400108 	ldr	x8, [x8]\n"
-        "  60:	92401509 	and	x9, x8, #0x3f\n"
-        "  64:	f100513f 	cmp	x9, #0x14\n"
+        "  54:	d61f0100 	br	x8\n"
+        "  58:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
+        "  5c:	f94000e7 	ldr	x7, [x7]\n"
+        "  60:	924014e8 	and	x8, x7, #0x3f\n"
+        "  64:	f100511f 	cmp	x8, #0x14\n"
         "  68:	54000100 	b.eq	0x88\n"
-        "  6c:	f9404e87 	ldr	x7, [x20, #152]\n"
+        "  6c:	f9404e88 	ldr	x8, [x20, #152]\n"
         "  70:	d2800e00 	mov	x0, #0x70\n"
         "  74:	d2803161 	mov	x1, #0x18b\n"
-        "  78:	aa0803e2 	mov	x2, x8\n"
+        "  78:	aa0703e2 	mov	x2, x7\n"
         "  7c:	f9000eb6 	str	x22, [x21, #24]\n"
         "  80:	f9002ab7 	str	x23, [x21, #80]\n"
-        "  84:	d61f00e0 	br	x7\n"
-        "  88:	f9401668 	ldr	x8, [x19, #40]\n"
+        "  84:	d61f0100 	br	x8\n"
+        "  88:	f9401667 	ldr	x7, [x19, #40]\n"
         "  8c:	d2805810 	mov	x16, #0x2c0\n"
-        "  90:	aa100108 	orr	x8, x8, x16\n"
-        "  94:	f90072a8 	str	x8, [x21, #224]\n"
-        "  98:	f9408288 	ldr	x8, [x20, #256]\n"
-        "  9c:	aa0703e0 	mov	x0, x7\n"
+        "  90:	aa1000e7 	orr	x7, x7, x16\n"
+        "  94:	f90072a7 	str	x7, [x21, #224]\n"
+        "  98:	f9408287 	ldr	x7, [x20, #256]\n"
+        "  9c:	aa1903e0 	mov	x0, x25\n"
         "  a0:	d2800001 	mov	x1, #0x0\n"
         "  a4:	f9000eb6 	str	x22, [x21, #24]\n"
         "  a8:	f9002ab7 	str	x23, [x21, #80]\n"
-        "  ac:	d61f0100 	br	x8"
+        "  ac:	d61f00e0 	br	x7"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2028,7 +2028,7 @@ decrement_reductions_invalidates_cache_test() ->
     {State4, Reg} = ?BACKEND:move_to_native_register(State3, {x_reg, 0}),
     Stream = ?BACKEND:stream(State4),
     Dump = <<
-        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
+        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
         "   4:	b9401267 	ldr	w7, [x19, #16]\n"
         "   8:	f10004e7 	subs	x7, x7, #0x1\n"
         "   c:	b9001267 	str	w7, [x19, #16]\n"
@@ -2039,7 +2039,7 @@ decrement_reductions_invalidates_cache_test() ->
         "  20:	f9000eb6 	str	x22, [x21, #24]\n"
         "  24:	f9002ab7 	str	x23, [x21, #80]\n"
         "  28:	d61f00e0 	br	x7\n"
-        "  2c:	f9402ea7 	ldr	x7, [x21, #88]"
+        "  2c:	f9402eb9 	ldr	x25, [x21, #88]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2253,10 +2253,10 @@ move_to_vm_register_test_() ->
                     ),
                     Stream = ?BACKEND:stream(State2),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f94004e7 	ldr	x7, [x7, #8]\n"
-                        "   8:	f9400e68 	ldr	x8, [x19, #24]\n"
-                        "   c:	f9000d07 	str	x7, [x8, #24]"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f9400739 	ldr	x25, [x25, #8]\n"
+                        "   8:	f9400e67 	ldr	x7, [x19, #24]\n"
+                        "   c:	f9000cf9 	str	x25, [x7, #24]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end)
@@ -2378,8 +2378,8 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, 2),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f9000907 	str	x7, [x8, #16]"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f9000919 	str	x25, [x8, #16]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2388,8 +2388,8 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, r9),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f8297907 	str	x7, [x8, x9, lsl #3]"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f8297919 	str	x25, [x8, x9, lsl #3]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2408,8 +2408,8 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {y_reg, 2}, r8, r9),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9400ae7 	ldr	x7, [x23, #16]\n"
-                        "   4:	f8297907 	str	x7, [x8, x9, lsl #3]"
+                        "   0:	f9400af9 	ldr	x25, [x23, #16]\n"
+                        "   4:	f8297919 	str	x25, [x8, x9, lsl #3]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2418,8 +2418,8 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, 2, 1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	f9000d07 	str	x7, [x8, #24]"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	f9000d19 	str	x25, [x8, #24]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2440,9 +2440,9 @@ move_to_array_element_test_() ->
                     State3 = ?BACKEND:move_to_array_element(State2, {x_reg, 0}, r8, r9, 1),
                     Stream = ?BACKEND:stream(State3),
                     Dump = <<
-                        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-                        "   4:	9100052a 	add	x10, x9, #0x1\n"
-                        "   8:	f82a7907 	str	x7, [x8, x10, lsl #3]"
+                        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+                        "   4:	91000527 	add	x7, x9, #0x1\n"
+                        "   8:	f8277919 	str	x25, [x8, x7, lsl #3]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2503,9 +2503,9 @@ move_to_native_register_test_() ->
                 ?_test(begin
                     {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 3}),
                     Stream = ?BACKEND:stream(State1),
-                    ?assertEqual(r7, Reg),
+                    ?assertEqual(r25, Reg),
                     Dump = <<
-                        "   0:	f9403aa7 	ldr	x7, [x21, #112]"
+                        "   0:	f9403ab9 	ldr	x25, [x21, #112]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2513,9 +2513,9 @@ move_to_native_register_test_() ->
                 ?_test(begin
                     {State1, Reg} = ?BACKEND:move_to_native_register(State0, {y_reg, 3}),
                     Stream = ?BACKEND:stream(State1),
-                    ?assertEqual(r7, Reg),
+                    ?assertEqual(r25, Reg),
                     Dump = <<
-                        "   0:	f9400ee7 	ldr	x7, [x23, #24]"
+                        "   0:	f9400ef9 	ldr	x25, [x23, #24]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2745,13 +2745,13 @@ jump_to_continuation_far_test() ->
 %% After freeing a register, cache is preserved so reload is elided
 cached_load_after_free_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    {State1, r7} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
-    State2 = ?BACKEND:free_native_registers(State1, [r7]),
-    {State3, r7} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    {State1, r25} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:free_native_registers(State1, [r25]),
+    {State3, r25} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	f9402ea7 	ldr	x7, [x21, #88]"
+            "   0:	f9402eb9 	ldr	x25, [x21, #88]"
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2867,10 +2867,10 @@ float_conv_int_test() ->
     State2 = ?BACKEND:float_conv_int(State1, IntReg, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   4:	f9400e68 	ldr	x8, [x19, #24]\n"
-        "   8:	9e6200e0 	scvtf	d0, x7\n"
-        "   c:	fd000500 	str	d0, [x8, #8]"
+        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   4:	f9400e67 	ldr	x7, [x19, #24]\n"
+        "   8:	9e620320 	scvtf	d0, x25\n"
+        "   c:	fd0004e0 	str	d0, [x7, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -2880,11 +2880,11 @@ float_conv_float_test() ->
     State2 = ?BACKEND:float_conv_float(State1, {free, BoxedReg}, 1),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
-        "   0:	f9402ea7 	ldr	x7, [x21, #88]\n"
-        "   4:	927ef4e7 	and	x7, x7, #0xfffffffffffffffc\n"
-        "   8:	fd4004e0 	ldr	d0, [x7, #8]\n"
-        "   c:	f9400e68 	ldr	x8, [x19, #24]\n"
-        "  10:	fd000500 	str	d0, [x8, #8]"
+        "   0:	f9402eb9 	ldr	x25, [x21, #88]\n"
+        "   4:	927ef739 	and	x25, x25, #0xfffffffffffffffc\n"
+        "   8:	fd400720 	ldr	d0, [x25, #8]\n"
+        "   c:	f9400e67 	ldr	x7, [x19, #24]\n"
+        "  10:	fd0004e0 	str	d0, [x7, #8]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 

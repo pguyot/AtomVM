@@ -54,6 +54,7 @@
     unreachable/1,
     invalidate_reg/2,
     invalidate_all/1,
+    invalidate_except/3,
     invalidate_vm_loc/2,
     find_reg_with_contents/2,
     merge/2,
@@ -182,6 +183,14 @@ invalidate_reg(#regs{contents = C} = Regs, Reg) ->
 -spec invalidate_all(regs()) -> regs().
 invalidate_all(Regs) ->
     Regs#regs{contents = #{}, stack = [], unreachable = false, vm_types = #{}}.
+
+%% @doc Invalidate everything except contents held in registers of KeepMask
+%% (callee-saved registers surviving a cache-safe C call). Type info and the
+%% shadow stack are still dropped.
+-spec invalidate_except(regs(), non_neg_integer(), fun((atom()) -> non_neg_integer())) -> regs().
+invalidate_except(#regs{contents = C} = Regs, KeepMask, RegBitFun) ->
+    C1 = maps:filter(fun(R, _V) -> (RegBitFun(R) band KeepMask) =/= 0 end, C),
+    Regs#regs{contents = C1, stack = [], unreachable = false, vm_types = #{}}.
 
 %% @doc Invalidate all CPU registers that reference a given VM location.
 %% Call this when a VM register is written to, so that any CPU register
