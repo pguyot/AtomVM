@@ -6819,6 +6819,9 @@ emit_tuple2_exact_eq(MMod, MSt0, Arg1Reg, Arg2Reg, Label, JumpOn, Fallback) ->
 %% full comparator. FastFn is called with (State, Arg1Reg, Arg2Reg) and both
 %% registers are free to consume.
 emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask) ->
+    emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, tuple2).
+
+emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, Tuple2Mode) ->
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
     %% Outer test on Arg1's tag; inner test on Arg2's tag. Only when both are
@@ -6832,11 +6835,25 @@ emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastF
         ),
         cond_jump_to_label({{free, ResultReg}, '&', JumpMask, '!=', 0}, Label, MMod, BSt2)
     end,
+    %% Backends with the inline tuple2 machinery also resolve 2-tuple
+    %% operand pairs whose deciding element pair is two small integers
+    %% (the compiler's #b_var{} keys under is_lt/is_ge and friends).
+    NotSmallInt =
+        case Tuple2Mode =:= tuple2 andalso
+            erlang:function_exported(MMod, supports_inline_tuple2_eq, 0)
+        of
+            true ->
+                fun(N1) ->
+                    emit_tuple2_order_fastpath(MMod, N1, Arg1Reg, Arg2Reg, FastFn, Fallback)
+                end;
+            false ->
+                Fallback
+        end,
     MMod:if_else_block(
         MSt2,
         {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
-        %% Arg1 not a small integer: fall back.
-        Fallback,
+        %% Arg1 not a small integer: try the tuple2 shape, then fall back.
+        NotSmallInt,
         %% Arg1 is a small integer: test Arg2.
         fun(BSt0) ->
             MMod:if_else_block(
@@ -6852,6 +6869,76 @@ emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastF
             )
         end
     ).
+
+%% Inline comparison of two 2-tuples for the ordering/equality compare ops:
+%% tuple order is arity first (equal here), then the leftmost differing
+%% element pair in term order. When that pair is two small integers the
+%% op's own FastFn decides on the tagged values; identical pairs advance;
+%% fully identical tuples decide via FastFn on an equal pair (X < X is
+%% false, matching both is_lt's and is_ge's jump polarity, and X != X is
+%% false for the equality forms). Anything else branches to the shared
+%% term_compare fallback stub.
+emit_tuple2_order_fastpath(MMod, MSt0, Arg1Reg, Arg2Reg, FastFn, Fallback) ->
+    Tuple2Header = (2 bsl 6) bor ?TERM_BOXED_TUPLE,
+    FallRef = make_ref(),
+    DoneRef = make_ref(),
+    Eq0Ref = make_ref(),
+    EqAllRef = make_ref(),
+    M1 = cond_jump_to_label(
+        {Arg1Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, FallRef, MMod, MSt0
+    ),
+    M2 = cond_jump_to_label(
+        {Arg2Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, FallRef, MMod, M1
+    ),
+    {M3, P1} = MMod:and_(M2, Arg1Reg, ?TERM_PRIMARY_CLEAR_MASK),
+    {M4, H1} = MMod:get_array_element(M3, P1, 0),
+    M5 = cond_jump_to_label({{free, H1}, '!=', Tuple2Header}, FallRef, MMod, M4),
+    {M6, P2} = MMod:and_(M5, Arg2Reg, ?TERM_PRIMARY_CLEAR_MASK),
+    {M7, H2} = MMod:get_array_element(M6, P2, 0),
+    M8 = cond_jump_to_label({{free, H2}, '!=', Tuple2Header}, FallRef, MMod, M7),
+    %% element 0
+    {M9, E1a} = MMod:get_array_element(M8, P1, 1),
+    {M10, E2a} = MMod:get_array_element(M9, P2, 1),
+    M11 = cond_jump_to_label({E1a, '==', E2a}, Eq0Ref, MMod, M10),
+    %% differing pair: decide only when both are small integers.
+    %% NOTE on compile-time liveness: P1/P2 (and later E1b) stay marked USED
+    %% until after their last runtime use on ANY path — labels emitted in
+    %% between flush pending stores, and a scratch allocated there must not
+    %% clobber a register that is dead on the linear path but live on the
+    %% branched-to one.
+    M12 = cond_jump_to_label(
+        {E1a, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, FallRef, MMod, M11
+    ),
+    M13 = cond_jump_to_label(
+        {E2a, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, FallRef, MMod, M12
+    ),
+    M14 = FastFn(M13, E1a, E2a),
+    M15 = MMod:free_native_registers(M14, [E1a, E2a]),
+    M16 = MMod:jump_to_label(M15, DoneRef),
+    %% element 0 identical: element 1 decides
+    M17 = MMod:add_label(M16, Eq0Ref),
+    {M19, E1b} = MMod:get_array_element(M17, P1, 2),
+    {M20, E2b} = MMod:get_array_element(M19, P2, 2),
+    M21 = MMod:free_native_registers(M20, [P1, P2]),
+    M22 = cond_jump_to_label({E1b, '==', E2b}, EqAllRef, MMod, M21),
+    M23 = cond_jump_to_label(
+        {E1b, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, FallRef, MMod, M22
+    ),
+    M24 = cond_jump_to_label(
+        {E2b, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, FallRef, MMod, M23
+    ),
+    M25 = FastFn(M24, E1b, E2b),
+    M27 = MMod:jump_to_label(M25, DoneRef),
+    %% fully identical tuples: equal pair decides (X cmp X)
+    M28 = MMod:add_label(M27, EqAllRef),
+    M29 = FastFn(M28, E1b, E1b),
+    M30 = MMod:free_native_registers(M29, [E1b, E2b]),
+    M31 = MMod:jump_to_label(M30, DoneRef),
+    %% shared fallback stub (consumes the operand registers)
+    M32 = MMod:add_label(M31, FallRef),
+    M33 = Fallback(M32),
+    M34 = MMod:add_label(M33, DoneRef),
+    MMod:free_native_registers(M34, [Arg1Reg, Arg2Reg]).
 
 %% Optimized =/= comparison for typed args. Mirror of op_is_eq_exact.
 op_is_not_eq_exact(
