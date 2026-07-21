@@ -9151,11 +9151,40 @@ static term nif_lists_seq(Context *ctx, int argc, term argv[])
 
 static inline TermCompareResult sort_compare(term x, term y, GlobalContext *glb)
 {
+    if (x == y) {
+        return TermEquals;
+    }
     if (SORT_BOTH_SMALL_INTS(x, y)) {
-        if (x == y) {
-            return TermEquals;
-        }
         return ((avm_int_t) x > (avm_int_t) y) ? TermGreaterThan : TermLessThan;
+    }
+    // 2-tuple fast path: sofs relation algebra (heavy in beam_ssa_dead) sorts
+    // huge lists of {Domain, Range} pairs whose deciding element is usually a
+    // scalar. Resolve those without the out-of-line term_compare dispatch,
+    // mirroring term_compare0's tuple fast path. Falls back for compound
+    // deciding elements.
+    if (term_is_tuple(x) && term_is_tuple(y)) {
+        int ax = term_get_tuple_arity(x);
+        int ay = term_get_tuple_arity(y);
+        if (ax == 2 && ay == 2) {
+            const term *px = term_to_const_term_ptr(x);
+            const term *py = term_to_const_term_ptr(y);
+            for (int i = 1; i <= 2; i++) {
+                term a = px[i];
+                term b = py[i];
+                if (a == b) {
+                    continue;
+                }
+                if (term_is_integer(a) && term_is_integer(b)) {
+                    return ((avm_int_t) a > (avm_int_t) b) ? TermGreaterThan : TermLessThan;
+                }
+                if (term_is_atom(a) && term_is_atom(b)) {
+                    int c = atom_table_cmp_using_atom_index(
+                        glb->atom_table, term_to_atom_index(a), term_to_atom_index(b));
+                    return (c > 0) ? TermGreaterThan : TermLessThan;
+                }
+                break; // compound deciding element: fall back
+            }
+        }
     }
     return term_compare(x, y, TermCompareNoOpts, glb);
 }
