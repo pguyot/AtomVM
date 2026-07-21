@@ -36,6 +36,7 @@
     close_avm_pack/2,
     get_start_beam/1,
     module_set_emulated/1,
+    set_load_binary_emulated/1,
     get_boot/0,
     posix_open/2,
     posix_open/3,
@@ -279,6 +280,17 @@ get_start_beam(_AVM) ->
 %%-----------------------------------------------------------------------------
 -spec module_set_emulated(Module :: module()) -> boolean().
 module_set_emulated(_Module) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Emulated    whether modules loaded from binaries are emulated
+%% @returns `ok'
+%% @doc     Make modules subsequently loaded with `code:load_binary/3' run in
+%%          the emulator instead of being compiled to native code.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_load_binary_emulated(Emulated :: boolean()) -> ok.
+set_load_binary_emulated(_Emulated) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
