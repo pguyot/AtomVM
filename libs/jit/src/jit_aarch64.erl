@@ -300,6 +300,12 @@
 %% saves, restores or reloads them around calls; r1/r2 become scratch.
 -define(JITSTATE_REG, r19).
 -define(NATIVE_INTERFACE_REG, r20).
+%% Upper bound, in bytes, on the distance between a set_cp site and its
+%% return point (the whole call sequence: pending stores, inline fast paths,
+%% argument marshalling, the call and its dispatch tail). Used to decide when
+%% the rewritten return-offset mov needs the two-instruction (mov+movk) slot;
+%% rewrite_cp_offset enforces it with a hard size check.
+-define(SET_CP_MAX_SEQUENCE, 2048).
 -define(Y_REGS, {?CTX_REG, 16#50}).
 -define(HEAP_PTR, {?CTX_REG, 16#18}).
 -define(X_REG(N), {?CTX_REG, 16#58 + (N * ?WORD_SIZE)}).
@@ -4490,8 +4496,15 @@ set_cp(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = St
     % cp = jit_state->cp_base (module_index << 24) | (return offset << 2);
     % the offset mov is rewritten once the return point is known.
     I1 = jit_aarch64_asm:ldr(Reg, ?JITSTATE_CPBASE),
+    % The rewritten value is the RETURN offset, which lies past the whole
+    % call sequence (pending stores, inline fast paths, argument marshalling,
+    % the call itself and its dispatch tail). A single mov encodes 16 bits,
+    % i.e. return offsets up to 16383 words; reserve the two-instruction slot
+    % (mov+movk) conservatively: ?SET_CP_MAX_SEQUENCE words is a hard upper
+    % bound on the distance between this site and its return point, enforced
+    % by the size check in rewrite_cp_offset/3.
     if
-        Offset >= 16250 ->
+        Offset >= 16384 - ?SET_CP_MAX_SEQUENCE ->
             I2 = jit_aarch64_asm:nop(),
             I3 = jit_aarch64_asm:nop(),
             RewriteSize = 8;
@@ -4519,7 +4532,12 @@ rewrite_cp_offset(
 ) ->
     NewOffset = StreamModule:offset(Stream0) - CodeOffset,
     NewMoveInstr = jit_aarch64_asm:mov(?IP0_REG, NewOffset bsl 2),
-    ?ASSERT(byte_size(NewMoveInstr) =< _RewriteSize),
+    %% Hard check, deliberately not ?ASSERT: an oversized mov would silently
+    %% overwrite the orr that merges the offset into cp, leaving a
+    %% zero-offset cp whose return lands on jump-table slot 0 (the label-0
+    %% metadata stub) and corrupts the scheduler. Guaranteed by set_cp's
+    %% ?SET_CP_MAX_SEQUENCE reservation margin.
+    true = byte_size(NewMoveInstr) =< _RewriteSize,
     Stream1 = StreamModule:replace(Stream0, RewriteOffset, NewMoveInstr),
     %% Execution resumes here when the callee returns: registers are
     %% clobbered and, crucially, code is reachable again.
@@ -4563,14 +4581,19 @@ return_labels_and_lines(
      || {Label, LabelOffset} <- maps:to_list(Labels), is_integer(Label)
     ]),
 
+    %% DEBUG canary: the only legitimate caller is C metadata code calling
+    %% entry_point(NULL, NULL, NULL); a rogue branch (e.g. jump-table slot 0
+    %% reached from generated code) arrives with x0 /= 0 and traps here.
+    I0a = jit_aarch64_asm:cbz(r0, 8),
+    I0b = jit_aarch64_asm:brk(16#BAD),
     I1 = jit_aarch64_asm:adr(r0, 8),
     I2 = jit_aarch64_asm:ret(),
     LabelsTable = <<<<Label:16, Offset:32>> || {Label, Offset} <- SortedLabels>>,
     LinesTable = <<<<Line:16, Offset:32>> || {Line, Offset} <- SortedLines>>,
     Stream1 = StreamModule:append(
         Stream0,
-        <<I1/binary, I2/binary, (length(SortedLabels)):16, LabelsTable/binary,
-            (length(SortedLines)):16, LinesTable/binary>>
+        <<I0a/binary, I0b/binary, I1/binary, I2/binary, (length(SortedLabels)):16,
+            LabelsTable/binary, (length(SortedLines)):16, LinesTable/binary>>
     ),
     State#state{stream = Stream1}.
 
