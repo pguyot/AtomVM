@@ -2480,9 +2480,10 @@ size_t jit_put_map_heap_need(Context *ctx, term src, size_t new_entries, size_t 
     UNUSED(ctx);
     size_t src_size = term_get_map_size(src);
     size_t new_size = src_size + new_entries;
-    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)) {
+    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)
+        && (new_entries == 0 || new_size <= TERM_MAP_FLAT_GROW_MAX)) {
         // Flat result: a new values array (shared keys) for a pure update, or a
-        // whole new flat map when the key set grows.
+        // whole new flat map when the key set grows (up to the growth cutoff).
         if (new_entries == 0) {
             return TERM_MAP_SHARED_SIZE(src_size);
         }
@@ -2505,9 +2506,12 @@ size_t jit_put_map_one_heap_need(Context *ctx, term src)
     UNUSED(ctx);
     size_t src_size = term_get_map_size(src);
     size_t new_size = src_size + 1;
-    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)) {
+    if (new_size <= TERM_MAP_FLAT_GROW_MAX && !term_is_map_tree(src)) {
         return TERM_MAP_SIZE(new_size);
     }
+    // Past the growth cutoff the outcome is either a flat-shared update
+    // (found key) or a tree conversion (new key); the tree sizing dominates
+    // the shared-values copy, so it covers both.
     size_t base = term_is_map_tree(src) ? 0 : termtree_from_sorted_heap_size(src_size);
     return base + termtree_put_heap_size(new_size) + (TERM_MAP_TREE_BOXED_ARITY + 1);
 }
@@ -2567,8 +2571,10 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
     bool is_shared = new_entries == 0;
 
     // Large maps are backed by a persistent weight-balanced tree (O(log n) put)
-    // rather than a flat sorted array (O(n) put); see termmap_tree.h.
-    if (new_map_size > TERM_MAP_TREE_THRESHOLD || term_is_map_tree(src)) {
+    // rather than a flat sorted array (O(n) put); see termmap_tree.h. Growing
+    // inserts convert earlier (TERM_MAP_FLAT_GROW_MAX) than pure updates.
+    if (term_is_map_tree(src) || new_map_size > TERM_MAP_TREE_THRESHOLD
+        || (new_entries > 0 && new_map_size > TERM_MAP_FLAT_GROW_MAX)) {
         return jit_map_build_tree(ctx, src, src_size, num_elements, kv);
     }
 
@@ -2587,6 +2593,14 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
             if (k == new_key) {
                 found = mid;
                 break;
+            }
+            if (LIKELY(term_is_integer(k) && term_is_integer(new_key))) {
+                if ((avm_int_t) k < (avm_int_t) new_key) {
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+                continue;
             }
             TermCompareResult cmp = term_compare(k, new_key, TermCompareExact, ctx->global);
             if (cmp == TermLessThan) {
@@ -2662,6 +2676,18 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
         } else {
             term src_key = term_get_map_key(src, src_pos);
             term new_key = kv[2 * kv_pos];
+            if (LIKELY(term_is_integer(src_key) && term_is_integer(new_key) && src_key != new_key)) {
+                if ((avm_int_t) src_key < (avm_int_t) new_key) {
+                    term src_value = term_get_map_value(src, src_pos);
+                    term_set_map_assoc(map, j, src_key, src_value);
+                    src_pos++;
+                } else {
+                    term new_value = kv[(2 * kv_pos) + 1];
+                    term_set_map_assoc(map, j, new_key, new_value);
+                    kv_pos++;
+                }
+                continue;
+            }
             // TODO: not sure if exact is the right choice here
             switch (term_compare(src_key, new_key, TermCompareExact, ctx->global)) {
                 case TermLessThan: {
@@ -2743,7 +2769,7 @@ static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, t
     TRACE("jit_put_map_assoc_one: src=%p\n", (void *) src);
     size_t src_size = term_get_map_size(src);
 
-    if (src_size + 1 > TERM_MAP_TREE_THRESHOLD || term_is_map_tree(src)) {
+    if (term_is_map_tree(src)) {
         term kv[2] = { key, value };
         return jit_map_build_tree(ctx, src, src_size, 1, kv);
     }
@@ -2759,6 +2785,14 @@ static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, t
         if (k == key) {
             found = mid;
             break;
+        }
+        if (LIKELY(term_is_integer(k) && term_is_integer(key))) {
+            if ((avm_int_t) k < (avm_int_t) key) {
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+            continue;
         }
         TermCompareResult cmp = term_compare(k, key, TermCompareExact, ctx->global);
         if (cmp == TermLessThan) {
@@ -2781,6 +2815,12 @@ static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, t
         memcpy(dst_vals, src_vals, src_size * sizeof(term));
         dst_vals[found] = value;
         return map;
+    }
+    // New key: a growing insert past the cutoff converts to the tree form
+    // instead of paying the O(n) flat copy (updates above stayed flat).
+    if (src_size + 1 > TERM_MAP_FLAT_GROW_MAX) {
+        term kv[2] = { key, value };
+        return jit_map_build_tree(ctx, src, src_size, 1, kv);
     }
     // Insert at the binary-search insertion point `low`.
     size_t at = (size_t) low;
