@@ -379,12 +379,14 @@
 -define(REG_BIT_R19, (1 bsl 19)).
 -define(REG_BIT_R20, (1 bsl 20)).
 -define(REG_BIT_R21, (1 bsl 21)).
-%% x25-x28: callee-saved allocatable registers. The dispatch loop declares
-%% them as clobbers of the C->native crossing (opcodesswitch.h saves them
-%% once per scheduling slice), so generated code may use them with no
-%% prologue. C primitives preserve them per the AAPCS64: values survive
-%% calls without the push/pop pair, and register-cache contents survive
-%% cache-safe (pure, non-x-writing) primitive calls.
+%% x25-x28: pinned HOME registers for VM x0-x3 (write-through). The dispatch
+%% loop declares them clobbered and seeds them from ctx->x[0..3] at every
+%% C->native crossing; generated code keeps them current on every VM x0-x3
+%% write (memory stays authoritative: the str is still emitted, subject to
+%% the usual pending elision) and reads x0-x3 from them with a reg-reg mov
+%% instead of a load. C primitives preserve them per the AAPCS64; after a
+%% call that may write VM registers or move terms (not cache-safe), they
+%% are reloaded from ctx->x[0..3].
 -define(REG_BIT_R25, (1 bsl 25)).
 -define(REG_BIT_R26, (1 bsl 26)).
 -define(REG_BIT_R27, (1 bsl 27)).
@@ -392,12 +394,13 @@
 -define(CALLEE_SAVED_CACHE_MASK,
     (?REG_BIT_R25 bor ?REG_BIT_R26 bor ?REG_BIT_R27 bor ?REG_BIT_R28)
 ).
+-define(X_HOME_COUNT, 4).
 
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
         ?REG_BIT_R12 bor ?REG_BIT_R13 bor ?REG_BIT_R14 bor ?REG_BIT_R15 bor
         ?REG_BIT_R3 bor ?REG_BIT_R4 bor ?REG_BIT_R5 bor ?REG_BIT_R6 bor
-        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0 bor ?CALLEE_SAVED_CACHE_MASK)
+        ?REG_BIT_R2 bor ?REG_BIT_R1 bor ?REG_BIT_R0)
 ).
 -define(SCRATCH_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
@@ -514,19 +517,27 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% free_native_registers/2, free_native_register/2, assert_all_native_free/1,
 %% first_avail/1, mask_to_list/1, args_regs/1, prepare_call_scratch/1) is shared
 %% across the register-based backends and flows through jit_regs.
--define(FIRST_AVAIL_REGS, [
-    r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6, r2, r1, r0, r25, r26, r27, r28
-]).
+-define(FIRST_AVAIL_REGS, [r7, r8, r9, r10, r11, r12, r13, r14, r15, r3, r4, r5, r6, r2, r1, r0]).
 
-%% Allocation for values worth caching across C calls (VM x/y register
-%% loads): prefer a callee-saved register so the cached copy survives
-%% cache-safe primitive calls (see call_func_ptr0). Falls back to the
-%% caller-saved scratch order under pressure.
-first_avail_cacheable(Avail) ->
-    case Avail band ?CALLEE_SAVED_CACHE_MASK of
-        0 -> first_avail(Avail);
-        M -> first_avail(M)
-    end.
+%% Pinned home register of VM x register X (X < ?X_HOME_COUNT).
+x_home(0) -> r25;
+x_home(1) -> r26;
+x_home(2) -> r27;
+x_home(3) -> r28.
+
+%% Load VM x register X into Dst: homed registers use a reg-reg mov.
+x_read(Dst, X) when is_integer(X), X < ?X_HOME_COUNT ->
+    jit_aarch64_asm:mov(Dst, x_home(X));
+x_read(Dst, X) ->
+    jit_aarch64_asm:ldr(Dst, ?X_REG(X)).
+
+%% Write-through home update, emitted BEFORE the memory store so the
+%% pending-elision bookkeeping (which assumes the str is the last emitted
+%% instruction) stays correct.
+x_home_update(Src, X) when is_integer(X), X < ?X_HOME_COUNT ->
+    jit_aarch64_asm:mov(x_home(X), Src);
+x_home_update(_Src, _X) ->
+    <<>>.
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, ?JITSTATE_REG).
 -include("jit_backend_regs_impl.hrl").
@@ -1142,10 +1153,10 @@ emit_backedge_recon(#state{stream_module = StreamModule, regs = Regs} = State, B
                     {ok, Other} ->
                         case lists:member(Other, Done) of
                             false -> jit_aarch64_asm:mov(Reg, Other);
-                            true -> jit_aarch64_asm:ldr(Reg, ?X_REG(X))
+                            true -> x_read(Reg, X)
                         end;
                     _ ->
-                        jit_aarch64_asm:ldr(Reg, ?X_REG(X))
+                        x_read(Reg, X)
                 end,
             {StreamModule:append(StAcc, I), [Reg | Done]}
         end,
@@ -2102,7 +2113,7 @@ call_func_ptr0(
 
     Stream6a = pop_registers(SavedRegsOdd, lists:reverse(SavedRegs), StreamModule, Stream5),
     %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
-    Stream6 =
+    Stream6b =
         case Pure of
             true ->
                 Stream6a;
@@ -2112,6 +2123,19 @@ call_func_ptr0(
                     (jit_aarch64_asm:ldr(?E_REG, ?Y_REGS))/binary
                 >>,
                 StreamModule:append(Stream6a, RL)
+        end,
+    %% Reload the VM x0-x3 home registers: a non-cache-safe callee may have
+    %% written VM registers or moved terms (GC).
+    Stream6 =
+        case CacheSafe of
+            true ->
+                Stream6b;
+            false ->
+                XRL = <<
+                    (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
+                    (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
+                >>,
+                StreamModule:append(Stream6b, XRL)
         end,
 
     ResultBit = reg_bit(ResultReg),
@@ -2293,7 +2317,7 @@ set_args1(Reg, Reg) ->
 set_args1({x_reg, extra}, Reg) ->
     jit_aarch64_asm:ldr(Reg, ?X_REG(?MAX_REG));
 set_args1({x_reg, X}, Reg) ->
-    jit_aarch64_asm:ldr(Reg, ?X_REG(X));
+    x_read(Reg, X);
 set_args1({ptr, Source}, Reg) ->
     jit_aarch64_asm:ldr(Reg, {Source, 0});
 %% ctx/jit_state as explicit arguments (BIFs, computed function pointers):
@@ -2365,7 +2389,7 @@ move_to_vm_register_emit(State0, Src, {x_reg, extra}) when is_atom(Src) ->
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
 move_to_vm_register_emit(State0, Src, {x_reg, X}) when is_atom(Src) ->
-    I1 = jit_aarch64_asm:str(Src, ?X_REG(X)),
+    I1 = <<(x_home_update(Src, X))/binary, (jit_aarch64_asm:str(Src, ?X_REG(X)))/binary>>,
     Stream1 = (State0#state.stream_module):append(State0#state.stream, I1),
     State0#state{stream = Stream1};
 move_to_vm_register_emit(State0, Src, {ptr, Reg}) when is_atom(Src) ->
@@ -2400,7 +2424,7 @@ move_to_vm_register_emit(#state{regs = Regs0} = State0, {x_reg, extra}, Dest) ->
 move_to_vm_register_emit(#state{} = StateP, {x_reg, X}, Dest) ->
     #state{regs = Regs0} = State0 = pending_clear_x(StateP, X),
     with_temp(State0, Dest, fun(Temp) ->
-        {jit_aarch64_asm:ldr(Temp, ?X_REG(X)), jit_regs:set_contents(Regs0, Temp, {x_reg, X})}
+        {x_read(Temp, X), jit_regs:set_contents(Regs0, Temp, {x_reg, X})}
     end);
 move_to_vm_register_emit(#state{regs = Regs0} = State0, {ptr, Reg}, Dest) ->
     with_temp(State0, Dest, fun(Temp) ->
@@ -2479,7 +2503,7 @@ move_array_element(
     Available = jit_regs:available_regs(Regs0),
     Temp = first_avail(Available),
     I1 = jit_aarch64_asm:ldr(Temp, {Reg, Index * ?WORD_SIZE}),
-    I2 = jit_aarch64_asm:str(Temp, ?X_REG(X)),
+    I2 = <<(x_home_update(Temp, X))/binary, (jit_aarch64_asm:str(Temp, ?X_REG(X)))/binary>>,
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
     Regs2 = jit_regs:set_contents(Regs1, Temp, {x_reg, X}),
@@ -2547,7 +2571,7 @@ move_array_element(
         regs = Regs0
     } = State = pending_elide_prev(State0, X),
     I1 = jit_aarch64_asm:ldr(IndexReg, {Reg, IndexReg, lsl, 3}),
-    I2 = jit_aarch64_asm:str(IndexReg, ?X_REG(X)),
+    I2 = <<(x_home_update(IndexReg, X))/binary, (jit_aarch64_asm:str(IndexReg, ?X_REG(X)))/binary>>,
     Bit = reg_bit(IndexReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
@@ -2847,7 +2871,7 @@ move_to_native_register_emit(
     Contents
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail_cacheable(Available),
+    Reg = first_avail(Available),
     Bit = reg_bit(Reg),
     I1 = jit_aarch64_asm:ldr(Reg, ?X_REG(?MAX_REG)),
     Stream1 = StreamModule:append(Stream0, I1),
@@ -2872,9 +2896,9 @@ move_to_native_register_emit(
         regs = Regs0
     } = State = pending_clear_x(StateP, X),
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail_cacheable(Available),
+    Reg = first_avail(Available),
     Bit = reg_bit(Reg),
-    I1 = jit_aarch64_asm:ldr(Reg, ?X_REG(X)),
+    I1 = x_read(Reg, X),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:set_contents(Regs0, Reg, Contents),
     {
@@ -2894,7 +2918,7 @@ move_to_native_register_emit(
     Contents
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Reg = first_avail_cacheable(Available),
+    Reg = first_avail(Available),
     Bit = reg_bit(Reg),
     Code = jit_aarch64_asm:ldr(Reg, {?E_REG, Y * ?WORD_SIZE}),
     Stream1 = StreamModule:append(Stream0, Code),
@@ -2956,7 +2980,7 @@ move_to_native_register(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State =
         pending_clear_x(StateP, X),
-    I1 = jit_aarch64_asm:ldr(RegDst, ?X_REG(X)),
+    I1 = x_read(RegDst, X),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:set_contents(Regs0, RegDst, {x_reg, X}),
     State#state{stream = Stream1, regs = Regs1};
@@ -4292,7 +4316,12 @@ call_fun_with_cp_direct(State0, Primitive, [ctx, jit_state, offset, FunRegArg, A
 %% comments drive the branch displacements — keep them in sync.
 emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) ->
     #state{stream_module = StreamModule, stream = Stream0} = State0,
-    Slow = fun(Idx) -> (40 - Idx) * 4 end,
+    NWords =
+        case ArgsCount < ?X_HOME_COUNT of
+            true -> 42;
+            false -> 40
+        end,
+    Slow = fun(Idx) -> (NWords - Idx) * 4 end,
     Code = <<
         % 0: unbox the fun (verify_is_function checked the boxed fun header)
         (jit_aarch64_asm:and_(T1, FunReg, bnot 3))/binary,
@@ -4340,6 +4369,18 @@ emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) -
         (jit_aarch64_asm:add(T0, T0, 8))/binary,
         (jit_aarch64_asm:sub(T6, T6, 1))/binary,
         (jit_aarch64_asm:cbnz(T6, -((33 - 28) * 4)))/binary,
+        % 34a: the frozen-var copy above stores into ctx->x[ArgsCount..]
+        % directly; when that range can overlap the homed VM x0-x3, refresh
+        % the home registers from memory (two loads, only for ArgsCount < 4).
+        (case ArgsCount < ?X_HOME_COUNT of
+            true ->
+                <<
+                    (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
+                    (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
+                >>;
+            false ->
+                <<>>
+        end)/binary,
         % 34-37: jit_state_set_module: module + cp_base (module_index << 24)
         (jit_aarch64_asm:str(T3, ?JITSTATE_MODULE))/binary,
         (jit_aarch64_asm:ldr_w(T2, {T3, 0}))/binary,
@@ -4349,7 +4390,7 @@ emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) -
         (jit_aarch64_asm:add(T4, T4, T5, {lsl, 2}))/binary,
         (jit_aarch64_asm:br(T4))/binary
     >>,
-    40 * 4 = byte_size(Code),
+    true = NWords * 4 =:= byte_size(Code),
     State0#state{stream = StreamModule:append(Stream0, Code)}.
 
 %% OP_CALL_EXT with an inline already-resolved fast path. Sets cp like
