@@ -188,6 +188,7 @@ ets:tab2list/1, &ets_tab2list_nif
 erlang:phash2/1, &phash2_nif
 erlang:phash2/2, &phash2_nif
 atomvm:module_set_emulated/1, &atomvm_module_set_emulated_nif
+atomvm:set_load_binary_emulated/1, &atomvm_set_load_binary_emulated_nif
 os:cmd/1, &os_cmd_nif
 re:pcre2_compile/2, &re_pcre2_compile_nif
 re:pcre2_match/4, &re_pcre2_match_nif
