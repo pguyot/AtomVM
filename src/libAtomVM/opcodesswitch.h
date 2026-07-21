@@ -1967,6 +1967,12 @@ schedule_in:
                     :
                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
                       "x11", "x12", "x13", "x14", "x15", "x16", "x17",
+                      // x25-x28: allocatable callee-saved registers of the
+                      // JIT ABI. Declaring them clobbered makes the compiler
+                      // save them once per C->native crossing, so generated
+                      // code uses them with no prologue and its register
+                      // cache survives C primitive calls in them.
+                      "x25", "x26", "x27", "x28",
                       AVM_JIT_AARCH64_X18_CLOBBER "x30",
                       "memory", "cc",
                       "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
