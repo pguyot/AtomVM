@@ -2760,6 +2760,7 @@ size_t jit_put_map_exact_one_heap_need(Context *ctx, term src)
 // jit_put_map_exact_one_heap_need(...) words.
 static term jit_put_map_exact_one(Context *ctx, JITState *jit_state, term src, int pos, term key, term value)
 {
+    UNUSED(jit_state);
     TRACE("jit_put_map_exact_one: src=%p pos=%d\n", (void *) src, pos);
     if (UNLIKELY(term_is_map_tree(src))) {
         term kv[2] = { key, value };
