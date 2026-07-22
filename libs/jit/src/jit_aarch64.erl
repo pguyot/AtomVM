@@ -328,6 +328,10 @@
 %% module_index << 24, maintained by jit_state_set_module in jit.c
 %% (_Static_assert pins the offset).
 -define(JITSTATE_CPBASE, {?JITSTATE_REG, 16#28}).
+%% Dispatcher return address, stored by the scheduler loop's native-entry
+%% asm block once per crossing. Call sites reload lr from here after every
+%% primitive call instead of saving/restoring it around each call.
+-define(JITSTATE_DISPATCHER_RET, {?JITSTATE_REG, 16#30}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * ?WORD_SIZE}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 % module->native_code (see _Static_assert in jit.c); used by the inline
@@ -2014,12 +2018,14 @@ call_func_ptr0(
     FreeMask = jit_regs:regs_to_mask(FreeRegs, fun reg_bit/1),
     UsedRegs1 = UsedRegs0 band (bnot FreeMask),
     %% ctx (r21), jit_state (r19) and the native-interface table (r20) are
-    %% callee-saved: the callee preserves them, so only lr and live scratch
-    %% regs need saving around the call.
+    %% callee-saved: the callee preserves them, so only live scratch regs
+    %% need saving around the call. lr is NOT saved: it is reloaded from
+    %% jit_state->dispatcher_ret after the call (stored once per crossing
+    %% by the scheduler loop's native-entry asm block).
     Reloc = (State0#state.variant band ?JIT_VARIANT_RELOC) =/= 0,
     %% x25-x28 are callee-saved: live values survive the call with no
     %% push/pop pair.
-    SavedRegs = [?LR_REG | mask_to_list(UsedRegs1 band (bnot ?CALLEE_SAVED_CACHE_MASK))],
+    SavedRegs = mask_to_list(UsedRegs1 band (bnot ?CALLEE_SAVED_CACHE_MASK)),
     %% If the function pointer lives in a parameter register (r0 is
     %% allocatable and call results may stay there), argument setup below
     %% would overwrite it: park it in IP0 first.
@@ -2083,19 +2089,29 @@ call_func_ptr0(
         end,
 
     % Call the function pointer: a direct BL (loader-relocated) in reloc mode,
-    % otherwise BLR through the loaded pointer.
+    % otherwise BLR through the loaded pointer. The call clobbers lr;
+    % restore the dispatcher return address right after, so any later `ret`
+    % (exit sequences, direct-dispatch tails) lands back in the scheduler
+    % loop.
+    LrReload = jit_aarch64_asm:ldr(?LR_REG, ?JITSTATE_DISPATCHER_RET),
     {Stream4, Relocations1} =
         case FuncPtrReg of
             {reloc, PrimIdx} ->
                 %% Single direct call. The loader binds it to the primitive when
                 %% in branch range, otherwise to a per-primitive in-module veneer.
                 BlOffset = StreamModule:offset(Stream3b),
-                {StreamModule:append(Stream3b, jit_aarch64_asm:bl(0)), [
-                    {BlOffset, PrimIdx} | State1#state.relocations
-                ]};
+                {
+                    StreamModule:append(
+                        Stream3b, <<(jit_aarch64_asm:bl(0))/binary, LrReload/binary>>
+                    ),
+                    [{BlOffset, PrimIdx} | State1#state.relocations]
+                };
             _ ->
                 {
-                    StreamModule:append(Stream3b, jit_aarch64_asm:blr(FuncPtrReg)),
+                    StreamModule:append(
+                        Stream3b,
+                        <<(jit_aarch64_asm:blr(FuncPtrReg))/binary, LrReload/binary>>
+                    ),
                     State1#state.relocations
                 }
         end,

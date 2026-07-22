@@ -1961,12 +1961,21 @@ schedule_in:
 #define AVM_JIT_AARCH64_X18_CLOBBER "x18",
 #endif
                 __asm__ volatile(
+                    // Store the dispatcher return address in
+                    // jit_state->dispatcher_ret (offset 0x30, asserted in
+                    // jit.c): generated code does not preserve lr across
+                    // primitive calls; it reloads x30 from here after every
+                    // call, so its exit `ret`s land on the label below —
+                    // the same place the blr's own return would.
+                    "adr x9, 1f\n\t"
+                    "str x9, [x19, #0x30]\n\t"
                     // Seed the VM x0-x3 home registers (x25-x28) from
                     // ctx->x[0..3]; generated code keeps them write-through
                     // current and reloads them after non-cache-safe calls.
                     "ldp x25, x26, [x21, #88]\n\t"
                     "ldp x27, x28, [x21, #104]\n\t"
-                    "blr x24"
+                    "blr x24\n\t"
+                    "1:"
                     : "=r"(result_reg), "+r"(pin_js), "+r"(pin_p), "+r"(pin_ctx),
                       "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
                     :
