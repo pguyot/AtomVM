@@ -190,7 +190,9 @@ static bool node_find(term node, term key, const struct TermMapProbe *probe, Glo
         // 2-tuple-of-immediates probes (#b_var{}-style compiler keys) compare
         // inline against each candidate; see TermMapProbe in term.h.
         if (key_is_tup2) {
-            TermCompareResult pr;
+            // Initialized: GCC's -Wmaybe-uninitialized cannot see that every
+            // true return of term_map_probe_tup2_cmp assigns it.
+            TermCompareResult pr = TermEquals;
             if (term_map_probe_tup2_cmp(probe, k, &pr)) {
                 if (pr == TermLessThan) {
                     hi = mid;
