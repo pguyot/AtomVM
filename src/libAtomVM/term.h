@@ -2722,7 +2722,7 @@ static inline bool term_map_probe_tup2_cmp(const struct TermMapProbe *probe, ter
         return true;
     }
     const term *kp = term_to_const_term_ptr(k);
-    TermCompareResult r0;
+    TermCompareResult r0 = TermEquals;
     if (!term_map_probe_elem_cmp(probe->e0, kp[1], &r0)) {
         return false;
     }
@@ -3399,7 +3399,8 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
             // 2-tuple-of-immediates probes (#b_var{}-style compiler keys)
             // compare inline; see TermMapProbe.
             if (key_is_tup2) {
-                TermCompareResult pr;
+                // Initialized for GCC's -Wmaybe-uninitialized (see node_find).
+                TermCompareResult pr = TermEquals;
                 if (term_map_probe_tup2_cmp(&probe, k, &pr)) {
                     if (pr == TermGreaterThan) {
                         low = mid + 1;
