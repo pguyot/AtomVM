@@ -28,17 +28,14 @@ start() ->
 to_int(A) ->
     try round(id(A)) of
         B when is_integer(B) ->
-            "BEAM" = erlang:system_info(machine),
+            %% any double fits since the bignum cap is >= 1280 bits
             79 = length(integer_to_list(B)),
             0;
         _Other ->
             1
     catch
         error:overflow ->
-            case erlang:system_info(machine) of
-                "BEAM" -> 2;
-                _ -> 0
-            end;
+            2;
         _:_ ->
             3
     end.

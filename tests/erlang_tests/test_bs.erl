@@ -390,7 +390,9 @@ test_signed_int_unaligned() ->
 % A >64-bit integer field at a non-byte-aligned offset is not supported yet
 % (BEAM matches it); AtomVM raises unsupported, as the construction side does.
 test_big_int_unaligned_unsupported() ->
-    atom_unsupported(fun() -> big72_at1(id(<<0:1, 42:72, 0:7>>)) end).
+    %% supported since the bit-granular big-integer bit syntax
+    42 = big72_at1(id(<<0:1, 42:72, 0:7>>)),
+    ok.
 
 big72_at1(B) ->
     <<_:1, X:72, _:7>> = B,

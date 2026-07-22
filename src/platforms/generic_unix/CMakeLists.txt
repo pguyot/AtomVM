@@ -61,6 +61,13 @@ if (NOT DEFINED AVM_SYSTEM_ARCHITECTURE_STRING OR "${AVM_SYSTEM_ARCHITECTURE_STR
     avm_get_system_architecture_string(AVM_SYSTEM_ARCHITECTURE_STRING)
 endif()
 
+# Desktop builds get big-integer room for real-world literals (OTP's ssh
+# embeds the 8192-bit dh_group18 prime); embedded platforms keep the
+# smaller intn.h default, as intn stack buffers scale with the cap.
+if (NOT DEFINED AVM_INTN_MAX_BITS)
+    set(AVM_INTN_MAX_BITS 8320)
+endif()
+
 add_subdirectory(../../libAtomVM libAtomVM)
 target_link_libraries(AtomVM PRIVATE libAtomVM)
 
