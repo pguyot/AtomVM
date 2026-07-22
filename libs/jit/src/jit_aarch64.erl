@@ -2514,7 +2514,8 @@ with_temp(
 %% pervasive tail-recursive list loop reads head/tail right after the match).
 %% ListReg (the already-unboxed cons pointer) is consumed. Both x-reg fast form
 %% and a fallback for y_reg / {ptr,_} destinations.
--spec get_list_head_tail(state(), {free, aarch64_register()}, vm_register(), vm_register()) -> state().
+-spec get_list_head_tail(state(), {free, aarch64_register()}, vm_register(), vm_register()) ->
+    state().
 get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
     H < ?MAX_REG, T < ?MAX_REG, H =/= T
 ->
@@ -4338,7 +4339,9 @@ call_primitive_with_cp(State0, Primitive, Args) ->
 %% @end
 %%-----------------------------------------------------------------------------
 -spec call_fun_with_cp_direct(state(), non_neg_integer(), [any()]) -> state().
-call_fun_with_cp_direct(State0, Primitive, [ctx, jit_state, offset, FunRegArg, ArgsCount] = Args) when
+call_fun_with_cp_direct(
+    State0, Primitive, [ctx, jit_state, offset, FunRegArg, ArgsCount] = Args
+) when
     is_integer(ArgsCount)
 ->
     {State1, RewriteOffset, RewriteSize} = set_cp(State0),
