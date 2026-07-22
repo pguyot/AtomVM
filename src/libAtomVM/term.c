@@ -1287,16 +1287,15 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                         break;
                     }
                     case TERM_TYPE_INDEX_NON_EMPTY_LIST: {
+                        // Tails are pushed as-is: nil orders between maps and
+                        // lists (TERM_TYPE_INDEX_NIL), which yields both
+                        // "a" < "ab" (nil vs cons) and BEAM's improper-tail
+                        // ordering ([1|2] < [1,2]: 2 vs nil, number < nil).
+                        // An older scheme substituted invalid-term as a
+                        // bottom element for nil tails, which inverted the
+                        // improper-tail case.
                         term t_tail = term_get_list_tail(t);
                         term other_tail = term_get_list_tail(other);
-                        // invalid term is used as a term lower than any other
-                        // so "a" < "ab" -> true can be implemented.
-                        if (term_is_nil(t_tail)) {
-                            t_tail = term_invalid_term();
-                        }
-                        if (term_is_nil(other_tail)) {
-                            other_tail = term_invalid_term();
-                        }
                         if (UNLIKELY(temp_stack_push(&temp_stack, t_tail) != TempStackOk)) {
                             return TermCompareMemoryAllocFail;
                         }
