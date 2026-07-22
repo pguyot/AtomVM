@@ -9484,10 +9484,88 @@ static term nif_lists_keyfind(Context *ctx, int argc, term argv[])
     return FALSE_ATOM;
 }
 
+// Traverse a bitstring_list() (possibly improper, possibly nested), summing
+// its total bit size. When dst is non-NULL, also copy every element's bits
+// into dst at the running bit offset. Elements are bytes (0..255) or
+// bitstrings of any bit size; the improper tail may be a bitstring.
+static InteropFunctionResult fold_bitstring_list(term t, uint8_t *dst, size_t *total_bits)
+{
+    size_t bits = 0;
+    struct TempStack temp_stack;
+    if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
+        return InteropMemoryAllocFail;
+    }
+    if (UNLIKELY(temp_stack_push(&temp_stack, t) != TempStackOk)) {
+        temp_stack_destroy(&temp_stack);
+        return InteropMemoryAllocFail;
+    }
+    while (!temp_stack_is_empty(&temp_stack)) {
+        if (term_is_integer(t)) {
+            avm_int_t value = term_to_int(t);
+            if (UNLIKELY(value < 0 || value > UCHAR_MAX)) {
+                temp_stack_destroy(&temp_stack);
+                return InteropBadArg;
+            }
+            if (dst) {
+                uint8_t byte = (uint8_t) value;
+                bitstring_copy_bits(dst, bits, &byte, 8);
+            }
+            bits += 8;
+            t = temp_stack_pop(&temp_stack);
+        } else if (term_is_bitstring(t)) {
+            size_t n = term_bit_size(t);
+            if (dst && n != 0) {
+                bitstring_copy_bits(dst, bits, (const uint8_t *) term_binary_data(t), n);
+            }
+            bits += n;
+            t = temp_stack_pop(&temp_stack);
+        } else if (term_is_nil(t)) {
+            t = temp_stack_pop(&temp_stack);
+        } else if (term_is_nonempty_list(t)) {
+            if (UNLIKELY(temp_stack_push(&temp_stack, term_get_list_tail(t)) != TempStackOk)) {
+                temp_stack_destroy(&temp_stack);
+                return InteropMemoryAllocFail;
+            }
+            t = term_get_list_head(t);
+        } else {
+            temp_stack_destroy(&temp_stack);
+            return InteropBadArg;
+        }
+    }
+    temp_stack_destroy(&temp_stack);
+    *total_bits = bits;
+    return InteropOk;
+}
+
 static term nif_erlang_list_to_bitstring_1(Context *ctx, int argc, term argv[])
 {
-    //  TODO: implement proper list_to_bitstring function when the bitstrings are supported
-    return nif_erlang_list_to_binary_1(ctx, argc, argv);
+    VALIDATE_VALUE(argv[0], term_is_list);
+
+    size_t total_bits;
+    InteropFunctionResult result = fold_bitstring_list(argv[0], NULL, &total_bits);
+    if (UNLIKELY(result != InteropOk)) {
+        RAISE_ERROR(result == InteropBadArg ? BADARG_ATOM : OUT_OF_MEMORY_ATOM);
+    }
+
+    size_t whole_bytes = total_bits / 8;
+    uint8_t trailing_bits = (uint8_t) (total_bits % 8);
+    size_t alloc_bytes = whole_bytes + (trailing_bits != 0 ? 1 : 0);
+    size_t heap_size = term_binary_heap_size(alloc_bytes)
+        + (trailing_bits != 0 ? TERM_BOXED_SUB_BINARY_SIZE : 0);
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_size, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term bin = term_create_empty_binary(alloc_bytes, &ctx->heap, ctx->global);
+    if (total_bits != 0) {
+        result = fold_bitstring_list(argv[0], (uint8_t *) term_binary_data(bin), &total_bits);
+        if (UNLIKELY(result != InteropOk)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+    }
+    if (trailing_bits != 0) {
+        return term_alloc_sub_binary_bits(bin, 0, whole_bytes, trailing_bits, &ctx->heap);
+    }
+    return bin;
 }
 
 #ifndef WITH_ZLIB

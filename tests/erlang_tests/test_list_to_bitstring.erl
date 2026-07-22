@@ -26,6 +26,7 @@ start() ->
     ok = test_concat(),
     ok = test_iolist(),
     ok = test_empty_list_to_binary(),
+    ok = test_bit_level(),
     0.
 
 test_concat() ->
@@ -42,6 +43,24 @@ test_iolist() ->
 test_empty_list_to_binary() ->
     <<"">> = erlang:list_to_bitstring(?MODULE:id([])),
     ok.
+
+test_bit_level() ->
+    <<2:2>> = list_to_bitstring(?MODULE:id([<<1:1>>, <<0:1>>])),
+    % improper tail may be a bitstring
+    <<2:2>> = list_to_bitstring(?MODULE:id([<<1:1>> | <<0:1>>])),
+    <<15:4>> = list_to_bitstring(?MODULE:id([[<<1:1>> | <<7:3>>]])),
+    % mixed bytes and bit fragments, nested
+    <<"ab", 1:3, 0:5>> = list_to_bitstring(?MODULE:id([<<"ab">>, [<<1:3>>], <<0:5>>])),
+    <<65, 1:1, 66:8, 3:7, 67>> = list_to_bitstring(?MODULE:id([65, <<1:1>>, 66, <<3:7>>, 67])),
+    3000 = bit_size(list_to_bitstring(?MODULE:id(duplicate(1000, <<5:3>>, [])))),
+    % non-bitstring elements are rejected
+    0 = invalid([<<1:1>>, 3.14]),
+    0 = invalid([<<1:1>> | some_atom]),
+    0 = invalid([256]),
+    ok.
+
+duplicate(0, _T, Acc) -> Acc;
+duplicate(N, T, Acc) -> duplicate(N - 1, T, [T | Acc]).
 
 concat(A, B) ->
     list_to_bitstring(?MODULE:id(A ++ " " ++ B)).
