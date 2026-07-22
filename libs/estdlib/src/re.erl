@@ -106,8 +106,8 @@ compile(Regexp, Options) ->
             %% Erlang/OTP's {re_pattern, _, _, _, binary()} (version-aware
             %% callers sniff the shape).
             Data =
-                <<NameCount:16, NameEntrySize:16, (byte_size(NameTable)):32,
-                    NameTable/binary, Serialized/binary>>,
+                <<NameCount:16, NameEntrySize:16, (byte_size(NameTable)):32, NameTable/binary,
+                    Serialized/binary>>,
             MP = {re_pattern, CaptureCount, Unicode, 0, Data},
             case lists:member(export, Options) of
                 false ->
@@ -169,8 +169,8 @@ run(Subject, RE) ->
 run(Subject, RE, Options) ->
     {MP, RunOptions} = ensure_compiled(RE, Options),
     {re_pattern, CaptureCount, Unicode, 0, Data} = MP,
-    <<NameCount:16, NameEntrySize:16, TableSize:32, NameTable:TableSize/binary,
-        Serialized/binary>> = Data,
+    <<NameCount:16, NameEntrySize:16, TableSize:32, NameTable:TableSize/binary, Serialized/binary>> =
+        Data,
     IsUnicode = Unicode =:= 1,
     {SubjectBin, _WasCharlist} = subject_to_binary(Subject, IsUnicode),
     Offset = proplists:get_value(offset, RunOptions, 0),
@@ -460,7 +460,9 @@ global_loop(SubjectBin, Serialized, Offset, MatchFlags, IsUnicode, Acc) when
                 end,
             case NextOffset of
                 {retry, NO, Match2} ->
-                    global_loop(SubjectBin, Serialized, NO, MatchFlags, IsUnicode, [Match2, Match | Acc]);
+                    global_loop(SubjectBin, Serialized, NO, MatchFlags, IsUnicode, [
+                        Match2, Match | Acc
+                    ]);
                 NO when is_integer(NO) ->
                     global_loop(SubjectBin, Serialized, NO, MatchFlags, IsUnicode, [Match | Acc])
             end;
