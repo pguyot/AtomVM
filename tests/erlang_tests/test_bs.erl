@@ -412,8 +412,9 @@ test_big_int_unaligned() ->
     (1 bsl 70) = big72_at1(id(<<0:1, (1 bsl 70):72, 0:7>>)),
     (1 bsl 70) = bigdyn_at1(id(<<0:1, (1 bsl 70):72, 0:7>>), id(72)),
     (1 bsl 70) = big72_at0(id(<<(1 bsl 70):72, 0:8>>)),
-    ok = atom_unsupported(fun() -> big300_at1(id(<<0:1, 0:300, 0:7>>)) end),
-    ok = atom_unsupported(fun() -> bigdyn_at1(id(<<0:1, 0:300, 0:7>>), id(300)) end),
+    % the bignum cap (AVM_INTN_MAX_BITS) is at least 1280 bits
+    (1 bsl 299) = big300_at1(id(<<0:1, (1 bsl 299):300, 0:7>>)),
+    (1 bsl 299) = bigdyn_at1(id(<<0:1, (1 bsl 299):300, 0:7>>), id(300)),
     ok.
 
 big300_at1(B) ->
