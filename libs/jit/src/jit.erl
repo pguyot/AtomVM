@@ -2251,71 +2251,75 @@ emit_pass(<<?OP_PUT_MAP_ASSOC, Rest0/binary>>, MMod, MSt0, State0) ->
             ?ASSERT_ALL_NATIVE_FREE(MSt10s),
             emit_pass(RestV, MMod, MSt10s, State0);
         _ ->
-    {MSt3, NewEntriesReg} = MMod:move_to_native_register(MSt2, 0),
-    % First iteration to compute size
-    NumElements = ListSize div 2,
-    {MSt4, _Rest6a} = lists:foldl(
-        fun(_Index, {ASt0, ARest0}) ->
-            {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
-            ARest2 = skip_compact_term(ARest1),
-            {ASt2, PosReg} = MMod:call_primitive(ASt1, ?PRIM_TERM_FIND_MAP_POS, [
-                ctx, Src, {free, Key}
-            ]),
-            ASt3 = MMod:if_block(ASt2, {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, fun(BSt0) ->
-                MMod:add(BSt0, NewEntriesReg, 1)
-            end),
-            ASt4 = MMod:if_block(
-                ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
-                    MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
-                        ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                    ])
-                end
+            {MSt3, NewEntriesReg} = MMod:move_to_native_register(MSt2, 0),
+            % First iteration to compute size
+            NumElements = ListSize div 2,
+            {MSt4, _Rest6a} = lists:foldl(
+                fun(_Index, {ASt0, ARest0}) ->
+                    {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
+                    ARest2 = skip_compact_term(ARest1),
+                    {ASt2, PosReg} = MMod:call_primitive(ASt1, ?PRIM_TERM_FIND_MAP_POS, [
+                        ctx, Src, {free, Key}
+                    ]),
+                    ASt3 = MMod:if_block(ASt2, {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, fun(
+                        BSt0
+                    ) ->
+                        MMod:add(BSt0, NewEntriesReg, 1)
+                    end),
+                    ASt4 = MMod:if_block(
+                        ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(
+                            BSt0
+                        ) ->
+                            MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
+                                ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
+                            ])
+                        end
+                    ),
+                    {ASt4, ARest2}
+                end,
+                {MSt3, Rest5},
+                lists:seq(1, NumElements)
             ),
-            {ASt4, ARest2}
-        end,
-        {MSt3, Rest5},
-        lists:seq(1, NumElements)
-    ),
-    % Heap words to reserve: computed in C because a large (tree-backed) result
-    % map has a very different footprint than a flat one. Src is still valid
-    % here (the ensure_free below may relocate it, returning NewSrc).
-    {MSt6, SrcSizeReg} = MMod:call_primitive(MSt4, ?PRIM_PUT_MAP_HEAP_NEED, [
-        ctx, Src, NewEntriesReg, NumElements
-    ]),
-    {MSt7, TrimResultReg} = MMod:call_primitive(MSt6, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt8 = MMod:free_native_registers(MSt7, [TrimResultReg]),
-    {MSt9, NewSrc} = memory_ensure_free_with_extra_root(
-        Src, Live, {free, SrcSizeReg}, MMod, MSt8
-    ),
-    % Second iteration to prepare KV pairs
-    {MSt10, KVReg} = MMod:call_primitive(MSt9, ?PRIM_MALLOC, [
-        ctx, jit_state, ListSize * MMod:word_size()
-    ]),
-    MSt11 = handle_error_if({KVReg, '==', 0}, MMod, MSt10),
-    {MSt12, Rest6} = lists:foldl(
-        fun(Index, {ASt0, ARest0}) ->
-            {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
-            {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
-            ?TRACE("(~p,~p),", [Key, Value]),
-            ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
-            ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
-            ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
-            {ASt5, ARest2}
-        end,
-        {MSt11, Rest5},
-        lists:seq(0, NumElements - 1)
-    ),
-    ?TRACE("]\n", []),
-    {MSt13, PutMapAssocReg} = MMod:call_primitive(MSt12, ?PRIM_PUT_MAP_ASSOC, [
-        ctx, jit_state, {free, NewSrc}, {free, NewEntriesReg}, NumElements, KVReg
-    ]),
-    {MSt14, FreeReg} = MMod:call_primitive(MSt13, ?PRIM_FREE, [{free, KVReg}]),
-    MSt15 = MMod:free_native_registers(MSt14, [FreeReg]),
-    MSt16 = handle_error_if({PutMapAssocReg, '==', 0}, MMod, MSt15),
-    MSt17 = MMod:move_to_vm_register(MSt16, PutMapAssocReg, Dest),
-    MSt18 = MMod:free_native_registers(MSt17, [PutMapAssocReg, Dest]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt18),
-    emit_pass(Rest6, MMod, MSt18, State0)
+            % Heap words to reserve: computed in C because a large (tree-backed) result
+            % map has a very different footprint than a flat one. Src is still valid
+            % here (the ensure_free below may relocate it, returning NewSrc).
+            {MSt6, SrcSizeReg} = MMod:call_primitive(MSt4, ?PRIM_PUT_MAP_HEAP_NEED, [
+                ctx, Src, NewEntriesReg, NumElements
+            ]),
+            {MSt7, TrimResultReg} = MMod:call_primitive(MSt6, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+            MSt8 = MMod:free_native_registers(MSt7, [TrimResultReg]),
+            {MSt9, NewSrc} = memory_ensure_free_with_extra_root(
+                Src, Live, {free, SrcSizeReg}, MMod, MSt8
+            ),
+            % Second iteration to prepare KV pairs
+            {MSt10, KVReg} = MMod:call_primitive(MSt9, ?PRIM_MALLOC, [
+                ctx, jit_state, ListSize * MMod:word_size()
+            ]),
+            MSt11 = handle_error_if({KVReg, '==', 0}, MMod, MSt10),
+            {MSt12, Rest6} = lists:foldl(
+                fun(Index, {ASt0, ARest0}) ->
+                    {ASt1, Key, ARest1} = decode_compact_term(ARest0, MMod, ASt0, State0),
+                    {ASt2, Value, ARest2} = decode_compact_term(ARest1, MMod, ASt1, State0),
+                    ?TRACE("(~p,~p),", [Key, Value]),
+                    ASt3 = MMod:move_to_array_element(ASt2, Key, KVReg, Index * 2),
+                    ASt4 = MMod:move_to_array_element(ASt3, Value, KVReg, (Index * 2) + 1),
+                    ASt5 = MMod:free_native_registers(ASt4, [Key, Value]),
+                    {ASt5, ARest2}
+                end,
+                {MSt11, Rest5},
+                lists:seq(0, NumElements - 1)
+            ),
+            ?TRACE("]\n", []),
+            {MSt13, PutMapAssocReg} = MMod:call_primitive(MSt12, ?PRIM_PUT_MAP_ASSOC, [
+                ctx, jit_state, {free, NewSrc}, {free, NewEntriesReg}, NumElements, KVReg
+            ]),
+            {MSt14, FreeReg} = MMod:call_primitive(MSt13, ?PRIM_FREE, [{free, KVReg}]),
+            MSt15 = MMod:free_native_registers(MSt14, [FreeReg]),
+            MSt16 = handle_error_if({PutMapAssocReg, '==', 0}, MMod, MSt15),
+            MSt17 = MMod:move_to_vm_register(MSt16, PutMapAssocReg, Dest),
+            MSt18 = MMod:free_native_registers(MSt17, [PutMapAssocReg, Dest]),
+            ?ASSERT_ALL_NATIVE_FREE(MSt18),
+            emit_pass(Rest6, MMod, MSt18, State0)
     end;
 % 155
 emit_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
@@ -2384,7 +2388,9 @@ emit_pass(<<?OP_PUT_MAP_EXACT, Rest0/binary>>, MMod, MSt0, State0) ->
                         {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, ASt2
                     ),
                     ASt4 = MMod:if_block(
-                        ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(BSt0) ->
+                        ASt3, {'(int)', {free, PosReg}, '==', ?TERM_MAP_MEMORY_ALLOC_FAIL}, fun(
+                            BSt0
+                        ) ->
                             MMod:call_primitive_last(BSt0, ?PRIM_RAISE_ERROR, [
                                 ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
                             ])
@@ -6829,9 +6835,13 @@ emit_tuple2_exact_eq(MMod, MSt0, Arg1Reg, Arg2Reg, Label, JumpOn, Fallback) ->
 %% full comparator. FastFn is called with (State, Arg1Reg, Arg2Reg) and both
 %% registers are free to consume.
 emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask) ->
-    emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, tuple2).
+    emit_smallint_compare_fastpath(
+        MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, tuple2
+    ).
 
-emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, Tuple2Mode) ->
+emit_smallint_compare_fastpath(
+    MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastFn, JumpMask, Tuple2Mode
+) ->
     {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
     {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
     %% Outer test on Arg1's tag; inner test on Arg2's tag. Only when both are
@@ -6849,8 +6859,9 @@ emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastF
     %% operand pairs whose deciding element pair is two small integers
     %% (the compiler's #b_var{} keys under is_lt/is_ge and friends).
     NotSmallInt =
-        case Tuple2Mode =:= tuple2 andalso
-            erlang:function_exported(MMod, supports_inline_tuple2_eq, 0)
+        case
+            Tuple2Mode =:= tuple2 andalso
+                erlang:function_exported(MMod, supports_inline_tuple2_eq, 0)
         of
             true ->
                 fun(N1) ->
