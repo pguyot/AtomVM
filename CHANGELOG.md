@@ -189,6 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start of the binary and crash under JIT
 - Fixed the JIT untagging small integers with a logical instead of an arithmetic shift, turning a
   negative integer into a large positive one
+- Fixed the ordering of improper lists: a scalar tail now compares against nil by term order,
+  so `[1,2|3] < [1,2]` like BEAM (the previous scheme inverted it)
 
 ## [0.7.0-beta.0] - 2026-09-28
 
