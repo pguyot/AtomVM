@@ -860,6 +860,47 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
         }
     }
 
+    // Ordering fast path for lists whose deciding element pair is a scalar,
+    // walking conses inline without the temp-stack machinery. The compiler
+    // compares short lists of variables/atoms/integers constantly (argument
+    // lists, sorted key lists). Identical heads advance; compound head pairs
+    // recurse on the depth budget like the tuple path; anything unresolved
+    // falls through to the general walker with the CURRENT pair — every
+    // element before it has already compared equal, so the comparison is
+    // compositional.
+    while (term_is_nonempty_list(t) && term_is_nonempty_list(other)) {
+        const term *t_ptr = term_get_list_ptr(t);
+        const term *other_ptr = term_get_list_ptr(other);
+        term a = t_ptr[1];
+        term b = other_ptr[1];
+        if (a != b) {
+            if (term_is_integer(a) && term_is_integer(b)) {
+                return (term_to_int(a) > term_to_int(b)) ? TermGreaterThan : TermLessThan;
+            }
+            if (term_is_atom(a) && term_is_atom(b)) {
+                int c = atom_table_cmp_using_atom_index(
+                    global->atom_table, term_to_atom_index(a), term_to_atom_index(b));
+                return (c > 0) ? TermGreaterThan : TermLessThan;
+            }
+            if (depth > 0) {
+                TermCompareResult elem = term_compare0(a, b, opts, global, depth - 1);
+                if (elem != TermEquals) {
+                    return elem;
+                }
+            } else {
+                // Out of inline depth: the full comparator takes over from
+                // this pair of lists.
+                break;
+            }
+        }
+        t = t_ptr[0];
+        other = other_ptr[0];
+        if (t == other) {
+            // Shared tail (or both nil): all remaining elements are equal.
+            return TermEquals;
+        }
+    }
+
     // Cross-type pairs order by type index alone — no structural walk — with
     // the one exception of mixed integer/float arithmetic comparison (non-
     // exact, outside map keys), mirroring the general loop below. Maps with
