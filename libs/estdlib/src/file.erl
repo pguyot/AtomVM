@@ -330,7 +330,17 @@ write_all(Fd, Bin) ->
 file_server(State) ->
     receive
         {io_request, From, ReplyAs, Request} ->
-            {reply, Reply, NewState} = io_request(Request, State),
+            %% io requests run caller-supplied callbacks (get_until's M:F,
+            %% put_chars' M:F:A). A callback that raises (e.g. an erl_scan
+            %% continuation hitting a VM limit) must not take the io server
+            %% down: the requester would wait for its reply forever.
+            {reply, Reply, NewState} =
+                try
+                    io_request(Request, State)
+                catch
+                    _Class:Reason ->
+                        {reply, {error, Reason}, State}
+                end,
             From ! {io_reply, ReplyAs, Reply},
             file_server(NewState);
         {file_request, From, ReplyAs, close} ->
