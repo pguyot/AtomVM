@@ -154,6 +154,12 @@ if (ENABLE_REALLOC_GC)
     target_compile_definitions(libAtomVM PUBLIC ENABLE_REALLOC_GC)
 endif()
 
+# Big-integer capacity in bits (see AVM_INTN_MAX_BITS in intn.h). Platforms
+# with room to spare raise it before including this directory.
+if (AVM_INTN_MAX_BITS)
+    target_compile_definitions(libAtomVM PUBLIC AVM_INTN_MAX_BITS=${AVM_INTN_MAX_BITS})
+endif()
+
 # AtomVM options used in libAtomVM
 if (ADVANCED_TRACING)
     target_compile_definitions(libAtomVM PUBLIC ENABLE_ADVANCED_TRACE)
