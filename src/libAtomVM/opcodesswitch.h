@@ -1817,6 +1817,7 @@ schedule_in:
             jit_state.fr = fr_bank;
             jit_state.caches = &scheduler_caches;
             jit_state.cp_base = ((uintptr_t) (unsigned int) mod->module_index) << 24;
+            jit_state.continuation_via_dispatcher = false;
             // __asm__ volatile("int $0x03");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
             jit_state.code_base = (const void *) mod->native_code;

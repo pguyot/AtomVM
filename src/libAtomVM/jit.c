@@ -391,8 +391,12 @@ static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
         // a wild jump.
         jit_state_set_module(jit_state, jit_state->module);
         if (jit_state->module->native_code) {
-            // catch label is in native code.
+            // catch label is in native code. Route it through the dispatcher
+            // (see continuation_via_dispatcher in jit.h): the handler reads
+            // x0-x2, written to ctx->x memory above, and the dispatcher
+            // crossing re-seeds the home registers from there.
             jit_state->continuation = JIT_CONTINUATION_FOR_LABEL(jit_state->module, target_label);
+            jit_state->continuation_via_dispatcher = true;
         } else {
 #ifndef AVM_NO_EMU
             // The catch handler is in an emulator-pinned module (its catch
@@ -1701,6 +1705,16 @@ static inline uintptr_t jit_direct_continuation(Context *ctx, JITState *jit_stat
             && jit_state->continuation != NULL
             && jit_state->remaining_reductions > 0
             && jit_state->module->native_code != NULL)) {
+        if (UNLIKELY(jit_state->continuation_via_dispatcher)) {
+            // Catch-handler continuation: return untagged so the call site
+            // exits to the dispatcher, whose crossing re-seeds the VM x0-x3
+            // home registers the handler reads. Set-and-consume: only
+            // jit_handle_error sets it; a stale flag (an error path that
+            // exited via a plain Context return) merely bounces the next
+            // direct continuation through the dispatcher once.
+            jit_state->continuation_via_dispatcher = false;
+            return (uintptr_t) result;
+        }
         return JIT_DIRECT_TAGGED(jit_state, jit_state->continuation);
     }
 #endif

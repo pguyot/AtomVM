@@ -236,6 +236,14 @@ struct JITState
     // Its offset is part of the native code ABI (JITSTATE_DISPATCHER_RET
     // in jit_aarch64.erl).
     const void *dispatcher_ret;
+    // Set by jit_handle_error when the continuation is a catch handler:
+    // jit_direct_continuation then routes it through the dispatcher (which
+    // re-seeds the VM x0-x3 home registers from ctx->x) instead of letting
+    // the call site branch to it directly. Handlers read x0-x2, which
+    // jit_handle_error writes to ctx->x MEMORY only, and call sites are
+    // free to reload fewer than all four homes after a call (only x0 is
+    // live across a function call). Only used by C.
+    bool continuation_via_dispatcher;
 };
 
 // Remember to keep this struct in sync with libs/jit/src/primitives.hrl
