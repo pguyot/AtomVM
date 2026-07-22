@@ -35,6 +35,9 @@
     get_machine_atom/0,
     expect_error/2,
     expect_overflow/1,
+    intn_max_pow2/0,
+    intn_cap_bits/0,
+    dup/2,
     is_integer_helper/1,
     is_number_helper/1,
     classify1/1,
@@ -48,10 +51,12 @@
 
 %
 % IMPORTANT NOTE
-% AtomVM supports up to 256-bit integers with an additional sign bit stored outside the numeric
-% payload, allowing for efficient representation of both signed and unsigned values without using
-% two's complement encoding. So INT_MAX = -INT_MIN, that is:
-% 16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+% AtomVM supports up to AVM_INTN_MAX_BITS-bit integers (a build knob, at
+% least 1280 bits) with an additional sign bit stored outside the numeric
+% payload, allowing for efficient representation of both signed and unsigned
+% values without using two's complement encoding. So INT_MAX = -INT_MIN,
+% that is 2^AVM_INTN_MAX_BITS - 1. Overflow boundary tests below discover
+% the cap at runtime (intn_max_pow2/0) so they hold for any build value.
 %
 
 start() ->
@@ -126,9 +131,11 @@ test_mul() ->
         P255_MAX_B
     ),
 
-    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:twice(P255_MIN) end),
-    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:mul(P255_MIN, -2) end),
-    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:mul(2, P255_MIN) end),
+    MaxPow2 = ?MODULE:intn_max_pow2(),
+    MinCap = -MaxPow2,
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:twice(MinCap) end),
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:mul(MinCap, -2) end),
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:mul(2, MinCap) end),
     erlang:display(P255_MIN),
 
     Fact55 = ?MODULE:fact(55),
@@ -439,14 +446,17 @@ test_add() ->
         ?MODULE:id(-16#8000000000000000) + ?MODULE:id(-1), 16
     ),
 
-    ok = ?MODULE:expect_overflow(fun() -> Int0 + ?MODULE:id(2) end),
-    ok = ?MODULE:expect_overflow(fun() -> Int0 + ?MODULE:id(16#7FFFFFFFFFFFFFFF) end),
+    %% overflow boundary, derived from the build's actual cap
+    MaxA = ?MODULE:intn_max_pow2() - 1 + ?MODULE:intn_max_pow2(),
+    MinA = -MaxA,
+    ok = ?MODULE:expect_overflow(fun() -> MaxA + ?MODULE:id(2) end),
+    ok = ?MODULE:expect_overflow(fun() -> MaxA + ?MODULE:id(16#7FFFFFFFFFFFFFFF) end),
     ok = ?MODULE:expect_overflow(fun() ->
-        Int0 + erlang:binary_to_integer(?MODULE:id(<<"FFFFFFFFFFFFFFFF">>), 16)
+        MaxA + erlang:binary_to_integer(?MODULE:id(<<"FFFFFFFFFFFFFFFF">>), 16)
     end),
-    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:id(Int0) + ?MODULE:id(Int0) end),
-    ok = ?MODULE:expect_overflow(fun() -> Int7 + ?MODULE:id(-1) end),
-    ok = ?MODULE:expect_overflow(fun() -> Int5 + Int7 end),
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:id(MaxA) + ?MODULE:id(MaxA) end),
+    ok = ?MODULE:expect_overflow(fun() -> MinA + ?MODULE:id(-1) end),
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:id(MinA) + MinA end),
 
     0.
 
@@ -606,9 +616,11 @@ test_sub() ->
         ?MODULE:id(erlang:binary_to_integer(?MODULE:id(<<"-8000000000000001">>), 16)) -
             ?MODULE:id(-1),
 
-    ok = ?MODULE:expect_overflow(fun() -> Int0 - ?MODULE:id(-2) end),
-    ok = ?MODULE:expect_overflow(fun() -> Int1 - ?MODULE:id(-1) end),
-    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:id(-1) - Int1 end),
+    %% overflow boundary, derived from the build's actual cap
+    MaxS = ?MODULE:intn_max_pow2() - 1 + ?MODULE:intn_max_pow2(),
+    ok = ?MODULE:expect_overflow(fun() -> (MaxS - 1) - ?MODULE:id(-2) end),
+    ok = ?MODULE:expect_overflow(fun() -> MaxS - ?MODULE:id(-1) end),
+    ok = ?MODULE:expect_overflow(fun() -> ?MODULE:id(-1) - MaxS end),
 
     0.
 
@@ -821,55 +833,23 @@ parse_bigint() ->
         )
     end),
 
-    TooBig1 = <<"10000000000000000000000000000000000000000000000000000000000000000">>,
+    %% strings one digit past the build's bignum cap must be rejected
+    CapBits = ?MODULE:intn_cap_bits(),
+    TooBigHex = erlang:list_to_binary(?MODULE:dup(CapBits div 4 + 1, $F)),
     ok = expect_atomvm_error(badarg, fun() ->
-        binary_to_integer(
-            ?MODULE:id(
-                TooBig1
-            ),
-            16
-        )
+        binary_to_integer(?MODULE:id(TooBigHex), 16)
     end),
-
-    TooBig2 = <<"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF">>,
+    TooBigDec = erlang:list_to_binary([$1 | ?MODULE:dup(CapBits div 3 + 1, $0)]),
     ok = expect_atomvm_error(badarg, fun() ->
-        binary_to_integer(
-            ?MODULE:id(
-                TooBig2
-            ),
-            16
-        )
+        binary_to_integer(?MODULE:id(TooBigDec), 10)
     end),
-
-    TooBig3 = <<"ACRLOAJ1MN6J7S7EH8796SS9GJF9GD34BPDF15DIES8ME9Q9G7HSG">>,
+    TooBig29 = erlang:list_to_binary(?MODULE:dup(CapBits div 4 + 1, $R)),
     ok = expect_atomvm_error(badarg, fun() ->
-        binary_to_integer(
-            ?MODULE:id(
-                TooBig3
-            ),
-            29
-        )
+        binary_to_integer(?MODULE:id(TooBig29), 29)
     end),
-
-    TooBig4 = <<"2AVFFIPA2YC3I7N7GI96SUVLXY3W2PM5SW8JCGASD013YIUGHJ3MBVOYDJ9PIXSH0SNR4">>,
+    TooBig35 = erlang:list_to_binary(?MODULE:dup(CapBits div 4 + 1, $Y)),
     ok = expect_atomvm_error(badarg, fun() ->
-        binary_to_integer(
-            ?MODULE:id(
-                TooBig4
-            ),
-            35
-        )
-    end),
-
-    TooBig5 =
-        <<"2AVFFIPA2YC3I7N7GI96SUVLXY3W2PM5SW8JCGASD013YIUGHJ3MBVOYDJ9PIXSH0SNR40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005">>,
-    ok = expect_atomvm_error(badarg, fun() ->
-        binary_to_integer(
-            ?MODULE:id(
-                TooBig5
-            ),
-            35
-        )
+        binary_to_integer(?MODULE:id(TooBig35), 35)
     end),
 
     0.
@@ -952,8 +932,7 @@ test_integer_from_list() ->
     Int5 = ?MODULE:id(erlang:list_to_integer(?MODULE:id(Int5List))),
     <<"18446744073709551616">> = erlang:integer_to_binary(?MODULE:id(Int5)),
 
-    TooBig =
-        "473G8HGH5SHXPHL0FW40LIZSMNW3BNJ51ABCT02HG4AKRJWXWI96A1W9UG2YQ9XNJ595OFX6ZUZWLNFZ2W1RYW49ZBUWZ16GXQE",
+    TooBig = ?MODULE:dup(?MODULE:intn_cap_bits() div 5 + 1, $Z),
     ok = expect_atomvm_error(badarg, fun() ->
         list_to_integer(
             ?MODULE:id(
@@ -1330,15 +1309,15 @@ conv_to_from_float() ->
             true = (?MODULE:id(-1.111111111111111e77) > MinIntAsFloat),
             true = (MinIntAsFloat > ?MODULE:id(-1.888888888888888e77)),
 
-            % test overflows
-            ok = expect_overflow(fun() -> trunc(?MODULE:id(1.157920892373163e77)) end),
-            ok = expect_overflow(fun() -> trunc(?MODULE:id(-1.157920892373163e77)) end),
+            % any double fits since the bignum cap is >= 1280 bits
+            true = (trunc(?MODULE:id(1.157920892373163e77)) > ?MODULE:pow(2, 255)),
+            true = (trunc(?MODULE:id(-1.157920892373163e77)) < ?MODULE:pow(-2, 255)),
 
             true = (trunc(?MODULE:id(1.157920892373160e77)) > ?MODULE:pow(2, 255)),
             true = (trunc(?MODULE:id(-1.157920892373160e77)) < ?MODULE:pow(-2, 255));
         4 ->
-            ok = expect_overflow(fun() -> trunc(?MODULE:id(1.157920892373163e77)) end),
-            ok = expect_overflow(fun() -> trunc(?MODULE:id(-1.157920892373163e77)) end)
+            true = (trunc(?MODULE:id(1.157920892373163e77)) > ?MODULE:pow(2, 255)),
+            true = (trunc(?MODULE:id(-1.157920892373163e77)) < ?MODULE:pow(-2, 255))
     end,
 
     0.
@@ -1377,43 +1356,33 @@ external_term_decode() ->
         )
     ),
 
-    % 16#10000000000000000000000000000000000000000000000000000000000000000 = 2^256
-    TooBig1 =
-        <<131, 110, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 1>>,
+    %% a serialized integer one byte past the build's cap must be rejected;
+    %% builds with a large AVM_INTN_MAX_BITS need the LARGE_BIG_EXT form
+    CapBitsX = ?MODULE:intn_cap_bits(),
+    NBytes = CapBitsX div 8 + 1,
+    ZeroPayload = erlang:list_to_binary(?MODULE:dup(NBytes - 1, 0)),
+    TooBigExt =
+        case NBytes =< 255 of
+            true -> <<131, 110, NBytes, 0, ZeroPayload/binary, 1>>;
+            false -> <<131, 111, NBytes:32, 0, ZeroPayload/binary, 1>>
+        end,
     ok = expect_atomvm_error(
         badarg,
         fun() ->
             erlang:binary_to_term(
-                ?MODULE:id(TooBig1)
+                ?MODULE:id(TooBigExt)
             )
         end
     ),
 
-    % {foo, #{16#10000000000000000000000000000000000000000000000000000000000000000 => <<"bar">>}}
-    TooBig2 =
-        <<131, 104, 2, 119, 3, 102, 111, 111, 116, 0, 0, 0, 1, 110, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 109, 0, 0, 0,
-            3, 98, 97, 114>>,
+    %% same, nested inside a tuple
+    <<131, InnerBig/binary>> = TooBigExt,
+    TooBigTuple = <<131, 104, 2, 119, 3, 102, 111, 111, InnerBig/binary>>,
     ok = expect_atomvm_error(
         badarg,
         fun() ->
             erlang:binary_to_term(
-                ?MODULE:id(TooBig2)
-            )
-        end
-    ),
-
-    % 16#1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 = 2^600
-    TooBig3 =
-        <<131, 110, 76, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1>>,
-    ok = expect_atomvm_error(
-        badarg,
-        fun() ->
-            erlang:binary_to_term(
-                ?MODULE:id(TooBig3)
+                ?MODULE:id(TooBigTuple)
             )
         end
     ),
@@ -2904,6 +2873,36 @@ expect_atomvm_error(Error, ErrFun) ->
 
 expect_overflow(OvfFun) ->
     expect_atomvm_error(overflow, OvfFun).
+
+%% Largest representable power of two: 2^(C-1) for a build capped at C bits
+%% (the maximum integer is 2^C - 1). Probed by doubling so the boundary
+%% tests hold for any AVM_INTN_MAX_BITS build value. On BEAM (no cap) a
+%% fixed 2^255 stands in: callers only feed the result to expect_* helpers,
+%% which ignore results on BEAM.
+intn_max_pow2() ->
+    case ?MODULE:get_machine_atom() of
+        beam -> ?MODULE:pow(2, 255);
+        atomvm -> intn_max_pow2(?MODULE:pow(2, 255))
+    end.
+
+intn_max_pow2(X) ->
+    try ?MODULE:twice(X) of
+        X2 -> intn_max_pow2(X2)
+    catch
+        error:overflow -> X
+    end.
+
+%% The build's bignum cap C in bits (max integer = 2^C - 1); 256 on BEAM
+%% as a stand-in (see intn_max_pow2/0).
+intn_cap_bits() ->
+    byte_size(erlang:integer_to_binary(?MODULE:intn_max_pow2(), 2)).
+
+%% lists:duplicate/2 without the lists module (tests run standalone)
+dup(N, V) ->
+    dup(N, V, []).
+
+dup(0, _V, Acc) -> Acc;
+dup(N, V, Acc) -> dup(N - 1, V, [V | Acc]).
 
 expect_overflow_or_limit(OvfFun) ->
     try OvfFun() of
