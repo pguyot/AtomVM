@@ -238,6 +238,14 @@
     %% the cold entry; when a later site would reuse one and the label has
     %% since gained a hot entry, a fresh block is emitted instead.
     cold_call_blocks = #{} :: #{non_neg_integer() => integer()},
+    %% Post-call VM x0-x3 home reload policy for the NEXT primitive call:
+    %% 'all' reloads x25-x28 (any home may be stale after a GC-capable
+    %% callee); 'x0' reloads only x25 — sound after a function call, where
+    %% only x0 is live by the BEAM calling convention (set by
+    %% call_ext_with_cp_direct, reset by call_func_ptr0). Exception
+    %% continuations re-seed all homes through the dispatcher (see
+    %% continuation_via_dispatcher in jit.c).
+    post_call_xregs = all :: all | x0,
     %% Deferred (outlined) raise blocks: {StubRef, SiteOffset, Prim, ExtraArgs}.
     %% The raise site branches to StubRef (happy path falls through); the actual
     %% tail-calling raise is emitted at the module tail by flush_deferred_raises,
@@ -2121,16 +2129,25 @@ call_func_ptr0(
                 StreamModule:append(Stream6a, RL)
         end,
     %% Reload the VM x0-x3 home registers: a non-cache-safe callee may have
-    %% written VM registers or moved terms (GC).
+    %% written VM registers or moved terms (GC). After a function call only
+    %% x0 is live (post_call_xregs = x0): x1-x3 are dead by the BEAM calling
+    %% convention and every write refreshes home and memory together, so
+    %% their stale homes are never read.
     Stream6 =
         case CacheSafe of
             true ->
                 Stream6b;
             false ->
-                XRL = <<
-                    (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
-                    (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
-                >>,
+                XRL =
+                    case State0#state.post_call_xregs of
+                        x0 ->
+                            jit_aarch64_asm:ldr(r25, {?CTX_REG, 16#58});
+                        all ->
+                            <<
+                                (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
+                                (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
+                            >>
+                    end,
                 StreamModule:append(Stream6b, XRL)
         end,
 
@@ -2150,7 +2167,8 @@ call_func_ptr0(
         State1#state{
             stream = Stream6,
             relocations = Relocations1,
-            regs = jit_regs:set_masks(Regs1, AvailableRegs3, UsedRegs2)
+            regs = jit_regs:set_masks(Regs1, AvailableRegs3, UsedRegs2),
+            post_call_xregs = all
         },
         ResultReg
     }.
@@ -4460,7 +4478,10 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
             false ->
                 State2
         end,
-    {State5, ResultReg} = call_primitive(State4, Primitive, Args),
+    %% Only x0 is live after the call: reload a single home register.
+    {State5, ResultReg} = call_primitive(
+        State4#state{post_call_xregs = x0}, Primitive, Args
+    ),
     #state{stream_module = StreamModule, stream = Stream5} = State5,
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
