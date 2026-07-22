@@ -70,3 +70,39 @@ prim_pure(?PRIM_TERM_GET_MAP_ASSOC_MISS) -> true;
 prim_pure(?PRIM_BITSTRING_GET_TAIL_HEAP_SIZE) -> true;
 prim_pure(?PRIM_BITSTRING_SLICE_HEAP_SIZE) -> true;
 prim_pure(_) -> false.
+
+%% Primitives that allocate at most within the caller's heap reservation
+%% (or a fresh fragment) and can neither collect (no memory_ensure_free on
+%% any resuming path) nor write VM x registers: terms never move and
+%% ctx->x is untouched, so the register cache — including cached VM
+%% register contents and untagged {ptr, _} derivatives — stays valid and
+%% no home reload is needed. They are NOT pure: hp/e must still be
+%% written back and reloaded around the call. Error paths may exist but
+%% never resume at the call site (they leave through handle_error and the
+%% dispatcher, which re-seeds homes; the following label invalidates the
+%% cache). Verified against the C bodies (static call-closure audit +
+%% hand check of the hot ones); when in doubt, leave a primitive out.
+-compile({nowarn_unused_function, [{prim_no_gc, 1}]}).
+
+prim_no_gc(?PRIM_PUT_LIST) -> true;
+prim_no_gc(?PRIM_MODULE_LOAD_LITERAL) -> true;
+prim_no_gc(?PRIM_ALLOC_BOXED_INTEGER_FRAGMENT) -> true;
+prim_no_gc(?PRIM_ALLOC_BIG_INTEGER_FRAGMENT) -> true;
+prim_no_gc(?PRIM_TERM_ALLOC_TUPLE) -> true;
+prim_no_gc(?PRIM_TERM_ALLOC_FUN) -> true;
+prim_no_gc(?PRIM_TERM_FROM_FLOAT) -> true;
+prim_no_gc(?PRIM_TERM_CREATE_EMPTY_BINARY) -> true;
+prim_no_gc(?PRIM_TERM_ALLOC_BIN_MATCH_STATE) -> true;
+prim_no_gc(?PRIM_TERM_MAYBE_CREATE_SUB_BINARY) -> true;
+prim_no_gc(?PRIM_BITSTRING_SLICE) -> true;
+prim_no_gc(?PRIM_BITSTRING_CREATE_TAIL) -> true;
+prim_no_gc(?PRIM_BS_CREATE_BIN_WRAP) -> true;
+prim_no_gc(?PRIM_BITSTRING_COPY_BINARY) -> true;
+prim_no_gc(?PRIM_BITSTRING_COPY_MODULE_STR) -> true;
+prim_no_gc(?PRIM_BITSTRING_EXTRACT_INTEGER) -> true;
+prim_no_gc(?PRIM_TERM_REUSE_BINARY) -> true;
+prim_no_gc(?PRIM_TERM_REUSE_OR_CLONE_BINARY) -> true;
+prim_no_gc(?PRIM_PUT_MAP_ASSOC) -> true;
+prim_no_gc(?PRIM_PUT_MAP_ASSOC_ONE) -> true;
+prim_no_gc(?PRIM_PUT_MAP_EXACT_ONE) -> true;
+prim_no_gc(_) -> false.
