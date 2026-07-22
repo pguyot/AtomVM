@@ -456,6 +456,7 @@ compile_erlang(test_list_match)
 compile_erlang(test_match)
 compile_erlang(test_ordering_0)
 compile_erlang(test_ordering_1)
+compile_erlang(test_improper_cmp)
 compile_erlang(test_bs)
 compile_erlang(test_bs_int)
 compile_erlang(test_bs_int_any_flags)
@@ -1047,6 +1048,7 @@ set(erlang_test_beams
     test_match.beam
     test_ordering_0.beam
     test_ordering_1.beam
+    test_improper_cmp.beam
     test_bs.beam
     test_bs_int.beam
     test_bs_int_any_flags.beam

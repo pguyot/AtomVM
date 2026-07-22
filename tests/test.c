@@ -413,6 +413,7 @@ struct Test tests[] = {
     TEST_CASE(test_match),
     TEST_CASE_EXPECTED(test_ordering_0, 1),
     TEST_CASE_EXPECTED(test_ordering_1, 1),
+    TEST_CASE(test_improper_cmp),
     TEST_CASE(test_binary_to_term),
     TEST_CASE(test_bitstring_to_list),
     TEST_CASE(test_selective_receive),
