@@ -713,9 +713,13 @@ call_primitive(
     %% calls go through call_func_ptr directly and keep their ctx argument.)
     Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     Pure = prim_pure(Primitive),
-    %% Register-cache contents survive the call only when the primitive
-    %% neither GCs (pure) nor writes VM x registers (trim).
-    CacheSafe = Pure andalso Primitive =/= ?PRIM_TRIM_LIVE_REGS,
+    %% Register-cache contents (and the VM x0-x3 homes) survive the call
+    %% when the primitive neither collects — pure, or allocating strictly
+    %% within the caller's reservation (prim_no_gc) — nor writes VM x
+    %% registers (trim). Pure alone still gates the hp/e sync.
+    CacheSafe =
+        (Pure orelse prim_no_gc(Primitive)) andalso
+            Primitive =/= ?PRIM_TRIM_LIVE_REGS,
     case (State#state.variant band ?JIT_VARIANT_RELOC) =/= 0 of
         true ->
             %% Direct, loader-relocated call: no table load, emit the branch in
