@@ -6902,11 +6902,38 @@ emit_smallint_compare_fastpath(MMod, MSt0, Label, Arg1, Arg2, CompareOpts, FastF
             false ->
                 Fallback
         end,
+    %% Identical operands (same immediate or same boxed pointer) compare
+    %% equal for every ordering/equality op, so FastFn on the equal pair
+    %% decides without the C comparator. Identical small-int pairs already
+    %% resolve in the both-small-int branch below, so the check only pays
+    %% on the not-small-int path — where compiler workloads compare shared
+    %% subterms (atoms under ==, common list/tuple structure) constantly:
+    %% ~16% of the compare-op calls reaching C on the OTP corpus have
+    %% identical operands. Gated with the tuple2 machinery to keep other
+    %% backends' generated code unchanged.
+    NotSmallIntWithIdentity =
+        case erlang:function_exported(MMod, supports_inline_tuple2_eq, 0) of
+            true ->
+                fun(ISt0) ->
+                    MMod:if_else_block(
+                        ISt0,
+                        {Arg1Reg, '!=', Arg2Reg},
+                        NotSmallInt,
+                        fun(BSt1) ->
+                            BSt2 = FastFn(BSt1, {free, Arg1Reg}, Arg2Reg),
+                            MMod:free_native_registers(BSt2, [Arg2Reg])
+                        end
+                    )
+                end;
+            false ->
+                NotSmallInt
+        end,
     MMod:if_else_block(
         MSt2,
         {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
-        %% Arg1 not a small integer: try the tuple2 shape, then fall back.
-        NotSmallInt,
+        %% Arg1 not a small integer: identity, then the tuple2 shape, then
+        %% the fallback.
+        NotSmallIntWithIdentity,
         %% Arg1 is a small integer: test Arg2.
         fun(BSt0) ->
             MMod:if_else_block(
