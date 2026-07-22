@@ -61,6 +61,7 @@
 #define BINARY_EXT 109
 #define BIT_BINARY_EXT 77
 #define SMALL_BIG_EXT 110
+#define LARGE_BIG_EXT 111
 #define NEW_FUN_EXT 112
 #define EXPORT_EXT 113
 #define RECORD_EXT 67
@@ -75,6 +76,7 @@
 #define SMALL_INTEGER_EXT_SIZE 2
 #define INTEGER_EXT_SIZE 5
 #define SMALL_BIG_EXT_BASE_SIZE 3
+#define LARGE_BIG_EXT_BASE_SIZE 6
 #define ATOM_EXT_BASE_SIZE 3
 #define STRING_EXT_BASE_SIZE 3
 #define LIST_EXT_BASE_SIZE 5
@@ -373,6 +375,18 @@ static int serialize_simple_term(uint8_t *buf, term t, GlobalContext *glb)
             intn_integer_sign_t sign;
             term_to_bigint(t, &bigint, &bigint_len, &sign);
             size_t num_bytes = intn_required_unsigned_integer_bytes(bigint, bigint_len);
+            if (num_bytes > 255) {
+                // The one-byte length of SMALL_BIG_EXT cannot express this
+                // magnitude (builds with a raised AVM_INTN_MAX_BITS allow it).
+                if (buf != NULL) {
+                    buf[0] = LARGE_BIG_EXT;
+                    WRITE_32_UNALIGNED(buf + 1, (uint32_t) num_bytes);
+                    buf[5] = sign == IntNNegativeInteger ? 0x01 : 0x00;
+                    intn_to_integer_bytes(bigint, bigint_len, IntNPositiveInteger,
+                        IntnLittleEndian, buf + 6, num_bytes);
+                }
+                return LARGE_BIG_EXT_BASE_SIZE + num_bytes;
+            }
             if (buf != NULL) {
                 buf[0] = SMALL_BIG_EXT;
                 buf[1] = num_bytes;
@@ -885,12 +899,23 @@ static term parse_simple_term(const uint8_t *external_term_buf, size_t *eterm_si
             return term_make_maybe_boxed_int64(value, heap);
         }
 
-        case SMALL_BIG_EXT: {
-            uint8_t int_len = external_term_buf[1];
-            uint8_t sign_byte = external_term_buf[2];
-            const uint8_t *int_bytes = external_term_buf + 3;
+        case SMALL_BIG_EXT:
+        case LARGE_BIG_EXT: {
+            size_t int_len;
+            uint8_t sign_byte;
+            const uint8_t *int_bytes;
+            if (external_term_buf[0] == SMALL_BIG_EXT) {
+                int_len = external_term_buf[1];
+                sign_byte = external_term_buf[2];
+                int_bytes = external_term_buf + 3;
+                *eterm_size = SMALL_BIG_EXT_BASE_SIZE + int_len;
+            } else {
+                int_len = READ_32_UNALIGNED(external_term_buf + 1);
+                sign_byte = external_term_buf[5];
+                int_bytes = external_term_buf + 6;
+                *eterm_size = LARGE_BIG_EXT_BASE_SIZE + int_len;
+            }
             bool is_negative = sign_byte != 0x00;
-            *eterm_size = SMALL_BIG_EXT_BASE_SIZE + int_len;
 
             if (int_len <= 8) {
                 avm_uint64_t unsigned_value = read_bytes(int_bytes, int_len);
@@ -1414,25 +1439,43 @@ static int calculate_simple_heap_usage(const uint8_t *external_term_buf, size_t 
             return term_boxed_integer_size(value);
         }
 
-        case SMALL_BIG_EXT: {
-            size_t num_bytes = external_term_buf[1];
-            if (UNLIKELY(remaining < (SMALL_BIG_EXT_BASE_SIZE + num_bytes)
+        case SMALL_BIG_EXT:
+        case LARGE_BIG_EXT: {
+            size_t num_bytes;
+            size_t base_size;
+            uint8_t sign;
+            const uint8_t *int_bytes;
+            if (external_term_buf[0] == SMALL_BIG_EXT) {
+                num_bytes = external_term_buf[1];
+                base_size = SMALL_BIG_EXT_BASE_SIZE;
+                sign = external_term_buf[2];
+                int_bytes = external_term_buf + 3;
+            } else {
+                if (UNLIKELY(remaining < LARGE_BIG_EXT_BASE_SIZE)) {
+                    return INVALID_TERM_SIZE;
+                }
+                num_bytes = READ_32_UNALIGNED(external_term_buf + 1);
+                base_size = LARGE_BIG_EXT_BASE_SIZE;
+                sign = external_term_buf[5];
+                int_bytes = external_term_buf + 6;
+            }
+            if (UNLIKELY(remaining < (base_size + num_bytes)
                     || num_bytes > INTN_MAX_UNSIGNED_BYTES_SIZE)) {
-                // This branch makes sure than any integer > 256 bits is rejected
-                // a badarg will be raised from the caller.
+                // This branch makes sure that any integer beyond the build's
+                // bignum cap (AVM_INTN_MAX_BITS) is rejected; a badarg will be
+                // raised from the caller.
                 //
-                // We raise badarg (not overflow) for integers > 256 bits because:
+                // We raise badarg (not overflow) for integers over the cap because:
                 // - overflow is for arithmetic operations exceeding capacity
                 // - badarg is for invalid/unsupported serialized terms
                 // This keeps error handling consistent across deserialization
                 return INVALID_TERM_SIZE;
             }
-            uint8_t sign = external_term_buf[2];
             bool is_negative = sign != 0x00;
-            *eterm_size = SMALL_BIG_EXT_BASE_SIZE + num_bytes;
+            *eterm_size = base_size + num_bytes;
 
             if (LIKELY(num_bytes <= 8)) {
-                avm_uint64_t unsigned_value = read_bytes(external_term_buf + 3, num_bytes);
+                avm_uint64_t unsigned_value = read_bytes(int_bytes, num_bytes);
                 if (!uint64_does_overflow_int64(unsigned_value, is_negative)) {
                     // Compute the size with the sign as -2^27 or -2^59 can be encoded
                     // on 1 term while 2^27 and 2^59 respectively (32/64 bits) cannot.
