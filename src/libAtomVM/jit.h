@@ -228,6 +228,14 @@ struct JITState
     // the module->index dereference chain; its offset is part of the native
     // code ABI (JITSTATE_CPBASE in jit_aarch64.erl).
     uintptr_t cp_base;
+    // Return address into the scheduler loop's native-entry asm block,
+    // stored once per C->native crossing. Backends whose generated code
+    // does not preserve the link register across primitive calls (aarch64)
+    // reload it from here after every call instead of saving it at each
+    // site; every exit `ret` then returns to the dispatcher through it.
+    // Its offset is part of the native code ABI (JITSTATE_DISPATCHER_RET
+    // in jit_aarch64.erl).
+    const void *dispatcher_ret;
 };
 
 // Remember to keep this struct in sync with libs/jit/src/primitives.hrl

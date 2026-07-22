@@ -204,6 +204,8 @@ _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in j
 _Static_assert(offsetof(JITState, continuation) == 0x8, "jit_state->continuation is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x10, "jit_state->remaining_reductions is 0x10 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(JITState, fr) == 0x18, "jit_state->fr is 0x18 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(JITState, dispatcher_ret) == 0x30,
+    "jit_state->dispatcher_ret is 0x30 in jit/src/jit_aarch64.erl");
 
 // Offsets for inlining the imported-BIF resolution at gc_bif call sites.
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
