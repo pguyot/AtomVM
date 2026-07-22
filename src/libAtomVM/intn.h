@@ -127,14 +127,28 @@
 #define INTN_UINT64_LEN 2
 
 /**
- * @def INTN_MAX_IN_LEN
- * @brief Maximum input length in digits (256 bits / 32 bits = 8 digits)
+ * @def AVM_INTN_MAX_BITS
+ * @brief Big-integer capacity in bits (a build-time knob, multiple of 32)
+ *
+ * The default supports the BEAM compiler itself: it accumulates binary
+ * string literals into integers of up to 1024+8 bits
+ * (v3_core:bin_expand_string), so at least 1032 bits are required to
+ * compile any module with a >32-byte string literal in a binary.
+ *
+ * Stack buffers throughout intn.c and bif.c scale linearly with this
+ * value, so memory-constrained platforms keep the default; desktop
+ * platforms raise it (generic_unix uses 8320: real-world sources embed
+ * literals up to the 8192-bit dh_group18 prime in OTP's ssh).
  */
-// 1280 bit / 32 bit = 40 digits. The BEAM compiler accumulates binary
-// string literals into integers of up to 1024+8 bits
-// (v3_core:bin_expand_string), so running the compiler requires at least
-// 1032-bit integers.
-#define INTN_MAX_IN_LEN 40
+#ifndef AVM_INTN_MAX_BITS
+#define AVM_INTN_MAX_BITS 1280
+#endif
+
+/**
+ * @def INTN_MAX_IN_LEN
+ * @brief Maximum input length in digits (AVM_INTN_MAX_BITS / 32)
+ */
+#define INTN_MAX_IN_LEN (AVM_INTN_MAX_BITS / 32)
 
 /**
  * @def INTN_MAX_RES_LEN
