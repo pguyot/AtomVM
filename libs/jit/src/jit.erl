@@ -2505,42 +2505,24 @@ emit_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
     {ListSize, Rest3} = decode_extended_list_header(Rest2),
     ?TRACE("OP_GET_MAP_ELEMENTS ~p,~p,[", [Label, Src]),
     {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
+    StubExported = erlang:function_exported(MMod, map_get_stub_call, 3),
     {MSt3, Rest4} = lists:foldl(
         fun(_Index, {AccMSt0, AccRest0}) ->
             {AccMSt1, Key, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
             ?TRACE(",~p", [Key]),
             {AccMSt2, Dest, AccRest2} = decode_dest(AccRest1, MMod, AccMSt1),
             ?TRACE(",~p", [Dest]),
-            % One walk: look the value up by key. A tree-backed map descends
-            % straight to the key (term_get_map_assoc -> term_map_tree_get)
-            % instead of the find_pos (rank) + map_get_value (select) pair that
-            % walked the tree twice. invalid_term means the key is absent (or,
-            % for a flat map, the rare compare-OOM): disambiguate on the cold
-            % miss path with term_find_map_pos so not-found jumps to the fail
-            % label and an alloc failure still raises.
-            {AccMSt3, ValueReg} = MMod:call_primitive(AccMSt2, ?PRIM_TERM_GET_MAP_ASSOC, [
-                ctx, SrcReg, Key
-            ]),
-            AccMSt4 = MMod:if_block(AccMSt3, {ValueReg, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
-                % term_get_map_assoc already walked the map; a tree miss is
-                % definitive, so this skips a redundant second walk and only a
-                % flat map still re-checks to tell a true miss from an alloc fail.
-                {BSt1, PosReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_GET_MAP_ASSOC_MISS, [
-                    ctx, SrcReg, {free, Key}
-                ]),
-                BSt2 = cond_jump_to_label(
-                    {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, BSt1
-                ),
-                % Reaching here means the position is TERM_MAP_MEMORY_ALLOC_FAIL.
-                MMod:call_primitive_last(BSt2, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
-                ])
-            end),
-            % Key still live on the found (block-skipped) path; free it here.
-            AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
-            AccMSt6 = MMod:move_to_vm_register(AccMSt5, ValueReg, Dest),
-            AccMSt7 = MMod:free_native_registers(AccMSt6, [ValueReg, Dest]),
-            {AccMSt7, AccRest2}
+            %% The stub pays for itself only when the key is a compile-time
+            %% immediate (literal atom or small integer): those are decided
+            %% inline both ways. Runtime-register keys are ~half tuples on
+            %% compiler workloads and would fall through to C after paying
+            %% the stub attempt.
+            case StubExported andalso is_integer(Key) of
+                true ->
+                    {get_map_element_via_stub(MMod, AccMSt2, SrcReg, Key, Dest, Label), AccRest2};
+                false ->
+                    get_map_element_via_prim(MMod, AccMSt2, SrcReg, Key, Dest, Label, AccRest2)
+            end
         end,
         {MSt2, Rest3},
         lists:seq(1, ListSize div 2)
@@ -7826,6 +7808,88 @@ cond_raise_outlined(Cond, Prim, ExtraArgs, MMod, MSt0) ->
 %% register (deterministic, since reset_regs_fresh gives an identical state),
 %% then the first occurrence emits the tail-calling raise and later ones branch
 %% to it. ctx/jit_state are pinned, so the shared body only reads that register.
+%% @private OP_GET_MAP_ELEMENTS per-key emission through the C primitive
+%% (the original path; also the multi-key path).
+get_map_element_via_prim(MMod, AccMSt2, SrcReg, Key, Dest, Label, AccRest2) ->
+    {AccMSt3, ValueReg} = MMod:call_primitive(AccMSt2, ?PRIM_TERM_GET_MAP_ASSOC, [
+        ctx, SrcReg, Key
+    ]),
+    AccMSt4 = MMod:if_block(AccMSt3, {ValueReg, '==', ?TERM_INVALID_TERM}, fun(BSt0) ->
+        {BSt1, PosReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_GET_MAP_ASSOC_MISS, [
+            ctx, SrcReg, {free, Key}
+        ]),
+        BSt2 = cond_jump_to_label(
+            {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, BSt1
+        ),
+        MMod:call_primitive_last(BSt2, ?PRIM_RAISE_ERROR, [
+            ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
+        ])
+    end),
+    AccMSt5 = MMod:free_native_registers(AccMSt4, [Key]),
+    AccMSt6 = MMod:move_to_vm_register(AccMSt5, ValueReg, Dest),
+    AccMSt7 = MMod:free_native_registers(AccMSt6, [ValueReg, Dest]),
+    {AccMSt7, AccRest2}.
+
+%% @private OP_GET_MAP_ELEMENTS single-key emission through the factorized
+%% flat-map stub (see map_get_stub_call in the backend): status 0 = hit
+%% (value in the returned raw value register), 1 = definitive not-found
+%% (immediate key scanned over a flat map), 2 = unsupported shape — the C
+%% primitive decides, overwriting the same destination so the paths join
+%% without a cross-branch register move. The first Dest write stores a
+%% garbage value on the unsupported path; nothing can observe it (both C
+%% primitives on that path are pure, and the raise path never returns).
+get_map_element_via_stub(MMod, AccMSt2, SrcReg, Key0, Dest, Label) ->
+    {AccMSt3, KeyReg} = MMod:move_to_native_register(AccMSt2, Key0),
+    {AccMSt4, ValReg, StatusReg} = MMod:map_get_stub_call(AccMSt3, SrcReg, KeyReg),
+    AccMSt5 = cond_jump_to_label({StatusReg, '==', 1}, Label, MMod, AccMSt4),
+    AccMSt6 = MMod:move_to_vm_register(AccMSt5, ValReg, Dest),
+    AccMSt7 = MMod:if_block(AccMSt6, {StatusReg, '==', 2}, fun(BSt0) ->
+        {BSt1, CValReg} = MMod:call_primitive(BSt0, ?PRIM_TERM_GET_MAP_ASSOC, [
+            ctx, SrcReg, KeyReg
+        ]),
+        BSt2 = MMod:if_block(BSt1, {CValReg, '==', ?TERM_INVALID_TERM}, fun(BBSt0) ->
+            {BBSt1, PosReg} = MMod:call_primitive(BBSt0, ?PRIM_TERM_GET_MAP_ASSOC_MISS, [
+                ctx, SrcReg, KeyReg
+            ]),
+            BBSt2 = cond_jump_to_label(
+                {'(int)', PosReg, '==', ?TERM_MAP_NOT_FOUND}, Label, MMod, BBSt1
+            ),
+            MMod:call_primitive_last(BBSt2, ?PRIM_RAISE_ERROR, [
+                ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
+            ])
+        end),
+        BSt3 = MMod:move_to_vm_register(BSt2, CValReg, Dest),
+        MMod:free_native_registers(BSt3, [CValReg])
+    end),
+    AccMSt8 = MMod:free_native_registers(AccMSt7, [KeyReg, StatusReg]),
+    MMod:free_native_registers(AccMSt8, [Dest]).
+
+%% Emit the bodies of the per-module callable stubs registered by
+%% MMod:stub_ref/3 (factorized inline sequences shared by many sites; see
+%% map_get_stub_call in the aarch64 backend). Loops in case a body
+%% registers another stub.
+flush_deferred_stubs(MMod, MSt0) ->
+    case erlang:function_exported(MMod, take_deferred_stubs, 1) of
+        false ->
+            MSt0;
+        true ->
+            case MMod:take_deferred_stubs(MSt0) of
+                {[], MSt1} ->
+                    MSt1;
+                {Stubs, MSt1} ->
+                    MStN = lists:foldl(
+                        fun({Ref, BodyFun}, MStA) ->
+                            MStB = MMod:add_label(MStA, Ref),
+                            MStC = MMod:reset_regs_fresh(MStB),
+                            BodyFun(MStC)
+                        end,
+                        MSt1,
+                        Stubs
+                    ),
+                    flush_deferred_stubs(MMod, MStN)
+            end
+    end.
+
 flush_deferred_raises(MMod, MSt0) ->
     case erlang:function_exported(MMod, take_deferred_raises, 1) of
         false ->
@@ -8564,7 +8628,8 @@ finalize_pass(MMod, MSt0, #state{line_offsets = Lines}) ->
     ?TRACE("SECOND PASS -- ~B lines\n", [length(Lines)]),
     % Emit any deferred (outlined) raise stubs at the module tail, before the
     % label/line metadata function, so their branches resolve in update_branches.
-    MStF = flush_deferred_raises(MMod, MSt0),
+    MStF0 = flush_deferred_raises(MMod, MSt0),
+    MStF = flush_deferred_stubs(MMod, MStF0),
     % Add extra function that returns labels and line information
     MSt1 = MMod:add_label(MStF, 0),
     SortedLines = lists:keysort(2, Lines),
