@@ -38,6 +38,8 @@
     call_primitive_last/3,
     add_deferred_raise/5,
     take_deferred_raises/1,
+    take_deferred_stubs/1,
+    map_get_stub_call/3,
     reset_regs_fresh/1,
     jump_to_label_cond/3,
     set_branch_hints/2,
@@ -246,6 +248,10 @@
     %% continuations re-seed all homes through the dispatcher (see
     %% continuation_via_dispatcher in jit.c).
     post_call_xregs = all :: all | x0,
+    %% Shared per-module callable stubs (see stub_ref/3): Key => label ref,
+    %% and the not-yet-emitted bodies flushed by jit:flush_deferred_stubs/2.
+    stubs = #{} :: #{term() => reference()},
+    deferred_stubs = [] :: [{reference(), fun((state()) -> state())}],
     %% Deferred (outlined) raise blocks: {StubRef, SiteOffset, Prim, ExtraArgs}.
     %% The raise site branches to StubRef (happy path falls through); the actual
     %% tail-calling raise is emitted at the module tail by flush_deferred_raises,
@@ -601,7 +607,8 @@ patch_branch(StreamModule, Stream, Offset, Type, LabelOffset) ->
         case Type of
             {bcc, CC} -> jit_aarch64_asm:bcc(CC, Rel);
             {adr, Reg} -> adr_far(Reg, Rel);
-            b -> jit_aarch64_asm:b(Rel)
+            b -> jit_aarch64_asm:b(Rel);
+            bl -> jit_aarch64_asm:bl(Rel)
         end,
     StreamModule:replace(Stream, Offset, NewInstr).
 
@@ -840,6 +847,180 @@ add_deferred_raise(#state{deferred_raises = DR} = State, StubRef, SiteOffset, Pr
     {[{reference(), non_neg_integer(), non_neg_integer(), [arg()]}], state()}.
 take_deferred_raises(#state{deferred_raises = DR} = State) ->
     {lists:reverse(DR), State#state{deferred_raises = []}}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get-or-register the per-module callable stub for Key. The body is
+%% emitted once at the module tail (jit:flush_deferred_stubs/2); every site
+%% reaches it with `bl' (bl_to_label/2) and restores lr from
+%% jit_state->dispatcher_ret afterwards, like any primitive call.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stub_ref(state(), term(), fun((state()) -> state())) -> {state(), reference()}.
+stub_ref(#state{stubs = Stubs, deferred_stubs = DS} = State, Key, BodyFun) ->
+    case Stubs of
+        #{Key := Ref} ->
+            {State, Ref};
+        _ ->
+            Ref = make_ref(),
+            {
+                State#state{
+                    stubs = Stubs#{Key => Ref},
+                    deferred_stubs = [{Ref, BodyFun} | DS]
+                },
+                Ref
+            }
+    end.
+
+-spec take_deferred_stubs(state()) -> {[{reference(), fun((state()) -> state())}], state()}.
+take_deferred_stubs(#state{deferred_stubs = DS} = State) ->
+    {lists:reverse(DS), State#state{deferred_stubs = []}}.
+
+%% @private Emit a bl to a (possibly not yet emitted) label; patched like
+%% any other branch when the label is added.
+-spec bl_to_label(state(), reference()) -> state().
+bl_to_label(
+    #state{stream_module = StreamModule, stream = Stream0, branches = Branches} = State, Label
+) ->
+    Offset = StreamModule:offset(Stream0),
+    Stream1 = StreamModule:append(Stream0, jit_aarch64_asm:bl(0)),
+    Branches1 = maps:update_with(Label, fun(L) -> [{Offset, bl} | L] end, [{Offset, bl}], Branches),
+    State#state{stream = Stream1, branches = Branches1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Factorized inline map get: call the per-module flat-map stub.
+%% ABI: in ip0 = map term, ip1 = key term; out ip0 = value (on hit),
+%% ip1 = status (0 hit, 1 not-found, 2 unsupported). The stub preserves
+%% every allocatable register (it saves its own scratch) and clobbers
+%% flags; the site restores lr from dispatcher_ret after the bl. The
+%% not-found verdict is sound only for immediate keys on flat maps, which
+%% is exactly what the stub handles — everything else reports unsupported
+%% and the caller takes the C path.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec map_get_stub_call(state(), aarch64_register(), aarch64_register() | integer()) ->
+    {state(), aarch64_register(), aarch64_register()}.
+map_get_stub_call(#state{} = State0, SrcReg, Key) ->
+    {State1, Ref} = stub_ref(State0, map_get_flat_imm, fun emit_map_get_stub_body/1),
+    #state{stream_module = StreamModule, stream = Stream1} = State1,
+    MovSrc = jit_aarch64_asm:mov(?IP0_REG, SrcReg),
+    MovKey =
+        case Key of
+            _ when is_atom(Key) -> jit_aarch64_asm:mov(r17, Key);
+            _ when is_integer(Key) -> jit_aarch64_asm:mov(r17, Key)
+        end,
+    Stream2 = StreamModule:append(Stream1, <<MovSrc/binary, MovKey/binary>>),
+    State2 = bl_to_label(State1#state{stream = Stream2}, Ref),
+    #state{stream_module = StreamModule, stream = Stream3, regs = Regs3} = State2,
+    %% Copy the status into an allocated register (the generic condition
+    %% machinery does not take raw ip registers); the value stays in ip0
+    %% and must be consumed by the immediately following emission.
+    StatusReg = first_avail(jit_regs:available_regs(Regs3)),
+    Post = <<
+        (jit_aarch64_asm:ldr(?LR_REG, ?JITSTATE_DISPATCHER_RET))/binary,
+        (jit_aarch64_asm:mov(StatusReg, r17))/binary
+    >>,
+    Stream4 = StreamModule:append(Stream3, Post),
+    Regs4 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs3, StatusReg), reg_bit(StatusReg)),
+    {State2#state{stream = Stream4, regs = Regs4}, ?IP0_REG, StatusReg}.
+
+%% @private The flat-map immediate-key lookup body. See map_get_stub_call
+%% for the ABI. Layout facts encoded here (asserted in jit.c / term.h):
+%% flat map = boxed [header|keys tuple|V0..Vn-1]; keys tuple = boxed
+%% [header|K0..Kn-1]; a tree map's boxed[1] is non-boxed. An immediate key
+%% (low bits 2#11) is exactly equal only to itself, so the identity scan
+%% is conclusive both ways.
+-spec emit_map_get_stub_body(state()) -> state().
+emit_map_get_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
+    %% Register plan: ip0 map term -> base delta; ip1 key (status at exit);
+    %% r7 map ptr -> cursor... saved; r8 keys ptr / end; r9 loaded key.
+    Prologue = <<
+        (jit_aarch64_asm:stp(r7, r8, {sp, -16}, '!'))/binary,
+        (jit_aarch64_asm:str(r9, {sp, -16}, '!'))/binary
+    >>,
+    %% Checks. Branch offsets to UNSUP are measured from each site.
+    C1 = <<
+        (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r7, ?TERM_PRIMARY_BOXED))/binary
+    >>,
+    C2 = <<
+        (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(r8, {r7, 0}))/binary,
+        (jit_aarch64_asm:and_(r8, r8, ?TERM_BOXED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r8, ?TERM_BOXED_MAP))/binary
+    >>,
+    C3 = <<
+        (jit_aarch64_asm:ldr(r8, {r7, 8}))/binary,
+        (jit_aarch64_asm:and_(?IP0_REG, r8, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(?IP0_REG, ?TERM_PRIMARY_BOXED))/binary
+    >>,
+    C4 = <<
+        (jit_aarch64_asm:and_(?IP0_REG, r17, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(?IP0_REG, 3))/binary
+    >>,
+    %% Setup: r7 = map ptr, r8 = keys tuple (tagged) -> keys ptr.
+    Setup = <<
+        (jit_aarch64_asm:and_(r8, r8, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(?IP0_REG, {r8, 0}))/binary,
+        (jit_aarch64_asm:lsr(?IP0_REG, ?IP0_REG, 6))/binary,
+        (jit_aarch64_asm:cmp(?IP0_REG, 64))/binary
+    >>,
+    Setup2 = <<
+        %% base delta: value_addr = (map_ptr - keys_ptr) + cursor_after_hit
+        (jit_aarch64_asm:sub(r7, r7, r8))/binary,
+        %% end = keys_ptr + 8*arity (address of the LAST key)
+        (jit_aarch64_asm:add(?IP0_REG, r8, ?IP0_REG, {lsl, 3}))/binary,
+        %% cursor = first key
+        (jit_aarch64_asm:add(r8, r8, 8))/binary
+    >>,
+    Hit = <<
+        (jit_aarch64_asm:ldr(?IP0_REG, {r7, r8}))/binary,
+        (jit_aarch64_asm:mov(r17, 0))/binary
+    >>,
+    NotFound = jit_aarch64_asm:mov(r17, 1),
+    Unsup = jit_aarch64_asm:mov(r17, 2),
+    Epilogue = <<
+        (jit_aarch64_asm:ldr(r9, {sp}, 16))/binary,
+        (jit_aarch64_asm:ldp(r7, r8, {sp}, 16))/binary,
+        (jit_aarch64_asm:ret())/binary
+    >>,
+    %% Assemble with measured branch offsets:
+    %%   entry: Prologue C1 [b.ne->UNSUP] C2 [b.ne->UNSUP] C3 [b.ne->UNSUP]
+    %%          C4 [b.ne->UNSUP] Setup [b.hi->UNSUP] Setup2 Loop
+    %%          Hit [b->EPI] NotFound [b->EPI] Unsup Epilogue
+    %% Loop's own branches are internal (16 forward to NotFound is measured
+    %% below instead; the bcc(hi,16) in Loop targets NotFound).
+
+    % + b to EPI
+    SzHit = byte_size(Hit) + 4,
+    % + b to EPI
+    SzNF = byte_size(NotFound) + 4,
+    %% Loop: cmp(4) b.hi(4) ldr(4) cmp(4) b.ne(4). b.hi at offset 4 of Loop
+    %% must reach NotFound = after Loop + SzHit. Rebuild with the real
+    %% offset:
+    LoopFixed = <<
+        (jit_aarch64_asm:cmp(r8, ?IP0_REG))/binary,
+        (jit_aarch64_asm:bcc(hi, 16 + SzHit))/binary,
+        (jit_aarch64_asm:ldr(r9, {r8}, 8))/binary,
+        (jit_aarch64_asm:cmp(r9, r17))/binary,
+        (jit_aarch64_asm:bcc(ne, -16))/binary
+    >>,
+    HitFixed = <<Hit/binary, (jit_aarch64_asm:b(4 + SzNF + byte_size(Unsup)))/binary>>,
+    NFFixed = <<NotFound/binary, (jit_aarch64_asm:b(4 + byte_size(Unsup)))/binary>>,
+    %% Distances from each check's b.ne to UNSUP:
+    Tail0 = <<Setup2/binary, LoopFixed/binary, HitFixed/binary, NFFixed/binary>>,
+    % from after Setup's cmp: b.hi then Setup2...
+    DUn4 = byte_size(Tail0) + 4,
+    Blk4 = <<Setup/binary, (jit_aarch64_asm:bcc(hi, DUn4))/binary, Tail0/binary>>,
+    DUn3 = byte_size(Blk4) + 4,
+    Blk3 = <<C4/binary, (jit_aarch64_asm:bcc(ne, DUn3))/binary, Blk4/binary>>,
+    DUn2 = byte_size(Blk3) + 4,
+    Blk2 = <<C3/binary, (jit_aarch64_asm:bcc(ne, DUn2))/binary, Blk3/binary>>,
+    DUn1 = byte_size(Blk2) + 4,
+    Blk1 = <<C2/binary, (jit_aarch64_asm:bcc(ne, DUn1))/binary, Blk2/binary>>,
+    DUn0 = byte_size(Blk1) + 4,
+    Blk0 = <<C1/binary, (jit_aarch64_asm:bcc(ne, DUn0))/binary, Blk1/binary>>,
+    Body = <<Prologue/binary, Blk0/binary, Unsup/binary, Epilogue/binary>>,
+    State0#state{stream = StreamModule:append(Stream0, Body)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Reset the tracked register state to fresh (all scratch available, no
