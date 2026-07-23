@@ -193,7 +193,7 @@
 -type wasm_local() :: non_neg_integer().
 -type immediate() :: non_neg_integer().
 -type vm_register() ::
-    {x_reg, non_neg_integer()} | {y_reg, non_neg_integer()} | {ptr, wasm_local()}.
+    {x_reg, non_neg_integer() | extra} | {y_reg, non_neg_integer()} | {ptr, wasm_local()}.
 -type value() :: immediate() | vm_register() | wasm_local() | {ptr, wasm_local()}.
 -type arg() :: ctx | jit_state | offset | value() | {free, value()} | {avm_int64_t, integer()}.
 
@@ -782,6 +782,11 @@ move_to_vm_register(State0, Value, {ptr, Local}) ->
         (jit_wasm32_asm:i32_store(2, 0))/binary
     >>,
     emit(State0, Code);
+move_to_vm_register(State0, Value, {x_reg, extra}) ->
+    %% The extra scratch register lives one slot past the addressable x
+    %% registers (ctx->x[MAX_REG]); memory_ensure_free_with_extra_root parks a
+    %% root there across a GC when all x registers are live.
+    move_to_vm_register(State0, Value, {x_reg, ?MAX_REG});
 move_to_vm_register(State0, Value, {x_reg, N}) ->
     %% Store value to ctx->x[N]
     %% ctx->x is at CTX_X_OFFSET, each x register is 4 bytes (word_size)
@@ -1531,6 +1536,8 @@ emit_value_to_stack({free, Local}) when is_atom(Local) ->
     jit_wasm32_asm:local_get(Local);
 emit_value_to_stack({free, Imm}) when is_integer(Imm) ->
     jit_wasm32_asm:i32_const(to_i32(Imm));
+emit_value_to_stack({x_reg, extra}) ->
+    emit_value_to_stack({x_reg, ?MAX_REG});
 emit_value_to_stack({x_reg, N}) ->
     %% Load ctx->x[N]
     Offset = ?CTX_X_OFFSET + N * 4,
