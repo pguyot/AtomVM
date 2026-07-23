@@ -6879,20 +6879,45 @@ emit_smallint_compare_fastpath(
         ),
         cond_jump_to_label({{free, ResultReg}, '&', JumpMask, '!=', 0}, Label, MMod, BSt2)
     end,
-    %% Backends with the inline tuple2 machinery also resolve 2-tuple
-    %% operand pairs whose deciding element pair is two small integers
-    %% (the compiler's #b_var{} keys under is_lt/is_ge and friends).
+    %% Backends with the factorized compare stub resolve the common
+    %% orderable shapes (lists with scalar heads, tuples by arity and
+    %% leftmost scalar-unequal element, small int vs other immediate,
+    %% immediate vs list) in one per-module stub before the C comparator;
+    %% its verdict is consumed with the same JumpMask as the C result.
+    %% The stub subsumes the inline tuple2 fast path, which remains for
+    %% backends without a stub.
     NotSmallInt =
-        case
-            Tuple2Mode =:= tuple2 andalso
-                erlang:function_exported(MMod, supports_inline_tuple2_eq, 0)
-        of
+        case erlang:function_exported(MMod, compare_stub_call, 3) of
             true ->
                 fun(N1) ->
-                    emit_tuple2_order_fastpath(MMod, N1, Arg1Reg, Arg2Reg, FastFn, Fallback)
+                    {N2, StatusReg} = MMod:compare_stub_call(N1, Arg1Reg, Arg2Reg),
+                    MMod:if_else_block(
+                        N2,
+                        {StatusReg, '==', 0},
+                        fun(CSt0) ->
+                            CSt1 = MMod:free_native_registers(CSt0, [StatusReg]),
+                            Fallback(CSt1)
+                        end,
+                        fun(CSt0) ->
+                            CSt1 = MMod:free_native_registers(CSt0, [Arg1Reg, Arg2Reg]),
+                            cond_jump_to_label(
+                                {{free, StatusReg}, '&', JumpMask, '!=', 0}, Label, MMod, CSt1
+                            )
+                        end
+                    )
                 end;
             false ->
-                Fallback
+                case
+                    Tuple2Mode =:= tuple2 andalso
+                        erlang:function_exported(MMod, supports_inline_tuple2_eq, 0)
+                of
+                    true ->
+                        fun(N1) ->
+                            emit_tuple2_order_fastpath(MMod, N1, Arg1Reg, Arg2Reg, FastFn, Fallback)
+                        end;
+                    false ->
+                        Fallback
+                end
         end,
     %% Identical operands (same immediate or same boxed pointer) compare
     %% equal for every ordering/equality op, so FastFn on the equal pair

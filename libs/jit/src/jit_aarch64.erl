@@ -40,6 +40,7 @@
     take_deferred_raises/1,
     take_deferred_stubs/1,
     map_get_stub_call/3,
+    compare_stub_call/3,
     reset_regs_fresh/1,
     jump_to_label_cond/3,
     set_branch_hints/2,
@@ -1043,6 +1044,179 @@ emit_map_get_stub_body(#state{stream_module = StreamModule, stream = Stream0} = 
     %% Every instruction above is one 4-byte word; the branch offsets are
     %% computed from the instruction indices in the comments.
     71 = byte_size(Body) div 4,
+    0 = byte_size(Body) rem 4,
+    State0#state{stream = StreamModule:append(Stream0, Body)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Factorized term-order resolution: call the per-module compare stub.
+%% ABI: in ip0 = left term, ip1 = right term; out ip1 = status, either a
+%% TermCompareResult (?TERM_EQUALS / ?TERM_LESS_THAN / ?TERM_GREATER_THAN)
+%% or 0 for unresolved, in which case the caller must call PRIM_TERM_COMPARE.
+%% The stub preserves every allocatable register (it saves its own scratch)
+%% and clobbers flags; the site restores lr from dispatcher_ret after the
+%% bl. Every conclusion the stub reaches is valid for both arithmetic and
+%% exact comparison (it only decides on identical words, two small
+%% integers, or type-rank facts that hold under either), so one stub
+%% serves is_lt/is_ge and the equality forms alike.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec compare_stub_call(state(), aarch64_register(), aarch64_register()) ->
+    {state(), aarch64_register()}.
+compare_stub_call(#state{} = State0, LeftReg, RightReg) ->
+    {State1, Ref} = stub_ref(State0, term_compare_order, fun emit_compare_stub_body/1),
+    #state{stream_module = StreamModule, stream = Stream1} = State1,
+    Pre = <<
+        (jit_aarch64_asm:mov(?IP0_REG, LeftReg))/binary,
+        (jit_aarch64_asm:mov(r17, RightReg))/binary
+    >>,
+    Stream2 = StreamModule:append(Stream1, Pre),
+    State2 = bl_to_label(State1#state{stream = Stream2}, Ref),
+    #state{stream_module = StreamModule, stream = Stream3, regs = Regs3} = State2,
+    %% Copy the status into an allocated register (the generic condition
+    %% machinery does not take raw ip registers).
+    StatusReg = first_avail(jit_regs:available_regs(Regs3)),
+    Post = <<
+        (jit_aarch64_asm:ldr(?LR_REG, ?JITSTATE_DISPATCHER_RET))/binary,
+        (jit_aarch64_asm:mov(StatusReg, r17))/binary
+    >>,
+    Stream4 = StreamModule:append(Stream3, Post),
+    Regs4 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs3, StatusReg), reg_bit(StatusReg)),
+    {State2#state{stream = Stream4, regs = Regs4}, StatusReg}.
+
+%% @private The term-order resolution body. See compare_stub_call for the
+%% ABI. Iterative only (no stack): list tails loop back to the top, list
+%% heads and tuple elements resolve as scalars or give up. Everything it
+%% decides is decided soundly for TERM_COMPARE_NO_OPTS, _EXACT and
+%% _EQUAL_ONLY alike:
+%%   - identical words are equal under every mode;
+%%   - two (unequal) small integers order by signed tagged compare;
+%%   - number ranks below every other type, and every immediate type ranks
+%%     below list, so small-int vs other-immediate and immediate vs list
+%%     decide on type alone (boxed operands never decide by type: a boxed
+%%     float/bignum is a number, a boxed binary ranks above list);
+%%   - tuples order by arity first, then leftmost unequal element pair;
+%%   - list order is decided by the leftmost unequal head pair, or by the
+%%     tails (nil is an immediate, so exhausted/improper tails fall out of
+%%     the loop into the scalar rules above).
+%% Undecidable pairs (atoms, anything boxed-vs-scalar, non-tuple boxes)
+%% report 0 and the site calls the C comparator.
+%%
+%% Register plan: ip0 = left cursor, ip1 = right cursor (status at exit);
+%% r7/r8 = box pointers; r9/r11 = primary tags -> headers/arity -> scan
+%% end / list tails; r10/r12 = scalar pair under test; r7-r12 saved.
+%% Every instruction is 4 bytes; branch offsets are in instruction units
+%% from the branch itself, asserted by the final size check.
+-spec emit_compare_stub_body(state()) -> state().
+emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
+    I = fun(N) -> N * 4 end,
+    Body = <<
+        %% 0..2  prologue
+        (jit_aarch64_asm:stp(r7, r8, {sp, -16}, '!'))/binary,
+        (jit_aarch64_asm:stp(r9, r10, {sp, -16}, '!'))/binary,
+        (jit_aarch64_asm:stp(r11, r12, {sp, -16}, '!'))/binary,
+        %% 3..10  TOP: identity, then dispatch on the primary tags
+        (jit_aarch64_asm:cmp(?IP0_REG, r17))/binary,
+        (jit_aarch64_asm:bcc(eq, I(76 - 4)))/binary,
+        (jit_aarch64_asm:and_(r9, ?IP0_REG, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:and_(r11, r17, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r9, ?TERM_PRIMARY_LIST))/binary,
+        (jit_aarch64_asm:bcc(eq, I(18 - 8)))/binary,
+        (jit_aarch64_asm:cmp(r9, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(eq, I(23 - 10)))/binary,
+        %% 11..17  left is immediate: below any list, undecided vs boxed,
+        %% two immediates resolve as a scalar pair
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_LIST))/binary,
+        (jit_aarch64_asm:bcc(eq, I(78 - 12)))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(eq, I(82 - 14)))/binary,
+        (jit_aarch64_asm:mov(r10, ?IP0_REG))/binary,
+        (jit_aarch64_asm:mov(r12, r17))/binary,
+        (jit_aarch64_asm:b(I(59 - 17)))/binary,
+        %% 18..22  left is a list: above any immediate, undecided vs boxed
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_LIST))/binary,
+        (jit_aarch64_asm:bcc(eq, I(50 - 19)))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_IMMED))/binary,
+        (jit_aarch64_asm:bcc(eq, I(80 - 21)))/binary,
+        (jit_aarch64_asm:b(I(82 - 22)))/binary,
+        %% 23..39  both boxed: tuples order by arity, all else undecided
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 24)))/binary,
+        (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(r9, {r7, 0}))/binary,
+        (jit_aarch64_asm:and_(r12, r9, ?TERM_BOXED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r12, ?TERM_BOXED_TUPLE))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 29)))/binary,
+        (jit_aarch64_asm:and_(r8, r17, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(r11, {r8, 0}))/binary,
+        (jit_aarch64_asm:and_(r12, r11, ?TERM_BOXED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r12, ?TERM_BOXED_TUPLE))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 34)))/binary,
+        (jit_aarch64_asm:lsr(r9, r9, 6))/binary,
+        (jit_aarch64_asm:lsr(r11, r11, 6))/binary,
+        (jit_aarch64_asm:cmp(r9, r11))/binary,
+        (jit_aarch64_asm:bcc(cc, I(78 - 38)))/binary,
+        (jit_aarch64_asm:bcc(hi, I(80 - 39)))/binary,
+        %% 40..49  equal arity: scan for the leftmost unequal element pair
+        %% (r9 = address of the last element of the left tuple)
+        (jit_aarch64_asm:add(r9, r7, r9, {lsl, 3}))/binary,
+        (jit_aarch64_asm:add(r7, r7, 8))/binary,
+        (jit_aarch64_asm:add(r8, r8, 8))/binary,
+        (jit_aarch64_asm:cmp(r7, r9))/binary,
+        (jit_aarch64_asm:bcc(hi, I(76 - 44)))/binary,
+        (jit_aarch64_asm:ldr(r10, {r7}, 8))/binary,
+        (jit_aarch64_asm:ldr(r12, {r8}, 8))/binary,
+        (jit_aarch64_asm:cmp(r10, r12))/binary,
+        (jit_aarch64_asm:bcc(eq, I(43 - 48)))/binary,
+        (jit_aarch64_asm:b(I(59 - 49)))/binary,
+        %% 50..58  both lists: leftmost unequal head pair decides as a
+        %% scalar pair; equal heads loop on the tails
+        (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:and_(r8, r17, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldp(r9, r10, {r7, 0}))/binary,
+        (jit_aarch64_asm:ldp(r11, r12, {r8, 0}))/binary,
+        (jit_aarch64_asm:cmp(r10, r12))/binary,
+        (jit_aarch64_asm:bcc(ne, I(59 - 55)))/binary,
+        (jit_aarch64_asm:mov(?IP0_REG, r9))/binary,
+        (jit_aarch64_asm:mov(r17, r11))/binary,
+        (jit_aarch64_asm:b(I(3 - 58)))/binary,
+        %% 59..72  SCALAR: unequal pair in r10/r12; two small ints order by
+        %% signed compare, small int vs other immediate is below, anything
+        %% else is undecided
+        (jit_aarch64_asm:and_(r9, r10, r12))/binary,
+        (jit_aarch64_asm:and_(r11, r9, ?TERM_IMMED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_INTEGER_TAG))/binary,
+        (jit_aarch64_asm:bcc(eq, I(73 - 62)))/binary,
+        (jit_aarch64_asm:and_(r11, r9, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_IMMED))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 65)))/binary,
+        (jit_aarch64_asm:and_(r11, r10, ?TERM_IMMED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_INTEGER_TAG))/binary,
+        (jit_aarch64_asm:bcc(eq, I(78 - 68)))/binary,
+        (jit_aarch64_asm:and_(r11, r12, ?TERM_IMMED_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_INTEGER_TAG))/binary,
+        (jit_aarch64_asm:bcc(eq, I(80 - 71)))/binary,
+        (jit_aarch64_asm:b(I(82 - 72)))/binary,
+        %% 73..75  both small integers: signed tagged compare decides
+        (jit_aarch64_asm:cmp(r10, r12))/binary,
+        (jit_aarch64_asm:bcc(lt, I(78 - 74)))/binary,
+        (jit_aarch64_asm:b(I(80 - 75)))/binary,
+        %% 76..82  verdicts
+        (jit_aarch64_asm:mov(r17, ?TERM_EQUALS))/binary,
+        (jit_aarch64_asm:b(I(83 - 77)))/binary,
+        (jit_aarch64_asm:mov(r17, ?TERM_LESS_THAN))/binary,
+        (jit_aarch64_asm:b(I(83 - 79)))/binary,
+        (jit_aarch64_asm:mov(r17, ?TERM_GREATER_THAN))/binary,
+        (jit_aarch64_asm:b(I(83 - 81)))/binary,
+        (jit_aarch64_asm:mov(r17, 0))/binary,
+        %% 83..86  epilogue
+        (jit_aarch64_asm:ldp(r11, r12, {sp}, 16))/binary,
+        (jit_aarch64_asm:ldp(r9, r10, {sp}, 16))/binary,
+        (jit_aarch64_asm:ldp(r7, r8, {sp}, 16))/binary,
+        (jit_aarch64_asm:ret())/binary
+    >>,
+    %% Every instruction above is one 4-byte word; the branch offsets are
+    %% computed from the instruction indices in the comments.
+    87 = byte_size(Body) div 4,
     0 = byte_size(Body) rem 4,
     State0#state{stream = StreamModule:append(Stream0, Body)}.
 
