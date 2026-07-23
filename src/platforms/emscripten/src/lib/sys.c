@@ -72,15 +72,9 @@ uint32_t sys_get_next_tracked_object_key(GlobalContext *glb)
 void sys_promise_resolve_int_and_destroy(em_promise_t promise, em_promise_result_t result, int value)
 {
     if (result == EM_PROMISE_FULFILL) {
-        EM_ASM({
-            promiseMap.get($0).resolve($1);
-        },
-            promise, value);
+        EM_ASM({ promiseMap.get($0).resolve($1); }, promise, value);
     } else {
-        EM_ASM({
-            promiseMap.get($0).reject($1);
-        },
-            promise, value);
+        EM_ASM({ promiseMap.get($0).reject($1); }, promise, value);
     }
     emscripten_promise_destroy(promise);
 }
@@ -95,15 +89,9 @@ void sys_promise_resolve_int_and_destroy(em_promise_t promise, em_promise_result
 void sys_promise_resolve_str_and_destroy(em_promise_t promise, em_promise_result_t result, int value)
 {
     if (result == EM_PROMISE_FULFILL) {
-        EM_ASM({
-            promiseMap.get($0).resolve(UTF8ToString($1));
-        },
-            promise, value);
+        EM_ASM({ promiseMap.get($0).resolve(UTF8ToString($1)); }, promise, value);
     } else {
-        EM_ASM({
-            promiseMap.get($0).reject(UTF8ToString($1));
-        },
-            promise, value);
+        EM_ASM({ promiseMap.get($0).reject(UTF8ToString($1)); }, promise, value);
     }
     emscripten_promise_destroy(promise);
 }

@@ -54,9 +54,9 @@
 #include "memory.h"
 #include "module.h"
 #include "persistent_term.h"
+#include "phash2.h"
 #include "platform_nifs.h"
 #include "port.h"
-#include "phash2.h"
 #include "posix_nifs.h"
 #include "scheduler.h"
 #include "smp.h"
@@ -5067,7 +5067,7 @@ static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[])
             message_len = 0;
         }
         if (UNLIKELY(memory_ensure_free_opt(ctx,
-                TUPLE_SIZE(2) * 2 + term_binary_heap_size(message_len), MEMORY_CAN_SHRINK)
+                         TUPLE_SIZE(2) * 2 + term_binary_heap_size(message_len), MEMORY_CAN_SHRINK)
                 != MEMORY_GC_OK)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -5149,7 +5149,8 @@ static term nif_re_pcre2_match(Context *ctx, int argc, term argv[])
 
     pcre2_code *code = NULL;
     if (UNLIKELY(pcre2_serialize_decode(&code, 1, (const uint8_t *) term_binary_data(argv[1]),
-            NULL) < 0)) {
+                     NULL)
+            < 0)) {
         RAISE_ERROR(BADARG_ATOM);
     }
     pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(code, NULL);
