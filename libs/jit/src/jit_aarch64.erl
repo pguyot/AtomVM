@@ -923,103 +923,128 @@ map_get_stub_call(#state{} = State0, SrcReg, Key) ->
     Regs4 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs3, StatusReg), reg_bit(StatusReg)),
     {State2#state{stream = Stream4, regs = Regs4}, ?IP0_REG, StatusReg}.
 
-%% @private The flat-map immediate-key lookup body. See map_get_stub_call
-%% for the ABI. Layout facts encoded here (asserted in jit.c / term.h):
-%% flat map = boxed [header|keys tuple|V0..Vn-1]; keys tuple = boxed
-%% [header|K0..Kn-1]; a tree map's boxed[1] is non-boxed. An immediate key
-%% (low bits 2#11) is exactly equal only to itself, so the identity scan
-%% is conclusive both ways.
+%% @private The flat-map lookup body. See map_get_stub_call for the ABI.
+%% Layout facts encoded here (asserted in jit.c / term.h): flat map =
+%% boxed [header | keys tuple | V0..Vn-1]; keys tuple = boxed
+%% [header | K0..Kn-1]; a tree map's boxed[1] is non-boxed. Two probe
+%% modes, both with a CONCLUSIVE not-found:
+%%   - immediate key (primary bits 2#11): exactly equal only to its
+%%     identical word;
+%%   - 2-tuple of immediates (#b_var{}-style compiler keys): a tuple is
+%%     exactly equal only to a same-arity tuple with exactly-equal
+%%     elements, and an immediate element equals only its identical word
+%%     (boxed small integers do not exist; 1 =:= 1.0 is false), so word
+%%     compares on the header and both elements decide either way.
+%% Anything else reports unsupported and the site takes the C path.
+%%
+%% Register plan: ip0 = map term -> arity -> scan end -> value; ip1 =
+%% key (status at exit); r7 = map ptr -> value-address base delta
+%% (map ptr - keys ptr: value_addr = delta + cursor_after_hit, since
+%% values start 16 bytes into the map box and the cursor has advanced 16
+%% bytes past the keys base at a hit); r8 = keys ptr -> cursor; r9 =
+%% probe classification scratch -> loaded stored key -> its ptr;
+%% r10/r11 = probe elements; r12 = stored-key header/element scratch.
+%% r7-r12 saved. Every instruction is 4 bytes; branch offsets below are
+%% in instruction units from the branch itself, asserted by the final
+%% size check.
 -spec emit_map_get_stub_body(state()) -> state().
 emit_map_get_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
-    %% Register plan: ip0 map term -> base delta; ip1 key (status at exit);
-    %% r7 map ptr -> cursor... saved; r8 keys ptr / end; r9 loaded key.
-    Prologue = <<
+    Tuple2Header = (2 bsl 6) bor ?TERM_BOXED_TUPLE,
+    I = fun(N) -> N * 4 end,
+    Body = <<
+        %% 0..2  prologue
         (jit_aarch64_asm:stp(r7, r8, {sp, -16}, '!'))/binary,
-        (jit_aarch64_asm:str(r9, {sp, -16}, '!'))/binary
-    >>,
-    %% Checks. Branch offsets to UNSUP are measured from each site.
-    C1 = <<
+        (jit_aarch64_asm:stp(r9, r10, {sp, -16}, '!'))/binary,
+        (jit_aarch64_asm:stp(r11, r12, {sp, -16}, '!'))/binary,
+        %% 3..5  map must be boxed
         (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_MASK))/binary,
-        (jit_aarch64_asm:cmp(r7, ?TERM_PRIMARY_BOXED))/binary
-    >>,
-    C2 = <<
+        (jit_aarch64_asm:cmp(r7, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 5)))/binary,
+        %% 6..10  boxed header must be a map
         (jit_aarch64_asm:and_(r7, ?IP0_REG, ?TERM_PRIMARY_CLEAR_MASK))/binary,
         (jit_aarch64_asm:ldr(r8, {r7, 0}))/binary,
         (jit_aarch64_asm:and_(r8, r8, ?TERM_BOXED_TAG_MASK))/binary,
-        (jit_aarch64_asm:cmp(r8, ?TERM_BOXED_MAP))/binary
-    >>,
-    C3 = <<
+        (jit_aarch64_asm:cmp(r8, ?TERM_BOXED_MAP))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 10)))/binary,
+        %% 11..14  flat form: boxed[1] is the (boxed) keys tuple
         (jit_aarch64_asm:ldr(r8, {r7, 8}))/binary,
-        (jit_aarch64_asm:and_(?IP0_REG, r8, ?TERM_PRIMARY_MASK))/binary,
-        (jit_aarch64_asm:cmp(?IP0_REG, ?TERM_PRIMARY_BOXED))/binary
-    >>,
-    C4 = <<
-        (jit_aarch64_asm:and_(?IP0_REG, r17, ?TERM_PRIMARY_MASK))/binary,
-        (jit_aarch64_asm:cmp(?IP0_REG, 3))/binary
-    >>,
-    %% Setup: r7 = map ptr, r8 = keys tuple (tagged) -> keys ptr.
-    Setup = <<
+        (jit_aarch64_asm:and_(r9, r8, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r9, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 14)))/binary,
+        %% 15..19  keys ptr, arity, size cap
         (jit_aarch64_asm:and_(r8, r8, ?TERM_PRIMARY_CLEAR_MASK))/binary,
         (jit_aarch64_asm:ldr(?IP0_REG, {r8, 0}))/binary,
         (jit_aarch64_asm:lsr(?IP0_REG, ?IP0_REG, 6))/binary,
-        (jit_aarch64_asm:cmp(?IP0_REG, 64))/binary
-    >>,
-    Setup2 = <<
-        %% base delta: value_addr = (map_ptr - keys_ptr) + cursor_after_hit
+        (jit_aarch64_asm:cmp(?IP0_REG, 64))/binary,
+        (jit_aarch64_asm:bcc(hi, I(66 - 19)))/binary,
+        %% 20..22  base delta, scan end (last key), cursor (first key)
         (jit_aarch64_asm:sub(r7, r7, r8))/binary,
-        %% end = keys_ptr + 8*arity (address of the LAST key)
         (jit_aarch64_asm:add(?IP0_REG, r8, ?IP0_REG, {lsl, 3}))/binary,
-        %% cursor = first key
-        (jit_aarch64_asm:add(r8, r8, 8))/binary
-    >>,
-    Hit = <<
+        (jit_aarch64_asm:add(r8, r8, 8))/binary,
+        %% 23..25  probe: immediate?
+        (jit_aarch64_asm:and_(r9, r17, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r9, 3))/binary,
+        (jit_aarch64_asm:bcc(eq, I(56 - 25)))/binary,
+        %% 26..27  else must be boxed
+        (jit_aarch64_asm:cmp(r9, ?TERM_PRIMARY_BOXED))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 27)))/binary,
+        %% 28..31  boxed header must be a 2-tuple
+        (jit_aarch64_asm:and_(r9, r17, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(r10, {r9, 0}))/binary,
+        (jit_aarch64_asm:cmp(r10, Tuple2Header))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 31)))/binary,
+        %% 32..37  both probe elements must be immediates
+        (jit_aarch64_asm:ldr(r10, {r9, 8}))/binary,
+        (jit_aarch64_asm:ldr(r11, {r9, 16}))/binary,
+        (jit_aarch64_asm:and_(r9, r10, r11))/binary,
+        (jit_aarch64_asm:and_(r9, r9, ?TERM_PRIMARY_MASK))/binary,
+        (jit_aarch64_asm:cmp(r9, 3))/binary,
+        (jit_aarch64_asm:bcc(ne, I(66 - 37)))/binary,
+        %% 38..55  tuple2 loop (T0 = 38)
+        (jit_aarch64_asm:cmp(r8, ?IP0_REG))/binary,
+        (jit_aarch64_asm:bcc(hi, I(64 - 39)))/binary,
+        (jit_aarch64_asm:ldr(r9, {r8}, 8))/binary,
+        (jit_aarch64_asm:cmp(r9, r17))/binary,
+        (jit_aarch64_asm:bcc(eq, I(61 - 42)))/binary,
+        %% stored key must be boxed to possibly be a tuple: primary 2#10
+        (jit_aarch64_asm:tbnz(r9, 0, I(38 - 43)))/binary,
+        (jit_aarch64_asm:tbz(r9, 1, I(38 - 44)))/binary,
+        (jit_aarch64_asm:and_(r9, r9, ?TERM_PRIMARY_CLEAR_MASK))/binary,
+        (jit_aarch64_asm:ldr(r12, {r9, 0}))/binary,
+        (jit_aarch64_asm:cmp(r12, Tuple2Header))/binary,
+        (jit_aarch64_asm:bcc(ne, I(38 - 48)))/binary,
+        (jit_aarch64_asm:ldr(r12, {r9, 8}))/binary,
+        (jit_aarch64_asm:cmp(r12, r10))/binary,
+        (jit_aarch64_asm:bcc(ne, I(38 - 51)))/binary,
+        (jit_aarch64_asm:ldr(r12, {r9, 16}))/binary,
+        (jit_aarch64_asm:cmp(r12, r11))/binary,
+        (jit_aarch64_asm:bcc(ne, I(38 - 54)))/binary,
+        (jit_aarch64_asm:b(I(61 - 55)))/binary,
+        %% 56..60  immediate loop (I0 = 56)
+        (jit_aarch64_asm:cmp(r8, ?IP0_REG))/binary,
+        (jit_aarch64_asm:bcc(hi, I(64 - 57)))/binary,
+        (jit_aarch64_asm:ldr(r9, {r8}, 8))/binary,
+        (jit_aarch64_asm:cmp(r9, r17))/binary,
+        (jit_aarch64_asm:bcc(ne, I(56 - 60)))/binary,
+        %% 61..63  hit (fallthrough from the immediate loop)
         (jit_aarch64_asm:ldr(?IP0_REG, {r7, r8}))/binary,
-        (jit_aarch64_asm:mov(r17, 0))/binary
-    >>,
-    NotFound = jit_aarch64_asm:mov(r17, 1),
-    Unsup = jit_aarch64_asm:mov(r17, 2),
-    Epilogue = <<
-        (jit_aarch64_asm:ldr(r9, {sp}, 16))/binary,
+        (jit_aarch64_asm:mov(r17, 0))/binary,
+        (jit_aarch64_asm:b(I(67 - 63)))/binary,
+        %% 64..65  not found
+        (jit_aarch64_asm:mov(r17, 1))/binary,
+        (jit_aarch64_asm:b(I(67 - 65)))/binary,
+        %% 66  unsupported
+        (jit_aarch64_asm:mov(r17, 2))/binary,
+        %% 67..70  epilogue
+        (jit_aarch64_asm:ldp(r11, r12, {sp}, 16))/binary,
+        (jit_aarch64_asm:ldp(r9, r10, {sp}, 16))/binary,
         (jit_aarch64_asm:ldp(r7, r8, {sp}, 16))/binary,
         (jit_aarch64_asm:ret())/binary
     >>,
-    %% Assemble with measured branch offsets:
-    %%   entry: Prologue C1 [b.ne->UNSUP] C2 [b.ne->UNSUP] C3 [b.ne->UNSUP]
-    %%          C4 [b.ne->UNSUP] Setup [b.hi->UNSUP] Setup2 Loop
-    %%          Hit [b->EPI] NotFound [b->EPI] Unsup Epilogue
-    %% Loop's own branches are internal (16 forward to NotFound is measured
-    %% below instead; the bcc(hi,16) in Loop targets NotFound).
-
-    % + b to EPI
-    SzHit = byte_size(Hit) + 4,
-    % + b to EPI
-    SzNF = byte_size(NotFound) + 4,
-    %% Loop: cmp(4) b.hi(4) ldr(4) cmp(4) b.ne(4). b.hi at offset 4 of Loop
-    %% must reach NotFound = after Loop + SzHit. Rebuild with the real
-    %% offset:
-    LoopFixed = <<
-        (jit_aarch64_asm:cmp(r8, ?IP0_REG))/binary,
-        (jit_aarch64_asm:bcc(hi, 16 + SzHit))/binary,
-        (jit_aarch64_asm:ldr(r9, {r8}, 8))/binary,
-        (jit_aarch64_asm:cmp(r9, r17))/binary,
-        (jit_aarch64_asm:bcc(ne, -16))/binary
-    >>,
-    HitFixed = <<Hit/binary, (jit_aarch64_asm:b(4 + SzNF + byte_size(Unsup)))/binary>>,
-    NFFixed = <<NotFound/binary, (jit_aarch64_asm:b(4 + byte_size(Unsup)))/binary>>,
-    %% Distances from each check's b.ne to UNSUP:
-    Tail0 = <<Setup2/binary, LoopFixed/binary, HitFixed/binary, NFFixed/binary>>,
-    % from after Setup's cmp: b.hi then Setup2...
-    DUn4 = byte_size(Tail0) + 4,
-    Blk4 = <<Setup/binary, (jit_aarch64_asm:bcc(hi, DUn4))/binary, Tail0/binary>>,
-    DUn3 = byte_size(Blk4) + 4,
-    Blk3 = <<C4/binary, (jit_aarch64_asm:bcc(ne, DUn3))/binary, Blk4/binary>>,
-    DUn2 = byte_size(Blk3) + 4,
-    Blk2 = <<C3/binary, (jit_aarch64_asm:bcc(ne, DUn2))/binary, Blk3/binary>>,
-    DUn1 = byte_size(Blk2) + 4,
-    Blk1 = <<C2/binary, (jit_aarch64_asm:bcc(ne, DUn1))/binary, Blk2/binary>>,
-    DUn0 = byte_size(Blk1) + 4,
-    Blk0 = <<C1/binary, (jit_aarch64_asm:bcc(ne, DUn0))/binary, Blk1/binary>>,
-    Body = <<Prologue/binary, Blk0/binary, Unsup/binary, Epilogue/binary>>,
+    %% Every instruction above is one 4-byte word; the branch offsets are
+    %% computed from the instruction indices in the comments.
+    71 = byte_size(Body) div 4,
+    0 = byte_size(Body) rem 4,
     State0#state{stream = StreamModule:append(Stream0, Body)}.
 
 %%-----------------------------------------------------------------------------
