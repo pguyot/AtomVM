@@ -3004,35 +3004,37 @@ static void jit_set_tuple_element(Context *ctx, term tuple, uint32_t position, t
 // legally park its own locals in the pinned registers mid-frame
 // (callee-saved only guarantees restore-on-return), so only generated-code
 // entry points may read them.
-#define JS_READ() \
+#define JS_READ()                                                   \
     register JITState *jit_state __asm__(JIT_PINNED_JIT_STATE_REG); \
-    __asm__ volatile("" : "+r"(jit_state))
-#define CTX_READ() \
+    __asm__ volatile(""                                             \
+                     : "+r"(jit_state))
+#define CTX_READ()                                     \
     register Context *ctx __asm__(JIT_PINNED_CTX_REG); \
-    __asm__ volatile("" : "+r"(ctx))
+    __asm__ volatile(""                                \
+                     : "+r"(ctx))
 
-static Context * jit_raise_error_pin(int a1, term a2)
+static Context *jit_raise_error_pin(int a1, term a2)
 {
     CTX_READ();
     JS_READ();
     return jit_raise_error(ctx, jit_state, a1, a2);
 }
 
-static Context * jit_return_pin(void)
+static Context *jit_return_pin(void)
 {
     CTX_READ();
     JS_READ();
     return jit_return(ctx, jit_state);
 }
 
-static Context * jit_schedule_next_cp_pin(void)
+static Context *jit_schedule_next_cp_pin(void)
 {
     CTX_READ();
     JS_READ();
     return jit_schedule_next_cp(ctx, jit_state);
 }
 
-static Context * jit_call_ext_pin(int a1, int a2, int a3, int a4)
+static Context *jit_call_ext_pin(int a1, int a2, int a3, int a4)
 {
     CTX_READ();
     JS_READ();
@@ -3046,7 +3048,7 @@ static bool jit_allocate_pin(uint32_t a1, uint32_t a2, uint32_t a3)
     return jit_allocate(ctx, jit_state, a1, a2, a3);
 }
 
-static Context * jit_handle_error_pin(int a1)
+static Context *jit_handle_error_pin(int a1)
 {
     CTX_READ();
     JS_READ();
@@ -3060,7 +3062,7 @@ static bool jit_deallocate_pin(uint32_t a1)
     return jit_deallocate(ctx, jit_state, a1);
 }
 
-static Context * jit_terminate_context_pin(void)
+static Context *jit_terminate_context_pin(void)
 {
     CTX_READ();
     JS_READ();
@@ -3095,7 +3097,7 @@ static bool jit_send_pin(void)
     return jit_send(ctx, jit_state);
 }
 
-static Context * jit_raise_error_tuple_pin(int a1, term a2, term a3)
+static Context *jit_raise_error_tuple_pin(int a1, term a2, term a3)
 {
     CTX_READ();
     JS_READ();
@@ -3109,42 +3111,42 @@ static term jit_term_alloc_fun_pin(uint32_t a1, uint32_t a2)
     return jit_term_alloc_fun(ctx, jit_state, a1, a2);
 }
 
-static Context * jit_process_signal_messages_pin(void)
+static Context *jit_process_signal_messages_pin(void)
 {
     CTX_READ();
     JS_READ();
     return jit_process_signal_messages(ctx, jit_state);
 }
 
-static Context * jit_raise_pin(term a1, term a2)
+static Context *jit_raise_pin(term a1, term a2)
 {
     CTX_READ();
     JS_READ();
     return jit_raise(ctx, jit_state, a1, a2);
 }
 
-static Context * jit_schedule_wait_cp_pin(void)
+static Context *jit_schedule_wait_cp_pin(void)
 {
     CTX_READ();
     JS_READ();
     return jit_schedule_wait_cp(ctx, jit_state);
 }
 
-static Context * jit_wait_timeout_pin(term a1, int a2)
+static Context *jit_wait_timeout_pin(term a1, int a2)
 {
     CTX_READ();
     JS_READ();
     return jit_wait_timeout(ctx, jit_state, a1, a2);
 }
 
-static Context * jit_wait_timeout_trap_handler_pin(int a1)
+static Context *jit_wait_timeout_trap_handler_pin(int a1)
 {
     CTX_READ();
     JS_READ();
     return jit_wait_timeout_trap_handler(ctx, jit_state, a1);
 }
 
-static Context * jit_call_fun_pin(int a1, term a2, unsigned int a3)
+static Context *jit_call_fun_pin(int a1, term a2, unsigned int a3)
 {
     CTX_READ();
     JS_READ();
@@ -3172,7 +3174,7 @@ static bool jit_memory_ensure_free_with_roots_pin(int a1, int a2, int a3)
     return jit_memory_ensure_free_with_roots(ctx, jit_state, a1, a2, a3);
 }
 
-static term jit_bitstring_extract_integer_pin(term * a1, size_t a2, int a3, int a4)
+static term jit_bitstring_extract_integer_pin(term *a1, size_t a2, int a3, int a4)
 {
     CTX_READ();
     JS_READ();
@@ -3200,21 +3202,21 @@ static int jit_bitstring_copy_binary_pin(term a1, size_t a2, term a3, term a4)
     return jit_bitstring_copy_binary(ctx, jit_state, a1, a2, a3, a4);
 }
 
-static Context * jit_apply_pin(int a1, term a2, term a3, unsigned int a4)
+static Context *jit_apply_pin(int a1, term a2, term a3, unsigned int a4)
 {
     CTX_READ();
     JS_READ();
     return jit_apply(ctx, jit_state, a1, a2, a3, a4);
 }
 
-static void * jit_malloc_pin(size_t a1)
+static void *jit_malloc_pin(size_t a1)
 {
     CTX_READ();
     JS_READ();
     return jit_malloc(ctx, jit_state, a1);
 }
 
-static term jit_put_map_assoc_pin(term a1, size_t a2, size_t a3, term * a4)
+static term jit_put_map_assoc_pin(term a1, size_t a2, size_t a3, term *a4)
 {
     CTX_READ();
     JS_READ();
@@ -3228,14 +3230,14 @@ static bool jit_bitstring_match_module_str_pin(term a1, size_t a2, int a3, size_
     return jit_bitstring_match_module_str(ctx, jit_state, a1, a2, a3, a4);
 }
 
-static Context * jit_raw_raise_pin(void)
+static Context *jit_raw_raise_pin(void)
 {
     CTX_READ();
     JS_READ();
     return jit_raw_raise(ctx, jit_state);
 }
 
-static Context * jit_raise_error_mfa_pin(int a1, int a2, int a3)
+static Context *jit_raise_error_mfa_pin(int a1, int a2, int a3)
 {
     CTX_READ();
     JS_READ();
@@ -3249,7 +3251,7 @@ static uint32_t jit_record_def_arity_pin(term a1)
     return jit_record_def_arity(ctx, jit_state, a1);
 }
 
-static term jit_put_record_pin(term a1, term a2, uint32_t a3, term * a4)
+static term jit_put_record_pin(term a1, term a2, uint32_t a3, term *a4)
 {
     CTX_READ();
     JS_READ();
@@ -3263,7 +3265,7 @@ static uint32_t jit_is_record_accessible_pin(term a1, term a2)
     return jit_is_record_accessible(ctx, jit_state, a1, a2);
 }
 
-static term jit_put_record_resolved_pin(uint32_t a1, term a2, uint32_t a3, term * a4)
+static term jit_put_record_resolved_pin(uint32_t a1, term a2, uint32_t a3, term *a4)
 {
     CTX_READ();
     JS_READ();
@@ -3322,7 +3324,7 @@ static term jit_term_alloc_tuple_pin(uint32_t a1)
     return jit_term_alloc_tuple(ctx, a1);
 }
 
-static term * jit_extended_register_ptr_pin(unsigned int a1)
+static term *jit_extended_register_ptr_pin(unsigned int a1)
 {
     CTX_READ();
     return jit_extended_register_ptr(ctx, a1);
@@ -3394,7 +3396,7 @@ static term jit_term_create_empty_binary_pin(size_t a1)
     return jit_term_create_empty_binary(ctx, a1);
 }
 
-static term jit_bitstring_extract_float_pin(term * a1, int a2, int a3, int a4)
+static term jit_bitstring_extract_float_pin(term *a1, int a2, int a3, int a4)
 {
     CTX_READ();
     JS_READ();

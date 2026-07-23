@@ -341,7 +341,7 @@ keyreplace(Key, N, [H | Tail], OrigL, NewTuple, Acc) ->
 %% slower on random input and did not exploit ordered runs at all.
 fsplit_1(Y, X, Fun, [Z | L], R, Rs) ->
     case Fun(Y, Z) of
-        true -> 
+        true ->
             fsplit_1(Z, Y, Fun, L, [X | R], Rs);
         false ->
             case Fun(X, Z) of
@@ -378,7 +378,7 @@ fsplit_1_1(Y, X, Fun, [], R, Rs, S) ->
 
 fsplit_2(Y, X, Fun, [Z | L], R, Rs) ->
     case Fun(Y, Z) of
-        false -> 
+        false ->
             fsplit_2(Z, Y, Fun, L, [X | R], Rs);
         true ->
             case Fun(X, Z) of
@@ -477,7 +477,8 @@ usort_1(Fun, X, [Y | L]) ->
     case Fun(X, Y) of
         true ->
             case Fun(Y, X) of
-                true -> % X equal to Y
+                % X equal to Y
+                true ->
                     case L of
                         [] ->
                             [X];
@@ -487,15 +488,16 @@ usort_1(Fun, X, [Y | L]) ->
                 false ->
                     ufsplit_1(Y, X, Fun, L, [], [])
             end;
-        false  ->
-	    ufsplit_2(Y, L, Fun, [X])
+        false ->
+            ufsplit_2(Y, L, Fun, [X])
     end.
 
 ufsplit_1(Y, X, Fun, [Z | L], R, Rs) ->
     case Fun(Y, Z) of
         true ->
             case Fun(Z, Y) of
-                true -> % Z equal to Y
+                % Z equal to Y
+                true ->
                     ufsplit_1(Y, X, Fun, L, R, Rs);
                 false ->
                     ufsplit_1(Z, Y, Fun, L, [X | R], Rs)
@@ -504,7 +506,8 @@ ufsplit_1(Y, X, Fun, [Z | L], R, Rs) ->
             case Fun(X, Z) of
                 true ->
                     case Fun(Z, X) of
-                        true -> % Z equal to X
+                        % Z equal to X
+                        true ->
                             ufsplit_1(Y, X, Fun, L, R, Rs);
                         false ->
                             ufsplit_1(Y, Z, Fun, L, [X | R], Rs)
@@ -522,7 +525,8 @@ ufsplit_1_1(Y, X, Fun, [Z | L], R, Rs, S) ->
     case Fun(Y, Z) of
         true ->
             case Fun(Z, Y) of
-                true -> % Z equal to Y
+                % Z equal to Y
+                true ->
                     ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
                 false ->
                     ufsplit_1_1(Z, Y, Fun, L, [X | R], Rs, S)
@@ -531,7 +535,8 @@ ufsplit_1_1(Y, X, Fun, [Z | L], R, Rs, S) ->
             case Fun(X, Z) of
                 true ->
                     case Fun(Z, X) of
-                        true -> % Z equal to X
+                        % Z equal to X
+                        true ->
                             ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
                         false ->
                             ufsplit_1_1(Y, Z, Fun, L, [X | R], Rs, S)
@@ -540,7 +545,8 @@ ufsplit_1_1(Y, X, Fun, [Z | L], R, Rs, S) ->
                     case Fun(S, Z) of
                         true ->
                             case Fun(Z, S) of
-                                true -> % Z equal to S
+                                % Z equal to S
+                                true ->
                                     ufsplit_1_1(Y, X, Fun, L, R, Rs, S);
                                 false ->
                                     ufsplit_1(Z, S, Fun, L, [], [[Y, X | R] | Rs])
@@ -557,7 +563,8 @@ ufsplit_2(Y, [Z | L], Fun, R) ->
     case Fun(Y, Z) of
         true ->
             case Fun(Z, Y) of
-                true -> % Z equal to Y
+                % Z equal to Y
+                true ->
                     ufsplit_2(Y, L, Fun, R);
                 false ->
                     ufsplit_1(Z, Y, Fun, L, [], [lists:reverse(R, [])])
@@ -590,7 +597,8 @@ ufmerge2_1([H1 | T1], H2, Fun, T2, M, HdM) ->
             ufmerge2_1(T1, H2, Fun, T2, [H1 | M], H1);
         false ->
             case Fun(H2, HdM) of
-                true -> % HdM equal to H2
+                % HdM equal to H2
+                true ->
                     ufmerge2_2(H1, T1, Fun, T2, M);
                 false ->
                     ufmerge2_2(H1, T1, Fun, T2, [H2 | M])
@@ -598,7 +606,8 @@ ufmerge2_1([H1 | T1], H2, Fun, T2, M, HdM) ->
     end;
 ufmerge2_1([], H2, Fun, T2, M, HdM) ->
     case Fun(H2, HdM) of
-        true -> % HdM equal to H2
+        % HdM equal to H2
+        true ->
             lists:reverse(T2, M);
         false ->
             lists:reverse(T2, [H2 | M])
@@ -630,7 +639,8 @@ rufmerge2_2(H1, T1, Fun, [H2 | T2], M, H2M) ->
             rufmerge2_2(H1, T1, Fun, T2, [H2M | M], H2);
         false ->
             case Fun(H2M, H1) of
-                true -> % H2M equal to H1
+                % H2M equal to H1
+                true ->
                     rufmerge2_1(T1, H2, Fun, T2, [H1 | M]);
                 false ->
                     rufmerge2_1(T1, H2, Fun, T2, [H1, H2M | M])
@@ -638,7 +648,7 @@ rufmerge2_2(H1, T1, Fun, [H2 | T2], M, H2M) ->
     end;
 rufmerge2_2(H1, T1, Fun, [], M, H2M) ->
     case Fun(H2M, H1) of
-        true -> 
+        true ->
             lists:reverse(T1, [H1 | M]);
         false ->
             lists:reverse(T1, [H1, H2M | M])
@@ -1191,7 +1201,6 @@ unique_default([_] = L) ->
     L;
 unique_default([]) ->
     [].
-
 
 %%-----------------------------------------------------------------------------
 %% @param   N           the position in the tuple to compare (1..tuple_size)

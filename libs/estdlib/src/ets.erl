@@ -549,7 +549,9 @@ ms_expr({const, Term}, _Bindings) ->
     Term;
 ms_expr({{}}, _Bindings) ->
     {};
-ms_expr(Tuple, Bindings) when is_tuple(Tuple), tuple_size(Tuple) =:= 1, is_tuple(element(1, Tuple)) ->
+ms_expr(Tuple, Bindings) when
+    is_tuple(Tuple), tuple_size(Tuple) =:= 1, is_tuple(element(1, Tuple))
+->
     % {{...}} is the tuple construction syntax
     Elements = tuple_to_list(element(1, Tuple)),
     list_to_tuple([ms_expr(E, Bindings) || E <- Elements]);

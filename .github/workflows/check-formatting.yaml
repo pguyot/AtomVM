@@ -67,10 +67,12 @@ jobs:
         cd erlfmt
         rebar3 as release escriptize
         cd ../AtomVM
-        # test_native_records* use the native-record syntax extension, which
-        # stock erlfmt cannot parse.
+        # test_native_records* (native-record syntax) and
+        # test_multi_value_comprehension (multi-value comprehensions) use
+        # syntax extensions stock erlfmt cannot parse.
         find . -name *.erl \
           -not -name 'test_native_records*.erl' \
+          -not -name 'test_multi_value_comprehension.erl' \
           | xargs ../erlfmt/_build/release/bin/erlfmt -c
 
   mix-format-check:
