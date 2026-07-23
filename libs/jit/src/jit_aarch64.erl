@@ -2902,25 +2902,31 @@ get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
 ->
     #state{stream_module = SM, regs = Regs0} =
         State1 = pending_elide_prev(pending_elide_prev(State0, H), T),
-    %% Two distinct scratch regs, neither being ListReg (it is used/allocated,
-    %% so available_regs already excludes it).
+    %% Load each cell straight into its destination register. For x0-3 the
+    %% destination IS the pinned home register (r25-r28), so the paired load
+    %% writes the home directly and no mov-to-home is needed afterwards --
+    %% BeamAsm loads get_list cells into its XREG machine registers the same
+    %% way. x4+ has no home register: use a scratch and rely on the memory
+    %% store below. Reusing a home target later is safe because the
+    %% write-through str keeps ctx->x authoritative (a reused home reloads).
+    %% Targets are distinct: H =/= T, home regs are outside available_regs
+    %% (so a scratch target never collides with a home), and ListReg is
+    %% already allocated (excluded from available_regs).
     Avail0 = jit_regs:available_regs(Regs0),
-    TailReg = first_avail(Avail0),
-    Avail1 = Avail0 band (bnot reg_bit(TailReg)),
-    HeadReg = first_avail(Avail1),
+    {TailReg, Avail1} = get_list_dest_reg(T, Avail0),
+    {HeadReg, _Avail2} = get_list_dest_reg(H, Avail1),
     %% ldp TailReg, HeadReg, [ListReg]  -> TailReg=cell[0]=tail, HeadReg=cell[1]=head
     Ldp = jit_aarch64_asm:ldp(TailReg, HeadReg, {ListReg, 0}),
     StreamA = SM:append(State1#state.stream, Ldp),
-    %% Head store (+ home for x0-3), then note it while its str is the last
-    %% instruction so pending_note_store records the correct offset (it is a
-    %% no-op for the homed x0-3 case). Same for tail.
-    StH = <<(x_home_update(HeadReg, H))/binary, (jit_aarch64_asm:str(HeadReg, ?X_REG(H)))/binary>>,
+    %% Write-through store only; note each store while its str is the last
+    %% instruction so pending_note_store records the correct offset.
+    StH = jit_aarch64_asm:str(HeadReg, ?X_REG(H)),
     StreamB = SM:append(StreamA, StH),
     StateB = pending_note_store(State1#state{stream = StreamB}, H),
-    StT = <<(x_home_update(TailReg, T))/binary, (jit_aarch64_asm:str(TailReg, ?X_REG(T)))/binary>>,
+    StT = jit_aarch64_asm:str(TailReg, ?X_REG(T)),
     StreamC = SM:append(StateB#state.stream, StT),
     StateC = pending_note_store(StateB#state{stream = StreamC}, T),
-    %% ListReg freed; track head/tail in their (free) registers as the dests.
+    %% ListReg freed; track head/tail in their destination registers.
     Regs1 = jit_regs:free_reg(StateC#state.regs, reg_bit(ListReg)),
     Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, H}),
     Regs3 = jit_regs:invalidate_vm_loc(Regs2, {x_reg, T}),
@@ -2934,6 +2940,17 @@ get_list_head_tail(State0, {free, ListReg}, HeadDest, TailDest) ->
     State3 = move_array_element(State2, ListReg, ?LIST_TAIL_INDEX, TailDest),
     State4 = free_native_register(State3, ListReg),
     free_native_register(State4, TailDest).
+
+%% @private Destination register for a get_list cell going to VM x register X:
+%% the pinned home register for x0-3 (so the paired load writes it directly,
+%% eliding the mov-to-home), otherwise a fresh scratch taken from Avail. The
+%% returned Avail excludes a scratch so the second cell picks a distinct one;
+%% home registers are outside Avail already, so they need no exclusion.
+get_list_dest_reg(X, Avail) when X < ?X_HOME_COUNT ->
+    {x_home(X), Avail};
+get_list_dest_reg(_X, Avail) ->
+    R = first_avail(Avail),
+    {R, Avail band (bnot reg_bit(R))}.
 
 move_array_element(
     #state{} =
