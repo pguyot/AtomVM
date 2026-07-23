@@ -51,35 +51,35 @@
 #include "utils.h"
 
 /* Bob Jenkins' 96-bit mix, as used by ERTS. */
-#define MIX(a, b, c)              \
-    do {                          \
-        a -= b;                   \
-        a -= c;                   \
-        a ^= (c >> 13);           \
-        b -= c;                   \
-        b -= a;                   \
-        b ^= (a << 8);            \
-        c -= a;                   \
-        c -= b;                   \
-        c ^= (b >> 13);           \
-        a -= b;                   \
-        a -= c;                   \
-        a ^= (c >> 12);           \
-        b -= c;                   \
-        b -= a;                   \
-        b ^= (a << 16);           \
-        c -= a;                   \
-        c -= b;                   \
-        c ^= (b >> 5);            \
-        a -= b;                   \
-        a -= c;                   \
-        a ^= (c >> 3);            \
-        b -= c;                   \
-        b -= a;                   \
-        b ^= (a << 10);           \
-        c -= a;                   \
-        c -= b;                   \
-        c ^= (b >> 15);           \
+#define MIX(a, b, c)    \
+    do {                \
+        a -= b;         \
+        a -= c;         \
+        a ^= (c >> 13); \
+        b -= c;         \
+        b -= a;         \
+        b ^= (a << 8);  \
+        c -= a;         \
+        c -= b;         \
+        c ^= (b >> 13); \
+        a -= b;         \
+        a -= c;         \
+        a ^= (c >> 12); \
+        b -= c;         \
+        b -= a;         \
+        b ^= (a << 16); \
+        c -= a;         \
+        c -= b;         \
+        c ^= (b >> 5);  \
+        a -= b;         \
+        a -= c;         \
+        a ^= (c >> 3);  \
+        b -= c;         \
+        b -= a;         \
+        b ^= (a << 10); \
+        c -= a;         \
+        c -= b;         \
+        c ^= (b >> 15); \
     } while (0)
 
 #define HCONST 0x9e3779b9UL /* the golden ratio; an arbitrary value */
@@ -113,33 +113,33 @@
 
 #define UINT32_HASH(Expr, AConst) UINT32_HASH_2(Expr, 0, AConst)
 
-#define SINT32_HASH(Expr, AConst)                                     \
-    do {                                                              \
-        int32_t y = (int32_t) (Expr);                                 \
-        if (y < 0) {                                                  \
-            UINT32_HASH(-y, AConst);                                  \
-            /* Negative numbers are unnecessarily mixed twice. */     \
-        }                                                             \
-        UINT32_HASH(y, AConst);                                       \
+#define SINT32_HASH(Expr, AConst)                                 \
+    do {                                                          \
+        int32_t y = (int32_t) (Expr);                             \
+        if (y < 0) {                                              \
+            UINT32_HASH(-y, AConst);                              \
+            /* Negative numbers are unnecessarily mixed twice. */ \
+        }                                                         \
+        UINT32_HASH(y, AConst);                                   \
     } while (0)
 
 #define IS_SSMALL28(x) (((uint64_t) (((x) >> (28 - 1)) + 1)) < 2)
 
-#define NOT_SSMALL28_HASH(SMALL)              \
-    do {                                      \
-        uint64_t t;                           \
-        uint32_t x, y;                        \
-        uint32_t con;                         \
-        if (SMALL < 0) {                      \
-            con = HCONST_10;                  \
-            t = (uint64_t) (-(SMALL));        \
-        } else {                              \
-            con = HCONST_11;                  \
-            t = (uint64_t) (SMALL);           \
-        }                                     \
-        x = t & 0xffffffff;                   \
-        y = t >> 32;                          \
-        UINT32_HASH_2(x, y, con);             \
+#define NOT_SSMALL28_HASH(SMALL)       \
+    do {                               \
+        uint64_t t;                    \
+        uint32_t x, y;                 \
+        uint32_t con;                  \
+        if (SMALL < 0) {               \
+            con = HCONST_10;           \
+            t = (uint64_t) (-(SMALL)); \
+        } else {                       \
+            con = HCONST_11;           \
+            t = (uint64_t) (SMALL);    \
+        }                              \
+        x = t & 0xffffffff;            \
+        y = t >> 32;                   \
+        UINT32_HASH_2(x, y, con);      \
     } while (0)
 
 /* ERTS 64-bit small range: signed 60-bit immediates. Any integer value in
@@ -334,7 +334,7 @@ static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
     atom_index_t index = term_to_atom_index(t);
 #if defined(HAVE_ATOMIC)
     struct Phash2AtomCache *cache = atomic_load_explicit(
-        (struct Phash2AtomCache *_Atomic *) &glb->phash2_atom_cache, memory_order_acquire);
+        (struct Phash2AtomCache * _Atomic *) &glb->phash2_atom_cache, memory_order_acquire);
 #else
     struct Phash2AtomCache *cache = glb->phash2_atom_cache;
 #endif
@@ -367,7 +367,7 @@ static uint32_t phash2_atom_hash(term t, GlobalContext *glb)
     // freed, as another scheduler may still be reading it (a few KB per
     // growth step, bounded by the atom count).
 #if defined(HAVE_ATOMIC)
-    atomic_store_explicit((struct Phash2AtomCache *_Atomic *) &glb->phash2_atom_cache,
+    atomic_store_explicit((struct Phash2AtomCache * _Atomic *) &glb->phash2_atom_cache,
         new_cache, memory_order_release);
 #else
     glb->phash2_atom_cache = new_cache;

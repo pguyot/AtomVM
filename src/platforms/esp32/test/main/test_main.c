@@ -42,9 +42,9 @@
 
 #include <esp_eth.h>
 #include <esp_event.h>
-#include <esp_partition.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_partition.h>
 #include <esp_vfs.h>
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
