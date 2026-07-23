@@ -1,3 +1,8 @@
+<!--
+ Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+-->
+
 # Hottest losing path: term comparison in ordered-collection scans
 
 ## Profiling method & finding

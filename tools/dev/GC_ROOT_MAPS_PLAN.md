@@ -1,3 +1,8 @@
+<!--
+ Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+-->
+
 # GC root maps / deferred x-register stores — engineering plan
 
 Goal: eliminate the write-through store that today accompanies every VM
