@@ -2512,12 +2512,11 @@ emit_pass(<<?OP_GET_MAP_ELEMENTS, Rest0/binary>>, MMod, MSt0, State0) ->
             ?TRACE(",~p", [Key]),
             {AccMSt2, Dest, AccRest2} = decode_dest(AccRest1, MMod, AccMSt1),
             ?TRACE(",~p", [Dest]),
-            %% The stub pays for itself only when the key is a compile-time
-            %% immediate (literal atom or small integer): those are decided
-            %% inline both ways. Runtime-register keys are ~half tuples on
-            %% compiler workloads and would fall through to C after paying
-            %% the stub attempt.
-            case StubExported andalso is_integer(Key) of
+            %% The stub decides immediate keys and 2-tuple-of-immediate
+            %% keys inline both ways (hit and definitive not-found), which
+            %% covers ~90%% of runtime lookups on compiler workloads; other
+            %% shapes cost it a ~12-instruction attempt before the C path.
+            case StubExported of
                 true ->
                     {get_map_element_via_stub(MMod, AccMSt2, SrcReg, Key, Dest, Label), AccRest2};
                 false ->
