@@ -215,6 +215,12 @@ _Static_assert(offsetof(Module, native_code) == 0x78, "module->native_code is 0x
 _Static_assert(offsetof(Module, fun_table) == 0x30, "module->fun_table is 0x30 in jit/src/jit_aarch64.erl");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+// Offset for the inline atom-vs-atom compare-stub fast path (64-bit desktop
+// layout: SMP + AVM_TASK_DRIVER_ENABLED, the only configuration that builds
+// the aarch64 backend): ctx->global->atom_table->index_to_node[idx]->sort_key.
+// struct AtomTable/HNode are opaque here; their field offsets are asserted
+// in atom_table.c, where the struct definitions are visible.
+_Static_assert(offsetof(GlobalContext, atom_table) == 0x430, "global->atom_table is 0x430 in jit/src/jit_aarch64.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 // Used only when built with -DJIT_LINE_PROFILING (AVM_ENABLE_JIT_LINE_PROFILING,
 // jit_aarch64.erl only, see msacc.h), which requires AVM_ENABLE_MSACC (the
