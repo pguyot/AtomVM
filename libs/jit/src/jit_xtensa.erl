@@ -186,6 +186,7 @@
 -type condition() ::
     {xtensa_register(), '<', integer()}
     | {maybe_free_xtensa_register(), '<', xtensa_register()}
+    | {maybe_free_xtensa_register(), '<u', xtensa_register()}
     | {integer(), '<', maybe_free_xtensa_register()}
     | {maybe_free_xtensa_register(), '==', integer()}
     | {maybe_free_xtensa_register(), '!=', xtensa_register() | integer()}
@@ -1068,6 +1069,22 @@ if_block_cond(
     State3 = State2#state{stream = Stream2},
     JumpDelta = MovSize + byte_size(I1),
     {State3, JumpDelta};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '<u', RegB}
+) when is_atom(RegB) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    %% Xtensa: bltu Reg, RegB, +2; J placeholder
+    I1 = jit_xtensa_asm:bltu(Reg, RegB, 2),
+    JPlaceholder = <<16#FF, 16#FF, 16#FF>>,
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, JPlaceholder/binary>>),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    State2 = State1#state{stream = Stream1},
+    {State2, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', RegB}

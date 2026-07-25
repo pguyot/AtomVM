@@ -159,6 +159,7 @@
 -type condition() ::
     {x86_64_register(), '<', integer()}
     | {maybe_free_x86_64_register(), '<', x86_64_register()}
+    | {maybe_free_x86_64_register(), '<u', x86_64_register()}
     | {integer(), '<', maybe_free_x86_64_register()}
     | {maybe_free_x86_64_register(), '==', integer()}
     | {maybe_free_x86_64_register(), '!=', x86_64_register() | integer()}
@@ -852,6 +853,16 @@ if_block_cond0(State0, {RegOrTuple, '<', Value}) when ?IS_SINT32_T(Value) ->
     {RelocJGEOffset, I2} = jit_x86_64_asm:jge_rel8(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJGEOffset};
+if_block_cond0(State0, {RegOrTuple, '<u', RegB}) when is_atom(RegB) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_x86_64_asm:cmpq(RegB, Reg),
+    {RelocJAEOffset, I2} = jit_x86_64_asm:jae_rel8(1),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJAEOffset};
 if_block_cond0(State0, {RegOrTuple, '<', RegB}) when is_atom(RegB) ->
     Reg =
         case RegOrTuple of

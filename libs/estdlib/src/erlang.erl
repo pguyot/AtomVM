@@ -1222,15 +1222,16 @@ binary_to_list(_Binary) ->
 
 %%-----------------------------------------------------------------------------
 %% @param   Bitstring   Bitstring to convert to list
-%% @returns a list of bytes from the bitstring
+%% @returns a list of bytes, with a final element holding the trailing bits if
+%%          `Bitstring' is not a whole number of bytes
 %% @doc     Convert a bitstring to a list of bytes.
 %%
-%% Unlike Erlang/OTP, AtomVM only supports byte-aligned bitstrings (binaries),
-%% so the returned list never has a trailing bitstring and this function
-%% behaves like `binary_to_list/1'.
+%%          If the number of bits in `Bitstring' is not divisible by `8', the
+%%          last element of the list is a bitstring containing the trailing
+%%          `1..7' bits, e.g. `bitstring_to_list(<<1:1>>)' returns `[<<1:1>>]'.
 %% @end
 %%-----------------------------------------------------------------------------
--spec bitstring_to_list(Bitstring :: bitstring()) -> [byte()].
+-spec bitstring_to_list(Bitstring :: bitstring()) -> [byte() | bitstring()].
 bitstring_to_list(_Bitstring) ->
     erlang:nif_error(undefined).
 
@@ -2598,10 +2599,8 @@ is_binary(_Term) ->
 %%-----------------------------------------------------------------------------
 %% @param   Term  the term to test
 %% @returns `true' if `Term' is a bitstring; `false', otherwise.
-%% @doc     Return `true' if `Term' is a bitstring; `false', otherwise.
-%%
-%% Since AtomVM only supports byte-aligned bitstrings (binaries), this behaves
-%% like `is_binary/1'.
+%% @doc     Return `true' if `Term' is a bitstring (including a binary);
+%%          `false', otherwise.
 %%
 %% This function may be used in a guard expression.
 %% @end
