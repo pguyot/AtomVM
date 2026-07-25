@@ -569,6 +569,7 @@ static inline void module_get_fun_arity_old_index_uniq(const Module *this_module
 {
     const uint8_t *table_data = (const uint8_t *) this_module->fun_table;
     int funs_count = READ_32_UNALIGNED(table_data + 8);
+    UNUSED(funs_count);
 
     assert(fun_index < funs_count);
 
