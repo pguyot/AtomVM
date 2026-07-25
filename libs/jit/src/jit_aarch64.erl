@@ -317,6 +317,18 @@
 %% fields are always authoritative when C runs; the dispatch loop only seeds.
 -define(HP_REG, r22).
 -define(E_REG, r23).
+%% Live remaining-reductions count, seeded once per C->native crossing from
+%% jit_state->remaining_reductions (opcodesswitch.h inline asm), decremented
+%% in-register on every call/call_only with no memory traffic on the hot
+%% path. Memory is NOT kept authoritative here (unlike x25-x28): it is only
+%% flushed at the specific points that can expose it to C — the
+%% call_primitive_last tail (any primitive that may trap/reschedule) and the
+%% four *_direct wrappers' fallthrough-to-C branch (their C primitive reads
+%% jit_state->remaining_reductions via jit_direct_continuation). Prototyped
+%% and benchmarked against the load/subs/store pattern first: see
+%% w30-reductions-register-pin memory for the isolated-mechanism measurement
+%% that motivated pinning instead of just skipping the store.
+-define(REDUCTIONS_REG, r24).
 %% jit_state and the primitives table live in callee-saved registers, seeded
 %% once per C->native crossing by the scheduler loop (opcodesswitch.h inline
 %% asm). C primitives preserve them per the AAPCS64, so generated code never
@@ -823,9 +835,14 @@ call_primitive_last(
     ),
     #state{stream = Stream2a} = State1,
     %% Write hp/e back to ctx before tail-calling into C (see call_func_ptr).
+    %% Also flush the pinned reduction count: this primitive is one that may
+    %% not return directly (trap/reschedule), the only class of call visible
+    %% to jit_direct_continuation / jit_schedule_next_cp, so every call
+    %% through here needs the register's current value in memory.
     WB = <<
         (jit_aarch64_asm:str(?HP_REG, ?HEAP_PTR))/binary,
-        (jit_aarch64_asm:str(?E_REG, ?Y_REGS))/binary
+        (jit_aarch64_asm:str(?E_REG, ?Y_REGS))/binary,
+        (jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT))/binary
     >>,
     Stream2 = StreamModule:append(Stream2a, WB),
     {Stream3, Relocations1} =
@@ -1325,6 +1342,13 @@ return_if_not_equal_to_ctx(
             % Move to r0 (return register)
             _ -> jit_aarch64_asm:orr(r0, xzr, Reg)
         end,
+    %% No reduction-count flush here: PRIM_PROCESS_SIGNAL_MESSAGES (the only
+    %% caller) never reads ?REDUCTIONS_REG and may itself have already
+    %% written jit_state->remaining_reductions=0 to force a reschedule
+    %% (e.g. jit_schedule_wait_cp on a trapped exit signal); flushing our
+    %% stale register value here would stomp that write. See
+    %% ?REDUCTIONS_REG and call_primitive_last (which flushes BEFORE
+    %% calling, not after, for exactly this reason).
     I4 = jit_aarch64_asm:ret(),
     I2 = jit_aarch64_asm:bcc(eq, 4 + byte_size(I3) + byte_size(I4)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
@@ -4665,17 +4689,18 @@ decrement_reductions_and_maybe_schedule_next(
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
-    % Load reduction count
-    I1 = jit_aarch64_asm:ldr_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
-    % Decrement reduction count
-    I2 = jit_aarch64_asm:subs(Temp, Temp, 1),
-    % Store back the decremented value
-    I3 = jit_aarch64_asm:str_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    % Decrement the pinned reduction count in-register: no memory traffic
+    % on this path (flushed only where it can become visible to C, see
+    % ?REDUCTIONS_REG).
+    I2 = jit_aarch64_asm:subs(?REDUCTIONS_REG, ?REDUCTIONS_REG, 1),
+    Stream1 = StreamModule:append(Stream0, I2),
     BNEOffset = StreamModule:offset(Stream1),
     % Branch if reduction count is not zero
     I4 = jit_aarch64_asm:bcc(ne, 0),
-    % Set continuation to the next instruction
+    % Set continuation to the next instruction. The reduction-count flush
+    % itself is NOT emitted here: call_primitive_last (below) flushes
+    % ?REDUCTIONS_REG unconditionally before tail-calling any primitive that
+    % may not return directly, which covers this PRIM_SCHEDULE_NEXT_CP call.
     ADROffset = BNEOffset + byte_size(I4),
     I5 = jit_aarch64_asm:adr(Temp, 0),
     I6 = jit_aarch64_asm:str(Temp, ?JITSTATE_CONTINUATION),
@@ -4731,8 +4756,7 @@ call_only_or_schedule_next(
         stream_module = StreamModule,
         stream = Stream0,
         branches = Branches,
-        labels = Labels,
-        regs = Regs0
+        labels = Labels
     } = StateF = pending_filter_label(StateP, Label),
     %% Loop-header hot entry: emit a site-specific reconciliation of the
     %% recorded bindings BEFORE the shared part of the block. jit.erl's
@@ -4754,23 +4778,11 @@ call_only_or_schedule_next(
             _ ->
                 {maps:get(Label, Labels, unknown), StateF}
         end,
-    %% On hot paths the reduction scratch must not clobber a reconciled
-    %% binding register (available_regs includes free-but-cached regs and
-    %% Temp is not invalidated below): use IP0 there.
-    Temp =
-        case StateF#state.loop_entries of
-            #{Label := _} -> ?IP0_REG;
-            _ -> first_avail(jit_regs:available_regs(Regs0))
-        end,
-    % Load reduction count
-    I1 = jit_aarch64_asm:ldr_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
-    % Decrement reduction count
-    I2 = jit_aarch64_asm:subs(Temp, Temp, 1),
-    % Store back the decremented value
-    I3 = jit_aarch64_asm:str_w(Temp, ?JITSTATE_REDUCTIONCOUNT),
-    StreamR = StreamModule:append(
-        State0#state.stream, <<I1/binary, I2/binary, I3/binary>>
-    ),
+    % Decrement the pinned reduction count in-register: no memory traffic
+    % on the hot backedge (see ?REDUCTIONS_REG). This is the loop we
+    % benchmarked the load/subs/store pattern against before pinning.
+    I2 = jit_aarch64_asm:subs(?REDUCTIONS_REG, ?REDUCTIONS_REG, 1),
+    StreamR = StreamModule:append(State0#state.stream, I2),
     BNEOffset = StreamModule:offset(StreamR),
     case TargetOffset of
         LabelOffset when
@@ -4806,6 +4818,10 @@ call_only_or_schedule_next(
                 cold_call_blocks = (State0#state.cold_call_blocks)#{EntryOffset => Label}
             }
     end,
+    % Falling through here means reductions hit zero. The reduction-count
+    % flush itself is NOT emitted here: call_primitive_last (below) flushes
+    % ?REDUCTIONS_REG unconditionally before tail-calling any primitive that
+    % may not return directly, which covers this PRIM_SCHEDULE_NEXT_CP call.
     State2 = set_continuation_to_label(State1, Label),
     call_primitive_last(State2, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]).
 
@@ -4867,7 +4883,16 @@ call_fun_with_cp_direct(
             false ->
                 State2
         end,
-    {State5, ResultReg} = call_primitive(State4, Primitive, Args),
+    %% jit_call_fun_direct's jit_direct_continuation check reads
+    %% remaining_reductions from memory: flush the pinned register before
+    %% the call so it sees the current count. Not flushed again after: the
+    %% primitive may itself have written remaining_reductions=0 to force a
+    %% reschedule (e.g. via jit_schedule_wait_cp), and a post-call flush of
+    %% our now-stale register would overwrite that write.
+    #state{stream_module = StreamModule0, stream = Stream4} = State4,
+    IPreFlush = jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT),
+    State4b = State4#state{stream = StreamModule0:append(Stream4, IPreFlush)},
+    {State5, ResultReg} = call_primitive(State4b, Primitive, Args),
     #state{stream_module = StreamModule, stream = Stream5} = State5,
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
@@ -4986,9 +5011,21 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
             false ->
                 State2
         end,
+    %% jit_call_ext_direct's jit_direct_continuation check (and the NIF's own
+    %% trap protocol, e.g. demonitor([flush])'s invalid_term + Trap-flag
+    %% return) reads remaining_reductions from memory: flush the pinned
+    %% register before the call. Not flushed again after: the NIF/primitive
+    %% may itself have written remaining_reductions=0 to force a reschedule,
+    %% and a post-call flush of our now-stale register would overwrite that
+    %% write (this was a real bug: caught it via test_monitor/test_exit2
+    %% returning stale values after PRIM_PROCESS_SIGNAL_MESSAGES-adjacent
+    %% signal handling).
+    #state{stream_module = StreamModule4, stream = Stream4} = State4,
+    IPreFlush = jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT),
+    State4b = State4#state{stream = StreamModule4:append(Stream4, IPreFlush)},
     %% Only x0 is live after the call: reload a single home register.
     {State5, ResultReg} = call_primitive(
-        State4#state{post_call_xregs = x0}, Primitive, Args
+        State4b#state{post_call_xregs = x0}, Primitive, Args
     ),
     #state{stream_module = StreamModule, stream = Stream5} = State5,
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
@@ -5108,7 +5145,15 @@ supports_inline_tuple2_eq() ->
 
 call_primitive_with_cp_direct(State0, Primitive, Args) ->
     {State1, RewriteOffset, RewriteSize} = set_cp(State0),
-    {State2, ResultReg} = call_primitive(State1, Primitive, Args),
+    %% The wrapped primitive (PRIM_CALL_EXT_DIRECT/PRIM_CALL_FUN_DIRECT) reads
+    %% jit_direct_continuation's remaining_reductions check from memory:
+    %% flush the pinned register before the call, not after (the primitive
+    %% may itself force remaining_reductions=0 to reschedule; a post-call
+    %% flush of our stale register would overwrite that write).
+    #state{stream_module = StreamModule1, stream = Stream1a} = State1,
+    IPreFlush = jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT),
+    State1b = State1#state{stream = StreamModule1:append(Stream1a, IPreFlush)},
+    {State2, ResultReg} = call_primitive(State1b, Primitive, Args),
     #state{stream_module = StreamModule, stream = Stream2} = State2,
     %% Dispatch on the primitive's tagged result:
     %%   bit 0 clear: Context * — return to the scheduler loop
@@ -5133,7 +5178,13 @@ call_primitive_with_cp_direct(State0, Primitive, Args) ->
 %% unreachable from this site.
 -spec call_primitive_direct(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_direct(State0, Primitive, Args) ->
-    {State1, ResultReg} = call_primitive(State0, Primitive, Args),
+    %% The wrapped primitive (e.g. PRIM_RETURN_DIRECT) reads
+    %% jit_direct_continuation's remaining_reductions check from memory:
+    %% flush before the call, not after (see call_primitive_with_cp_direct).
+    #state{stream_module = StreamModule0, stream = Stream0} = State0,
+    IPreFlush = jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT),
+    State0b = State0#state{stream = StreamModule0:append(Stream0, IPreFlush)},
+    {State1, ResultReg} = call_primitive(State0b, Primitive, Args),
     #state{stream_module = StreamModule, stream = Stream1} = State1,
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
