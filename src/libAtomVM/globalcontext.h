@@ -266,6 +266,21 @@ struct GlobalContext
 #endif
 
     void *platform_data;
+
+#ifdef AVM_ENABLE_MSACC
+    // atomvm:profile_start/0 / atomvm:profile_stop/0 (see msacc.h). Checked
+    // on every scheduler state transition, so a single bool (not ATOMIC: a
+    // transiently stale read only means one transition is misclassified or
+    // one is missed, never a crash) keeps the disabled-path overhead to one
+    // branch. Last field on purpose: nothing else's offset is pinned
+    // against fields after it, so adding here never perturbs the
+    // JIT-consumed offsets earlier in this struct (see the _Static_asserts
+    // in jit.c).
+    bool msacc_enabled;
+    // One struct MsaccInfo per scheduler OS thread, appended once at thread
+    // start and never removed until VM shutdown.
+    struct SyncList msacc_info_list;
+#endif
 };
 
 enum SendMessageResult

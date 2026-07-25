@@ -664,6 +664,19 @@ void module_insert_line_ref_offset(Module *mod, struct ListHead *line_refs, uint
 bool module_find_line(Module *mod, size_t offset, uint32_t *line, size_t *filename_len, const uint8_t **filename);
 
 /**
+ * @brief Resolve a line_ref (the raw operand of an OP_LINE/OP_EXECUTABLE_LINE
+ * instruction, an index into the module's Line chunk -- not a source line
+ * number itself) to the actual source line number.
+ *
+ * @param mod the module
+ * @param line_ref the raw line_ref decoded from the instruction
+ * @param out_line on output, the resolved source line number, or 0 if
+ * line_ref is 0 (undefined location) or the module has no Line chunk
+ * @return \c true if line_ref was resolved (including the "undefined" case)
+ */
+bool module_resolve_line_ref(Module *mod, uint16_t line_ref, uint32_t *out_line);
+
+/**
  * @return true if the module has line information, false, otherwise.
  */
 static inline bool module_has_line_chunk(Module *mod)

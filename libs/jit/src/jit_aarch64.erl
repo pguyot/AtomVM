@@ -137,6 +137,12 @@
 ]).
 -endif.
 
+-ifdef(JIT_LINE_PROFILING).
+-export([
+    track_line/2
+]).
+-endif.
+
 -compile([warnings_as_errors]).
 
 -include_lib("jit.hrl").
@@ -361,6 +367,13 @@
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
 -define(CTX_EXTENDED_X_REGS, 16#F8).
+% ctx->current_line (see _Static_assert in jit.c); written by track_line/2,
+% only emitted when this jit app is built with -DJIT_LINE_PROFILING
+% (AVM_ENABLE_JIT_LINE_PROFILING in CMakeLists.txt). Last field of Context on
+% purpose (see the comment there): its offset depends on how many of the
+% earlier conditionally-compiled bitfield members are present, so it must be
+% measured for the exact build this jit.beam targets, not assumed portable.
+-define(CTX_CURRENT_LINE, 16#240).
 % struct Bif { struct ExportedFunction base; union { BifImpl0 bif0_ptr; ... }; }
 % base is at offset 0, so EXPORTED_FUNCTION_TO_BIF(f) == f and bif0_ptr is here.
 -define(BIF_BIF0_PTR, 16#8).
@@ -3249,6 +3262,26 @@ move_to_array_element(
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
     State2 = State1#state{stream = Stream1, regs = Regs1},
     free_native_register(State2, ValueReg).
+
+-ifdef(JIT_LINE_PROFILING).
+%%-----------------------------------------------------------------------------
+%% @doc Store the current source line into ctx->current_line, for
+%% atomvm:profile_stop/0's reduction-sampled hotness (see msacc.h). Emitted
+%% at every OP_EXECUTABLE_LINE boundary only when this jit app is built with
+%% -DJIT_LINE_PROFILING (AVM_ENABLE_JIT_LINE_PROFILING): a real per-line cost
+%% (one immediate load, one store) paid by every JIT-compiled module built
+%% this way, not gated at runtime, hence the separate build-time-only flag.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec track_line(state(), non_neg_integer()) -> state().
+track_line(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, LineNum) ->
+    Temp = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_aarch64_asm:mov(Temp, LineNum),
+    I2 = jit_aarch64_asm:str_w(Temp, {?CTX_REG, ?CTX_CURRENT_LINE}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
+    State0#state{stream = Stream1, regs = Regs1}.
+-endif.
 
 %%-----------------------------------------------------------------------------
 %% @doc Move a value (integer, vm register, pointer or native register) to a

@@ -131,6 +131,15 @@ if(NOT AVM_DISABLE_JIT OR AVM_ENABLE_PRECOMPILED)
     )
 endif()
 
+if(AVM_ENABLE_MSACC)
+    set(HEADER_FILES ${HEADER_FILES}
+        msacc.h
+    )
+    set(SOURCE_FILES ${SOURCE_FILES}
+        msacc.c
+    )
+endif()
+
 option(AVM_PEDANTIC_WARNINGS "Pedantic compiler warnings" ON)
 if (AVM_PEDANTIC_WARNINGS)
     set(MAYBE_PEDANTIC_FLAG "-pedantic")
@@ -189,6 +198,9 @@ if (AVM_DISABLE_SMP)
 endif()
 if (NOT AVM_DISABLE_TASK_DRIVER)
     target_compile_definitions(libAtomVM PUBLIC AVM_TASK_DRIVER_ENABLED)
+endif()
+if (AVM_ENABLE_MSACC)
+    target_compile_definitions(libAtomVM PUBLIC AVM_ENABLE_MSACC)
 endif()
 
 if (NOT AVM_DISABLE_JIT AND AVM_ENABLE_PRECOMPILED)
