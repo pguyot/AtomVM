@@ -148,15 +148,6 @@ struct GlobalContext
     struct ListHead waiting_processes;
     // This lock is held when manipulating the process list and also
     // when running native handlers.
-#ifndef AVM_NO_SMP
-    SpinLock processes_spinlock;
-#endif
-#ifdef AVM_TASK_DRIVER_ENABLED
-    // Queue of messages that could not be directly sent from a driver task
-    struct MessageQueueItem *ATOMIC message_queue;
-    // Queue of refc binaries that could not be directly ref decremented from a driver task
-    struct RefcBinaryQueueItem *ATOMIC refc_queue;
-#endif
     struct SyncList refc_binaries;
     struct SyncList processes_table;
     // Open-addressing hash index over processes_table (process id ->
@@ -199,7 +190,14 @@ struct GlobalContext
     struct ValuesHashTable *modules_table;
 
 #ifndef AVM_NO_SMP
+    SpinLock processes_spinlock;
     RWLock *modules_lock;
+#endif
+#ifdef AVM_TASK_DRIVER_ENABLED
+    // Queue of messages that could not be directly sent from a driver task
+    struct MessageQueueItem *ATOMIC message_queue;
+    // Queue of refc binaries that could not be directly ref decremented from a driver task
+    struct RefcBinaryQueueItem *ATOMIC refc_queue;
 #endif
     // modules_by_index lives at the top of this struct (see there).
     int modules_by_index_capacity;
