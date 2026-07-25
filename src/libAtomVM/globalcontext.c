@@ -117,6 +117,11 @@ GlobalContext *globalcontext_new(void)
     glb->phash2_atom_cache = NULL;
     glb->load_binary_emulated = false;
 
+#ifdef AVM_ENABLE_MSACC
+    glb->msacc_enabled = false;
+    synclist_init(&glb->msacc_info_list);
+#endif
+
     glb->last_process_id = 0;
 
     glb->atom_table = atom_table_new();

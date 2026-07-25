@@ -415,6 +415,9 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(test_ordering_0, 1),
     TEST_CASE_EXPECTED(test_ordering_1, 1),
     TEST_CASE(test_improper_cmp),
+#ifdef AVM_ENABLE_MSACC
+    TEST_CASE(profile_smoke),
+#endif
     TEST_CASE(test_binary_to_term),
     TEST_CASE(test_bitstring_to_list),
     TEST_CASE(test_selective_receive),

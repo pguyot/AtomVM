@@ -2407,6 +2407,15 @@ static bool module_get_line_ref(Module *mod, uint16_t line_ref, uint32_t *out_li
     return false;
 }
 
+bool module_resolve_line_ref(Module *mod, uint16_t line_ref, uint32_t *out_line)
+{
+    // Safe even without a Line chunk: line_refs_count is then 0, so the scan
+    // loop never runs and line_ref != 0 simply fails to resolve (line_ref ==
+    // 0, "undefined location", is handled unconditionally at the top).
+    uint16_t location_ix;
+    return module_get_line_ref(mod, line_ref, out_line, &location_ix);
+}
+
 static bool module_get_location(Module *mod, uint16_t location_ix, size_t *filename_len, const uint8_t **filename)
 {
     // 0 is module.erl

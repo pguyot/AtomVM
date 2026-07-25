@@ -72,6 +72,17 @@
 -define(DWARF_VARIABLES(_MMod, MSt, _Vars), MSt).
 -endif.
 
+% atomvm:profile_stop/0 native-code line tracking (see msacc.h). Independent
+% of JIT_DWARF: this emits a real runtime store on every line boundary (see
+% jit_aarch64:track_line/2), a per-line cost paid by every JIT-compiled
+% module built this way, not just while profiling -- hence the separate,
+% off-by-default gate (AVM_ENABLE_JIT_LINE_PROFILING in CMakeLists.txt).
+-ifdef(JIT_LINE_PROFILING).
+-define(TRACK_LINE(MMod, MSt, Line), MMod:track_line(MSt, Line)).
+-else.
+-define(TRACK_LINE(_MMod, MSt, _Line), MSt).
+-endif.
+
 -define(BOXED_FUN_SIZE, 3).
 -define(FLOAT_SIZE_64, 2).
 -define(FLOAT_SIZE_32, 3).
@@ -2212,8 +2223,9 @@ emit_pass(
     {Line, Rest1} = decode_literal(Rest0),
     ?TRACE("OP_LINE ~p\n", [Line]),
     MSt0 = ?DWARF_LINE(MMod, MSt, Line),
-    Offset = MMod:offset(MSt0),
-    emit_pass(Rest1, MMod, MSt0, State0#state{
+    MSt1 = ?TRACK_LINE(MMod, MSt0, Line),
+    Offset = MMod:offset(MSt1),
+    emit_pass(Rest1, MMod, MSt1, State0#state{
         line_offsets = [{Line, Offset} | AccLines],
         current_line = Line
     });
@@ -3131,8 +3143,9 @@ emit_pass(<<?OP_EXECUTABLE_LINE, Rest0/binary>>, MMod, MSt0, State0) ->
     {_LineNum, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_EXECUTABLE_LINE ~p, ~p\n", [_Location, _LineNum]),
     MSt2 = ?DWARF_LINE(MMod, MSt1, _Location),
-    ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    emit_pass(Rest2, MMod, MSt2, State0);
+    MSt3 = ?TRACK_LINE(MMod, MSt2, _LineNum),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    emit_pass(Rest2, MMod, MSt3, State0);
 % 184
 emit_pass(
     <<?OP_DEBUG_LINE, Rest0/binary>>,

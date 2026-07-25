@@ -216,6 +216,15 @@ _Static_assert(offsetof(Module, fun_table) == 0x30, "module->fun_table is 0x30 i
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->local_atoms_to_global_table is 0xD8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+// Used only when built with -DJIT_LINE_PROFILING (AVM_ENABLE_JIT_LINE_PROFILING,
+// jit_aarch64.erl only, see msacc.h), which requires AVM_ENABLE_MSACC (the
+// field this asserts only exists in that config). current_line is Context's
+// last field on purpose (its offset depends on which conditionally-compiled
+// bitfield members precede it), so this assert -- unlike the others here --
+// is not portable across build configs beyond what was actually measured.
+#ifdef AVM_ENABLE_MSACC
+_Static_assert(offsetof(Context, current_line) == 0x240, "ctx->current_line is 0x240 in jit/src/jit_aarch64.erl");
+#endif
 _Static_assert(offsetof(struct Bif, bif0_ptr) == 0x8, "bif->bif0_ptr is 0x8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 _Static_assert(offsetof(struct Bif, base) == 0x0, "bif->base is 0x0 (EXPORTED_FUNCTION_TO_BIF is identity)");
 #elif JIT_ARCH_TARGET == JIT_ARCH_ARMV6M || JIT_ARCH_TARGET == JIT_ARCH_ARM32 || JIT_ARCH_TARGET == JIT_ARCH_RISCV32 || JIT_ARCH_TARGET == JIT_ARCH_WASM32 || JIT_ARCH_TARGET == JIT_ARCH_XTENSA
