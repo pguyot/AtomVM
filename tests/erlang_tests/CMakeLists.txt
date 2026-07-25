@@ -458,6 +458,7 @@ compile_erlang(test_match)
 compile_erlang(test_ordering_0)
 compile_erlang(test_ordering_1)
 compile_erlang(test_improper_cmp)
+compile_erlang(profile_smoke)
 compile_erlang(test_bs)
 compile_erlang(test_bs_gettail)
 compile_erlang(test_bs_int)
@@ -1054,6 +1055,7 @@ set(erlang_test_beams
     test_ordering_0.beam
     test_ordering_1.beam
     test_improper_cmp.beam
+    profile_smoke.beam
     test_bs.beam
     test_bs_gettail.beam
     test_bs_int.beam
