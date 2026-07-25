@@ -418,6 +418,7 @@ struct Test tests[] = {
 #ifdef AVM_ENABLE_MSACC
     TEST_CASE(profile_smoke),
 #endif
+    TEST_CASE(test_atom_sort_key_tie),
     TEST_CASE(test_binary_to_term),
     TEST_CASE(test_bitstring_to_list),
     TEST_CASE(test_selective_receive),
