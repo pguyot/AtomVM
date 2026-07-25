@@ -652,9 +652,14 @@ call_primitive0(
 %% @param Args arguments to pass to the primitive
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
-call_primitive_last(StateP, Primitive, Args) ->
+call_primitive_last(StateP, Primitive, [_, jit_state | _] = Args) ->
     %% Control leaves through the primitive, which reads ctx->x.
-    call_primitive_last0(pending_clear_all(StateP), Primitive, Args).
+    call_primitive_last0(pending_clear_all(StateP), Primitive, Args);
+%% The windowed-ABI tail-call sequence rewrites the second argument
+%% (jit_state -> jit_state_tail_call), so reject every other shape in the
+%% function head before allocating registers or appending to the stream.
+call_primitive_last(_State, _Primitive, Args) ->
+    error({unsupported_call_primitive_last_args, Args}).
 
 call_primitive_last0(
     #state{
@@ -701,12 +706,7 @@ call_primitive_last0(
                     jit_regs:unreachable(State2#state.regs), ?AVAILABLE_REGS_MASK, 0
                 )
             }
-    end;
-%% The windowed-ABI tail-call sequence rewrites the second argument
-%% (jit_state -> jit_state_tail_call), so reject every other shape in the
-%% function head before allocating registers or appending to the stream.
-call_primitive_last(_State, _Primitive, Args) ->
-    error({unsupported_call_primitive_last_args, Args}).
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a return of a value if it's not equal to ctx.
