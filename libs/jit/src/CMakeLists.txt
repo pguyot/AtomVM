@@ -93,6 +93,10 @@ else()
     )
 endif()
 
+if (AVM_ENABLE_JIT_LINE_PROFILING)
+    list(APPEND erlc_flags -DJIT_LINE_PROFILING)
+endif()
+
 pack_precompiled_archive(jit ERLC_FLAGS ${erlc_flags} MODULES ${ERLANG_MODULES} PRECOMPILED_MODULES ${JIT_PRECOMPILED_MODULES})
 
 if (AVM_DISABLE_JIT_DWARF)

@@ -205,6 +205,17 @@ struct Context
     uintptr_t exception_class;
     term exception_reason;
     term exception_stacktrace;
+
+#ifdef AVM_ENABLE_MSACC
+    // Last executable_line/debug_line source line this process crossed (see
+    // msacc.h): updated by the interpreter's OP_EXECUTABLE_LINE case
+    // unconditionally, and by JIT-compiled code only when built with
+    // JIT_LINE_PROFILING (see jit_aarch64.erl:track_line/2) -- 0 otherwise.
+    // Last field on purpose: nothing else's offset is pinned against fields
+    // after it, so adding here never perturbs the JIT-consumed offsets
+    // earlier in this struct (see the _Static_asserts in jit.c).
+    uint32_t current_line;
+#endif
 };
 
 #ifndef TYPEDEF_CONTEXT

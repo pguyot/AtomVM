@@ -34,6 +34,8 @@ option(AVM_DISABLE_TASK_DRIVER "Disable task driver support." OFF)
 option(AVM_DISABLE_JIT "Disable just in time compilation." ON)
 option(AVM_ENABLE_PRECOMPILED "Enable execution of precompiled code, even if JIT is disabled." OFF)
 option(AVM_DISABLE_JIT_DWARF "Disable DWARF debug and profiling info for JIT." ON)
+option(AVM_ENABLE_MSACC "Enable microstate accounting and reduction-sampled hotness profiling (atomvm:profile_start/0, atomvm:profile_stop/0, see msacc.h). Adds a current_line field to every Context and bookkeeping fields to GlobalContext even when profiling is not running -- runtime overhead while disabled is a single branch, but the fields themselves are not free, so it is off by default." OFF)
+option(AVM_ENABLE_JIT_LINE_PROFILING "Emit source-line tracking in JIT-compiled code for atomvm:profile_stop/0 (see msacc.h); adds real per-line overhead to every JIT-compiled module, not just while profiling, so it is off by default. aarch64 only." OFF)
 option(AVM_USE_32BIT_FLOAT "Use 32 bit floats." OFF)
 option(AVM_JIT_RELOC "JIT native code calls primitives with direct loader-relocated branches instead of an indirect native-interface table load." OFF)
 option(AVM_VERBOSE_ABORT "Print module and line number on VM abort" OFF)
@@ -79,6 +81,23 @@ if (NOT AVM_DISABLE_JIT_DWARF)
     endif()
     if ("wasm32" IN_LIST AVM_PRECOMPILED_TARGETS)
         list(REMOVE_ITEM AVM_PRECOMPILED_TARGETS "wasm32")
+    endif()
+endif()
+
+# JIT line profiling (atomvm:profile_stop/0 native-code line tracking) is
+# only implemented in jit_aarch64.erl -- track_line/2 is not exported by the
+# other backends, so jit_precompile would crash compiling any other target
+# with a jit.beam built with -DJIT_LINE_PROFILING.
+if (AVM_ENABLE_JIT_LINE_PROFILING)
+    if (NOT AVM_JIT_TARGET_ARCH STREQUAL "aarch64")
+        message(FATAL_ERROR "AVM_ENABLE_JIT_LINE_PROFILING requires AVM_JIT_TARGET_ARCH=aarch64 (got ${AVM_JIT_TARGET_ARCH})")
+    endif()
+    set(AVM_PRECOMPILED_TARGETS "aarch64" CACHE STRING "" FORCE)
+    # track_line/2 writes ctx->current_line, which only exists in Context
+    # when AVM_ENABLE_MSACC is on (see src/libAtomVM/context.h).
+    if (NOT AVM_ENABLE_MSACC)
+        message(STATUS "AVM_ENABLE_JIT_LINE_PROFILING requires AVM_ENABLE_MSACC: enabling it")
+        set(AVM_ENABLE_MSACC ON CACHE BOOL "" FORCE)
     endif()
 endif()
 

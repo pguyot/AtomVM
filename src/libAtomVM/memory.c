@@ -30,6 +30,7 @@
 #include "globalcontext.h"
 #include "list.h"
 #include "memory.h"
+#include "msacc.h"
 #include "refc_binary.h"
 #include "tempstack.h"
 #include "term.h"
@@ -370,6 +371,7 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
             if (UNLIKELY(c->has_max_heap_size && target_size > c->max_heap_size)) {
                 return MEMORY_GC_DENIED_ALLOCATION;
             }
+            msacc_transition_current(c->global, MsaccStateGC);
             enum MemoryGCResult gc_result;
             if (alloc_mode == MEMORY_FORCE_SHRINK) {
                 gc_result = memory_full_gc(c, target_size, num_roots, roots);
@@ -383,6 +385,7 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
             if (UNLIKELY(gc_result != MEMORY_GC_OK)) {
                 // TODO: handle this more gracefully
                 TRACE("Unable to allocate memory for GC.  target_size=%zu\n", target_size);
+                msacc_transition_current(c->global, MsaccStateEmulator);
                 return MEMORY_GC_ERROR_FAILED_ALLOCATION;
             }
             // After a minor GC (gc_count > 0; every full GC path resets it to
@@ -425,12 +428,14 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
                     if (new_target_size != new_memory_size) {
                         if (UNLIKELY(MEMORY_SHRINK(c, new_target_size, num_roots, roots) != MEMORY_GC_OK)) {
                             TRACE("Unable to allocate memory for GC shrink.  new_memory_size=%zu new_free_space=%zu size=%u\n", new_memory_size, new_free_space, (unsigned int) size);
+                            msacc_transition_current(c->global, MsaccStateEmulator);
                             return MEMORY_GC_ERROR_FAILED_ALLOCATION;
                         }
                         c->heap.high_water_mark = c->heap.heap_ptr;
                     }
                 }
             }
+            msacc_transition_current(c->global, MsaccStateEmulator);
         }
     }
 

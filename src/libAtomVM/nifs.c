@@ -53,6 +53,7 @@
 #include "mailbox.h"
 #include "memory.h"
 #include "module.h"
+#include "msacc.h"
 #include "persistent_term.h"
 #include "phash2.h"
 #include "platform_nifs.h"
@@ -1197,6 +1198,11 @@ DEFINE_MATH_NIF(tanh)
 #define IF_HAVE_KILL(expr) (expr)
 #else
 #define IF_HAVE_KILL(expr) NULL
+#endif
+#ifdef AVM_ENABLE_MSACC
+#define IF_MSACC(expr) (expr)
+#else
+#define IF_MSACC(expr) NULL
 #endif
 #if HAVE_OPEN && HAVE_CLOSE && HAVE_LSEEK
 #define IF_HAVE_LSEEK(expr) (expr)

@@ -159,6 +159,10 @@ Context *context_new(GlobalContext *glb)
 
     ctx->exit_reason = NORMAL_ATOM;
 
+#ifdef AVM_ENABLE_MSACC
+    ctx->current_line = 0;
+#endif
+
     globalcontext_init_process(glb, ctx);
 
     return ctx;
