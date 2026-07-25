@@ -21,6 +21,7 @@
 #include "atom_table.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +90,14 @@ struct HNode
 };
 
 #if ATOM_TABLE_SORT_KEY_CACHE
+// The JIT aarch64 compare stub resolves atom-vs-atom ordering in generated
+// code by reading this field directly (see jit_aarch64.erl,
+// emit_compare_stub_body); keep in sync with ?HNODE_SORT_KEY there.
+_Static_assert(offsetof(struct HNode, sort_key) == 0x10,
+    "HNode->sort_key is 0x10 in jit/src/jit_aarch64.erl (compare stub)");
+#endif
+
+#if ATOM_TABLE_SORT_KEY_CACHE
 static inline uint64_t atom_sort_key(const uint8_t *atom_data, size_t atom_len)
 {
     uint64_t key = 0;
@@ -129,7 +138,10 @@ struct AtomTable
     struct HNode **buckets;
 
     // O(1) atom index -> node mapping, grown under the write lock and
-    // published with a release store for lock-free readers.
+    // published with a release store for lock-free readers. The JIT
+    // aarch64 compare stub reads this field directly (see jit_aarch64.erl,
+    // emit_compare_stub_body); keep in sync with ?ATOM_TABLE_INDEX_TO_NODE
+    // there -- see the _Static_assert right after this struct.
     struct HNode **index_to_node;
     size_t index_capacity;
 #ifdef ATOM_TABLE_LOCKFREE_READS
@@ -139,6 +151,11 @@ struct AtomTable
     struct HNodeGroup *first_node_group;
     struct HNodeGroup *last_node_group;
 };
+
+#if UINTPTR_MAX > UINT32_MAX
+_Static_assert(offsetof(struct AtomTable, index_to_node) == 0x28,
+    "AtomTable->index_to_node is 0x28 in jit/src/jit_aarch64.erl (compare stub)");
+#endif
 
 // Publication protocol: init_node() fills the node, the index slot is
 // written, then count is release-stored. A reader that acquire-loads count

@@ -363,6 +363,13 @@
 -define(MODULE_FUN_TABLE, 16#30).
 % module->local_atoms_to_global_table (see _Static_assert in jit.c).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#D8}).
+% global->atom_table, atom_table->index_to_node, HNode->sort_key (see
+% _Static_assert in jit.c); used by the inline atom-vs-atom compare-stub
+% fast path. 64-bit desktop layout only (generic_unix, SMP + task driver
+% enabled) -- the only configuration that builds the aarch64 backend.
+-define(GLOBAL_ATOM_TABLE, 16#430).
+-define(ATOM_TABLE_INDEX_TO_NODE, 16#28).
+-define(HNODE_SORT_KEY, 16#10).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
 -define(MODULE_IMPORTED_FUNCS, 16#90).
@@ -1111,15 +1118,25 @@ compare_stub_call(#state{} = State0, LeftReg, RightReg) ->
 %%   - tuples order by arity first, then leftmost unequal element pair;
 %%   - list order is decided by the leftmost unequal head pair, or by the
 %%     tails (nil is an immediate, so exhausted/improper tails fall out of
-%%     the loop into the scalar rules above).
-%% Undecidable pairs (atoms, anything boxed-vs-scalar, non-tuple boxes)
-%% report 0 and the site calls the C comparator.
+%%     the loop into the scalar rules above);
+%%   - two atoms order by their cached 8-byte name sort_key (ctx->global
+%%     ->atom_table->index_to_node[idx]->sort_key, read directly -- see
+%%     ?GLOBAL_ATOM_TABLE et al.), matching atom_table_cmp_using_atom_index's
+%%     fast path; a sort_key tie (shared 8-byte name prefix) is rare and
+%%     reports unresolved so the C comparator's memcmp fallback decides.
+%% Undecidable pairs (anything boxed-vs-scalar, non-tuple boxes, pids,
+%% ports, references, funs) report 0 and the site calls the C comparator.
 %%
 %% Register plan: ip0 = left cursor, ip1 = right cursor (status at exit);
-%% r7/r8 = box pointers; r9/r11 = primary tags -> headers/arity -> scan
-%% end / list tails; r10/r12 = scalar pair under test; r7-r12 saved.
-%% Every instruction is 4 bytes; branch offsets are in instruction units
-%% from the branch itself, asserted by the final size check.
+%% r7/r8 = box pointers, reused in the atom tail as left/right working
+%% registers (index -> node -> sort_key); r9/r11 = primary tags -> headers/
+%% arity -> scan end / list tails; r10/r12 = scalar pair under test;
+%% r7-r12 saved. Every instruction is 4 bytes; branch offsets are in
+%% instruction units from the branch itself, asserted by the final size
+%% check. Not contiguous: the atom tail (87..102) and the relocated
+%% both-small-int block (103..105, moved here to free 73..75 for the atom
+%% dispatch without renumbering 76..86's verdicts) sit after the epilogue;
+%% only reached by explicit branches, never by fall-through.
 -spec emit_compare_stub_body(state()) -> state().
 emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
     I = fun(N) -> N * 4 end,
@@ -1193,13 +1210,14 @@ emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = 
         (jit_aarch64_asm:mov(?IP0_REG, r9))/binary,
         (jit_aarch64_asm:mov(r17, r11))/binary,
         (jit_aarch64_asm:b(I(3 - 58)))/binary,
-        %% 59..72  SCALAR: unequal pair in r10/r12; two small ints order by
-        %% signed compare, small int vs other immediate is below, anything
-        %% else is undecided
+        %% 59..75  SCALAR: unequal pair in r10/r12; two small ints order by
+        %% signed compare (relocated to 103..105), small int vs other
+        %% immediate is below, two atoms fall to the tail at 87, anything
+        %% else undecided
         (jit_aarch64_asm:and_(r9, r10, r12))/binary,
         (jit_aarch64_asm:and_(r11, r9, ?TERM_IMMED_TAG_MASK))/binary,
         (jit_aarch64_asm:cmp(r11, ?TERM_INTEGER_TAG))/binary,
-        (jit_aarch64_asm:bcc(eq, I(73 - 62)))/binary,
+        (jit_aarch64_asm:bcc(eq, I(103 - 62)))/binary,
         (jit_aarch64_asm:and_(r11, r9, ?TERM_PRIMARY_MASK))/binary,
         (jit_aarch64_asm:cmp(r11, ?TERM_PRIMARY_IMMED))/binary,
         (jit_aarch64_asm:bcc(ne, I(82 - 65)))/binary,
@@ -1209,11 +1227,13 @@ emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = 
         (jit_aarch64_asm:and_(r11, r12, ?TERM_IMMED_TAG_MASK))/binary,
         (jit_aarch64_asm:cmp(r11, ?TERM_INTEGER_TAG))/binary,
         (jit_aarch64_asm:bcc(eq, I(80 - 71)))/binary,
-        (jit_aarch64_asm:b(I(82 - 72)))/binary,
-        %% 73..75  both small integers: signed tagged compare decides
-        (jit_aarch64_asm:cmp(r10, r12))/binary,
-        (jit_aarch64_asm:bcc(lt, I(78 - 74)))/binary,
-        (jit_aarch64_asm:b(I(80 - 75)))/binary,
+        %% 72..75  neither is a small int: is the left operand exactly an
+        %% atom? If not, undecided; if so, jump to the atom tail (87), which
+        %% checks the right operand too.
+        (jit_aarch64_asm:and_(r11, r10, ?TERM_IMMED2_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_IMMED2_ATOM))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 74)))/binary,
+        (jit_aarch64_asm:b(I(87 - 75)))/binary,
         %% 76..82  verdicts
         (jit_aarch64_asm:mov(r17, ?TERM_EQUALS))/binary,
         (jit_aarch64_asm:b(I(83 - 77)))/binary,
@@ -1226,11 +1246,44 @@ emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = 
         (jit_aarch64_asm:ldp(r11, r12, {sp}, 16))/binary,
         (jit_aarch64_asm:ldp(r9, r10, {sp}, 16))/binary,
         (jit_aarch64_asm:ldp(r7, r8, {sp}, 16))/binary,
-        (jit_aarch64_asm:ret())/binary
+        (jit_aarch64_asm:ret())/binary,
+        %% 87..102  ATOM TAIL: reached from 75 with r10/r12 confirmed
+        %% TERM_PRIMARY_IMMED, not TERM_INTEGER_TAG, and r10 confirmed an
+        %% atom. Check r12 too, then compare both atoms' cached sort_key,
+        %% reached by the address-dependency chain ctx -> global ->
+        %% atom_table -> index_to_node[idx] -> sort_key (same idiom, and
+        %% same soundness argument, as the plain-load chain in
+        %% return_cross_module: each load's address depends on the previous
+        %% load's value, and an atom_index already held in a live term
+        %% cannot have been published more recently than whatever channel
+        %% delivered that term to this scheduler -- no acquire needed, and
+        %% no count bound check needed since the index is already known
+        %% valid). r7/r8 hold left/right index, then node, then sort_key.
+        (jit_aarch64_asm:and_(r11, r12, ?TERM_IMMED2_TAG_MASK))/binary,
+        (jit_aarch64_asm:cmp(r11, ?TERM_IMMED2_ATOM))/binary,
+        (jit_aarch64_asm:bcc(ne, I(82 - 89)))/binary,
+        (jit_aarch64_asm:lsr(r7, r10, ?TERM_IMMED2_TAG_SIZE))/binary,
+        (jit_aarch64_asm:lsr(r8, r12, ?TERM_IMMED2_TAG_SIZE))/binary,
+        (jit_aarch64_asm:ldr(r9, {?CTX_REG, 0}))/binary,
+        (jit_aarch64_asm:ldr(r9, {r9, ?GLOBAL_ATOM_TABLE}))/binary,
+        (jit_aarch64_asm:ldr(r11, {r9, ?ATOM_TABLE_INDEX_TO_NODE}))/binary,
+        (jit_aarch64_asm:ldr(r7, {r11, r7, lsl, 3}))/binary,
+        (jit_aarch64_asm:ldr(r8, {r11, r8, lsl, 3}))/binary,
+        (jit_aarch64_asm:ldr(r7, {r7, ?HNODE_SORT_KEY}))/binary,
+        (jit_aarch64_asm:ldr(r8, {r8, ?HNODE_SORT_KEY}))/binary,
+        (jit_aarch64_asm:cmp(r7, r8))/binary,
+        (jit_aarch64_asm:bcc(eq, I(82 - 100)))/binary,
+        (jit_aarch64_asm:bcc(cc, I(78 - 101)))/binary,
+        (jit_aarch64_asm:b(I(80 - 102)))/binary,
+        %% 103..105  both small integers (relocated from 73..75, reached
+        %% from 62): signed tagged compare decides
+        (jit_aarch64_asm:cmp(r10, r12))/binary,
+        (jit_aarch64_asm:bcc(lt, I(78 - 104)))/binary,
+        (jit_aarch64_asm:b(I(80 - 105)))/binary
     >>,
     %% Every instruction above is one 4-byte word; the branch offsets are
     %% computed from the instruction indices in the comments.
-    87 = byte_size(Body) div 4,
+    106 = byte_size(Body) div 4,
     0 = byte_size(Body) rem 4,
     State0#state{stream = StreamModule:append(Stream0, Body)}.
 
