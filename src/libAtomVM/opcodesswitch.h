@@ -1980,9 +1980,11 @@ schedule_in:
                 register Context *pin_ctx __asm__("x21") = ctx;
                 register term *pin_hp __asm__("x22") = ctx->heap.heap_ptr;
                 register term *pin_e __asm__("x23") = ctx->e;
-                // The entry pointer rides in x24 (callee-saved, so no
-                // overlap with the caller-saved clobber list is possible).
-                register ModuleNativeEntryPoint entry_reg __asm__("x24") = native_pc;
+                // The entry pointer rides in x1 (caller-saved: dead the
+                // moment blr reads it, so it does not need its own clobber
+                // exemption). x24 is reserved for the pinned reduction
+                // count below.
+                register ModuleNativeEntryPoint entry_reg __asm__("x1") = native_pc;
                 register Context *result_reg __asm__("x0");
 // On Darwin x18 is reserved (never allocated, clobber listing warns); on
 // other aarch64 platforms it is a temporary the callee may use.
@@ -2005,19 +2007,28 @@ schedule_in:
                     // current and reloads them after non-cache-safe calls.
                     "ldp x25, x26, [x21, #88]\n\t"
                     "ldp x27, x28, [x21, #104]\n\t"
-                    "blr x24\n\t"
+                    // Seed the pinned remaining-reductions register (x24,
+                    // offset 0x10, asserted in jit.c) from jit_state: unlike
+                    // x25-x28, generated code does NOT keep memory
+                    // authoritative on every decrement (that is the whole
+                    // point of pinning it), so it must be flushed back
+                    // explicitly at the few points that can expose it to C
+                    // (call_primitive_last, the *_direct wrappers) instead
+                    // of being reloaded here on return.
+                    "ldr w24, [x19, #0x10]\n\t"
+                    "blr x1\n\t"
                     "1:"
                     : "=r"(result_reg), "+r"(pin_js), "+r"(pin_p), "+r"(pin_ctx),
                       "+r"(pin_hp), "+r"(pin_e), "+r"(entry_reg)
                     :
-                    : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
+                    : "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
                       "x11", "x12", "x13", "x14", "x15", "x16", "x17",
-                      // x25-x28: allocatable callee-saved registers of the
+                      // x24-x28: allocatable callee-saved registers of the
                       // JIT ABI. Declaring them clobbered makes the compiler
                       // save them once per C->native crossing, so generated
                       // code uses them with no prologue and its register
                       // cache survives C primitive calls in them.
-                      "x25", "x26", "x27", "x28",
+                      "x24", "x25", "x26", "x27", "x28",
                       AVM_JIT_AARCH64_X18_CLOBBER "x30",
                       "memory", "cc",
                       "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
