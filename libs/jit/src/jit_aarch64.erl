@@ -379,8 +379,8 @@
 % _Static_assert in jit.c); used by the inline atom-vs-atom compare-stub
 % fast path. 64-bit desktop layout only (generic_unix, SMP + task driver
 % enabled) -- the only configuration that builds the aarch64 backend.
--define(GLOBAL_ATOM_TABLE, 16#430).
--define(ATOM_TABLE_INDEX_TO_NODE, 16#28).
+-define(GLOBAL_ATOM_TABLE, 16#418).
+-define(ATOM_TABLE_INDEX_TO_NODE, 16#20).
 -define(HNODE_SORT_KEY, 16#10).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.

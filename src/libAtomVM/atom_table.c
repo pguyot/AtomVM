@@ -132,9 +132,6 @@ struct AtomTable
     size_t capacity;
     size_t count;
     int last_node_group_avail;
-#ifndef AVM_NO_SMP
-    RWLock *lock;
-#endif
     struct HNode **buckets;
 
     // O(1) atom index -> node mapping, grown under the write lock and
@@ -147,14 +144,17 @@ struct AtomTable
 #ifdef ATOM_TABLE_LOCKFREE_READS
     struct RetiredIndexArray *retired_index_arrays;
 #endif
+#ifndef AVM_NO_SMP
+    RWLock *lock;
+#endif
 
     struct HNodeGroup *first_node_group;
     struct HNodeGroup *last_node_group;
 };
 
 #if UINTPTR_MAX > UINT32_MAX
-_Static_assert(offsetof(struct AtomTable, index_to_node) == 0x28,
-    "AtomTable->index_to_node is 0x28 in jit/src/jit_aarch64.erl (compare stub)");
+_Static_assert(offsetof(struct AtomTable, index_to_node) == 0x20,
+    "AtomTable->index_to_node is 0x20 in jit/src/jit_aarch64.erl (compare stub)");
 #endif
 
 // Publication protocol: init_node() fills the node, the index slot is
