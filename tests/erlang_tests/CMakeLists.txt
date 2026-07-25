@@ -459,6 +459,7 @@ compile_erlang(test_ordering_0)
 compile_erlang(test_ordering_1)
 compile_erlang(test_improper_cmp)
 compile_erlang(profile_smoke)
+compile_erlang(test_atom_sort_key_tie)
 compile_erlang(test_bs)
 compile_erlang(test_bs_int)
 compile_erlang(test_bs_int_any_flags)
@@ -1053,6 +1054,7 @@ set(erlang_test_beams
     test_ordering_1.beam
     test_improper_cmp.beam
     profile_smoke.beam
+    test_atom_sort_key_tie.beam
     test_bs.beam
     test_bs_int.beam
     test_bs_int_any_flags.beam
