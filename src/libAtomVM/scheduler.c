@@ -25,6 +25,7 @@
 #include "debug.h"
 #include "list.h"
 #include "mailbox.h"
+#include "msacc.h"
 #include "smp.h"
 #include "sys.h"
 #include "utils.h"
@@ -301,7 +302,9 @@ static Context *scheduler_run0(GlobalContext *global)
 #endif
             if (result == NULL && !global->scheduler_stop_all) {
                 // The poller may block waiting for events.
+                msacc_transition_current(global, MsaccStateSleep);
                 sys_poll_events(global, wait_timeout);
+                msacc_transition_current(global, MsaccStateScheduler);
             } else {
                 sys_poll_events(global, SYS_POLL_EVENTS_DO_NOT_WAIT);
             }

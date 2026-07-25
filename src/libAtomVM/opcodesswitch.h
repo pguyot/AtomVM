@@ -34,6 +34,7 @@
 #include "intn.h"
 #include "jit.h"
 #include "mailbox.h"
+#include "msacc.h"
 #include "native_call.h"
 #include "nifs.h"
 #include "scheduler.h"
@@ -704,12 +705,26 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 #endif
 #endif
 
+// atomvm:profile_stop/0 hotness sampling (see msacc.h): a no-op call when
+// not built with AVM_ENABLE_MSACC, so every SCHEDULE_* site below can call
+// it unconditionally instead of repeating an #ifdef at each one. Must run
+// while ctx->saved_module/saved_ip (or saved_function_ptr) still describe
+// the position this process is yielding from -- i.e. right after the
+// SCHEDULE_* macro updates them and before the process actually stops
+// running (scheduler_next/scheduler_wait).
+#ifdef AVM_ENABLE_MSACC
+#define MSACC_SAMPLE_AND_TRANSITION() msacc_sample_and_transition(ctx->global, msacc_info, ctx)
+#else
+#define MSACC_SAMPLE_AND_TRANSITION() ((void) 0)
+#endif
+
 #if AVM_NO_JIT
 
 #define SCHEDULE_NEXT(restore_mod, restore_to) \
     {                                                                                             \
         ctx->saved_ip = restore_to;                                                               \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_next(ctx->global, ctx);                                                   \
         goto schedule_in;                                                                         \
     }
@@ -718,6 +733,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
     {                                                                                             \
         ctx->saved_ip = pc;                                                                       \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -726,6 +742,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
     {                                                                                             \
         ctx->saved_ip = restore_to;                                                               \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -737,6 +754,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 #define SCHEDULE_WAIT_ANY(restore_mod) \
     {                                                                                             \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -745,6 +763,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
     {                                                                                             \
         ctx->saved_function_ptr = native_pc;                                                      \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -757,6 +776,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         assert(restore_mod->native_code == NULL);                                                 \
         ctx->saved_ip = restore_to;                                                               \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_next(ctx->global, ctx);                                                   \
         goto schedule_in;                                                                         \
     }
@@ -768,6 +788,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         }                                                                                         \
         /* For JIT: saved_function_ptr already has correct encoding */                            \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -777,6 +798,7 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         assert(restore_mod->native_code == NULL);                                                 \
         ctx->saved_ip = restore_to;                                                               \
         ctx->saved_module = restore_mod;                                                          \
+        MSACC_SAMPLE_AND_TRANSITION();                                                            \
         ctx = scheduler_wait(ctx);                                                                \
         goto schedule_in;                                                                         \
     }
@@ -1742,6 +1764,14 @@ HOT_FUNC int scheduler_entry_point(GlobalContext *glb)
     // native_call.h); zero-initialized means empty.
     struct SchedulerCaches scheduler_caches = { 0 };
 
+#ifdef AVM_ENABLE_MSACC
+    // Registers this OS thread's accounting block for msacc_transition_current
+    // (see msacc.h) to find via thread-local storage, and is also passed
+    // explicitly to MSACC_SAMPLE_AND_TRANSITION at every SCHEDULE_* site
+    // below (avoids a thread-local lookup on every yield).
+    struct MsaccInfo *msacc_info = msacc_thread_init(glb);
+#endif
+
     Context *ctx = scheduler_run(glb);
 
 // This is where loop starts after context switching.
@@ -2009,6 +2039,16 @@ schedule_in:
                 goto schedule_in;
             }
             if (UNLIKELY(remaining_reductions == 0)) {
+#ifdef AVM_ENABLE_MSACC
+                // Does not go through SCHEDULE_NEXT/WAIT (same ctx, just out
+                // of reductions): ctx->saved_module/saved_function_ptr are
+                // not necessarily current here (they are the interpreter's
+                // own resumption bookkeeping), but jit_state already has the
+                // right module/position for where generated code is about to
+                // resume (see msacc_sample_position_and_transition's doc).
+                msacc_sample_position_and_transition(
+                    ctx->global, msacc_info, jit_state.module, jit_state.continuation_pc, ctx->current_line);
+#endif
                 goto schedule_in;
             }
             if (jit_state.module != mod) {
