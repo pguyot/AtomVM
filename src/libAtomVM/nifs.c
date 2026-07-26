@@ -8204,6 +8204,9 @@ static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
 // two already-sorted key sequences with a single result allocation, instead of
 // the O(m) path-copying inserts a fold of Map2 into Map1 would do. This mirrors
 // BEAM, where maps:merge/2 is the maps_merge_2 BIF rather than Erlang code.
+// Above this, merging entry by entry stops beating a single rebuild.
+#define MAPS_MERGE_SMALL_MAX 8
+
 static term nif_maps_merge(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
@@ -8233,6 +8236,42 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     }
     if (n1 == 0) {
         return m2;
+    }
+
+    // When one operand is tiny and the other is tree-backed, insert the small
+    // side's entries into the big tree instead of materialising both operands
+    // and rebuilding the whole result: O(k log n) path copies, no scratch
+    // buffers. Sets built by repeated union hit this constantly.
+    int small = (n1 <= n2) ? n1 : n2;
+    term big = (n1 <= n2) ? m2 : m1;
+    if (small <= MAPS_MERGE_SMALL_MAX && term_is_map_tree(big)) {
+        size_t big_size = (size_t) term_get_map_size(big);
+        size_t need = TERM_MAP_TREE_BOXED_ARITY + 1;
+        for (int k = 0; k < small; k++) {
+            need += termtree_put_heap_size(big_size + (size_t) k);
+        }
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 2, argv, MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        // The reservation may have moved both operands.
+        m1 = argv[0];
+        m2 = argv[1];
+        bool small_is_m2 = (n1 > n2);
+        term src = small_is_m2 ? m2 : m1;
+        term root = term_get_map_tree_root(small_is_m2 ? m1 : m2);
+        for (int k = 0; k < small; k++) {
+            term key = term_get_map_key(src, (avm_uint_t) k);
+            // Map2 wins on shared keys, so entries taken from Map1 must not
+            // overwrite what Map2 already holds.
+            if (!small_is_m2
+                && !term_is_invalid_term(termtree_get(root, key, glb))) {
+                continue;
+            }
+            root = termtree_put(
+                &ctx->heap, root, key, term_get_map_value(src, (avm_uint_t) k), glb);
+        }
+        return term_alloc_map_tree(&ctx->heap, root, termtree_size(root));
     }
 
     // Materialize tree-backed operands once (O(n)) so the walk below is O(1)
