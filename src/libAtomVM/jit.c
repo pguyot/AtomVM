@@ -220,7 +220,7 @@ _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0xD8, "module->l
 // the aarch64 backend): ctx->global->atom_table->index_to_node[idx]->sort_key.
 // struct AtomTable/HNode are opaque here; their field offsets are asserted
 // in atom_table.c, where the struct definitions are visible.
-_Static_assert(offsetof(GlobalContext, atom_table) == 0x418, "global->atom_table is 0x418 in jit/src/jit_aarch64.erl");
+_Static_assert(offsetof(GlobalContext, atom_table) == 0x8, "global->atom_table is 0x8 in jit/src/jit_{aarch64,x86_64}.erl");
 _Static_assert(offsetof(Context, extended_x_regs) == 0xF8, "ctx->extended_x_regs is 0xF8 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
 // Used only when built with -DJIT_LINE_PROFILING (AVM_ENABLE_JIT_LINE_PROFILING,
 // jit_aarch64.erl only, see msacc.h), which requires AVM_ENABLE_MSACC (the

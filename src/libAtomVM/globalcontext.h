@@ -143,6 +143,15 @@ struct GlobalContext
     // (config-gated fields elsewhere in this struct would shift any other
     // offset); pinned by a _Static_assert in jit.c.
     Module *ATOMIC *ATOMIC modules_by_index;
+    // Second field on purpose, for the same reason as modules_by_index:
+    // generated native code reads it at a fixed offset (the compare stub's
+    // atom-vs-atom fast path walks global->atom_table->index_to_node[idx]).
+    // Every other member of this struct is preceded by at least one
+    // config-gated field (SMP locks, the task-driver queues, the shard
+    // array whose element size depends on SMP_ATOMIC_RWLOCK), so only the
+    // first two offsets are stable across build configurations. Pinned by
+    // a _Static_assert in jit.c.
+    struct AtomTable *atom_table;
     struct ListHead ready_processes;
     struct ListHead running_processes;
     struct ListHead waiting_processes;
@@ -186,7 +195,7 @@ struct GlobalContext
 
     int32_t last_process_id;
 
-    struct AtomTable *atom_table;
+    // atom_table lives at the top of this struct (see there).
     struct ValuesHashTable *modules_table;
 
 #ifndef AVM_NO_SMP

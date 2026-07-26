@@ -377,9 +377,9 @@
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#D8}).
 % global->atom_table, atom_table->index_to_node, HNode->sort_key (see
 % _Static_assert in jit.c); used by the inline atom-vs-atom compare-stub
-% fast path. 64-bit desktop layout only (generic_unix, SMP + task driver
-% enabled) -- the only configuration that builds the aarch64 backend.
--define(GLOBAL_ATOM_TABLE, 16#418).
+% fast path. atom_table is the second field of GlobalContext on purpose, so
+% this offset holds in every build configuration.
+-define(GLOBAL_ATOM_TABLE, 16#8).
 -define(ATOM_TABLE_INDEX_TO_NODE, 16#20).
 -define(HNODE_SORT_KEY, 16#10).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
