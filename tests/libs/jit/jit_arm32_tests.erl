@@ -1105,6 +1105,117 @@ move_to_array_element_test_() ->
                         "   4:	e583600c 	str	r6, [r3, #12]"
                     >>,
                     ?assertStream(arm32, Dump, Stream)
+                end),
+                %% move_to_array_element/4: x_reg to reg[1024], past the 4095
+                %% byte str immediate: the offset is built in a register
+                ?_test(begin
+                    State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r3, 1024),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump =
+                        <<
+                            "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                            "   4:	e3a05004 	mov	r5, #4\n"
+                            "   8:	e0855003 	add	r5, r5, r3\n"
+                            "   c:	e5856ffc 	str	r6, [r5, #4092]	@ 0xffc"
+                        >>,
+                    ?assertStream(arm32, Dump, Stream)
+                end),
+                %% move_to_array_element/5: y_reg to reg[1020+4]
+                ?_test(begin
+                    State1 = ?BACKEND:move_to_array_element(State0, {y_reg, 1}, r3, 1020, 4),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump =
+                        <<
+                            "   0:	e5986004 	ldr	r6, [r8, #4]\n"
+                            "   4:	e3a05004 	mov	r5, #4\n"
+                            "   8:	e0855003 	add	r5, r5, r3\n"
+                            "   c:	e5856ffc 	str	r6, [r5, #4092]	@ 0xffc"
+                        >>,
+                    ?assertStream(arm32, Dump, Stream)
+                end)
+            ]
+        end}.
+
+%% Array accesses past the 4095-byte ldr/str immediate range: every one of
+%% these has a separate "large offset" clause that the test-suite corpus never
+%% reaches (no module has a 1024-element tuple), so they are only exercised
+%% here.
+large_array_offset_test_() ->
+    {setup,
+        fun() ->
+            ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0))
+        end,
+        fun(State0) ->
+            [
+                %% get_array_element: reg[1024] to a new native register
+                ?_test(begin
+                    {State1, Reg} = ?BACKEND:get_array_element(State0, r4, 1024),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump =
+                        <<
+                            "   0:	e3a05004 	mov	r5, #4\n"
+                            "   4:	e0855004 	add	r5, r5, r4\n"
+                            "   8:	e5956ffc 	ldr	r6, [r5, #4092]	@ 0xffc"
+                        >>,
+                    ?assertStream(arm32, Dump, Stream),
+                    ?assertEqual(r6, Reg)
+                end),
+                %% get_array_element: {free, reg}[1024]
+                ?_test(begin
+                    {State1, Reg} = ?BACKEND:get_array_element(State0, {free, r3}, 1024),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump =
+                        <<
+                            "   0:	e3a06004 	mov	r6, #4\n"
+                            "   4:	e0833006 	add	r3, r3, r6\n"
+                            "   8:	e5933ffc 	ldr	r3, [r3, #4092]	@ 0xffc"
+                        >>,
+                    ?assertStream(arm32, Dump, Stream),
+                    ?assertEqual(r3, Reg)
+                end),
+                %% move_array_element: reg[1024] to x_reg
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 1024, {x_reg, 0}, <<
+                        "   0:	e3a06004 	mov	r6, #4\n"
+                        "   4:	e0866003 	add	r6, r6, r3\n"
+                        "   8:	e5965ffc 	ldr	r5, [r6, #4092]	@ 0xffc\n"
+                        "   c:	e587502c 	str	r5, [r7, #44]	@ 0x2c"
+                    >>)
+                end),
+                %% move_array_element: reg[1024] to ptr
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 1024, {ptr, r5}, <<
+                        "   0:	e3a06004 	mov	r6, #4\n"
+                        "   4:	e0866003 	add	r6, r6, r3\n"
+                        "   8:	e5966ffc 	ldr	r6, [r6, #4092]	@ 0xffc\n"
+                        "   c:	e5856000 	str	r6, [r5]"
+                    >>)
+                end),
+                %% move_array_element: reg[1024] to y_reg
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 1024, {y_reg, 2}, <<
+                        "   0:	e3a05004 	mov	r5, #4\n"
+                        "   4:	e0855003 	add	r5, r5, r3\n"
+                        "   8:	e5955ffc 	ldr	r5, [r5, #4092]	@ 0xffc\n"
+                        "   c:	e5885008 	str	r5, [r8, #8]"
+                    >>)
+                end),
+                %% move_array_element: reg[1024] to a native register
+                ?_test(begin
+                    move_array_element_test0(State0, r3, 1024, r5, <<
+                        "   0:	e3a06004 	mov	r6, #4\n"
+                        "   4:	e0866003 	add	r6, r6, r3\n"
+                        "   8:	e5965ffc 	ldr	r5, [r6, #4092]	@ 0xffc"
+                    >>)
+                end),
+                %% move_array_element: {free, reg}[1024] to y_reg
+                ?_test(begin
+                    move_array_element_test0(State0, {free, r3}, 1024, {y_reg, 2}, <<
+                        "   0:	e3a05004 	mov	r5, #4\n"
+                        "   4:	e0855003 	add	r5, r5, r3\n"
+                        "   8:	e5953ffc 	ldr	r3, [r5, #4092]	@ 0xffc\n"
+                        "   c:	e5883008 	str	r3, [r8, #8]"
+                    >>)
                 end)
             ]
         end}.
@@ -1506,3 +1617,320 @@ jump_table_large_labels_test() ->
     State1 = ?BACKEND:jump_table(State0, 512),
     Stream = ?BACKEND:stream(State1),
     ?assertEqual((512 + 1) * 8, byte_size(Stream)).
+
+%% mul/3 has a shift-and-add clause per constant the compiler emits (tuple and
+%% record index scaling), plus a generic fallback for everything else. Only the
+%% powers of two show up in the test corpus, so the rest are pinned here.
+mul_constants_test_() ->
+    [
+        {"mul by 1", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 1),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<"   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c">>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 2", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 2),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06086 	lsl	r6, r6, #1"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 3", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 3),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05086 	lsl	r5, r6, #1\n"
+                    "   8:	e0856006 	add	r6, r5, r6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 4", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 4),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06106 	lsl	r6, r6, #2"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 5", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 5),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05106 	lsl	r5, r6, #2\n"
+                    "   8:	e0856006 	add	r6, r5, r6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 6", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 6),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05086 	lsl	r5, r6, #1\n"
+                    "   8:	e0856006 	add	r6, r5, r6\n"
+                    "   c:	e1a06086 	lsl	r6, r6, #1"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 7", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 7),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05186 	lsl	r5, r6, #3\n"
+                    "   8:	e0456006 	sub	r6, r5, r6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 8", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 8),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06186 	lsl	r6, r6, #3"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 9", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 9),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05186 	lsl	r5, r6, #3\n"
+                    "   8:	e0856006 	add	r6, r5, r6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 10", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 10),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05106 	lsl	r5, r6, #2\n"
+                    "   8:	e0856006 	add	r6, r5, r6\n"
+                    "   c:	e1a06086 	lsl	r6, r6, #1"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 15", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 15),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a05206 	lsl	r5, r6, #4\n"
+                    "   8:	e0456006 	sub	r6, r5, r6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 16", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 16),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06206 	lsl	r6, r6, #4"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 32", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 32),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06286 	lsl	r6, r6, #5"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 64", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 64),
+            State2 = ?BACKEND:flush(State2x),
+            Dump = <<
+                "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                "   4:	e1a06306 	lsl	r6, r6, #6"
+            >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 100", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 100),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3a05064 	mov	r5, #100	@ 0x64\n"
+                    "   8:	e0060596 	mul	r6, r6, r5"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"mul by 12345", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2x = ?BACKEND:mul(State1, Reg, 12345),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e59f5000 	ldr	r5, [pc]	@ 0xc\n"
+                    "   8:	e0060596 	mul	r6, r6, r5\n"
+                    "   c:	00003039 	andeq	r3, r0, r9, lsr r0"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end}
+    ].
+
+%% and_/3 with immediates outside the ARM rotated-imm12 encoding: the mask goes
+%% through mov_immediate (16#FFFFFF and the small negatives have their own
+%% encodings, via BIC).
+and_large_immediate_test_() ->
+    [
+        {"and_ with 16#FFFFFF", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2x, _} = ?BACKEND:and_(State1, {free, Reg}, 16#FFFFFF),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e1a06406 	lsl	r6, r6, #8\n"
+                    "   8:	e1a06426 	lsr	r6, r6, #8"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"and_ with -16", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2x, _} = ?BACKEND:and_(State1, {free, Reg}, -16),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3a0500f 	mov	r5, #15\n"
+                    "   8:	e1c66005 	bic	r6, r6, r5"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"and_ with -256", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2x, _} = ?BACKEND:and_(State1, {free, Reg}, -256),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3a050ff 	mov	r5, #255	@ 0xff\n"
+                    "   8:	e1c66005 	bic	r6, r6, r5"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"and_ with 16#12345", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2x, _} = ?BACKEND:and_(State1, {free, Reg}, 16#12345),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e59f5000 	ldr	r5, [pc]	@ 0xc\n"
+                    "   8:	e0066005 	and	r6, r6, r5\n"
+                    "   c:	00012345 	andeq	r2, r1, r5, asr #6"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end},
+        {"and_ with 16#7FFFFFFF", fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2x, _} = ?BACKEND:and_(State1, {free, Reg}, 16#7FFFFFFF),
+            State2 = ?BACKEND:flush(State2x),
+            Dump =
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3e05102 	mvn	r5, #-2147483648	@ 0x80000000\n"
+                    "   8:	e0066005 	and	r6, r6, r5"
+                >>,
+            ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
+        end}
+    ].
+
+%
+
+%% More large-operand shapes, both emitted by jit.erl: a freed base register
+%% (bs_match/bs_get_integer) and an immediate value (put_map key/value).
+large_operand_extra_test_() ->
+    [
+        {"get_array_element at index 1024 with a freed base", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, {free, Base}, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3a05004 	mov	r5, #4\n"
+                    "   8:	e0866005 	add	r6, r6, r5\n"
+                    "   c:	e5966ffc 	ldr	r6, [r6, #4092]	@ 0xffc"
+                >>
+            )
+        end},
+        {"move_to_array_element of an immediate at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, 42, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
+                    "   4:	e3a0502a 	mov	r5, #42	@ 0x2a\n"
+                    "   8:	e3a04004 	mov	r4, #4\n"
+                    "   c:	e0844006 	add	r4, r4, r6\n"
+                    "  10:	e5845ffc 	str	r5, [r4, #4092]	@ 0xffc"
+                >>
+            )
+        end}
+    ].
+
+large_operand_state() ->
+    ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
+
+large_operand_dump(State, Dump) ->
+    ?assertStream(arm32, Dump, ?BACKEND:stream(?BACKEND:flush(State))).

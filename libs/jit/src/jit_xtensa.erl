@@ -86,7 +86,9 @@
     div_/3,
     rem_/3,
     supports_div/1,
-    supports_fp/1
+    supports_fp/1,
+    set_vm_record_type/3,
+    get_vm_record_type/2
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -2534,7 +2536,7 @@ move_array_element(
     State = pending_elide_prev(State0, X),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = jit_xtensa_asm:l32i(Temp, Reg, Index * 4),
+    I1 = array_load_code(Temp, Reg, Index * 4),
     {BaseReg, Off} = ?X_REG(X),
     I2 = jit_xtensa_asm:s32i(Temp, BaseReg, Off),
     Stream1 = StreamModule:append(State#state.stream, <<I1/binary, I2/binary>>),
@@ -2549,7 +2551,7 @@ move_array_element(
 ) when is_atom(Reg) andalso is_integer(Index) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = jit_xtensa_asm:l32i(Temp, Reg, Index * 4),
+    I1 = array_load_code(Temp, Reg, Index * 4),
     I2 = jit_xtensa_asm:s32i(Temp, Dest, 0),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
@@ -2565,7 +2567,7 @@ move_array_element(
     Avail2 = Avail band (bnot reg_bit(Temp1)),
     Temp2 = first_avail(Avail2),
     AT = Avail2 band (bnot reg_bit(Temp2)),
-    I1 = jit_xtensa_asm:l32i(Temp2, Reg, Index * 4),
+    I1 = array_load_code(Temp2, Reg, Index * 4),
     YCode = str_y_reg(Temp2, Y, Temp1, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -2581,7 +2583,7 @@ move_array_element(
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp)),
-    I1 = jit_xtensa_asm:l32i(Reg, Reg, Index * 4),
+    I1 = array_load_code(Reg, Reg, Index * 4),
     YCode = str_y_reg(Reg, Y, Temp, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -2591,7 +2593,7 @@ move_array_element(
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0} = State, Reg, Index, Dest
 ) when is_atom(Dest) andalso is_integer(Index) ->
-    I1 = jit_xtensa_asm:l32i(Dest, Reg, Index * 4),
+    I1 = array_load_code(Dest, Reg, Index * 4),
     Stream1 = StreamModule:append(Stream0, I1),
     State#state{stream = Stream1};
 move_array_element(
@@ -2676,6 +2678,30 @@ move_array_element(
     state(), xtensa_register() | {free, xtensa_register()}, non_neg_integer()
 ) ->
     {state(), xtensa_register()}.
+%% l32i/s32i encode the displacement as an 8-bit value scaled by 4, i.e. at
+%% most 1020 bytes. Deeper accesses -- a tuple with more than 255 elements, a
+%% frame past y255 -- need the address computed first; a8 is the backend's
+%% scratch (never allocated to a value) so it can carry it.
+-define(L32I_MAX_OFFSET, 1020).
+
+array_load_code(DstReg, BaseReg, Offset) when Offset =< ?L32I_MAX_OFFSET ->
+    jit_xtensa_asm:l32i(DstReg, BaseReg, Offset);
+array_load_code(DstReg, BaseReg, Offset) ->
+    <<
+        (mov_immediate(?A8_REG, Offset))/binary,
+        (jit_xtensa_asm:add(?A8_REG, BaseReg, ?A8_REG))/binary,
+        (jit_xtensa_asm:l32i(DstReg, ?A8_REG, 0))/binary
+    >>.
+
+array_store_code(ValueReg, BaseReg, Offset) when Offset =< ?L32I_MAX_OFFSET ->
+    jit_xtensa_asm:s32i(ValueReg, BaseReg, Offset);
+array_store_code(ValueReg, BaseReg, Offset) ->
+    <<
+        (mov_immediate(?A8_REG, Offset))/binary,
+        (jit_xtensa_asm:add(?A8_REG, BaseReg, ?A8_REG))/binary,
+        (jit_xtensa_asm:s32i(ValueReg, ?A8_REG, 0))/binary
+    >>.
+
 get_array_element(
     #state{
         stream_module = StreamModule,
@@ -2684,7 +2710,7 @@ get_array_element(
     {free, Reg},
     Index
 ) ->
-    I1 = jit_xtensa_asm:l32i(Reg, Reg, Index * 4),
+    I1 = array_load_code(Reg, Reg, Index * 4),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
     {State#state{stream = Stream1}, Reg};
 get_array_element(
@@ -2703,7 +2729,7 @@ get_array_element(
             _ -> first_avail(Avail)
         end,
     ElemBit = reg_bit(ElemReg),
-    I1 = jit_xtensa_asm:l32i(ElemReg, Reg, Index * 4),
+    I1 = array_load_code(ElemReg, Reg, Index * 4),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
     {
         State#state{
@@ -2723,7 +2749,7 @@ move_to_array_element(
     Reg,
     Index
 ) when ?IS_GPR(ValueReg) andalso ?IS_GPR(Reg) andalso is_integer(Index) ->
-    I1 = jit_xtensa_asm:s32i(ValueReg, Reg, Index * 4),
+    I1 = array_store_code(ValueReg, Reg, Index * 4),
     Stream1 = StreamModule:append(Stream0, I1),
     State0#state{stream = Stream1};
 move_to_array_element(
@@ -4506,6 +4532,16 @@ ldr_y_reg(DstReg, Y, 0) ->
     I4 = jit_xtensa_asm:add(DstReg, DstReg, ?A8_REG),
     I5 = jit_xtensa_asm:l32i(DstReg, DstReg, 0),
     <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>.
+
+%% @doc Record the record type a VM x/y register is known to hold, as asserted
+%% by OP_IS_NATIVE_RECORD. Invalidation is jit_regs' business: any write to the
+%% VM register clears it through jit_regs:invalidate_vm_loc/2.
+set_vm_record_type(#state{regs = Regs} = State, VmLoc, Type) ->
+    State#state{regs = jit_regs:set_vm_type(Regs, VmLoc, Type)}.
+
+%% @doc Look up the type assertion previously recorded for a VM x/y register.
+get_vm_record_type(#state{regs = Regs}, VmLoc) ->
+    jit_regs:get_vm_type(Regs, VmLoc).
 
 reg_bit(a0) -> ?REG_BIT_A0;
 reg_bit(a1) -> ?REG_BIT_A1;

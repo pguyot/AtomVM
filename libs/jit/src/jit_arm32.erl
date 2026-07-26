@@ -2527,7 +2527,7 @@ move_array_element(
     {free, Reg},
     Index,
     {y_reg, Y}
-) when is_integer(Index) ->
+) when is_integer(Index) andalso Index * 4 =< 4095 ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp)),
@@ -2539,12 +2539,49 @@ move_array_element(
     Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
     State#state{stream = Stream1, regs = Regs2};
 move_array_element(
+    #state{stream_module = StreamModule, regs = Regs0} =
+        State,
+    {free, Reg},
+    Index,
+    {y_reg, Y}
+) when is_integer(Index) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Temp1 = first_avail(Avail),
+    Avail1 = Avail band (bnot reg_bit(Temp1)),
+    Temp2 = first_avail(Avail1),
+    AT = Avail1 band (bnot reg_bit(Temp2)),
+    % For large offsets, use max offset (4092) in ldr + remainder in a temp
+    % register; the element lands in the (freed) base register
+    State1 = mov_immediate(State, Temp2, Index * 4 - 4092),
+    I1 = jit_arm32_asm:add(al, Temp2, Temp2, Reg),
+    I2 = jit_arm32_asm:ldr(al, Reg, {Temp2, 4092}),
+    YCode = str_y_reg(Reg, Y, Temp1, AT),
+    Code = <<I1/binary, I2/binary, YCode/binary>>,
+    Stream1 = StreamModule:append(State1#state.stream, Code),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(State1#state.regs, Temp1), Temp2), Reg
+    ),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y}),
+    State1#state{stream = Stream1, regs = Regs2};
+move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Reg, Index, Dest
-) when is_atom(Dest) andalso is_integer(Index) ->
+) when is_atom(Dest) andalso is_integer(Index) andalso Index * 4 =< 4095 ->
     I1 = jit_arm32_asm:ldr(al, Dest, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Dest),
     State#state{stream = Stream1, regs = Regs1};
+move_array_element(
+    #state{stream_module = StreamModule, regs = Regs0} = State, Reg, Index, Dest
+) when is_atom(Dest) andalso is_integer(Index) ->
+    % For large offsets, use max offset (4092) in ldr + remainder in a temp
+    % register (Dest may be the base register, so it cannot hold the remainder)
+    Temp = first_avail(jit_regs:available_regs(Regs0)),
+    State1 = mov_immediate(State, Temp, Index * 4 - 4092),
+    I1 = jit_arm32_asm:add(al, Temp, Temp, Reg),
+    I2 = jit_arm32_asm:ldr(al, Dest, {Temp, 4092}),
+    Stream1 = StreamModule:append(State1#state.stream, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(State1#state.regs, Temp), Dest),
+    State1#state{stream = Stream1, regs = Regs1};
 move_array_element(
     #state{
         stream_module = StreamModule,
