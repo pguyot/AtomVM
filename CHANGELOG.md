@@ -149,6 +149,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed the JIT pinned-register entry shims reading their register with a read-modify-write
+  asm constraint, which made the compiler load the pinned register from the shim's own
+  uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
+  were unaffected, so this only broke unoptimized builds of every pinned-register backend
+  (x86_64, aarch64, arm32, riscv)
 - Fixed the JIT direct-dispatch tail following a stale continuation when a load-trapped
   process was returned unsuspended by the scheduler (a message made it ready during the
   call), re-executing caller code while the process was trapped
