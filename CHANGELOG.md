@@ -129,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed the JIT pinned-register entry shims reading their register with a read-modify-write
+  asm constraint, which made the compiler load the pinned register from the shim's own
+  uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
+  were unaffected, so this only broke unoptimized builds of every pinned-register backend
+  (x86_64, aarch64, arm32, riscv)
 - Route `io:put_chars(standard_error, ...)` and `io:format(standard_error, ...)` to stderr instead
   of aliasing them to standard_io (diagnostics no longer pollute an escript's stdout)
 - Fixed the JIT direct-dispatch tail following a stale continuation when a load-trapped

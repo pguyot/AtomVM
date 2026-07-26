@@ -3014,14 +3014,22 @@ static void jit_set_tuple_element(Context *ctx, term tuple, uint32_t position, t
 // legally park its own locals in the pinned registers mid-frame
 // (callee-saved only guarantees restore-on-return), so only generated-code
 // entry points may read them.
+// The constraint must be output-only ("=r"), never "+r". "+r" makes the
+// variable an input as well, so the compiler has to materialize its current
+// value into the pinned register before the asm -- and since the variable has
+// no initializer, that means loading its (uninitialized) stack home over the
+// live value the dispatch loop seeded. Optimized builds hide this because
+// there is nothing to load, but at -O0 the shim really does emit
+// `mov -0x18(%rbp), %r14' and hands the callee garbage. With "=r" the value
+// only ever flows out of the register.
 #define JS_READ()                                                   \
     register JITState *jit_state __asm__(JIT_PINNED_JIT_STATE_REG); \
     __asm__ volatile(""                                             \
-                     : "+r"(jit_state))
+                     : "=r"(jit_state))
 #define CTX_READ()                                     \
     register Context *ctx __asm__(JIT_PINNED_CTX_REG); \
     __asm__ volatile(""                                \
-                     : "+r"(ctx))
+                     : "=r"(ctx))
 
 static Context *jit_raise_error_pin(int a1, term a2)
 {
