@@ -653,6 +653,8 @@ compile_erlang(int64_build_binary)
 compile_erlang(bs_create_bin_integer_unit)
 compile_erlang(bs_create_bin_float_unit)
 compile_erlang(get_map_elements_bignum_key)
+compile_erlang(get_map_elements_tuple_key)
+compile_erlang(test_term_order_stub)
 
 compile_erlang(test_link_port)
 
@@ -1245,6 +1247,8 @@ set(erlang_test_beams
     bs_create_bin_integer_unit.beam
     bs_create_bin_float_unit.beam
     get_map_elements_bignum_key.beam
+    get_map_elements_tuple_key.beam
+    test_term_order_stub.beam
 
     test_link_port.beam
 
