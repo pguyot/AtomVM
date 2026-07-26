@@ -191,6 +191,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   negative integer into a large positive one
 - Fixed the ordering of improper lists: a scalar tail now compares against nil by term order,
   so `[1,2|3] < [1,2]` like BEAM (the previous scheme inverted it)
+- Fixed the JIT pinned-register entry shims reading their register with a read-modify-write
+  asm constraint, which made the compiler load the pinned register from the shim's own
+  uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
+  were unaffected, so this only broke unoptimized builds of every pinned-register backend
+  (x86_64, aarch64, arm32, riscv)
 
 ## [0.7.0-beta.0] - 2026-09-28
 
