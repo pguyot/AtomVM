@@ -56,6 +56,8 @@
     jbe/1,
     jbe_rel8/1,
     jbe_rel32/1,
+    ja_rel32/1,
+    jl_rel32/1,
     jmp/1,
     jmp_rel8/1,
     jmp_rel32/1,
@@ -73,6 +75,7 @@
     leaq/2,
     leaq_rel32/2,
     callq/1,
+    callq_rel32/1,
     pushq/1,
     popq/1,
     jmpq/1,
@@ -280,6 +283,35 @@ movq(Imm, {Offset, DestReg}) when is_integer(Imm) andalso ?IS_SINT8_T(Offset) ->
 movq(Imm, {Offset, DestReg}) when is_integer(Imm) andalso ?IS_SINT32_T(Offset) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, 0, 0, REX_B), 16#c7, (modrm_mem(0, MODRM_RM, Offset))/binary, Imm:32/little>>;
+% movq {0, base, index, scale}, reg - SIB load with no displacement. Mirror of
+% the store form below; used for the atom_table index_to_node[idx] lookup.
+movq({0, RegB, RegC, Scale}, RegA) when
+    is_atom(RegA),
+    is_atom(RegB),
+    is_atom(RegC),
+    (Scale == 1 orelse Scale == 2 orelse Scale == 4 orelse Scale == 8)
+->
+    {REX_R, MODRM_REG} = x86_64_x_reg(RegA),
+    {REX_B, MODRM_BASE} = x86_64_x_reg(RegB),
+    {REX_X, MODRM_INDEX} = x86_64_x_reg(RegC),
+    ScaleBits =
+        case Scale of
+            1 -> 0;
+            2 -> 1;
+            4 -> 2;
+            8 -> 3
+        end,
+    % rm=100 for SIB, mod=00 for no displacement
+    <<
+        ?X86_64_REX(1, REX_R, REX_X, REX_B),
+        16#8B,
+        0:2,
+        MODRM_REG:3,
+        4:3,
+        ScaleBits:2,
+        MODRM_INDEX:3,
+        MODRM_BASE:3
+    >>;
 % movq reg, {0, base, index, scale} - SIB with no displacement
 movq(RegA, {0, RegB, RegC, Scale}) when
     is_atom(RegA),
@@ -438,12 +470,20 @@ movl(Imm, DestReg) when is_integer(Imm), is_atom(DestReg) ->
         {0, Index} -> <<(16#B8 + Index), Imm:32/little>>;
         {1, Index} -> <<16#41, (16#B8 + Index), Imm:32/little>>
     end;
-movl({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
+movl({Offset, SrcReg}, DestReg) when
+    is_atom(SrcReg), is_atom(DestReg), ?IS_SINT32_T(Offset)
+->
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
     (case {REX_R, REX_B} of
-        {0, 0} -> <<16#8B, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
-        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#8B, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
+        {0, 0} ->
+            <<16#8B, (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary>>;
+        _ ->
+            <<
+                ?X86_64_REX(0, REX_R, 0, REX_B),
+                16#8B,
+                (modrm_mem(MODRM_REG, MODRM_RM, Offset))/binary
+            >>
     end).
 
 % movzx byte ptr [SrcReg], DestReg (zero-extended to 64 bits)
@@ -505,6 +545,13 @@ rolw(Imm, Reg) when ?IS_UINT8_T(Imm), is_atom(Reg) ->
         {1, Index} -> <<16#66, 16#41, 16#C1, (16#C0 + Index), Imm>>
     end.
 
+%% Variable shift: the count is the low byte of rcx (`%cl'), the only count
+%% register x86-64 has for the non-BMI2 shift forms.
+shlq(cl, Reg) when is_atom(Reg) ->
+    case x86_64_x_reg(Reg) of
+        {0, Index} -> <<16#48, 16#D3, (16#E0 + Index)>>;
+        {1, Index} -> <<16#49, 16#D3, (16#E0 + Index)>>
+    end;
 shlq(Imm, Reg) when ?IS_UINT8_T(Imm) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#C1, (16#E0 + Index), Imm>>;
@@ -642,6 +689,19 @@ jbe_rel32(Offset) when ?IS_SINT32_T(Offset) ->
     AdjustedOffset = Offset - 6,
     {2, <<16#0F, 16#86, AdjustedOffset:32/little>>}.
 
+% Jump if above (unsigned, CF=0 and ZF=0) with a 32-bit displacement
+% (0F 87, 6-byte instruction).
+ja_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#87, AdjustedOffset:32/little>>}.
+
+% Jump if less (signed, SF <> OF) with a 32-bit displacement (0F 8C, 6-byte
+% instruction). Signed, unlike jb: small integers compare as tagged signed
+% words.
+jl_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 6,
+    {2, <<16#0F, 16#8C, AdjustedOffset:32/little>>}.
+
 jmp(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
     AdjustedOffset = Offset - 2,
@@ -673,7 +733,14 @@ andq(Imm, {Offset, DestReg}) when ?IS_SINT8_T(Imm) andalso ?IS_SINT32_T(Offset) 
 andq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
-    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#21, 3:2, MODRM_REG:3, MODRM_RM:3>>.
+    <<?X86_64_REX(1, REX_R, 0, REX_B), 16#21, 3:2, MODRM_REG:3, MODRM_RM:3>>;
+andq(Imm, rax) when ?IS_SINT32_T(Imm) ->
+    % Special short encoding for and imm32, %rax
+    <<16#48, 16#25, Imm:32/little>>;
+andq(Imm, DestReg) when ?IS_SINT32_T(Imm) andalso is_atom(DestReg) ->
+    % AND r/m64, imm32 (sign-extended): REX.W 0x81 /4 imm32
+    {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 3:2, 4:3, MODRM_RM:3, Imm:32/little>>.
 
 andl(Imm, Reg) when is_integer(Imm), Imm >= 0, Imm =< 127, is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
@@ -893,6 +960,13 @@ callq({Reg}) ->
         {1, Index} -> <<16#41, 16#FF, (16#D0 + Index)>>
     end.
 
+% Direct near call with a 32-bit displacement (E8, 5-byte instruction), used
+% to reach the per-module stubs. Same shape as jmp_rel32/1: the displacement
+% is relative to the end of the instruction and starts at byte 1.
+callq_rel32(Offset) when ?IS_SINT32_T(Offset) ->
+    AdjustedOffset = Offset - 5,
+    {1, <<16#E8, AdjustedOffset:32/little>>}.
+
 pushq(Reg) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<(16#50 + Index)>>;
@@ -975,6 +1049,11 @@ idivq(Reg) when is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
     <<?X86_64_REX(1, 0, 0, REX_B), 16#F7, 3:2, 7:3, MODRM_RM:3>>.
 
+sarq(cl, Reg) when is_atom(Reg) ->
+    case x86_64_x_reg(Reg) of
+        {0, Index} -> <<16#48, 16#D3, (16#F8 + Index)>>;
+        {1, Index} -> <<16#49, 16#D3, (16#F8 + Index)>>
+    end;
 sarq(Imm, Reg) when ?IS_UINT8_T(Imm) ->
     case x86_64_x_reg(Reg) of
         {0, Index} -> <<16#48, 16#C1, (16#F8 + Index), Imm>>;
