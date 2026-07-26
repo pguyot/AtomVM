@@ -129,6 +129,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed the aarch64 JIT crashing when compiled with DWARF support (the default) on any module
+  whose register cache holds a VM x register in x25-x28: the DWARF register table stopped at
+  x21, so `dwarf_register_number/1` raised `function_clause` and the module failed to compile
+- Fixed the xtensa JIT not implementing the native record type tracking callbacks, so any
+  OTP-29 module carrying a `Recs` chunk failed to compile with `undef`
+- Fixed the armv6m JIT crashing on frames of 64 slots or more: the y register byte offset was
+  materialized with `movs`, whose immediate is 8 bits, both for stack slot access and for
+  frame deallocation
+- Fixed the arm32, xtensa, riscv32 and riscv64 JIT backends crashing on tuple element access
+  past the load/store displacement range of the architecture (index 1024 on arm32, 256 on
+  xtensa, 512 on riscv32, 256 on riscv64) for some destination shapes
 - Fixed the JIT pinned-register entry shims reading their register with a read-modify-write
   asm constraint, which made the compiler load the pinned register from the shim's own
   uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
