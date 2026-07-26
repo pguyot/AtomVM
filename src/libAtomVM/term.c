@@ -606,6 +606,30 @@ static enum TermTypeIndex term_type_to_index(term t)
     }                                        \
     t = temp_stack_pop(&temp_stack);
 
+// Equality-only comparison of two flat maps of the same size. Entries are kept
+// in term_compare(TermCompareExact) key order, so a parallel index walk is
+// valid and stops at the first differing pair -- unlike the ordering path,
+// which materialises every key and value on the temp stack before comparing
+// anything. Element pairs go to the generic comparator with plain
+// TermCompareExact, exactly like the delegation below, so a nested map cannot
+// recurse back into this walk and grow the C stack without bound.
+static TermCompareResult map_exact_equals(term t, term other, int size, GlobalContext *global)
+{
+    for (int i = 0; i < size; i++) {
+        term tk = term_get_map_key(t, i);
+        term ok = term_get_map_key(other, i);
+        if (tk != ok && term_compare(tk, ok, TermCompareExact, global) != TermEquals) {
+            return TermLessThan;
+        }
+        term tv = term_get_map_value(t, i);
+        term ov = term_get_map_value(other, i);
+        if (tv != ov && term_compare(tv, ov, TermCompareExact, global) != TermEquals) {
+            return TermLessThan;
+        }
+    }
+    return TermEquals;
+}
+
 // Structural exact-equality walk for TermCompareExact | TermCompareEqualOnly:
 // no ordering, so no type-index dispatch and no atom table. Immediates are
 // equal only to themselves, lists and same-header tuples are walked inline,
@@ -742,8 +766,24 @@ deep:;
                 }
                 // Same boxed class with differing headers or a non-tuple tag:
                 // delegate this pair to the generic comparator (plain Exact,
-                // not EqualOnly, so it is not routed back here).
-                TermCompareResult pair = term_compare(t, other, TermCompareExact, global);
+                // not EqualOnly, so it is not routed back here). Maps are the
+                // dominant case here and the ordering path is O(size) even when
+                // the first entry already differs, so answer them directly.
+                TermCompareResult pair;
+                if (term_is_map(t) && term_is_map(other)) {
+                    int t_size = term_get_map_size(t);
+                    if (t_size != term_get_map_size(other)) {
+                        result = TermLessThan;
+                        goto done;
+                    }
+                    if (!term_is_map_tree(t) && !term_is_map_tree(other)) {
+                        pair = map_exact_equals(t, other, t_size, global);
+                    } else {
+                        pair = term_compare(t, other, TermCompareExact, global);
+                    }
+                } else {
+                    pair = term_compare(t, other, TermCompareExact, global);
+                }
                 if (pair == TermEquals) {
                     other = temp_stack_pop(&temp_stack);
                     t = temp_stack_pop(&temp_stack);
