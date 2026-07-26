@@ -6904,7 +6904,10 @@ emit_smallint_compare_fastpath(
                 fun(ISt0) ->
                     MMod:if_else_block(
                         ISt0,
-                        {Arg1Reg, '!=', Arg2Reg},
+                        %% '(wide)': the guarded block is the whole
+                        %% not-identical subtree, far past the short-branch
+                        %% range of backends that have one.
+                        {'(wide)', {Arg1Reg, '!=', Arg2Reg}},
                         NotSmallInt,
                         fun(BSt1) ->
                             BSt2 = FastFn(BSt1, {free, Arg1Reg}, Arg2Reg),
