@@ -47,7 +47,6 @@
     call_primitive/3,
     call_primitive_last/3,
     call_primitive_with_cp/3,
-    call_primitive_with_cp_direct/3,
     call_primitive_direct/3,
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
@@ -4642,25 +4641,6 @@ call_primitive_with_cp(State0, Primitive, Args) ->
     State2 = call_primitive_last(State1, Primitive, Args),
     rewrite_cp_offset(State2, RewriteOffset).
 
-%% Call a resolving primitive whose tagged result routes the continuation:
-%%   value 1: branch to jit_state->continuation directly, skipping the
-%%     scheduler-loop round trip (x86_64 jumptable entries are 5 bytes, so a
-%%     native entry address can carry any low bits — it travels through
-%%     jit_state->continuation instead of being tagged into the result);
-%%   value 3 (STAY): the continuation is this site's own cp target — fall
-%%     through;
-%%   bit 0 clear: a Context * — return it to the scheduler loop.
-%% ctx/jit_state/interface argument registers are restored by
-%% call_primitive's save sequence, so the callee entry starts with the JIT
-%% ABI registers intact. Twin of the aarch64 implementation modulo the
-%% sentinel-vs-tagged-entry contract.
--spec call_primitive_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
-call_primitive_with_cp_direct(State0, Primitive, Args) ->
-    {State1, RewriteOffset} = set_cp(State0),
-    {State2, ResultReg} = call_primitive(State1, Primitive, Args),
-    State3 = direct_dispatch(State2, ResultReg, true),
-    rewrite_cp_offset(State3, RewriteOffset).
-
 %%-----------------------------------------------------------------------------
 %% @doc OP_CALL_FUN/OP_CALL_FUN2 with an inline fast path for a local fun:
 %% resolve the fun's module and label from its boxed representation and the
@@ -4928,7 +4908,7 @@ call_primitive_direct(State0, Primitive, Args) ->
 
 %% @private
 %% Emit the tagged-result dispatch shared by the *_direct primitives (see
-%% call_primitive_with_cp_direct for the contract).
+%% call_ext_with_cp_direct for the contract).
 -spec direct_dispatch(state(), x86_64_register(), boolean()) -> state().
 direct_dispatch(
     #state{stream_module = StreamModule, stream = Stream0} = State0, ResultReg, TestStay
