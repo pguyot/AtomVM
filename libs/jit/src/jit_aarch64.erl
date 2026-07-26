@@ -133,7 +133,8 @@
     dwarf_function/3,
     dwarf_line/2,
     dwarf_variables/2,
-    dwarf_ctx_register/0
+    dwarf_ctx_register/0,
+    dwarf_register_number/1
 ]).
 -endif.
 
@@ -5487,5 +5488,11 @@ dwarf_register_number(r16) -> 16;
 dwarf_register_number(r17) -> 17;
 dwarf_register_number(r19) -> 19;
 dwarf_register_number(r20) -> 20;
-dwarf_register_number(r21) -> 21.
+dwarf_register_number(r21) -> 21;
+%% x25-x28 are the home registers for VM x0-x3 (?CALLEE_SAVED_CACHE_MASK), so
+%% they show up in the jit_regs contents map like any other cache register.
+dwarf_register_number(r25) -> 25;
+dwarf_register_number(r26) -> 26;
+dwarf_register_number(r27) -> 27;
+dwarf_register_number(r28) -> 28.
 -endif.
