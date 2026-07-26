@@ -1888,6 +1888,11 @@ if_else_block(
         jit_aarch64_asm:cc() | {tbz | tbnz, atom(), 0..63} | {cbz, atom()},
         non_neg_integer()
     }.
+%% '(wide)' marks a condition whose guarded block is large. aarch64 guard
+%% branches already reach +/-1 MB (and overflows are relaxed by the sizing
+%% pass), so the marker carries no information here: strip it.
+if_block_cond(State0, {'(wide)', Cond}) ->
+    if_block_cond(State0, Cond);
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
 ) ->
