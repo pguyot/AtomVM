@@ -47,7 +47,6 @@
     take_overflows/1,
     rewind_stream/2,
     call_primitive_with_cp/3,
-    call_primitive_with_cp_direct/3,
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
     supports_inline_tuple2_eq/0,
@@ -79,7 +78,6 @@
     set_continuation_to_label/2,
     set_continuation_to_offset/1,
     continuation_entry_point/1,
-    get_module_index/1,
     get_cp_base/1,
     get_module_atom_index/2,
     move_imported_gcbif_to_native_register/3,
@@ -3842,15 +3840,13 @@ move_imported_gcbif_to_native_register(
     }.
 
 %%-----------------------------------------------------------------------------
-%% @doc Get the module index from the JIT state and load it into a native
-%% register.
+%% @doc Load jit_state->cp_base (module_index << 24) into a fresh register:
+%% one load instead of the module->index chain the other backends walk in
+%% get_module_index/1. Used by the intra-module return check.
 %% @end
 %% @param State current backend state
-%% @return Tuple of {Updated backend state, Native register containing module index}
+%% @return Tuple of {Updated backend state, Native register holding cp_base}
 %%-----------------------------------------------------------------------------
-%% @doc Load jit_state->cp_base (module_index << 24) into a fresh register.
-%% One load instead of get_module_index's dependent module->index chain;
-%% used by the intra-module return check.
 -spec get_cp_base(state()) -> {state(), aarch64_register()}.
 get_cp_base(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
@@ -3862,30 +3858,6 @@ get_cp_base(
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, Bit)}, Reg}.
-
--spec get_module_index(state()) -> {state(), aarch64_register()}.
-get_module_index(
-    #state{
-        stream_module = StreamModule,
-        stream = Stream0,
-        regs = Regs0
-    } = State
-) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Reg = first_avail(Avail),
-    Bit = reg_bit(Reg),
-    I1 = jit_aarch64_asm:ldr(Reg, ?JITSTATE_MODULE),
-    I2 = jit_aarch64_asm:ldr_w(Reg, ?MODULE_INDEX(Reg)),
-    Code = <<I1/binary, I2/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:set_contents(Regs0, Reg, module_index),
-    {
-        State#state{
-            stream = Stream1,
-            regs = jit_regs:alloc_reg(Regs1, Bit)
-        },
-        Reg
-    }.
 
 %% @doc Load the 32-bit global atom index for a module-local atom id, i.e.
 %% jit_state->module->local_atoms_to_global_table[AtomIndex], into a fresh
@@ -4847,12 +4819,6 @@ call_primitive_with_cp(State0, Primitive, Args) ->
     State2 = call_primitive_last(State1, Primitive, Args),
     rewrite_cp_offset(State2, RewriteOffset, RewriteSize).
 
-%% Call a resolving primitive that returns either the callee's native entry
-%% point with bit 0 set — branch to it directly, skipping the scheduler-loop
-%% round trip — or a Context * (bit 0 clear) to return to the scheduler loop
-%% (the saved lr still points there; primitives preserve it). cp is set to
-%% the instruction after the dispatch sequence, like call_primitive_with_cp.
--spec call_primitive_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
 %%-----------------------------------------------------------------------------
 %% @doc OP_CALL_FUN with an inline local-fun fast path. Sets cp like
 %% call_primitive_with_cp_direct, then resolves a local fun entirely in
@@ -5149,36 +5115,7 @@ emit_call_ext_last_fast_path(State0, Index, NWords, T0, T1, T2, T3) ->
 supports_inline_tuple2_eq() ->
     true.
 
-call_primitive_with_cp_direct(State0, Primitive, Args) ->
-    {State1, RewriteOffset, RewriteSize} = set_cp(State0),
-    %% The wrapped primitive (PRIM_CALL_EXT_DIRECT/PRIM_CALL_FUN_DIRECT) reads
-    %% jit_direct_continuation's remaining_reductions check from memory:
-    %% flush the pinned register before the call, not after (the primitive
-    %% may itself force remaining_reductions=0 to reschedule; a post-call
-    %% flush of our stale register would overwrite that write).
-    #state{stream_module = StreamModule1, stream = Stream1a} = State1,
-    IPreFlush = jit_aarch64_asm:str_w(?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT),
-    State1b = State1#state{stream = StreamModule1:append(Stream1a, IPreFlush)},
-    {State2, ResultReg} = call_primitive(State1b, Primitive, Args),
-    #state{stream_module = StreamModule, stream = Stream2} = State2,
-    %% Dispatch on the primitive's tagged result:
-    %%   bit 0 clear: Context * — return to the scheduler loop
-    %%   value 3 (STAY): the continuation is this site's cp target — fall
-    %%     through (skips the callee's cp->native-pc resolution entirely)
-    %%   bit 0 set: tagged native entry — branch to it
-    I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
-    I2 = jit_aarch64_asm:mov(r0, ResultReg),
-    I3 = jit_aarch64_asm:ret(),
-    I4 = jit_aarch64_asm:tbnz(ResultReg, 1, 12),
-    I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
-    I6 = jit_aarch64_asm:br(ResultReg),
-    Stream3 = StreamModule:append(
-        Stream2, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
-    ),
-    State3 = free_native_register(State2#state{stream = Stream3}, ResultReg),
-    rewrite_cp_offset(State3, RewriteOffset, RewriteSize).
-
-%% Tail-position variant of call_primitive_with_cp_direct: no cp is set (the
+%% Tail-position variant of the *_with_cp_direct calls: no cp is set (the
 %% callee returns to the caller's caller), but the branch-or-return dispatch
 %% on the primitive's tagged result is the same. Code after this is
 %% unreachable from this site.
