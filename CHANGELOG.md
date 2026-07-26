@@ -196,6 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
   were unaffected, so this only broke unoptimized builds of every pinned-register backend
   (x86_64, aarch64, arm32, riscv)
+- Fixed the x86_64 JIT emitting 8-bit operand instructions (`testb`, `andb`, `cmpb`, `movb`)
+  without the REX prefix that `%sil`/`%dil` require, so a tag test on one of those registers
+  silently tested `%dh`/`%bh` instead
 
 ## [0.7.0-beta.0] - 2026-09-28
 

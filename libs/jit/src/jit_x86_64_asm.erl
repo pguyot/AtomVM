@@ -147,6 +147,18 @@ x86_64_xmm_reg(xmm15) -> {1, 7}.
 rex_opt(0, 0, 0, 0) -> <<>>;
 rex_opt(W, R, X, B) -> <<4:4, W:1, R:1, X:1, B:1>>.
 
+% REX prefix for an instruction with 8-bit REGISTER operands. Unlike rex_opt/4
+% this must emit an all-zero (0x40) REX when any byte-addressed operand has a
+% low-3 encoding >= 4: without it, rm/reg 4..7 mean the legacy high-byte
+% registers ah/ch/dh/bh, so `testb $1, %sil' would silently become
+% `testb $1, %dh'. `ByteRegs' lists the low-3 encodings of the operands that
+% are addressed as bytes (memory bases are 64-bit and do not count).
+rex_byte_op(R, X, B, ByteRegs) ->
+    case R =/= 0 orelse X =/= 0 orelse B =/= 0 orelse lists:any(fun(N) -> N >= 4 end, ByteRegs) of
+        true -> <<4:4, 0:1, R:1, X:1, B:1>>;
+        false -> <<>>
+    end.
+
 % ModRM (+ SIB) + displacement for the memory operand [Base + Disp], valid for
 % every base register: rm=100 (rsp/r12) needs a SIB byte (index=none), and
 % rm=101 (rbp/r13) at mod=00 would mean RIP-relative, so those bases always
@@ -457,10 +469,12 @@ bswapl(Reg) when is_atom(Reg) ->
 movb_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(SrcReg),
     {REX_B, MODRM_RM} = x86_64_x_reg(AddrReg),
-    case {REX_R, REX_B} of
-        {0, 0} -> <<16#88, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>;
-        _ -> <<?X86_64_REX(0, REX_R, 0, REX_B), 16#88, (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary>>
-    end.
+    % Only SrcReg is byte-addressed here; AddrReg is a 64-bit memory base.
+    <<
+        (rex_byte_op(REX_R, 0, REX_B, [MODRM_REG]))/binary,
+        16#88,
+        (modrm_mem(MODRM_REG, MODRM_RM, 0))/binary
+    >>.
 
 % movw SrcReg(low word), [AddrReg]: store the low 16 bits of SrcReg to memory.
 movw_store(SrcReg, {0, AddrReg}) when is_atom(SrcReg), is_atom(AddrReg) ->
@@ -504,21 +518,18 @@ shrq(Imm, Reg) when ?IS_UINT8_T(Imm) ->
     end.
 
 testb(Reg, Reg) when is_atom(Reg) ->
-    case x86_64_x_reg(Reg) of
-        {0, Index} -> <<16#84, (16#C0 bor (Index bsl 3) bor Index)>>;
-        {1, Index} -> <<16#45, 16#84, (16#C0 bor (Index bsl 3) bor Index)>>
-    end;
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<
+        (rex_byte_op(REX_B, 0, REX_B, [MODRM_RM]))/binary,
+        16#84,
+        (16#C0 bor (MODRM_RM bsl 3) bor MODRM_RM)
+    >>;
 testb(Imm, rax) when ?IS_UINT8_T(Imm); ?IS_SINT8_T(Imm) ->
     <<16#A8, Imm>>;
 testb(Imm, Reg) when ?IS_UINT8_T(Imm), is_atom(Reg); ?IS_SINT8_T(Imm), is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    % TEST r/m8, imm8: 0xF6 /0 ModRM imm8 (REX prefix for r8-r15)
-    Prefix =
-        case REX_B of
-            0 -> <<>>;
-            1 -> <<?X86_64_REX(0, 0, 0, REX_B)>>
-        end,
-    <<Prefix/binary, 16#F6, 3:2, 0:3, MODRM_RM:3, Imm>>.
+    % TEST r/m8, imm8: 0xF6 /0 ModRM imm8
+    <<(rex_byte_op(0, 0, REX_B, [MODRM_RM]))/binary, 16#F6, 3:2, 0:3, MODRM_RM:3, Imm>>.
 
 testq(Reg, Reg) when is_atom(Reg) ->
     case x86_64_x_reg(Reg) of
@@ -691,32 +702,21 @@ andb(Imm, rax) when ?IS_UINT8_T(Imm) orelse ?IS_SINT8_T(Imm) ->
     <<16#24, Imm>>;
 andb(Imm, Reg) when ?IS_UINT8_T(Imm) orelse ?IS_SINT8_T(Imm), is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    % AND r/m8, imm8: 0x80 /4 ModRM imm8 (REX prefix for r8-r15)
-    Prefix =
-        case REX_B of
-            0 -> <<>>;
-            1 -> <<?X86_64_REX(0, 0, 0, REX_B)>>
-        end,
-    <<Prefix/binary, 16#80, 3:2, 4:3, MODRM_RM:3, Imm>>.
+    % AND r/m8, imm8: 0x80 /4 ModRM imm8
+    <<(rex_byte_op(0, 0, REX_B, [MODRM_RM]))/binary, 16#80, 3:2, 4:3, MODRM_RM:3, Imm>>.
 
 cmpb(RegA, RegB) when is_atom(RegA), is_atom(RegB) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(RegA),
     {REX_B, MODRM_RM} = x86_64_x_reg(RegB),
-    Prefix =
-        case {REX_R, REX_B} of
-            {0, 0} -> <<>>;
-            _ -> <<?X86_64_REX(0, REX_R, 0, REX_B)>>
-        end,
-    <<Prefix/binary, 16#38, (16#C0 bor (MODRM_REG bsl 3) bor MODRM_RM)>>;
+    <<
+        (rex_byte_op(REX_R, 0, REX_B, [MODRM_REG, MODRM_RM]))/binary,
+        16#38,
+        (16#C0 bor (MODRM_REG bsl 3) bor MODRM_RM)
+    >>;
 cmpb(Imm, Reg) when ?IS_UINT8_T(Imm), is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
-    % CMP r/m8, imm8: 0x80 /7 ModRM imm8 (REX prefix for r8-r15)
-    Prefix =
-        case REX_B of
-            0 -> <<>>;
-            1 -> <<?X86_64_REX(0, 0, 0, REX_B)>>
-        end,
-    <<Prefix/binary, 16#80, 3:2, 7:3, MODRM_RM:3, Imm>>.
+    % CMP r/m8, imm8: 0x80 /7 ModRM imm8
+    <<(rex_byte_op(0, 0, REX_B, [MODRM_RM]))/binary, 16#80, 3:2, 7:3, MODRM_RM:3, Imm>>.
 
 cmpl(Imm, Reg) when ?IS_SINT8_T(Imm), is_atom(Reg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
