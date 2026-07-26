@@ -32,6 +32,10 @@
 
 -export([mc_iterator/1, mc_refill/1]).
 
+%% Associations handed to the comprehension per call. Bounded because the chain
+%% is built by non-tail recursion and is materialised eagerly.
+-define(MC_CHUNK, 32).
+
 %%-----------------------------------------------------------------------------
 %% @param   MapOrIter   a map or a map iterator to iterate over
 %% @returns the first association as `{Key, Value, NextIterator}', `none' if the
@@ -48,11 +52,11 @@
     MapOrIter :: map() | maps:iterator(),
     Iter :: {term(), term(), maps:iterator()} | none | [].
 mc_iterator(Map) when is_map(Map) ->
-    maps:next([0 | Map]);
+    mc_chunk(maps:next([0 | Map]), ?MC_CHUNK);
 mc_iterator([Path | Map]) ->
     %% This is probably an iterator.
     try maps:next([Path | Map]) of
-        Iter -> Iter
+        Iter -> mc_chunk(Iter, ?MC_CHUNK)
     catch
         error:badarg -> []
     end;
@@ -93,4 +97,16 @@ is_map_iter(Iter) ->
     IterMap :: nonempty_improper_list(non_neg_integer() | list(), map()),
     Iter :: {term(), term(), maps:iterator()} | none.
 mc_refill([Path | Map]) ->
-    maps:next([Path | Map]).
+    mc_chunk(maps:next([Path | Map]), ?MC_CHUNK).
+
+%% Chain up to `N' associations into `{K1, V1, {K2, V2, ..., Iter}}', the shape
+%% the compiler-generated loop already understands: it consumes a tuple
+%% directly and only calls back here when it reaches the plain iterator at the
+%% end of the chain. Returning one association at a time instead costs that
+%% loop an extra call plus a self tail call for every element of the map.
+mc_chunk(none, _N) ->
+    none;
+mc_chunk(Iter, 1) ->
+    Iter;
+mc_chunk({Key, Value, Iter}, N) ->
+    {Key, Value, mc_chunk(maps:next(Iter), N - 1)}.
