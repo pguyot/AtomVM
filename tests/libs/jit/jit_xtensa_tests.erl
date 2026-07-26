@@ -2562,3 +2562,240 @@ xor_invalidates_hidden_temp_cache_test() ->
         "   f:	0c22e2        	l32i	a14, a2, 48"
     >>,
     ?assertStream(xtensa, Dump, Stream).
+
+%% Operands past the architecture's immediate / displacement encodings: a
+%% 1024-element tuple index, a 200-slot frame, masks and multipliers that need
+%% a literal. Each has its own backend clause, and nothing in the test corpus
+%% is big enough to reach them.
+large_operand_test_() ->
+    [
+        {"get_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	00a082        	movi	a8, 0\n"
+                    "   6:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   9:	808f80        	add	a8, a15, a8\n"
+                    "   c:	0028e2        	l32i	a14, a8, 0"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to an x register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	00a082        	movi	a8, 0\n"
+                    "   6:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   9:	808f80        	add	a8, a15, a8\n"
+                    "   c:	0028e2        	l32i	a14, a8, 0\n"
+                    "   f:	0c62e2        	s32i	a14, a2, 48"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to a y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {y_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	00a082        	movi	a8, 0\n"
+                    "   6:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   9:	808f80        	add	a8, a15, a8\n"
+                    "   c:	0028d2        	l32i	a13, a8, 0\n"
+                    "   f:	0a22e2        	l32i	a14, a2, 40\n"
+                    "  12:	016ed2        	s32i	a13, a14, 4"
+                >>
+            )
+        end},
+        {"move_to_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, {x_reg, 1}, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	0c22e2        	l32i	a14, a2, 48\n"
+                    "   6:	00a082        	movi	a8, 0\n"
+                    "   9:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   c:	808f80        	add	a8, a15, a8\n"
+                    "   f:	0068e2        	s32i	a14, a8, 0"
+                >>
+            )
+        end},
+        {"move_to_native_register from a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State2, _Reg} = ?BACKEND:move_to_native_register(State0, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0a22e2        	l32i	a14, a2, 40\n"
+                    "   3:	c82ef2        	l32i	a15, a14, 0x320"
+                >>
+            )
+        end},
+        {"move_to_vm_register to a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_vm_register(State1, Reg, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	0a22e2        	l32i	a14, a2, 40\n"
+                    "   6:	c86ef2        	s32i	a15, a14, 0x320"
+                >>
+            )
+        end},
+        {"move_to_vm_register of a large immediate", fun() ->
+            State0 = large_operand_state(),
+            State2 = ?BACKEND:move_to_vm_register(State0, 16#12345678, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	000106        	j	0x8\n"
+                    "   3:	ff          	.byte	0xff\n"
+                    "   4:	5678      	l32i.n	a7, a6, 20\n"
+                    "   6:	f11234        	lsi	f3, a2, 0x3c4\n"
+                    "   9:	ff          	.byte	0xff\n"
+                    "   a:	ff          	.byte	0xff\n"
+                    "   b:	0c62f2        	s32i	a15, a2, 48"
+                >>
+            )
+        end},
+        {"and_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _} = ?BACKEND:and_(State1, {free, Reg}, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	8fa4e2        	movi	a14, 0x48f\n"
+                    "   6:	11eea0        	slli	a14, a14, 6\n"
+                    "   9:	85cee2        	addi	a14, a14, -123\n"
+                    "   c:	10ffe0        	and	a15, a15, a14"
+                >>
+            )
+        end},
+        {"or_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:or_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	8fa4e2        	movi	a14, 0x48f\n"
+                    "   6:	11eea0        	slli	a14, a14, 6\n"
+                    "   9:	85cee2        	addi	a14, a14, -123\n"
+                    "   c:	20ffe0        	or	a15, a15, a14"
+                >>
+            )
+        end},
+        {"xor_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:xor_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	8fa4e2        	movi	a14, 0x48f\n"
+                    "   6:	11eea0        	slli	a14, a14, 6\n"
+                    "   9:	85cee2        	addi	a14, a14, -123\n"
+                    "   c:	30ffe0        	xor	a15, a15, a14"
+                >>
+            )
+        end},
+        {"mul by a constant needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:mul(State1, Reg, 12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	39a0e2        	movi	a14, 57\n"
+                    "   6:	30dee2        	addmi	a14, a14, 0x3000\n"
+                    "   9:	82ffe0        	mull	a15, a15, a14"
+                >>
+            )
+        end},
+        {"if_block on a large immediate", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:if_block(State1, {Reg, '==', 16#12345678}, fun(BSt) ->
+                ?BACKEND:move_to_vm_register(BSt, 0, {x_reg, 1})
+            end),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	000146        	j	0xc\n"
+                    "   6:	78ff00        	lsi	f0, a15, 0x1e0\n"
+                    "   9:	123456        	bnez	a4, 0x130\n"
+                    "   c:	ffffe1        	l32r	a14, 0x8 (0x12345678)\n"
+                    "   f:	021fe7        	beq	a15, a14, 0x15\n"
+                    "  12:	000146        	j	0x1b\n"
+                    "  15:	00a0e2        	movi	a14, 0\n"
+                    "  18:	0c62e2        	s32i	a14, a2, 48"
+                >>
+            )
+        end}
+    ].
+
+large_operand_state() ->
+    ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
+
+large_operand_dump(State, Dump) ->
+    ?assertStream(xtensa, Dump, ?BACKEND:stream(?BACKEND:flush(State))).
+
+%
+
+%% More large-operand shapes, both emitted by jit.erl: a freed base register
+%% (bs_match/bs_get_integer) and an immediate value (put_map key/value).
+large_operand_extra_test_() ->
+    [
+        {"get_array_element at index 1024 with a freed base", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, {free, Base}, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	00a082        	movi	a8, 0\n"
+                    "   6:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   9:	808f80        	add	a8, a15, a8\n"
+                    "   c:	0028f2        	l32i	a15, a8, 0"
+                >>
+            )
+        end},
+        {"move_to_array_element of an immediate at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, 42, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0b22f2        	l32i	a15, a2, 44\n"
+                    "   3:	2aa0e2        	movi	a14, 42\n"
+                    "   6:	00a082        	movi	a8, 0\n"
+                    "   9:	10d882        	addmi	a8, a8, 0x1000\n"
+                    "   c:	808f80        	add	a8, a15, a8\n"
+                    "   f:	0068e2        	s32i	a14, a8, 0"
+                >>
+            )
+        end}
+    ].

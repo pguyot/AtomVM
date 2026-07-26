@@ -509,6 +509,23 @@ increment_sp_test() ->
         >>,
     ?assertStream(arm, Dump, Stream).
 
+%% A frame deallocation of 70 slots (280 bytes) no longer fits the 8-bit adds
+%% immediate and must go through a second register.
+increment_sp_large_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:increment_sp(State0, 70),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	6a87      	ldr	r7, [r0, #40]\n"
+            "   2:	2601      	movs	r6, #1\n"
+            "   4:	0236      	lsls	r6, r6, #8\n"
+            "   6:	3618      	adds	r6, #24\n"
+            "   8:	4437      	add	r7, r6\n"
+            "   a:	6287      	str	r7, [r0, #40]"
+        >>,
+    ?assertStream(arm, Dump, Stream).
+
 if_block_test_() ->
     {setup,
         fun() ->
@@ -2818,6 +2835,45 @@ move_to_vm_register_test_() ->
                         "   a:	e079      	b.n	0x100"
                     >>)
                 end),
+                %% Test: y_reg index (64) whose byte offset (256) no longer
+                %% fits the 8-bit movs immediate used to build it
+                ?_test(begin
+                    move_to_vm_register_test0(State0, 42, {y_reg, 64}, <<
+                        "   0:	262a      	movs	r6, #42	; 0x2a\n"
+                        "   2:	6a87      	ldr	r7, [r0, #40]\n"
+                        "   4:	2501      	movs	r5, #1\n"
+                        "   6:	022d      	lsls	r5, r5, #8\n"
+                        "   8:	443d      	add	r5, r7\n"
+                        "   a:	602e      	str	r6, [r5, #0]\n"
+                        "   c:	e078      	b.n	0x100"
+                    >>)
+                end),
+                %% Test: y_reg index (300) whose byte offset (1200) is neither
+                %% an 8-bit immediate nor a shifted byte
+                ?_test(begin
+                    move_to_vm_register_test0(State0, 42, {y_reg, 300}, <<
+                        "   0:	262a      	movs	r6, #42	; 0x2a\n"
+                        "   2:	6a87      	ldr	r7, [r0, #40]\n"
+                        "   4:	2504      	movs	r5, #4\n"
+                        "   6:	022d      	lsls	r5, r5, #8\n"
+                        "   8:	35b0      	adds	r5, #176	; 0xb0\n"
+                        "   a:	443d      	add	r5, r7\n"
+                        "   c:	602e      	str	r6, [r5, #0]\n"
+                        "   e:	e077      	b.n	0x100"
+                    >>)
+                end),
+                %% Test: reading back a y_reg with a large byte offset
+                ?_test(begin
+                    move_to_vm_register_test0(State0, {y_reg, 64}, {x_reg, 0}, <<
+                        "   0:	6a86      	ldr	r6, [r0, #40]\n"
+                        "   2:	2701      	movs	r7, #1\n"
+                        "   4:	023f      	lsls	r7, r7, #8\n"
+                        "   6:	4437      	add	r7, r6\n"
+                        "   8:	683f      	ldr	r7, [r7, #0]\n"
+                        "   a:	62c7      	str	r7, [r0, #44]\n"
+                        "   c:	e078      	b.n	0x100"
+                    >>)
+                end),
                 %% Test: Negative immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, -1, {x_reg, 0}, <<
@@ -4464,3 +4520,258 @@ y_reg_load_last_available_register_test() ->
             "   c:	6809      	ldr	r1, [r1, #0]"
         >>,
     ?assertStream(arm, Dump, Stream).
+
+%% Operands past the architecture's immediate / displacement encodings: a
+%% 1024-element tuple index, a 200-slot frame, masks and multipliers that need
+%% a literal. Each has its own backend clause, and nothing in the test corpus
+%% is big enough to reach them.
+large_operand_test_() ->
+    [
+        {"get_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4d01      	ldr	r5, [pc, #4]	@ (0x8)\n"
+                    "   4:	443d      	add	r5, r7\n"
+                    "   6:	6fee      	ldr	r6, [r5, #124]	@ 0x7c\n"
+                    "   8:	0f84      	lsrs	r4, r0, #30\n"
+                    "   a:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to an x register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e02      	ldr	r6, [pc, #8]	@ (0xc)\n"
+                    "   4:	443e      	add	r6, r7\n"
+                    "   6:	6ff5      	ldr	r5, [r6, #124]	@ 0x7c\n"
+                    "   8:	6305      	str	r5, [r0, #48]	@ 0x30\n"
+                    "   a:	0000      	movs	r0, r0\n"
+                    "   c:	0f84      	lsrs	r4, r0, #30\n"
+                    "   e:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to a y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {y_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4d02      	ldr	r5, [pc, #8]	@ (0xc)\n"
+                    "   4:	443d      	add	r5, r7\n"
+                    "   6:	6fed      	ldr	r5, [r5, #124]	@ 0x7c\n"
+                    "   8:	6a86      	ldr	r6, [r0, #40]	@ 0x28\n"
+                    "   a:	6075      	str	r5, [r6, #4]\n"
+                    "   c:	0f84      	lsrs	r4, r0, #30\n"
+                    "   e:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"move_to_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, {x_reg, 1}, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+                    "   4:	4d01      	ldr	r5, [pc, #4]	@ (0xc)\n"
+                    "   6:	443d      	add	r5, r7\n"
+                    "   8:	67ee      	str	r6, [r5, #124]	@ 0x7c\n"
+                    "   a:	0000      	movs	r0, r0\n"
+                    "   c:	0f84      	lsrs	r4, r0, #30\n"
+                    "   e:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"move_to_native_register from a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State2, _Reg} = ?BACKEND:move_to_native_register(State0, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6a86      	ldr	r6, [r0, #40]	@ 0x28\n"
+                    "   2:	2703      	movs	r7, #3\n"
+                    "   4:	023f      	lsls	r7, r7, #8\n"
+                    "   6:	3720      	adds	r7, #32\n"
+                    "   8:	4437      	add	r7, r6\n"
+                    "   a:	683f      	ldr	r7, [r7, #0]"
+                >>
+            )
+        end},
+        {"move_to_vm_register to a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_vm_register(State1, Reg, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	6a86      	ldr	r6, [r0, #40]	@ 0x28\n"
+                    "   4:	2503      	movs	r5, #3\n"
+                    "   6:	022d      	lsls	r5, r5, #8\n"
+                    "   8:	3520      	adds	r5, #32\n"
+                    "   a:	4435      	add	r5, r6\n"
+                    "   c:	602f      	str	r7, [r5, #0]"
+                >>
+            )
+        end},
+        {"move_to_vm_register of a large immediate", fun() ->
+            State0 = large_operand_state(),
+            State2 = ?BACKEND:move_to_vm_register(State0, 16#12345678, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	4f00      	ldr	r7, [pc, #0]	@ (0x4)\n"
+                    "   2:	6307      	str	r7, [r0, #48]	@ 0x30\n"
+                    "   4:	5678      	ldrsb	r0, [r7, r1]\n"
+                    "   6:	1234      	asrs	r4, r6, #8"
+                >>
+            )
+        end},
+        {"and_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _} = ?BACKEND:and_(State1, {free, Reg}, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e01      	ldr	r6, [pc, #4]	@ (0x8)\n"
+                    "   4:	4037      	ands	r7, r6\n"
+                    "   6:	0000      	movs	r0, r0\n"
+                    "   8:	2345      	movs	r3, #69	@ 0x45\n"
+                    "   a:	0001      	movs	r1, r0"
+                >>
+            )
+        end},
+        {"or_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:or_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e01      	ldr	r6, [pc, #4]	@ (0x8)\n"
+                    "   4:	4337      	orrs	r7, r6\n"
+                    "   6:	0000      	movs	r0, r0\n"
+                    "   8:	2345      	movs	r3, #69	@ 0x45\n"
+                    "   a:	0001      	movs	r1, r0"
+                >>
+            )
+        end},
+        {"xor_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:xor_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e01      	ldr	r6, [pc, #4]	@ (0x8)\n"
+                    "   4:	4077      	eors	r7, r6\n"
+                    "   6:	0000      	movs	r0, r0\n"
+                    "   8:	2345      	movs	r3, #69	@ 0x45\n"
+                    "   a:	0001      	movs	r1, r0"
+                >>
+            )
+        end},
+        {"mul by a constant needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:mul(State1, Reg, 12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e01      	ldr	r6, [pc, #4]	@ (0x8)\n"
+                    "   4:	4377      	muls	r7, r6\n"
+                    "   6:	0000      	movs	r0, r0\n"
+                    "   8:	3039      	adds	r0, #57	@ 0x39\n"
+                    "   a:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"if_block on a large immediate", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:if_block(State1, {Reg, '==', 16#12345678}, fun(BSt) ->
+                ?BACKEND:move_to_vm_register(BSt, 0, {x_reg, 1})
+            end),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e02      	ldr	r6, [pc, #8]	@ (0xc)\n"
+                    "   4:	42b7      	cmp	r7, r6\n"
+                    "   6:	d101      	bne.n	0xc\n"
+                    "   8:	2600      	movs	r6, #0\n"
+                    "   a:	6306      	str	r6, [r0, #48]	@ 0x30\n"
+                    "   c:	5678      	ldrsb	r0, [r7, r1]\n"
+                    "   e:	1234      	asrs	r4, r6, #8"
+                >>
+            )
+        end}
+    ].
+
+large_operand_state() ->
+    ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
+
+large_operand_dump(State, Dump) ->
+    ?assertStream(arm, Dump, ?BACKEND:stream(?BACKEND:flush(State))).
+
+%
+
+%% More large-operand shapes, both emitted by jit.erl: a freed base register
+%% (bs_match/bs_get_integer) and an immediate value (put_map key/value).
+large_operand_extra_test_() ->
+    [
+        {"get_array_element at index 1024 with a freed base", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, {free, Base}, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	4e01      	ldr	r6, [pc, #4]	@ (0x8)\n"
+                    "   4:	4437      	add	r7, r6\n"
+                    "   6:	6fff      	ldr	r7, [r7, #124]	@ 0x7c\n"
+                    "   8:	0f84      	lsrs	r4, r0, #30\n"
+                    "   a:	0000      	movs	r0, r0"
+                >>
+            )
+        end},
+        {"move_to_array_element of an immediate at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, 42, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	262a      	movs	r6, #42	@ 0x2a\n"
+                    "   4:	4d01      	ldr	r5, [pc, #4]	@ (0xc)\n"
+                    "   6:	443d      	add	r5, r7\n"
+                    "   8:	67ee      	str	r6, [r5, #124]	@ 0x7c\n"
+                    "   a:	0000      	movs	r0, r0\n"
+                    "   c:	0f84      	lsrs	r4, r0, #30\n"
+                    "   e:	0000      	movs	r0, r0"
+                >>
+            )
+        end}
+    ].
