@@ -175,10 +175,15 @@ test_bitstring_source() ->
     %% a /binary segment rejects a partial source rather than truncating it
     badarg = expect_error(fun() -> append_binary_to(Bits1, id(<<1, 2>>)) end),
 
-    %% a big integer (> 64 bits) written by the legacy bs_put_integer opcode at a
-    %% non-byte-aligned offset is not supported: the whole-byte bignum writer
-    %% cannot place it, so AtomVM rejects it rather than misplacing the bits.
-    %% BEAM builds it, so check only on AtomVM.
+    ok = check_wide_int_after(Bits1),
+    ok.
+
+-if(?OTP_RELEASE =< 27).
+%% A big integer (> 64 bits) written by the legacy bs_put_integer opcode at a
+%% non-byte-aligned offset is not supported: the whole-byte bignum writer
+%% cannot place it, so AtomVM rejects it rather than misplacing the bits.
+%% BEAM builds it, so check only on AtomVM.
+check_wide_int_after(Bits1) ->
     case erlang:system_info(machine) of
         "ATOM" ->
             %% the interpreter raises unsupported, the JIT badarg; either way it
@@ -189,8 +194,18 @@ test_bitstring_source() ->
             end;
         _ ->
             ok
-    end,
+    end.
+-else.
+%% OTP 28+ has no no_bs_create_bin, so this segment goes through bs_create_bin,
+%% whose bit-granular bignum writer places a > 64-bit field at any offset. The
+%% legacy opcode above is not emitted at all here, so there is nothing to
+%% reject: check that the bits land where they should instead. Expressed as a
+%% literal rather than rebuilding it with the same code path under test:
+%% Bits1 is <<1:1>>, so the result is a 1 bit, then 1 bsl 100 in 101 bits.
+check_wide_int_after(Bits1) ->
+    <<3:2, 0:100>> = put_wide_int_after(Bits1, id(1 bsl 100)),
     ok.
+-endif.
 
 put_wide_int_after(Bits, V) ->
     <<Bits/bitstring, V:101>>.
