@@ -606,15 +606,34 @@ static enum TermTypeIndex term_type_to_index(term t)
     }                                        \
     t = temp_stack_pop(&temp_stack);
 
-// Equality-only comparison of two flat maps of the same size. Entries are kept
-// in term_compare(TermCompareExact) key order, so a parallel index walk is
-// valid and stops at the first differing pair -- unlike the ordering path,
+// Equality-only comparison of two maps of the same size. Entries are kept in
+// term_compare(TermCompareExact) key order in both representations, so flat
+// operands are walked by index and tree operands in parallel by termtree_equal,
+// stopping at the first differing pair -- unlike the ordering path,
 // which materialises every key and value on the temp stack before comparing
 // anything. Element pairs go to the generic comparator with plain
 // TermCompareExact, exactly like the delegation below, so a nested map cannot
 // recurse back into this walk and grow the C stack without bound.
+//
+// TermCompareMemoryAllocFail is returned when the pair is not answerable here,
+// so the caller falls back to the generic comparator.
 static TermCompareResult map_exact_equals(term t, term other, int size, GlobalContext *global)
 {
+    bool t_tree = term_is_map_tree(t);
+    if (t_tree != term_is_map_tree(other)) {
+        return TermCompareMemoryAllocFail;
+    }
+    if (t_tree) {
+        switch (
+            termtree_equal(term_get_map_tree_root(t), term_get_map_tree_root(other), global)) {
+            case 1:
+                return TermEquals;
+            case 0:
+                return TermLessThan;
+            default:
+                return TermCompareMemoryAllocFail;
+        }
+    }
     for (int i = 0; i < size; i++) {
         term tk = term_get_map_key(t, i);
         term ok = term_get_map_key(other, i);
@@ -776,9 +795,11 @@ deep:;
                         result = TermLessThan;
                         goto done;
                     }
-                    if (!term_is_map_tree(t) && !term_is_map_tree(other)) {
-                        pair = map_exact_equals(t, other, t_size, global);
-                    } else {
+                    pair = map_exact_equals(t, other, t_size, global);
+                    if (pair == TermCompareMemoryAllocFail) {
+                        // Not answerable by the direct walk (operands in
+                        // different representations, or a tree deeper than the
+                        // cursor bound): let the generic comparator handle it.
                         pair = term_compare(t, other, TermCompareExact, global);
                     }
                 } else {
