@@ -63,6 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoder's key order, which broke `==` and made `=>` updates on an existing key produce
   duplicate keys
 - Fixed `binary_to_term/1,2` accepting maps with duplicate keys instead of raising `badarg`
+- Fixed the JIT pinned-register entry shims reading their register with a read-modify-write
+  asm constraint, which made the compiler load the pinned register from the shim's own
+  uninitialized stack slot and hand the primitive a null `ctx`/`jit_state`. Optimized builds
+  were unaffected, so this only broke unoptimized builds of every pinned-register backend
+  (x86_64, aarch64, arm32, riscv)
 - Fixed the JIT direct-dispatch tail following a stale continuation when a load-trapped
   process was returned unsuspended by the scheduler (a message made it ready during the
   call), re-executing caller code while the process was trapped
