@@ -2307,6 +2307,30 @@ with_temp(#state{regs = Regs0} = State0, EmitFun, ContentsFun) ->
 %% @param Dest vm or native register to move to
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+%% lw/sw (ld/sd on rv64) encode a signed 12-bit displacement, i.e. at most
+%% 2047 bytes: an element past the 511th (255th on rv64) needs the address
+%% materialised first. Scratch may be the destination register but must not be
+%% the base, which is still live when the offset is loaded.
+-define(LOAD_STORE_MAX_OFFSET, 2047).
+
+array_load_code(DstReg, BaseReg, Offset, _Scratch) when Offset =< ?LOAD_STORE_MAX_OFFSET ->
+    ?LOAD_WORD(DstReg, BaseReg, Offset);
+array_load_code(DstReg, BaseReg, Offset, Scratch) ->
+    <<
+        (?ASM:li(Scratch, Offset))/binary,
+        (?ASM:add(Scratch, BaseReg, Scratch))/binary,
+        (?LOAD_WORD(DstReg, Scratch, 0))/binary
+    >>.
+
+array_store_code(BaseReg, ValueReg, Offset, _Scratch) when Offset =< ?LOAD_STORE_MAX_OFFSET ->
+    ?STORE_WORD(BaseReg, ValueReg, Offset);
+array_store_code(BaseReg, ValueReg, Offset, Scratch) ->
+    <<
+        (?ASM:li(Scratch, Offset))/binary,
+        (?ASM:add(Scratch, BaseReg, Scratch))/binary,
+        (?STORE_WORD(Scratch, ValueReg, 0))/binary
+    >>.
+
 move_array_element(
     #state{stream_module = StreamModule, stream = _Stream0, regs = Regs0} =
         State0,
@@ -2318,7 +2342,7 @@ move_array_element(
     State = pending_elide_prev(State0, X),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = ?LOAD_WORD(Temp, Reg, Index * ?WORD_SIZE_BYTES),
+    I1 = array_load_code(Temp, Reg, Index * ?WORD_SIZE_BYTES, Temp),
     {BaseReg, Off} = ?X_REG(X),
     I2 = ?STORE_WORD(BaseReg, Temp, Off),
     Stream1 = StreamModule:append(State#state.stream, <<I1/binary, I2/binary>>),
@@ -2335,7 +2359,7 @@ move_array_element(
 ) when is_atom(Reg) andalso is_integer(Index) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    I1 = ?LOAD_WORD(Temp, Reg, Index * ?WORD_SIZE_BYTES),
+    I1 = array_load_code(Temp, Reg, Index * ?WORD_SIZE_BYTES, Temp),
     I2 = ?STORE_WORD(Dest, Temp, 0),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
@@ -2352,7 +2376,7 @@ move_array_element(
     Avail2 = Avail band (bnot reg_bit(Temp1)),
     Temp2 = first_avail(Avail2),
     AT = Avail2 band (bnot reg_bit(Temp2)),
-    I1 = ?LOAD_WORD(Temp2, Reg, Index * ?WORD_SIZE_BYTES),
+    I1 = array_load_code(Temp2, Reg, Index * ?WORD_SIZE_BYTES, Temp2),
     YCode = str_y_reg(Temp2, Y, Temp1, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -2370,7 +2394,7 @@ move_array_element(
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
     AT = Avail band (bnot reg_bit(Temp)),
-    I1 = ?LOAD_WORD(Reg, Reg, Index * ?WORD_SIZE_BYTES),
+    I1 = array_load_code(Reg, Reg, Index * ?WORD_SIZE_BYTES, Temp),
     YCode = str_y_reg(Reg, Y, Temp, AT),
     Code = <<I1/binary, YCode/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
@@ -2384,9 +2408,15 @@ move_array_element(
     Index,
     Dest
 ) when is_atom(Dest) andalso is_integer(Index) ->
-    I1 = ?LOAD_WORD(Dest, Reg, Index * ?WORD_SIZE_BYTES),
+    %% Dest doubles as the address scratch unless it is the base itself.
+    Scratch =
+        case Dest of
+            Reg -> first_avail(jit_regs:available_regs(Regs0));
+            _ -> Dest
+        end,
+    I1 = array_load_code(Dest, Reg, Index * ?WORD_SIZE_BYTES, Scratch),
     Stream1 = StreamModule:append(Stream0, I1),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Dest),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Scratch), Dest),
     State#state{stream = Stream1, regs = Regs1};
 move_array_element(
     #state{
@@ -2476,9 +2506,10 @@ get_array_element(
     {free, Reg},
     Index
 ) ->
-    I1 = ?LOAD_WORD(Reg, Reg, Index * ?WORD_SIZE_BYTES),
+    Scratch = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = array_load_code(Reg, Reg, Index * ?WORD_SIZE_BYTES, Scratch),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Scratch), Reg),
     {State#state{stream = Stream1, regs = Regs1}, Reg};
 get_array_element(
     #state{
@@ -2492,7 +2523,7 @@ get_array_element(
     Avail = jit_regs:available_regs(Regs0),
     ElemReg = first_avail(Avail),
     ElemBit = reg_bit(ElemReg),
-    I1 = ?LOAD_WORD(ElemReg, Reg, Index * ?WORD_SIZE_BYTES),
+    I1 = array_load_code(ElemReg, Reg, Index * ?WORD_SIZE_BYTES, ElemReg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, ElemReg),
     {
@@ -2505,14 +2536,15 @@ get_array_element(
 
 %% @doc move an integer, a vm or native register to reg[x]
 move_to_array_element(
-    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
     ValueReg,
     Reg,
     Index
 ) when ?IS_GPR(ValueReg) andalso ?IS_GPR(Reg) andalso is_integer(Index) ->
-    I1 = ?STORE_WORD(Reg, ValueReg, Index * ?WORD_SIZE_BYTES),
+    Scratch = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = array_store_code(Reg, ValueReg, Index * ?WORD_SIZE_BYTES, Scratch),
     Stream1 = StreamModule:append(Stream0, I1),
-    State0#state{stream = Stream1};
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Scratch)};
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State0,

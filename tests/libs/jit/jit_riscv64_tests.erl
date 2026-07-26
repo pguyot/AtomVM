@@ -3857,3 +3857,225 @@ cached_move_to_vm_imm_reuse_test() ->
         "   4:	05f4bc23          	sd	t6,88(s1)"
     >>,
     ?assertStream(riscv64, Dump, Stream).
+
+%% Operands past the architecture's immediate / displacement encodings: a
+%% 1024-element tuple index, a 200-slot frame, masks and multipliers that need
+%% a literal. Each has its own backend clause, and nothing in the test corpus
+%% is big enough to reach them.
+large_operand_test_() ->
+    [
+        {"get_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f09                	lui	t5,0x2\n"
+                    "   6:	01ef8f33          	add	t5,t6,t5\n"
+                    "   a:	000f3f03          	ld	t5,0(t5) # 0x2000"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to an x register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f09                	lui	t5,0x2\n"
+                    "   6:	01ef8f33          	add	t5,t6,t5\n"
+                    "   a:	000f3f03          	ld	t5,0(t5) # 0x2000\n"
+                    "   e:	07e4b023          	sd	t5,96(s1)"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to a y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {y_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6e89                	lui	t4,0x2\n"
+                    "   6:	01df8eb3          	add	t4,t6,t4\n"
+                    "   a:	000ebe83          	ld	t4,0(t4) # 0x2000\n"
+                    "   e:	01da3423          	sd	t4,8(s4)"
+                >>
+            )
+        end},
+        {"move_to_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, {x_reg, 1}, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	0604bf03          	ld	t5,96(s1)\n"
+                    "   8:	6e89                	lui	t4,0x2\n"
+                    "   a:	01df8eb3          	add	t4,t6,t4\n"
+                    "   e:	01eeb023          	sd	t5,0(t4) # 0x2000"
+                >>
+            )
+        end},
+        {"move_to_native_register from a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State2, _Reg} = ?BACKEND:move_to_native_register(State0, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	64000f93          	li	t6,1600\n"
+                    "   4:	9fd2                	add	t6,t6,s4\n"
+                    "   6:	000fbf83          	ld	t6,0(t6)"
+                >>
+            )
+        end},
+        {"move_to_vm_register to a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_vm_register(State1, Reg, {y_reg, 200}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	64000f13          	li	t5,1600\n"
+                    "   8:	9f52                	add	t5,t5,s4\n"
+                    "   a:	01ff3023          	sd	t6,0(t5)"
+                >>
+            )
+        end},
+        {"move_to_vm_register of a large immediate", fun() ->
+            State0 = large_operand_state(),
+            State2 = ?BACKEND:move_to_vm_register(State0, 16#12345678, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	12345fb7          	lui	t6,0x12345\n"
+                    "   4:	678f8f9b          	addiw	t6,t6,1656 # 0x12345678\n"
+                    "   8:	07f4b023          	sd	t6,96(s1)"
+                >>
+            )
+        end},
+        {"and_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _} = ?BACKEND:and_(State1, {free, Reg}, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f49                	lui	t5,0x12\n"
+                    "   6:	345f0f1b          	addiw	t5,t5,837 # 0x12345\n"
+                    "   a:	01efffb3          	and	t6,t6,t5"
+                >>
+            )
+        end},
+        {"or_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:or_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f49                	lui	t5,0x12\n"
+                    "   6:	345f0f1b          	addiw	t5,t5,837 # 0x12345\n"
+                    "   a:	01efefb3          	or	t6,t6,t5"
+                >>
+            )
+        end},
+        {"xor_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:xor_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f49                	lui	t5,0x12\n"
+                    "   6:	345f0f1b          	addiw	t5,t5,837 # 0x12345\n"
+                    "   a:	01efcfb3          	xor	t6,t6,t5"
+                >>
+            )
+        end},
+        {"mul by a constant needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:mul(State1, Reg, 12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f0d                	lui	t5,0x3\n"
+                    "   6:	039f0f1b          	addiw	t5,t5,57 # 0x3039\n"
+                    "   a:	03ef8fb3          	mul	t6,t6,t5"
+                >>
+            )
+        end},
+        {"if_block on a large immediate", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:if_block(State1, {Reg, '==', 16#12345678}, fun(BSt) ->
+                ?BACKEND:move_to_vm_register(BSt, 0, {x_reg, 1})
+            end),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	12345f37          	lui	t5,0x12345\n"
+                    "   8:	678f0f1b          	addiw	t5,t5,1656 # 0x12345678\n"
+                    "   c:	01ef9563          	bne	t6,t5,0x16\n"
+                    "  10:	4f01                	li	t5,0\n"
+                    "  12:	07e4b023          	sd	t5,96(s1)"
+                >>
+            )
+        end}
+    ].
+
+large_operand_state() ->
+    ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
+
+large_operand_dump(State, Dump) ->
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(?BACKEND:flush(State))).
+
+%
+
+%% More large-operand shapes, both emitted by jit.erl: a freed base register
+%% (bs_match/bs_get_integer) and an immediate value (put_map key/value).
+large_operand_extra_test_() ->
+    [
+        {"get_array_element at index 1024 with a freed base", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, {free, Base}, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	6f09                	lui	t5,0x2\n"
+                    "   6:	01ef8f33          	add	t5,t6,t5\n"
+                    "   a:	000f3f83          	ld	t6,0(t5) # 0x2000"
+                >>
+            )
+        end},
+        {"move_to_array_element of an immediate at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, 42, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	0584bf83          	ld	t6,88(s1)\n"
+                    "   4:	02a00f13          	li	t5,42\n"
+                    "   8:	6e89                	lui	t4,0x2\n"
+                    "   a:	01df8eb3          	add	t4,t6,t4\n"
+                    "   e:	01eeb023          	sd	t5,0(t4) # 0x2000"
+                >>
+            )
+        end}
+    ].

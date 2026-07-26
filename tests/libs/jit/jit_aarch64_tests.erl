@@ -3038,3 +3038,220 @@ jump_to_label_cond_fused_forward_far_test() ->
         (jit_aarch64_asm:b(LabelOffset - BranchOffset - 4))/binary
     >>,
     ?assertEqual(Expected, binary:part(Stream, BranchOffset, 8)).
+
+%% Every register the allocator can park a VM x register in must have a DWARF
+%% number: with -DJIT_DWARF, jit_dwarf:extract_x_reg_locations/2 maps the whole
+%% jit_regs contents through dwarf_register_number/1 at every opcode, so a
+%% missing clause is a function_clause crash at compile time (it was: the x25-x28
+%% home registers were absent, which broke 29% of the corpus).
+dwarf_register_number_covers_every_content_register_test() ->
+    case erlang:function_exported(?BACKEND, dwarf_register_number, 1) of
+        false ->
+            %% jit_aarch64 built without -DJIT_DWARF
+            ok;
+        true ->
+            Regs =
+                lists:seq(0, 15) ++
+                    %% pinned: ctx, jit_state, native_interface, ...
+                    [19, 20, 21] ++
+                    %% x25-x28: home registers for VM x0-x3
+                    [25, 26, 27, 28],
+            lists:foreach(
+                fun(N) ->
+                    Reg = list_to_atom("r" ++ integer_to_list(N)),
+                    ?assertEqual(N, ?BACKEND:dwarf_register_number(Reg))
+                end,
+                Regs
+            )
+    end.
+
+%% Operands past the architecture's immediate / displacement encodings: a
+%% 1024-element tuple index, a 200-slot frame, masks and multipliers that need
+%% a literal. Each has its own backend clause, and nothing in the test corpus
+%% is big enough to reach them.
+large_operand_test_() ->
+    [
+        {"get_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, Base, 1024),
+            large_operand_dump(
+                State2, <<"   0:	aa1903e7 	mov	x7, x25\n   4:	f95000e8 	ldr	x8, [x7, #8192]">>
+            )
+        end},
+        {"move_array_element from index 1024 to an x register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	f95000e8 	ldr	x8, [x7, #8192]\n"
+                    "   8:	aa0803fa 	mov	x26, x8\n"
+                    "   c:	f90032a8 	str	x8, [x21, #96]"
+                >>
+            )
+        end},
+        {"move_array_element from index 1024 to a y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_array_element(State1, Base, 1024, {y_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	f95000e8 	ldr	x8, [x7, #8192]\n"
+                    "   8:	f90006e8 	str	x8, [x23, #8]"
+                >>
+            )
+        end},
+        {"move_to_array_element at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, {x_reg, 1}, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	aa1a03e8 	mov	x8, x26\n"
+                    "   8:	f91000e8 	str	x8, [x7, #8192]"
+                >>
+            )
+        end},
+        {"move_to_native_register from a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State2, _Reg} = ?BACKEND:move_to_native_register(State0, {y_reg, 200}),
+            large_operand_dump(State2, <<"   0:	f94322e7 	ldr	x7, [x23, #1600]">>)
+        end},
+        {"move_to_vm_register to a deep y register", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_vm_register(State1, Reg, {y_reg, 200}),
+            large_operand_dump(
+                State2, <<"   0:	aa1903e7 	mov	x7, x25\n   4:	f90322e7 	str	x7, [x23, #1600]">>
+            )
+        end},
+        {"move_to_vm_register of a large immediate", fun() ->
+            State0 = large_operand_state(),
+            State2 = ?BACKEND:move_to_vm_register(State0, 16#12345678, {x_reg, 1}),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	d28acf07 	mov	x7, #0x5678\n"
+                    "   4:	f2a24687 	movk	x7, #0x1234, lsl #16\n"
+                    "   8:	aa0703fa 	mov	x26, x7\n"
+                    "   c:	f90032a7 	str	x7, [x21, #96]"
+                >>
+            )
+        end},
+        {"and_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _} = ?BACKEND:and_(State1, {free, Reg}, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d28468a8 	mov	x8, #0x2345\n"
+                    "   8:	f2a00028 	movk	x8, #0x1, lsl #16\n"
+                    "   c:	8a0800e7 	and	x7, x7, x8"
+                >>
+            )
+        end},
+        {"or_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:or_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d28468a8 	mov	x8, #0x2345\n"
+                    "   8:	f2a00028 	movk	x8, #0x1, lsl #16\n"
+                    "   c:	aa0800e7 	orr	x7, x7, x8"
+                >>
+            )
+        end},
+        {"xor_ with a mask needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:xor_(State1, Reg, 16#12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d28468a8 	mov	x8, #0x2345\n"
+                    "   8:	f2a00028 	movk	x8, #0x1, lsl #16\n"
+                    "   c:	ca0800e7 	eor	x7, x7, x8"
+                >>
+            )
+        end},
+        {"mul by a constant needing a literal", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:mul(State1, Reg, 12345),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d2860728 	mov	x8, #0x3039\n"
+                    "   8:	9b087ce7 	mul	x7, x7, x8"
+                >>
+            )
+        end},
+        {"if_block on a large immediate", fun() ->
+            State0 = large_operand_state(),
+            {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:if_block(State1, {Reg, '==', 16#12345678}, fun(BSt) ->
+                ?BACKEND:move_to_vm_register(BSt, 0, {x_reg, 1})
+            end),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d28acf10 	mov	x16, #0x5678\n"
+                    "   8:	f2a24690 	movk	x16, #0x1234, lsl #16\n"
+                    "   c:	eb1000ff 	cmp	x7, x16\n"
+                    "  10:	54000061 	b.ne	0x1c\n"
+                    "  14:	aa1f03fa 	mov	x26, xzr\n"
+                    "  18:	f90032bf 	str	xzr, [x21, #96]"
+                >>
+            )
+        end}
+    ].
+
+large_operand_state() ->
+    ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
+
+large_operand_dump(State, Dump) ->
+    ?assertStream(aarch64, Dump, ?BACKEND:stream(?BACKEND:flush(State))).
+
+%
+
+%% More large-operand shapes, both emitted by jit.erl: a freed base register
+%% (bs_match/bs_get_integer) and an immediate value (put_map key/value).
+large_operand_extra_test_() ->
+    [
+        {"get_array_element at index 1024 with a freed base", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State2, _Reg} = ?BACKEND:get_array_element(State1, {free, Base}, 1024),
+            large_operand_dump(
+                State2, <<"   0:	aa1903e7 	mov	x7, x25\n   4:	f95000e7 	ldr	x7, [x7, #8192]">>
+            )
+        end},
+        {"move_to_array_element of an immediate at index 1024", fun() ->
+            State0 = large_operand_state(),
+            {State1, Base} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            State2 = ?BACKEND:move_to_array_element(State1, 42, Base, 1024),
+            large_operand_dump(
+                State2,
+                <<
+                    "   0:	aa1903e7 	mov	x7, x25\n"
+                    "   4:	d2800548 	mov	x8, #0x2a\n"
+                    "   8:	f91000e8 	str	x8, [x7, #8192]"
+                >>
+            )
+        end}
+    ].

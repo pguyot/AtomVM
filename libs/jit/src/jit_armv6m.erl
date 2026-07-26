@@ -3589,13 +3589,38 @@ increment_sp(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
+    AT = Avail band (bnot reg_bit(Reg)),
     I1 = jit_armv6m_asm:ldr(Reg, ?Y_REGS),
-    I2 = jit_armv6m_asm:adds(Reg, Offset * 4),
     I3 = jit_armv6m_asm:str(Reg, ?Y_REGS),
+    %% adds only encodes an 8-bit immediate; deeper frames need the byte count
+    %% materialized in a second register (IP_REG when none is available).
+    {I2, Regs1} =
+        if
+            Offset * 4 =< 255 ->
+                {jit_armv6m_asm:adds(Reg, Offset * 4), Regs0};
+            AT =/= 0 ->
+                Temp = first_avail(AT),
+                {
+                    <<
+                        (mov_offset_code(Temp, Offset * 4))/binary,
+                        (jit_armv6m_asm:add(Reg, Temp))/binary
+                    >>,
+                    jit_regs:invalidate_reg(Regs0, Temp)
+                };
+            true ->
+                {
+                    <<
+                        (jit_armv6m_asm:mov(?IP_REG, Reg))/binary,
+                        (mov_offset_code(Reg, Offset * 4))/binary,
+                        (jit_armv6m_asm:add(Reg, ?IP_REG))/binary
+                    >>,
+                    Regs0
+                }
+        end,
     Code = <<I1/binary, I2/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    Regs2 = jit_regs:invalidate_reg(Regs1, Reg),
+    State#state{stream = Stream1, regs = Regs2}.
 
 set_continuation_to_label(
     StateP,
@@ -4749,6 +4774,35 @@ return_labels_and_lines(
     ),
     State#state{stream = Stream1}.
 
+%% Materialize a y_reg byte offset into a register. Thumb-1 movs only encodes
+%% an 8-bit immediate, so anything larger is built one byte at a time: the
+%% most significant byte first, then a shift (and an add when the byte is
+%% non-zero) per remaining byte. Frames with 64 slots or more (offset 256)
+%% already need this.
+mov_offset_code(Reg, Offset) when Offset >= 0, Offset =< 255 ->
+    jit_armv6m_asm:movs(Reg, Offset);
+mov_offset_code(Reg, Offset) when Offset > 255 ->
+    Shift = 8 * (byte_len(Offset) - 1),
+    I1 = jit_armv6m_asm:movs(Reg, Offset bsr Shift),
+    mov_offset_code0(Reg, Offset, Shift, I1).
+
+mov_offset_code0(_Reg, _Offset, 0, Acc) ->
+    Acc;
+mov_offset_code0(Reg, Offset, Shift, Acc) ->
+    I1 = jit_armv6m_asm:lsls(Reg, Reg, 8),
+    Byte = (Offset bsr (Shift - 8)) band 16#FF,
+    Acc1 =
+        case Byte of
+            0 -> <<Acc/binary, I1/binary>>;
+            _ -> <<Acc/binary, I1/binary, (jit_armv6m_asm:adds(Reg, Byte))/binary>>
+        end,
+    mov_offset_code0(Reg, Offset, Shift - 8, Acc1).
+
+byte_len(Value) when Value =< 16#FF -> 1;
+byte_len(Value) when Value =< 16#FFFF -> 2;
+byte_len(Value) when Value =< 16#FFFFFF -> 3;
+byte_len(_Value) -> 4.
+
 %% Helper function to generate str instruction with y_reg offset, handling large offsets
 str_y_reg(SrcReg, Y, TempReg, _AvailMask) when Y * 4 =< 124 ->
     % Small offset - use immediate addressing
@@ -4758,18 +4812,16 @@ str_y_reg(SrcReg, Y, TempReg, _AvailMask) when Y * 4 =< 124 ->
 str_y_reg(SrcReg, Y, TempReg1, AvailMask) when AvailMask =/= 0 ->
     % Large offset - use register arithmetic with second available register
     TempReg2 = first_avail(AvailMask),
-    Offset = Y * 4,
     I1 = jit_armv6m_asm:ldr(TempReg1, ?Y_REGS),
-    I2 = jit_armv6m_asm:movs(TempReg2, Offset),
+    I2 = mov_offset_code(TempReg2, Y * 4),
     I3 = jit_armv6m_asm:add(TempReg2, TempReg1),
     I4 = jit_armv6m_asm:str(SrcReg, {TempReg2, 0}),
     <<I1/binary, I2/binary, I3/binary, I4/binary>>;
 str_y_reg(SrcReg, Y, TempReg1, 0) ->
     % Large offset - no additional registers available, use IP_REG as second temp
-    Offset = Y * 4,
     I1 = jit_armv6m_asm:ldr(TempReg1, ?Y_REGS),
     I2 = jit_armv6m_asm:mov(?IP_REG, TempReg1),
-    I3 = jit_armv6m_asm:movs(TempReg1, Offset),
+    I3 = mov_offset_code(TempReg1, Y * 4),
     I4 = jit_armv6m_asm:add(TempReg1, ?IP_REG),
     I5 = jit_armv6m_asm:str(SrcReg, {TempReg1, 0}),
     <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>.
@@ -4797,9 +4849,8 @@ ldr_y_reg(
 ) when AvailMask =/= 0 ->
     % Large offset - use DstReg as second temp register for arithmetic
     TempReg = first_avail(AvailMask),
-    Offset = Y * 4,
     I1 = jit_armv6m_asm:ldr(TempReg, ?Y_REGS),
-    I2 = jit_armv6m_asm:movs(DstReg, Offset),
+    I2 = mov_offset_code(DstReg, Y * 4),
     I3 = jit_armv6m_asm:add(DstReg, TempReg),
     I4 = jit_armv6m_asm:ldr(DstReg, {DstReg, 0}),
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary>>,
@@ -4823,10 +4874,9 @@ ldr_y_reg(
 ) ->
     % Large offset, no registers available - use IP_REG as temp register
     % Note: IP_REG (r12) can only be used with mov, not ldr directly
-    Offset = Y * 4,
     I1 = jit_armv6m_asm:ldr(DstReg, ?Y_REGS),
     I2 = jit_armv6m_asm:mov(?IP_REG, DstReg),
-    I3 = jit_armv6m_asm:movs(DstReg, Offset),
+    I3 = mov_offset_code(DstReg, Y * 4),
     I4 = jit_armv6m_asm:add(DstReg, ?IP_REG),
     I5 = jit_armv6m_asm:ldr(DstReg, {DstReg, 0}),
     Code = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,

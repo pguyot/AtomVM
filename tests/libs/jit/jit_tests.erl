@@ -1628,3 +1628,31 @@ type_resolver_v4_record_is_tuple_test() ->
     Resolver = jit_precompile:type_resolver(Chunk),
     ?assertEqual(t_tuple, Resolver(0)),
     ?assertEqual(t_tuple, Resolver(1)).
+
+%% jit.erl calls MMod:get_vm_record_type/2 and MMod:set_vm_record_type/3
+%% unconditionally on the OTP-29 native-record opcodes (no function_exported
+%% guard), so a backend missing them crashes with undef when compiling any
+%% module carrying a Recs chunk -- which is exactly what happened to xtensa.
+%% Every backend must implement the pair, and the type recorded for a VM
+%% register must read back.
+backends_track_record_types_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            State0 = Backend:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            ?assertEqual(undefined, Backend:get_vm_record_type(State0, {x_reg, 0})),
+            Info = #{index => 3, fields => [a, b], is_exported => false},
+            State1 = Backend:set_vm_record_type(State0, {x_reg, 0}, Info),
+            ?assertEqual(Info, Backend:get_vm_record_type(State1, {x_reg, 0})),
+            ?assertEqual(undefined, Backend:get_vm_record_type(State1, {x_reg, 1}))
+        end}
+     || Backend <- [
+            jit_x86_64,
+            jit_aarch64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_wasm32,
+            jit_xtensa
+        ]
+    ].
