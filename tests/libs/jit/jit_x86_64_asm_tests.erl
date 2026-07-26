@@ -409,7 +409,14 @@ testb_test_() ->
         ?_assertAsmEqual(<<16#84, 16#C0>>, "test %al,%al", jit_x86_64_asm:testb(rax, rax)),
         ?_assertAsmEqual(<<16#84, 16#C9>>, "test %cl,%cl", jit_x86_64_asm:testb(rcx, rcx)),
         ?_assertAsmEqual(<<16#45, 16#84, 16#C0>>, "test %r8b,%r8b", jit_x86_64_asm:testb(r8, r8)),
-        ?_assertAsmEqual(<<16#45, 16#84, 16#C9>>, "test %r9b,%r9b", jit_x86_64_asm:testb(r9, r9))
+        ?_assertAsmEqual(<<16#45, 16#84, 16#C9>>, "test %r9b,%r9b", jit_x86_64_asm:testb(r9, r9)),
+        % rsi/rdi need a bare REX to name sil/dil rather than dh/bh
+        ?_assertAsmEqual(
+            <<16#40, 16#84, 16#F6>>, "test %sil,%sil", jit_x86_64_asm:testb(rsi, rsi)
+        ),
+        ?_assertAsmEqual(
+            <<16#40, 16#84, 16#FF>>, "test %dil,%dil", jit_x86_64_asm:testb(rdi, rdi)
+        )
     ].
 
 testb_imm_reg_test_() ->
@@ -418,6 +425,14 @@ testb_imm_reg_test_() ->
         ?_assertAsmEqual(<<16#A8, 16#01>>, "test $0x1,%al", jit_x86_64_asm:testb(1, rax)),
         % testb imm8, rcx (no REX)
         ?_assertAsmEqual(<<16#F6, 16#C1, 16#7F>>, "test $0x7f,%cl", jit_x86_64_asm:testb(127, rcx)),
+        % testb imm8, rsi/rdi: a bare REX is required, otherwise rm 6/7 name
+        % the legacy high-byte registers dh/bh instead of sil/dil
+        ?_assertAsmEqual(
+            <<16#40, 16#F6, 16#C6, 16#01>>, "test $0x1,%sil", jit_x86_64_asm:testb(1, rsi)
+        ),
+        ?_assertAsmEqual(
+            <<16#40, 16#F6, 16#C7, 16#01>>, "test $0x1,%dil", jit_x86_64_asm:testb(1, rdi)
+        ),
         % testb imm8, r8 (REX)
         ?_assertAsmEqual(
             <<16#41, 16#F6, 16#C0, 16#01>>, "test $0x1,%r8b", jit_x86_64_asm:testb(1, r8)
@@ -669,6 +684,12 @@ cmpb_test_() ->
         ?_assertAsmEqual(<<16#41, 16#38, 16#C0>>, "cmpb %al, %r8b", jit_x86_64_asm:cmpb(rax, r8)),
         % cmpb r8, r9 (REX prefix)
         ?_assertAsmEqual(<<16#45, 16#38, 16#C1>>, "cmpb %r8b, %r9b", jit_x86_64_asm:cmpb(r8, r9)),
+        % rsi/rdi need a bare REX to name sil/dil rather than dh/bh
+        ?_assertAsmEqual(<<16#40, 16#38, 16#F7>>, "cmpb %sil, %dil", jit_x86_64_asm:cmpb(rsi, rdi)),
+        ?_assertAsmEqual(<<16#41, 16#38, 16#F0>>, "cmpb %sil, %r8b", jit_x86_64_asm:cmpb(rsi, r8)),
+        ?_assertAsmEqual(
+            <<16#40, 16#80, 16#FF, 16#42>>, "cmpb $0x42, %dil", jit_x86_64_asm:cmpb(16#42, rdi)
+        ),
         % cmpb Imm, Reg
         ?_assertAsmEqual(
             <<16#80, 16#f9, 16#42>>, "cmpb $0x42, %cl", jit_x86_64_asm:cmpb(16#42, rcx)
@@ -1251,6 +1272,27 @@ andb_test_() ->
         ),
         ?_assertAsmEqual(
             <<16#41, 16#80, 16#e1, 16#7f>>, "andb $0x7f, %r9b", jit_x86_64_asm:andb(127, r9)
+        ),
+        % rsi/rdi need a bare REX to name sil/dil rather than dh/bh
+        ?_assertAsmEqual(
+            <<16#40, 16#80, 16#e6, 16#7f>>, "andb $0x7f, %sil", jit_x86_64_asm:andb(127, rsi)
+        ),
+        ?_assertAsmEqual(
+            <<16#40, 16#80, 16#e7, 16#7f>>, "andb $0x7f, %dil", jit_x86_64_asm:andb(127, rdi)
+        )
+    ].
+
+movb_store_byte_reg_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#88, 16#00>>, "movb %al,(%rax)", jit_x86_64_asm:movb_store(rax, {0, rax})
+        ),
+        % rsi/rdi as the stored byte need a bare REX
+        ?_assertAsmEqual(
+            <<16#40, 16#88, 16#30>>, "movb %sil,(%rax)", jit_x86_64_asm:movb_store(rsi, {0, rax})
+        ),
+        ?_assertAsmEqual(
+            <<16#40, 16#88, 16#38>>, "movb %dil,(%rax)", jit_x86_64_asm:movb_store(rdi, {0, rax})
         )
     ].
 
