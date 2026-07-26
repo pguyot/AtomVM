@@ -70,6 +70,19 @@ size_t termtree_size(term node);
 int termtree_struct_equal(term a, term b, struct GlobalContext *global);
 
 /**
+ * @brief Equality of two trees holding the same number of entries, whatever
+ * their shapes.
+ *
+ * termtree_struct_equal gives up when an insert split has made the two shapes
+ * diverge; this walks both in ascending key order instead, skipping subtrees
+ * that are pointer-identical, and so still answers a map versus a path-copied
+ * update of itself in O(height) without materialising either side.
+ * @return 1 if equal, 0 if they differ, -1 if the walk could not be performed
+ * (tree deeper than the cursor bound) and the caller must fall back.
+ */
+int termtree_equal(term a, term b, struct GlobalContext *global);
+
+/**
  * @brief Look up \p key.
  * @return the associated value, or term_invalid_term() if absent.
  */

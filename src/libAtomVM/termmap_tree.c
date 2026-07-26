@@ -283,6 +283,123 @@ int termtree_struct_equal(term a, term b, GlobalContext *global)
     return 1;
 }
 
+// In-order cursor over a tree, used to compare two trees of the same size whose
+// shapes differ. A level holds a node and a position in [0, 2 * nkeys]: even
+// positions are the child to descend into, odd positions are a key/value pair.
+// The branching factor is at least BT_T, so this depth covers any tree that
+// fits in memory; overflow is still reported so the caller can fall back.
+#define TT_CURSOR_MAX_DEPTH 24
+
+struct TermTreeCursor
+{
+    term node[TT_CURSOR_MAX_DEPTH];
+    size_t pos[TT_CURSOR_MAX_DEPTH];
+    int depth;
+};
+
+static bool cursor_push(struct TermTreeCursor *c, term node)
+{
+    if (UNLIKELY(c->depth >= TT_CURSOR_MAX_DEPTH)) {
+        return false;
+    }
+    c->node[c->depth] = node;
+    c->pos[c->depth] = 0;
+    c->depth++;
+    return true;
+}
+
+// 1 = *key/*value filled in, 0 = exhausted, -1 = cursor overflow.
+static int cursor_next(struct TermTreeCursor *c, term *key, term *value)
+{
+    while (c->depth > 0) {
+        int d = c->depth - 1;
+        term node = c->node[d];
+        size_t p = c->pos[d];
+        size_t nkeys = node_nkeys(node);
+        if (p > 2 * nkeys) {
+            c->depth--;
+            continue;
+        }
+        c->pos[d] = p + 1;
+        if ((p & 1) == 0) {
+            if (!node_is_leaf(node) && UNLIKELY(!cursor_push(c, node_child(node, p / 2)))) {
+                return -1;
+            }
+            continue;
+        }
+        *key = node_key(node, (p - 1) / 2);
+        *value = node_value(node, (p - 1) / 2);
+        return 1;
+    }
+    return 0;
+}
+
+// If both cursors are about to descend into the very same subtree, skip it in
+// both. The subtrees are pointer-identical, hence hold the same entries in the
+// same order, so both cursors advance by the same amount and stay aligned.
+static bool cursors_skip_shared(struct TermTreeCursor *a, struct TermTreeCursor *b)
+{
+    if (a->depth == 0 || b->depth == 0) {
+        return false;
+    }
+    int da = a->depth - 1;
+    int db = b->depth - 1;
+    term na = a->node[da];
+    term nb = b->node[db];
+    size_t pa = a->pos[da];
+    size_t pb = b->pos[db];
+    if ((pa & 1) != 0 || (pb & 1) != 0 || node_is_leaf(na) || node_is_leaf(nb)) {
+        return false;
+    }
+    if (pa > 2 * node_nkeys(na) || pb > 2 * node_nkeys(nb)) {
+        return false;
+    }
+    if (node_child(na, pa / 2) != node_child(nb, pb / 2)) {
+        return false;
+    }
+    a->pos[da] = pa + 1;
+    b->pos[db] = pb + 1;
+    return true;
+}
+
+int termtree_equal(term a, term b, GlobalContext *global)
+{
+    if (a == b) {
+        return 1;
+    }
+    struct TermTreeCursor ca;
+    struct TermTreeCursor cb;
+    ca.depth = 0;
+    cb.depth = 0;
+    if (UNLIKELY(!cursor_push(&ca, a) || !cursor_push(&cb, b))) {
+        return -1;
+    }
+    for (;;) {
+        while (cursors_skip_shared(&ca, &cb)) {
+        }
+        term ka;
+        term va;
+        term kb;
+        term vb;
+        int ra = cursor_next(&ca, &ka, &va);
+        int rb = cursor_next(&cb, &kb, &vb);
+        if (UNLIKELY(ra < 0 || rb < 0)) {
+            return -1;
+        }
+        if (ra == 0 || rb == 0) {
+            return (ra == rb) ? 1 : 0;
+        }
+        // Plain TermCompareExact, like termtree_struct_equal: an element pair
+        // must not route back into the equality walk that called us.
+        if (ka != kb && term_compare(ka, kb, TermCompareExact, global) != TermEquals) {
+            return 0;
+        }
+        if (va != vb && term_compare(va, vb, TermCompareExact, global) != TermEquals) {
+            return 0;
+        }
+    }
+}
+
 // Result of inserting into a subtree: either no split (did_split false, the new
 // subtree is the function's return value) or a split into two siblings around a
 // median entry that the parent must absorb.
