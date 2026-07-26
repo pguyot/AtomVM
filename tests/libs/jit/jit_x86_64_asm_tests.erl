@@ -310,7 +310,11 @@ shlq_test_() ->
         ),
         ?_assertAsmEqual(
             <<16#49, 16#C1, 16#E3, 16#02>>, "shl $0x2,%r11", jit_x86_64_asm:shlq(2, r11)
-        )
+        ),
+        % Variable shift by %cl
+        ?_assertAsmEqual(<<16#48, 16#D3, 16#E0>>, "shl %cl,%rax", jit_x86_64_asm:shlq(cl, rax)),
+        ?_assertAsmEqual(<<16#48, 16#D3, 16#E6>>, "shl %cl,%rsi", jit_x86_64_asm:shlq(cl, rsi)),
+        ?_assertAsmEqual(<<16#49, 16#D3, 16#E3>>, "shl %cl,%r11", jit_x86_64_asm:shlq(cl, r11))
     ].
 
 shrq_test_() ->
@@ -543,6 +547,43 @@ jno_rel32_test_() ->
         ?_assertEqual({2, <<16#0F, 16#81, 16#C8, 0, 0, 0>>}, jit_x86_64_asm:jno_rel32(206))
     ].
 
+%% The rel32 conditional jumps are asserted on their encoding rather than
+%% against the assembler, which would shrink a short displacement to rel8.
+ja_rel32_test_() ->
+    [
+        ?_assertEqual({2, <<16#0F, 16#87, 0:32/little>>}, jit_x86_64_asm:ja_rel32(6)),
+        ?_assertEqual({2, <<16#0F, 16#87, 16#C8, 0, 0, 0>>}, jit_x86_64_asm:ja_rel32(206))
+    ].
+
+jl_rel32_test_() ->
+    [
+        ?_assertEqual({2, <<16#0F, 16#8C, 0:32/little>>}, jit_x86_64_asm:jl_rel32(6)),
+        ?_assertEqual({2, <<16#0F, 16#8C, 16#C8, 0, 0, 0>>}, jit_x86_64_asm:jl_rel32(206))
+    ].
+
+callq_rel32_test_() ->
+    [
+        %% `call .' assembles to e8 fb ff ff ff
+        ?_assertEqual({1, <<16#E8, 251, 255, 255, 255>>}, jit_x86_64_asm:callq_rel32(0)),
+        ?_assertEqual({1, <<16#E8, 0:32/little>>}, jit_x86_64_asm:callq_rel32(5))
+    ].
+
+%% SIB load with no displacement: the atom_table index_to_node[idx] lookup of
+%% the compare stub.
+movq_sib_load_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#49, 16#8B, 16#14, 16#D0>>,
+            "movq (%r8,%rdx,8), %rdx",
+            jit_x86_64_asm:movq({0, r8, rdx, 8}, rdx)
+        ),
+        ?_assertAsmEqual(
+            <<16#48, 16#8B, 16#34, 16#C8>>,
+            "movq (%rax,%rcx,8), %rsi",
+            jit_x86_64_asm:movq({0, rax, rcx, 8}, rsi)
+        )
+    ].
+
 jz_rel32_test_() ->
     [
         ?_assertEqual({2, <<16#0F, 16#84, 251, 255, 255, 255>>}, jit_x86_64_asm:jz_rel32(1)),
@@ -573,6 +614,17 @@ andq_test_() ->
             <<72, 131, 167, 144, 0, 0, 0, 0>>,
             "andq $0x0,0x90(%rdi)",
             jit_x86_64_asm:andq(0, {16#90, rdi})
+        ),
+        % andq imm32, reg (the cp offset mask of the cross-module return)
+        ?_assertAsmEqual(
+            <<16#48, 16#25, 16#FF, 16#FF, 16#FF, 16#00>>,
+            "and $0xffffff,%rax",
+            jit_x86_64_asm:andq(16#FFFFFF, rax)
+        ),
+        ?_assertAsmEqual(
+            <<16#49, 16#81, 16#E3, 16#FF, 16#FF, 16#FF, 16#00>>,
+            "and $0xffffff,%r11",
+            jit_x86_64_asm:andq(16#FFFFFF, r11)
         ),
         % andq reg, reg
         ?_assertAsmEqual(
@@ -1513,7 +1565,11 @@ sarq_test_() ->
         ),
         ?_assertAsmEqual(
             <<16#49, 16#C1, 16#FB, 16#04>>, "sarq $0x4,%r11", jit_x86_64_asm:sarq(4, r11)
-        )
+        ),
+        % Variable shift by %cl
+        ?_assertAsmEqual(<<16#48, 16#D3, 16#F8>>, "sarq %cl,%rax", jit_x86_64_asm:sarq(cl, rax)),
+        ?_assertAsmEqual(<<16#48, 16#D3, 16#FF>>, "sarq %cl,%rdi", jit_x86_64_asm:sarq(cl, rdi)),
+        ?_assertAsmEqual(<<16#49, 16#D3, 16#FA>>, "sarq %cl,%r10", jit_x86_64_asm:sarq(cl, r10))
     ].
 
 movsd_load_test_() ->

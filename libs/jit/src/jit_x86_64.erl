@@ -28,19 +28,32 @@
     flush/1,
     set_live_masks/2,
     supports_loop_residency/0,
+    supports_inline_tuple2_eq/0,
+    add_deferred_raise/5,
+    take_deferred_raises/1,
+    take_deferred_stubs/1,
+    map_get_stub_call/3,
+    compare_stub_call/3,
+    reset_regs_fresh/1,
     debugger/1,
     used_regs/1,
     available_regs/1,
     free_native_registers/2,
     assert_all_native_free/1,
     jump_table/2,
+    jump_table_range_check/4,
+    jump_table_dispatch/1,
     update_branches/1,
     call_primitive/3,
     call_primitive_last/3,
     call_primitive_with_cp/3,
     call_primitive_with_cp_direct/3,
     call_primitive_direct/3,
+    call_ext_with_cp_direct/4,
+    call_ext_last_direct/5,
+    call_fun_with_cp_direct/3,
     return_if_not_equal_to_ctx/2,
+    return_cross_module/2,
     jump_to_label/2,
     jump_to_label_cond/3,
     jump_to_continuation/2,
@@ -49,7 +62,9 @@
     if_else_block/4,
     shift_right/3,
     shift_right_arith/3,
+    shift_right_arith_reg/3,
     shift_left/3,
+    shift_left_reg/3,
     move_to_vm_register/3,
     move_to_native_register/2,
     move_to_native_register/3,
@@ -68,8 +83,10 @@
     continuation_entry_point/1,
     move_imported_gcbif_to_native_register/3,
     move_imported_bif_to_native_register/2,
+    get_cp_base/1,
     get_module_index/1,
     get_module_atom_index/2,
+    get_list_head_tail/4,
     and_/3,
     or_/3,
     add/3,
@@ -178,7 +195,21 @@
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
     pending_x = #{} ::
         #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
-    cond_depth = 0 :: non_neg_integer()
+    cond_depth = 0 :: non_neg_integer(),
+    %% Outlined raise blocks, newest first (see add_deferred_raise/5); emitted
+    %% at the module tail by jit:flush_deferred_raises/2.
+    deferred_raises = [] :: [{reference(), non_neg_integer(), non_neg_integer(), [arg()]}],
+    %% select_val jump table under construction: the index register, the
+    %% offset of the range check's jbe (patched by jump_table_dispatch/1) and
+    %% the slot count. jump_table_slots counts down the slots still to emit,
+    %% which jump_to_label/2 must emit at a fixed width.
+    jump_table_index = undefined ::
+        undefined | {x86_64_register(), non_neg_integer(), pos_integer()},
+    jump_table_slots = 0 :: non_neg_integer(),
+    %% Per-module callable stubs: Key -> label reference (so every site shares
+    %% one body), plus the bodies still to emit at the module tail.
+    stubs = #{} :: #{term() => reference()},
+    deferred_stubs = [] :: [{reference(), fun((state()) -> state())}]
 }).
 
 -type state() :: #state{}.
@@ -250,8 +281,33 @@
 -define(JITSTATE_MODULE, {0, ?JITSTATE_REG}).
 -define(JITSTATE_CONTINUATION, {16#8, ?JITSTATE_REG}).
 -define(JITSTATE_REMAINING_REDUCTIONS, {16#10, ?JITSTATE_REG}).
+% jit_state->cp_base: module_index << 24, precomputed by the C side wherever
+% jit_state->module is set (see _Static_assert in jit.c), so building a cp or
+% a catch term is one load instead of load-module/load-index/shift.
+-define(JITSTATE_CPBASE, {16#28, ?JITSTATE_REG}).
 -define(PRIMITIVE(N), {N * ?WORD_SIZE, ?NATIVE_INTERFACE_REG}).
 -define(MODULE_INDEX(ModuleReg), {0, ModuleReg}).
+% module->native_code (see _Static_assert in jit.c); used by the inline
+% cross-module return fast path.
+-define(MODULE_NATIVE_CODE, 16#78).
+% module->fun_table (see _Static_assert in jit.c); used by the inline
+% call_fun fast path. Entries are 24 bytes after a 12-byte header, holding
+% big-endian 32-bit fields: arity (+16), label (+20), n_freeze (+28) -- see
+% module_get_fun in module.h.
+-define(MODULE_FUN_TABLE, 16#30).
+-define(FUN_TABLE_ARITY, 16).
+-define(FUN_TABLE_LABEL, 20).
+-define(FUN_TABLE_N_FREEZE, 28).
+% Bytes per entry of the module jump table (one jmp rel32 per label), which is
+% emitted at offset 0 of the module's native code (see jump_table/2).
+-define(JUMP_TABLE_ENTRY_SIZE, 5).
+% global->atom_table, atom_table->index_to_node, HNode->sort_key (see
+% _Static_assert in jit.c); used by the inline atom-vs-atom compare-stub fast
+% path. atom_table is the second field of GlobalContext on purpose, so this
+% offset holds in every build configuration.
+-define(GLOBAL_ATOM_TABLE, 16#8).
+-define(ATOM_TABLE_INDEX_TO_NODE, 16#20).
+-define(HNODE_SORT_KEY, 16#10).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {16#D8, ModuleReg}).
 % Offsets for inlining the imported-BIF pointer resolution at gc_bif call sites.
 % Kept in sync with src/libAtomVM/jit.c via _Static_assert.
@@ -401,10 +457,567 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 set_live_masks(State, {Masks, _CallTargets}) ->
     State#state{live_masks = Masks}.
 
-%% x86-64 has no loop-header register residency, so jit.erl may share whole
+%% x86-64 has no loop-header register residency: residency needs a bank of
+%% callee-saved registers to hold VM x0-x3 across the loop back-edge, and all
+%% but one of the six SysV callee-saved registers are already pinned (rbx,
+%% r12-r15; rbp is the frame pointer). So jit.erl may share whole
 %% op_call_last blocks across sites.
 -spec supports_loop_residency() -> boolean().
 supports_loop_residency() -> false.
+
+%% Capability marker: the generic layer inlines exact 2-tuple (in)equality
+%% and the 2-tuple ordering fast path (see jit:emit_tuple2_exact_eq/7 and
+%% jit:emit_tuple2_order_fastpath/6) on backends exporting this, and also
+%% short-circuits identical operands in the ordering ops. Both helpers are
+%% written against the generic backend API, so this is a pure opt-in.
+-spec supports_inline_tuple2_eq() -> true.
+supports_inline_tuple2_eq() ->
+    true.
+
+%%-----------------------------------------------------------------------------
+%% @doc Get-or-register the per-module callable stub for Key. The body is
+%% emitted once at the module tail (jit:flush_deferred_stubs/2); every site
+%% reaches it with a plain `call' and the body ends in `ret', so unlike
+%% aarch64 no link-register bookkeeping is needed.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec stub_ref(state(), term(), fun((state()) -> state())) -> {state(), reference()}.
+stub_ref(#state{stubs = Stubs, deferred_stubs = DS} = State, Key, BodyFun) ->
+    case Stubs of
+        #{Key := Ref} ->
+            {State, Ref};
+        _ ->
+            Ref = make_ref(),
+            {
+                State#state{
+                    stubs = Stubs#{Key => Ref},
+                    deferred_stubs = [{Ref, BodyFun} | DS]
+                },
+                Ref
+            }
+    end.
+
+-spec take_deferred_stubs(state()) -> {[{reference(), fun((state()) -> state())}], state()}.
+take_deferred_stubs(#state{deferred_stubs = DS} = State) ->
+    {lists:reverse(DS), State#state{deferred_stubs = []}}.
+
+%% @private Emit a `call' to a (possibly not yet emitted) label; patched like
+%% any other 32-bit branch when the label is added.
+-spec call_to_label(state(), reference()) -> state().
+call_to_label(
+    #state{stream_module = StreamModule, stream = Stream0, branches = Branches} = State, Label
+) ->
+    Offset = StreamModule:offset(Stream0),
+    {RelocOffset, I} = jit_x86_64_asm:callq_rel32(1),
+    Stream1 = StreamModule:append(Stream0, I),
+    BrEntry = {Offset + RelocOffset, 32},
+    Branches1 = maps:update_with(Label, fun(L) -> [BrEntry | L] end, [BrEntry], Branches),
+    State#state{stream = Stream1, branches = Branches1}.
+
+%% @private Assemble a stub body with local labels. Unlike a fixed-width ISA,
+%% x86-64 branch displacements depend on the sizes of everything in between, so
+%% the body is described as a list of items and the labels are resolved in two
+%% passes. Every branch uses the 32-bit form so the sizes are known up front and
+%% one sizing pass suffices; the few wasted bytes are paid once per module, not
+%% per call site.
+%%
+%% Items: a binary (emitted verbatim), {label, Name}, {jcc, Fun, Name} where
+%% Fun is one of the jit_x86_64_asm rel32 conditional jumps, or {jmp, Name}.
+-spec stub_assemble([binary() | tuple()]) -> binary().
+stub_assemble(Items) ->
+    Labels = stub_scan(Items, 0, #{}),
+    stub_emit(Items, 0, Labels, []).
+
+stub_scan([], _Offset, Labels) ->
+    Labels;
+stub_scan([{label, Name} | Rest], Offset, Labels) ->
+    stub_scan(Rest, Offset, Labels#{Name => Offset});
+stub_scan([Item | Rest], Offset, Labels) ->
+    stub_scan(Rest, Offset + stub_item_size(Item), Labels).
+
+stub_item_size(Bin) when is_binary(Bin) -> byte_size(Bin);
+%% 0F 8x rel32
+stub_item_size({jcc, _, _}) -> 6;
+%% E9 rel32
+stub_item_size({jmp, _}) -> 5.
+
+stub_emit([], _Offset, _Labels, Acc) ->
+    iolist_to_binary(lists:reverse(Acc));
+stub_emit([{label, _} | Rest], Offset, Labels, Acc) ->
+    stub_emit(Rest, Offset, Labels, Acc);
+stub_emit([{jcc, Fun, Name} | Rest], Offset, Labels, Acc) ->
+    #{Name := Target} = Labels,
+    {_RelocOffset, Bin} = Fun(Target - Offset),
+    stub_emit(Rest, Offset + 6, Labels, [Bin | Acc]);
+stub_emit([{jmp, Name} | Rest], Offset, Labels, Acc) ->
+    #{Name := Target} = Labels,
+    {_RelocOffset, Bin} = jit_x86_64_asm:jmp_rel32(Target - Offset),
+    stub_emit(Rest, Offset + 5, Labels, [Bin | Acc]);
+stub_emit([Bin | Rest], Offset, Labels, Acc) when is_binary(Bin) ->
+    stub_emit(Rest, Offset + byte_size(Bin), Labels, [Bin | Acc]).
+
+%%-----------------------------------------------------------------------------
+%% @doc Record a deferred (outlined) raise. The raise site has already branched
+%% to `StubRef' when the error condition holds; the tail-calling raise itself is
+%% emitted at the module tail by `jit:flush_deferred_raises/2'. `SiteOffset' is
+%% the site's native offset, used to reconstruct the exception's line number.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_deferred_raise(state(), reference(), non_neg_integer(), non_neg_integer(), [arg()]) ->
+    state().
+add_deferred_raise(#state{deferred_raises = DR} = State, StubRef, SiteOffset, Prim, ExtraArgs) ->
+    State#state{deferred_raises = [{StubRef, SiteOffset, Prim, ExtraArgs} | DR]}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Factorized inline map get: call the per-module flat-map stub.
+%% ABI: in rax = map term, rcx = key term; out rax = value (on hit),
+%% rcx = status (0 hit, 1 not-found, 2 unsupported). The stub preserves every
+%% other register (it pushes its own scratch) and clobbers flags. The
+%% not-found verdict is sound only for immediate keys on flat maps, which is
+%% exactly what the stub handles -- everything else reports unsupported and
+%% the caller takes the C path.
+%%
+%% x86-64 has no register outside the allocatable pool to use as the ABI
+%% (aarch64 has ip0/ip1), so rax/rcx are saved around the call whenever they
+%% currently hold something live, and the two results are moved out before
+%% those saves are restored. Pushing the arguments and popping them into
+%% rax/rcx sidesteps every aliasing case between the sources and the ABI pair.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec map_get_stub_call(state(), x86_64_register(), x86_64_register()) ->
+    {state(), x86_64_register(), x86_64_register()}.
+map_get_stub_call(#state{} = State0, SrcReg, KeyReg) ->
+    {State1, Ref} = stub_ref(State0, map_get_flat_imm, fun emit_map_get_stub_body/1),
+    #state{stream_module = StreamModule, stream = Stream1, regs = Regs1} = State1,
+    Used = jit_regs:used_regs(Regs1),
+    Saved = [R || R <- [rax, rcx], Used band reg_bit(R) =/= 0],
+    Pre = [
+        [jit_x86_64_asm:pushq(R) || R <- Saved],
+        jit_x86_64_asm:pushq(SrcReg),
+        jit_x86_64_asm:pushq(KeyReg),
+        jit_x86_64_asm:popq(rcx),
+        jit_x86_64_asm:popq(rax)
+    ],
+    Stream2 = StreamModule:append(Stream1, iolist_to_binary(Pre)),
+    State2 = call_to_label(State1#state{stream = Stream2}, Ref),
+    #state{stream = Stream3, regs = Regs3} = State2,
+    %% The value register is deliberately NOT allocated (the generic layer does
+    %% not free it): it must be consumed by the immediately following emission,
+    %% exactly like the aarch64 contract. The status register is allocated, as
+    %% the condition machinery keeps it live across several blocks.
+    Avail = jit_regs:available_regs(Regs3),
+    ValReg = first_avail(Avail),
+    StatusReg = first_avail(Avail band (bnot reg_bit(ValReg))),
+    Post = [
+        move_reg_if_different(rax, ValReg),
+        move_reg_if_different(rcx, StatusReg),
+        [jit_x86_64_asm:popq(R) || R <- lists:reverse(Saved)]
+    ],
+    Stream4 = StreamModule:append(Stream3, iolist_to_binary(Post)),
+    Regs4 = lists:foldl(
+        fun(R, Acc) -> jit_regs:invalidate_reg(Acc, R) end,
+        Regs3,
+        [rax, rcx, ValReg, StatusReg]
+    ),
+    Regs5 = jit_regs:alloc_reg(Regs4, reg_bit(StatusReg)),
+    {State2#state{stream = Stream4, regs = Regs5}, ValReg, StatusReg}.
+
+%% @private
+move_reg_if_different(Reg, Reg) -> <<>>;
+move_reg_if_different(From, To) -> jit_x86_64_asm:movq(From, To).
+
+%%-----------------------------------------------------------------------------
+%% @doc Factorized term-order resolution: call the per-module compare stub.
+%% ABI: in rax = left term, rcx = right term; out rcx = status, either a
+%% TermCompareResult (?TERM_EQUALS / ?TERM_LESS_THAN / ?TERM_GREATER_THAN) or 0
+%% when the stub could not decide and the site must call the C comparator.
+%% Both operands stay live in their own registers (the site still needs them
+%% for the fallback), which the stub guarantees by preserving everything except
+%% rax/rcx; see map_get_stub_call/3 for why those two are saved around the call.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec compare_stub_call(state(), x86_64_register(), x86_64_register()) ->
+    {state(), x86_64_register()}.
+compare_stub_call(#state{} = State0, LeftReg, RightReg) ->
+    {State1, Ref} = stub_ref(State0, term_compare_order, fun emit_compare_stub_body/1),
+    #state{stream_module = StreamModule, stream = Stream1, regs = Regs1} = State1,
+    Used = jit_regs:used_regs(Regs1),
+    Saved = [R || R <- [rax, rcx], Used band reg_bit(R) =/= 0],
+    Pre = [
+        [jit_x86_64_asm:pushq(R) || R <- Saved],
+        jit_x86_64_asm:pushq(LeftReg),
+        jit_x86_64_asm:pushq(RightReg),
+        jit_x86_64_asm:popq(rcx),
+        jit_x86_64_asm:popq(rax)
+    ],
+    Stream2 = StreamModule:append(Stream1, iolist_to_binary(Pre)),
+    State2 = call_to_label(State1#state{stream = Stream2}, Ref),
+    #state{stream = Stream3, regs = Regs3} = State2,
+    %% The status is copied into an allocated register: the generic condition
+    %% machinery keeps it live across both arms of an if_else_block.
+    StatusReg = first_avail(jit_regs:available_regs(Regs3)),
+    Post = [
+        move_reg_if_different(rcx, StatusReg),
+        [jit_x86_64_asm:popq(R) || R <- lists:reverse(Saved)]
+    ],
+    Stream4 = StreamModule:append(Stream3, iolist_to_binary(Post)),
+    Regs4 = lists:foldl(
+        fun(R, Acc) -> jit_regs:invalidate_reg(Acc, R) end,
+        Regs3,
+        [rax, rcx, StatusReg]
+    ),
+    Regs5 = jit_regs:alloc_reg(Regs4, reg_bit(StatusReg)),
+    {State2#state{stream = Stream4, regs = Regs5}, StatusReg}.
+
+%% @private The term-order resolution body. See compare_stub_call/3 for the
+%% ABI. Iterative only (no stack): list tails loop back to the top, list heads
+%% and tuple elements resolve as scalars or give up. Everything it decides is
+%% decided soundly for TERM_COMPARE_NO_OPTS, _EXACT and _EQUAL_ONLY alike:
+%%   - identical words are equal under every mode;
+%%   - two (unequal) small integers order by signed tagged compare;
+%%   - number ranks below every other type, and every immediate type ranks
+%%     below list, so small-int vs other-immediate and immediate vs list decide
+%%     on type alone (boxed operands never decide by type: a boxed float/bignum
+%%     is a number, a boxed binary ranks above list);
+%%   - tuples order by arity first, then leftmost unequal element pair;
+%%   - list order is decided by the leftmost unequal head pair, or by the tails
+%%     (nil is an immediate, so exhausted/improper tails fall out of the loop
+%%     into the scalar rules above);
+%%   - two atoms order by their cached 8-byte name sort_key (ctx->global
+%%     ->atom_table->index_to_node[idx]->sort_key, read directly -- see
+%%     ?GLOBAL_ATOM_TABLE et al.), matching atom_table_cmp_using_atom_index's
+%%     fast path; a sort_key tie (shared 8-byte name prefix) is rare and
+%%     reports unresolved so the C comparator's memcmp fallback decides.
+%% Undecidable pairs (anything boxed-vs-scalar, non-tuple boxes, pids, ports,
+%% references, funs) report 0 and the site calls the C comparator.
+%%
+%% Register plan: rax = left cursor, rcx = right cursor (status at exit);
+%% rdx/rsi = box pointers, reused in the atom tail as left/right working
+%% registers (index -> node -> sort_key); rdi/r8 = primary tags -> headers/
+%% arity -> scan end / list tails; r9/r10 = scalar pair under test.
+%% rdx/rsi/rdi/r8/r9/r10 are saved.
+-spec emit_compare_stub_body(state()) -> state().
+emit_compare_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
+    Scratch = [rdx, rsi, rdi, r8, r9, r10],
+    Body = stub_assemble(
+        lists:flatten([
+            [jit_x86_64_asm:pushq(R) || R <- Scratch],
+            {label, top},
+            %% identity, then dispatch on the primary tags
+            jit_x86_64_asm:cmpq(rax, rcx),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_equals},
+            jit_x86_64_asm:movq(rax, rdi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, rdi),
+            jit_x86_64_asm:movq(rcx, r8),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_LIST, rdi),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, left_list},
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, rdi),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, both_boxed},
+            %% left is immediate: below any list, undecided vs boxed, and two
+            %% immediates resolve as a scalar pair
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_LIST, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_less},
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_undecided},
+            jit_x86_64_asm:movq(rax, r9),
+            jit_x86_64_asm:movq(rcx, r10),
+            {jmp, scalar},
+            {label, left_list},
+            %% left is a list: above any immediate, undecided vs boxed
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_LIST, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, both_lists},
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_IMMED, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_greater},
+            {jmp, v_undecided},
+            {label, both_boxed},
+            %% both boxed: tuples order by arity, everything else undecided
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, r8),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            jit_x86_64_asm:movq(rax, rdx),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rdx),
+            jit_x86_64_asm:movq({0, rdx}, rdi),
+            jit_x86_64_asm:movq(rdi, r10),
+            jit_x86_64_asm:andq(?TERM_BOXED_TAG_MASK, r10),
+            jit_x86_64_asm:cmpq(?TERM_BOXED_TUPLE, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            jit_x86_64_asm:movq(rcx, rsi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rsi),
+            jit_x86_64_asm:movq({0, rsi}, r8),
+            jit_x86_64_asm:movq(r8, r10),
+            jit_x86_64_asm:andq(?TERM_BOXED_TAG_MASK, r10),
+            jit_x86_64_asm:cmpq(?TERM_BOXED_TUPLE, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            jit_x86_64_asm:shrq(6, rdi),
+            jit_x86_64_asm:shrq(6, r8),
+            %% arities are unsigned; above decides, otherwise a non-zero
+            %% remainder means below and equality falls into the element scan
+            jit_x86_64_asm:cmpq(r8, rdi),
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, v_greater},
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_less},
+            %% equal arity: scan for the leftmost unequal element pair, with
+            %% rdi the address of the last element of the left tuple
+            jit_x86_64_asm:shlq(3, rdi),
+            jit_x86_64_asm:addq(rdx, rdi),
+            jit_x86_64_asm:addq(8, rdx),
+            jit_x86_64_asm:addq(8, rsi),
+            {label, tuple_loop},
+            jit_x86_64_asm:cmpq(rdi, rdx),
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, v_equals},
+            jit_x86_64_asm:movq({0, rdx}, r9),
+            jit_x86_64_asm:addq(8, rdx),
+            jit_x86_64_asm:movq({0, rsi}, r10),
+            jit_x86_64_asm:addq(8, rsi),
+            jit_x86_64_asm:cmpq(r10, r9),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, tuple_loop},
+            {jmp, scalar},
+            {label, both_lists},
+            %% both lists: the leftmost unequal head pair decides as a scalar
+            %% pair; equal heads loop on the tails
+            jit_x86_64_asm:movq(rax, rdx),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rdx),
+            jit_x86_64_asm:movq(rcx, rsi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rsi),
+            jit_x86_64_asm:movq({?LIST_TAIL_INDEX * 8, rdx}, rdi),
+            jit_x86_64_asm:movq({?LIST_HEAD_INDEX * 8, rdx}, r9),
+            jit_x86_64_asm:movq({?LIST_TAIL_INDEX * 8, rsi}, r8),
+            jit_x86_64_asm:movq({?LIST_HEAD_INDEX * 8, rsi}, r10),
+            jit_x86_64_asm:cmpq(r10, r9),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, scalar},
+            jit_x86_64_asm:movq(rdi, rax),
+            jit_x86_64_asm:movq(r8, rcx),
+            {jmp, top},
+            {label, scalar},
+            %% an unequal pair in r9/r10: two small ints order by signed
+            %% compare, a small int against another immediate is below, two
+            %% atoms fall to the tail, anything else is undecided
+            jit_x86_64_asm:movq(r9, rdi),
+            jit_x86_64_asm:andq(r10, rdi),
+            jit_x86_64_asm:movq(rdi, r8),
+            jit_x86_64_asm:andq(?TERM_IMMED_TAG_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_INTEGER_TAG, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, both_small_ints},
+            jit_x86_64_asm:movq(rdi, r8),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_IMMED, r8),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            jit_x86_64_asm:movq(r9, r8),
+            jit_x86_64_asm:andq(?TERM_IMMED_TAG_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_INTEGER_TAG, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_less},
+            jit_x86_64_asm:movq(r10, r8),
+            jit_x86_64_asm:andq(?TERM_IMMED_TAG_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_INTEGER_TAG, r8),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_greater},
+            %% neither is a small int: only an atom pair goes any further
+            jit_x86_64_asm:movq(r9, r8),
+            jit_x86_64_asm:andq(?TERM_IMMED2_TAG_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_IMMED2_ATOM, r8),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            {jmp, atom_tail},
+            {label, v_equals},
+            jit_x86_64_asm:movq(?TERM_EQUALS, rcx),
+            {jmp, epilogue},
+            {label, v_less},
+            jit_x86_64_asm:movq(?TERM_LESS_THAN, rcx),
+            {jmp, epilogue},
+            {label, v_greater},
+            jit_x86_64_asm:movq(?TERM_GREATER_THAN, rcx),
+            {jmp, epilogue},
+            {label, v_undecided},
+            jit_x86_64_asm:movq(0, rcx),
+            {label, epilogue},
+            [jit_x86_64_asm:popq(R) || R <- lists:reverse(Scratch)],
+            jit_x86_64_asm:retq(),
+            {label, atom_tail},
+            %% Reached with r9/r10 confirmed TERM_PRIMARY_IMMED, not
+            %% TERM_INTEGER_TAG, and r9 confirmed an atom. Check r10 too, then
+            %% compare both atoms' cached sort_key, reached by the
+            %% address-dependency chain ctx -> global -> atom_table ->
+            %% index_to_node[idx] -> sort_key (same idiom, and same soundness
+            %% argument, as the plain-load chain in return_cross_module/2: each
+            %% load's address depends on the previous load's value, and an
+            %% atom_index already held in a live term cannot have been
+            %% published more recently than whatever channel delivered that
+            %% term to this scheduler -- no acquire needed, and no count bound
+            %% check needed since the index is already known valid).
+            jit_x86_64_asm:movq(r10, r8),
+            jit_x86_64_asm:andq(?TERM_IMMED2_TAG_MASK, r8),
+            jit_x86_64_asm:cmpq(?TERM_IMMED2_ATOM, r8),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, v_undecided},
+            jit_x86_64_asm:movq(r9, rdx),
+            jit_x86_64_asm:shrq(?TERM_IMMED2_TAG_SIZE, rdx),
+            jit_x86_64_asm:movq(r10, rsi),
+            jit_x86_64_asm:shrq(?TERM_IMMED2_TAG_SIZE, rsi),
+            jit_x86_64_asm:movq({0, ?CTX_REG}, rdi),
+            jit_x86_64_asm:movq({?GLOBAL_ATOM_TABLE, rdi}, rdi),
+            jit_x86_64_asm:movq({?ATOM_TABLE_INDEX_TO_NODE, rdi}, r8),
+            jit_x86_64_asm:movq({0, r8, rdx, 8}, rdx),
+            jit_x86_64_asm:movq({0, r8, rsi, 8}, rsi),
+            jit_x86_64_asm:movq({?HNODE_SORT_KEY, rdx}, rdx),
+            jit_x86_64_asm:movq({?HNODE_SORT_KEY, rsi}, rsi),
+            %% sort keys are unsigned; a tie is left to the C comparator
+            jit_x86_64_asm:cmpq(rsi, rdx),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, v_undecided},
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, v_greater},
+            {jmp, v_less},
+            {label, both_small_ints},
+            %% tagged small integers compare as signed words
+            jit_x86_64_asm:cmpq(r10, r9),
+            {jcc, fun jit_x86_64_asm:jl_rel32/1, v_less},
+            {jmp, v_greater}
+        ])
+    ),
+    State0#state{stream = StreamModule:append(Stream0, Body)}.
+
+%% @private The flat-map lookup body. See map_get_stub_call/3 for the ABI.
+%% Layout facts encoded here (asserted in jit.c / term.h): flat map =
+%% boxed [header | keys tuple | V0..Vn-1]; keys tuple = boxed
+%% [header | K0..Kn-1]; a tree map's boxed[1] is non-boxed. Two probe modes,
+%% both with a CONCLUSIVE not-found:
+%%   - immediate key (primary bits 2#11): exactly equal only to its identical
+%%     word;
+%%   - 2-tuple of immediates (#b_var{}-style compiler keys): a tuple is exactly
+%%     equal only to a same-arity tuple with exactly-equal elements, and an
+%%     immediate element equals only its identical word (boxed small integers
+%%     do not exist; 1 =:= 1.0 is false), so word compares on the header and
+%%     both elements decide either way.
+%% Anything else reports unsupported and the site takes the C path.
+%%
+%% Register plan: rax = map term -> arity -> scan end -> value; rcx = key
+%% (status at exit); rdx = map ptr -> value-address base delta (map ptr - keys
+%% ptr: value_addr = delta + cursor_after_hit, since values start 16 bytes into
+%% the map box and the cursor has advanced 16 bytes past the keys base at a
+%% hit); rsi = keys ptr -> cursor; rdi = probe classification scratch -> loaded
+%% stored key -> its ptr; r8/r9 = probe elements; r10 = stored-key
+%% header/element scratch. rdx/rsi/rdi/r8/r9/r10 are saved.
+-spec emit_map_get_stub_body(state()) -> state().
+emit_map_get_stub_body(#state{stream_module = StreamModule, stream = Stream0} = State0) ->
+    Tuple2Header = (2 bsl 6) bor ?TERM_BOXED_TUPLE,
+    Scratch = [rdx, rsi, rdi, r8, r9, r10],
+    Body = stub_assemble(
+        lists:flatten([
+            [jit_x86_64_asm:pushq(R) || R <- Scratch],
+            %% the map must be boxed
+            jit_x86_64_asm:movq(rax, rdx),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, rdx),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, rdx),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            %% its boxed header must be a map
+            jit_x86_64_asm:movq(rax, rdx),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rdx),
+            jit_x86_64_asm:movq({0, rdx}, rsi),
+            jit_x86_64_asm:andq(?TERM_BOXED_TAG_MASK, rsi),
+            jit_x86_64_asm:cmpq(?TERM_BOXED_MAP, rsi),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            %% flat form: boxed[1] is the (boxed) keys tuple
+            jit_x86_64_asm:movq({8, rdx}, rsi),
+            jit_x86_64_asm:movq(rsi, rdi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, rdi),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, rdi),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            %% keys ptr, arity, size cap
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rsi),
+            jit_x86_64_asm:movq({0, rsi}, rax),
+            jit_x86_64_asm:shrq(6, rax),
+            jit_x86_64_asm:cmpq(64, rax),
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, unsupported},
+            %% base delta, scan end (address of the last key), cursor (first key)
+            jit_x86_64_asm:subq(rsi, rdx),
+            jit_x86_64_asm:shlq(3, rax),
+            jit_x86_64_asm:addq(rsi, rax),
+            jit_x86_64_asm:addq(8, rsi),
+            %% probe: an immediate key takes the short loop
+            jit_x86_64_asm:movq(rcx, rdi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, rdi),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_IMMED, rdi),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, imm_loop},
+            %% otherwise it must be boxed...
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, rdi),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            %% ...with a 2-tuple header...
+            jit_x86_64_asm:movq(rcx, rdi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rdi),
+            jit_x86_64_asm:movq({0, rdi}, r8),
+            jit_x86_64_asm:cmpq(Tuple2Header, r8),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            %% ...whose two elements are both immediates
+            jit_x86_64_asm:movq({8, rdi}, r8),
+            jit_x86_64_asm:movq({16, rdi}, r9),
+            jit_x86_64_asm:movq(r8, rdi),
+            jit_x86_64_asm:andq(r9, rdi),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, rdi),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_IMMED, rdi),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, unsupported},
+            {label, tuple2_loop},
+            jit_x86_64_asm:cmpq(rax, rsi),
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, not_found},
+            jit_x86_64_asm:movq({0, rsi}, rdi),
+            jit_x86_64_asm:addq(8, rsi),
+            jit_x86_64_asm:cmpq(rcx, rdi),
+            {jcc, fun jit_x86_64_asm:jz_rel32/1, hit},
+            %% a stored key must be boxed (primary 2#10) to possibly be a tuple
+            jit_x86_64_asm:movq(rdi, r10),
+            jit_x86_64_asm:andq(?TERM_PRIMARY_MASK, r10),
+            jit_x86_64_asm:cmpq(?TERM_PRIMARY_BOXED, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, tuple2_loop},
+            jit_x86_64_asm:andq(?TERM_PRIMARY_CLEAR_MASK, rdi),
+            jit_x86_64_asm:movq({0, rdi}, r10),
+            jit_x86_64_asm:cmpq(Tuple2Header, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, tuple2_loop},
+            jit_x86_64_asm:movq({8, rdi}, r10),
+            jit_x86_64_asm:cmpq(r8, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, tuple2_loop},
+            jit_x86_64_asm:movq({16, rdi}, r10),
+            jit_x86_64_asm:cmpq(r9, r10),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, tuple2_loop},
+            {jmp, hit},
+            {label, imm_loop},
+            jit_x86_64_asm:cmpq(rax, rsi),
+            {jcc, fun jit_x86_64_asm:ja_rel32/1, not_found},
+            jit_x86_64_asm:movq({0, rsi}, rdi),
+            jit_x86_64_asm:addq(8, rsi),
+            jit_x86_64_asm:cmpq(rcx, rdi),
+            {jcc, fun jit_x86_64_asm:jnz_rel32/1, imm_loop},
+            {label, hit},
+            %% value = *(delta + cursor), the cursor having advanced past the
+            %% matching key; rdx is dead from here on
+            jit_x86_64_asm:addq(rsi, rdx),
+            jit_x86_64_asm:movq({0, rdx}, rax),
+            jit_x86_64_asm:movq(0, rcx),
+            {jmp, epilogue},
+            {label, not_found},
+            jit_x86_64_asm:movq(1, rcx),
+            {jmp, epilogue},
+            {label, unsupported},
+            jit_x86_64_asm:movq(2, rcx),
+            {label, epilogue},
+            [jit_x86_64_asm:popq(R) || R <- lists:reverse(Scratch)],
+            jit_x86_64_asm:retq()
+        ])
+    ),
+    State0#state{stream = StreamModule:append(Stream0, Body)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Return the recorded deferred raises (in emission order) and clear them.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec take_deferred_raises(state()) ->
+    {[{reference(), non_neg_integer(), non_neg_integer(), [arg()]}], state()}.
+take_deferred_raises(#state{deferred_raises = DR} = State) ->
+    {lists:reverse(DR), State#state{deferred_raises = []}}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Reset the register file to the state a freshly entered block sees: no
+%% tracked contents, nothing allocated. Outlined blocks are reached from
+%% arbitrary sites, so they may not inherit the emitting site's allocation.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec reset_regs_fresh(state()) -> state().
+reset_regs_fresh(#state{regs = Regs} = State) ->
+    State#state{
+        regs = jit_regs:set_masks(jit_regs:invalidate_all(Regs), ?AVAILABLE_REGS_MASK, 0)
+    }.
 
 %% Nop encoding of a given store width. x86-64 x-stores are 4 bytes
 %% (`mov reg, disp8(%rdi)') or 7 bytes (disp32); the assembler provides
@@ -654,8 +1267,17 @@ jump_to_label(
     #state{stream_module = StreamModule, stream = Stream0, branches = AccBranches, labels = Labels} =
         State = pending_filter_label(StateP, Label),
     Offset = StreamModule:offset(Stream0),
+    %% Inside a select_val jump table every slot must be exactly one 5-byte
+    %% `jmp rel32', because the computed branch indexes the table by a fixed
+    %% stride; the short form is only allowed outside one.
+    Fixed = State#state.jump_table_slots > 0,
+    State1 =
+        case Fixed of
+            true -> State#state{jump_table_slots = State#state.jump_table_slots - 1};
+            false -> State
+        end,
     case Labels of
-        #{Label := LabelOffset} ->
+        #{Label := LabelOffset} when not Fixed ->
             % Label is already known, emit direct branch without relocation
 
             % Calculate relative offset (assembler will adjust for instruction size)
@@ -664,18 +1286,95 @@ jump_to_label(
             Stream1 = StreamModule:append(Stream0, I1),
             %% After unconditional jump, register tracking is dead until next label
             State#state{stream = Stream1, regs = jit_regs:unreachable(State#state.regs)};
+        #{Label := LabelOffset} ->
+            {_RelocOffset, I1} = jit_x86_64_asm:jmp_rel32(LabelOffset - Offset),
+            Stream1 = StreamModule:append(Stream0, I1),
+            State1#state{stream = Stream1, regs = jit_regs:unreachable(State1#state.regs)};
         _ ->
             % Label not yet known, emit placeholder and add relocation
             {RelocOffset, I1} = jit_x86_64_asm:jmp_rel32(1),
             Stream1 = StreamModule:append(Stream0, I1),
             BrEntry = {Offset + RelocOffset, 32},
             ExistingBrs = maps:get(Label, AccBranches, []),
-            State#state{
+            State1#state{
                 stream = Stream1,
                 branches = AccBranches#{Label => [BrEntry | ExistingBrs]},
-                regs = jit_regs:unreachable(State#state.regs)
+                regs = jit_regs:unreachable(State1#state.regs)
             }
     end.
+
+%%-----------------------------------------------------------------------------
+%% @doc First half of a dense select_val jump table: compute the index
+%% `Src - MinTagged' and, when it is (unsigned) at most `Bound', skip the next
+%% instruction -- the caller emits the branch to the default label there.
+%% Otherwise execution falls into that branch. The forward displacement is
+%% patched by jump_table_dispatch/1, since the default branch's width is not
+%% known here.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec jump_table_range_check(state(), x86_64_register(), non_neg_integer(), non_neg_integer()) ->
+    state().
+jump_table_range_check(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    SrcReg,
+    MinTagged,
+    Bound
+) ->
+    %% SrcReg is allocated, so it cannot be picked here. The index register
+    %% stays allocated until jump_table_dispatch/1 consumes it; the only thing
+    %% emitted in between is the default branch, and jump_to_label/2 preserves
+    %% the allocation masks.
+    IdxReg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_x86_64_asm:leaq({-MinTagged, SrcReg}, IdxReg),
+    I2 = jit_x86_64_asm:cmpq(Bound, IdxReg),
+    {_RelocOffset, I3} = jit_x86_64_asm:jbe_rel32(0),
+    Code = <<I1/binary, I2/binary, I3/binary>>,
+    JbeOffset = StreamModule:offset(Stream0) + byte_size(I1) + byte_size(I2),
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, IdxReg), reg_bit(IdxReg)),
+    State0#state{
+        stream = Stream1,
+        regs = Regs1,
+        jump_table_index = {IdxReg, JbeOffset, Bound div 16 + 1}
+    }.
+
+%%-----------------------------------------------------------------------------
+%% @doc Second half: patch the range check to land here, then branch into the
+%% table of 5-byte `jmp rel32' slots the caller emits right after. The index
+%% register holds the tagged difference (a small int delta is value * 16), so
+%% the byte offset into the table is (delta >> 4) * 5.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec jump_table_dispatch(state()) -> state().
+jump_table_dispatch(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0,
+        jump_table_index = {IdxReg, JbeOffset, Slots}
+    } = State0
+) ->
+    %% The jbe emitted by jump_table_range_check/4 skips everything up to here.
+    {_RelocOffset, Jbe} = jit_x86_64_asm:jbe_rel32(StreamModule:offset(Stream0) - JbeOffset),
+    Stream1 = StreamModule:replace(Stream0, JbeOffset, Jbe),
+    %% IdxReg is allocated; pick a second scratch for the table base.
+    TmpReg = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(IdxReg))),
+    I1 = jit_x86_64_asm:shrq(4, IdxReg),
+    I2 = jit_x86_64_asm:imulq(5, IdxReg),
+    I4 = jit_x86_64_asm:addq(IdxReg, TmpReg),
+    I5 = jit_x86_64_asm:jmpq({TmpReg}),
+    %% The rip base is the address following the lea, so the table starts
+    %% byte_size(I4) + byte_size(I5) further on.
+    I3 = jit_x86_64_asm:leaq({rip, byte_size(I4) + byte_size(I5)}, TmpReg),
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
+    Stream2 = StreamModule:append(Stream1, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, IdxReg), TmpReg),
+    State0#state{
+        stream = Stream2,
+        regs = jit_regs:free_reg(Regs1, reg_bit(IdxReg)),
+        jump_table_index = undefined,
+        jump_table_slots = Slots
+    }.
 
 jump_to_offset(StateP, TargetOffset) ->
     %% Entering a shared (tail-cached) block that reads ctx->x: pending
@@ -785,6 +1484,70 @@ cond_direct_jcc(#state{regs = Regs0} = State0, {Reg, '&', Mask, '!=', Val}) when
     end;
 cond_direct_jcc(_State0, _Cond) ->
     unsupported.
+
+%%-----------------------------------------------------------------------------
+%% @doc Cross-module return fast path: resolve the caller's module from the cp
+%% in CpReg (ctx->global->modules_by_index[cp >> 24], offsets pinned by
+%% _Static_asserts in jit.c), and when it has native code, update
+%% jit_state->module / cp_base and branch straight to native_code + offset --
+%% the work PRIM_RETURN does in C, minus the call round trip. Falls through
+%% (with CpReg freed) when the target module has no native code (emulated),
+%% for the caller to emit the C fallback.
+%% @end
+%% @param State current backend state
+%% @param CpReg register holding the full cp value, consumed
+%% @return Updated backend state
+%%-----------------------------------------------------------------------------
+-spec return_cross_module(state(), {free, x86_64_register()}) -> state().
+return_cross_module(#state{} = StateP, {free, CpReg}) ->
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State = pending_clear_all(StateP),
+    Avail0 = jit_regs:available_regs(Regs0),
+    IdxReg = first_avail(Avail0),
+    Avail1 = Avail0 band (bnot reg_bit(IdxReg)),
+    ModReg = first_avail(Avail1),
+    TargetReg = first_avail(Avail1 band (bnot reg_bit(ModReg))),
+    I1 = jit_x86_64_asm:movq(CpReg, IdxReg),
+    I2 = jit_x86_64_asm:shrq(24, IdxReg),
+    % ctx->global, then global->modules_by_index (both at offset 0).
+    I3 = jit_x86_64_asm:movq({0, ?CTX_REG}, ModReg),
+    I4 = jit_x86_64_asm:movq({0, ModReg}, ModReg),
+    % modules_by_index[idx]: scale the index in place, so it also serves as
+    % the cp_base source below (idx << 24 is then idx * 8 << 21).
+    I5 = jit_x86_64_asm:shlq(3, IdxReg),
+    I6 = jit_x86_64_asm:addq(IdxReg, ModReg),
+    I7 = jit_x86_64_asm:movq({0, ModReg}, ModReg),
+    I8 = jit_x86_64_asm:movq({?MODULE_NATIVE_CODE, ModReg}, TargetReg),
+    I9 = jit_x86_64_asm:testq(TargetReg, TargetReg),
+    % jit_state_set_module: module and cp_base (module_index << 24).
+    I11 = jit_x86_64_asm:movq(ModReg, ?JITSTATE_MODULE),
+    I12 = jit_x86_64_asm:shlq(21, IdxReg),
+    I13 = jit_x86_64_asm:movq(IdxReg, ?JITSTATE_CPBASE),
+    % native_code + ((cp & 0xFFFFFF) >> 2)
+    I14 = jit_x86_64_asm:andq(16#FFFFFF, CpReg),
+    I15 = jit_x86_64_asm:shrq(2, CpReg),
+    I16 = jit_x86_64_asm:addq(CpReg, TargetReg),
+    I17 = jit_x86_64_asm:jmpq({TargetReg}),
+    Tail =
+        <<I11/binary, I12/binary, I13/binary, I14/binary, I15/binary, I16/binary, I17/binary>>,
+    % No native code (emulated target): fall through to the C fallback.
+    I10 = jit_x86_64_asm:jz(byte_size(Tail) + 2),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary,
+            I9/binary, I10/binary, Tail/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = lists:foldl(
+        fun(R, Acc) -> jit_regs:invalidate_reg(Acc, R) end,
+        Regs0,
+        [IdxReg, ModReg, TargetReg]
+    ),
+    State#state{
+        stream = Stream1,
+        regs = jit_regs:free_reg(Regs1, reg_bit(CpReg))
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Jump to a continuation address stored in a register.
@@ -967,6 +1730,8 @@ cond_skip_disp_width(mul_overflow_set) -> 4;
 cond_skip_disp_width({_, '&', _, '!=', _}) -> 4;
 %% select_val binary-search tree splits guard whole subtrees.
 cond_skip_disp_width({_, '(uint)>', _}) -> 4;
+%% Explicitly marked by the caller as guarding a large block.
+cond_skip_disp_width({'(wide)', _}) -> 4;
 cond_skip_disp_width(_) -> 1.
 
 %% Patch the forward (skip-the-block) displacement of a conditional jump at byte
@@ -1172,6 +1937,20 @@ if_block_cond0(State0, {'(int)', RegOrTuple, '!=', 0}) ->
         end,
     I1 = jit_x86_64_asm:testl(Reg, Reg),
     {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel8(1),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
+%% '(wide)': the caller knows the guarded block is far past the rel8 +127
+%% range, so the skip is emitted with a 32-bit displacement (see
+%% cond_skip_disp_width). Unmarked conditions of the same shape keep the rel8
+%% form below -- they guard a handful of instructions.
+if_block_cond0(State0, {'(wide)', {RegOrTuple, '!=', RegB}}) when ?IS_GPR(RegB) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I1 = jit_x86_64_asm:cmpq(RegB, Reg),
+    {RelocJZOffset, I2} = jit_x86_64_asm:jz_rel32(1),
     State1 = if_block_free_reg(RegOrTuple, State0),
     {State1, <<I1/binary, I2/binary>>, byte_size(I1) + RelocJZOffset};
 if_block_cond0(
@@ -1515,6 +2294,71 @@ shift_left(
     I = jit_x86_64_asm:shlq(Shift, Reg),
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc In-place variable shift: shift `Reg' by the amount in `ShiftReg'
+%% (callers bound-check the amount; the hardware takes it mod 64).
+%%
+%% x86-64 takes a variable shift count only in `%cl', so unless the amount
+%% already is in rcx the count has to be moved there. rcx is an ordinary
+%% member of the scratch pool, so three shapes are possible: it is free (use
+%% it directly), it holds the value being shifted (swap the two registers
+%% around the shift, which leaves the count where the caller expects it -- the
+%% bsl path reuses it), or it is live for something else (save and restore it
+%% around the shift). The BMI2 shlx/sarx forms would avoid all of this, but
+%% AOT-precompiled code has to run on pre-Haswell CPUs too.
+%% @end
+%% @param State current backend state
+%% @param Reg register holding the value to shift, updated in place
+%% @param ShiftReg register holding the shift amount, preserved
+%% @return new state
+%%-----------------------------------------------------------------------------
+-spec shift_right_arith_reg(state(), x86_64_register(), x86_64_register()) -> state().
+shift_right_arith_reg(State, Reg, ShiftReg) ->
+    shift_by_cl(State, fun jit_x86_64_asm:sarq/2, Reg, ShiftReg).
+
+-spec shift_left_reg(state(), x86_64_register(), x86_64_register()) -> state().
+shift_left_reg(State, Reg, ShiftReg) ->
+    shift_by_cl(State, fun jit_x86_64_asm:shlq/2, Reg, ShiftReg).
+
+shift_by_cl(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, ShiftFun, Reg, rcx
+) when Reg =/= rcx ->
+    Stream1 = StreamModule:append(Stream0, ShiftFun(cl, Reg)),
+    State#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Reg)};
+shift_by_cl(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    ShiftFun,
+    rcx,
+    ShiftReg
+) when ShiftReg =/= rcx ->
+    %% The value is in rcx and the count is not: swap them, shift in place,
+    %% swap back. The second xchg restores the count to ShiftReg and leaves
+    %% the result in rcx.
+    Xchg = jit_x86_64_asm:xchgq(rcx, ShiftReg),
+    Code = <<Xchg/binary, (ShiftFun(cl, ShiftReg))/binary, Xchg/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, rcx)};
+shift_by_cl(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
+    ShiftFun,
+    Reg,
+    ShiftReg
+) when Reg =/= rcx, ShiftReg =/= rcx ->
+    Mov = jit_x86_64_asm:movq(ShiftReg, rcx),
+    Shift = ShiftFun(cl, Reg),
+    Code =
+        case jit_regs:available_regs(Regs0) band ?REG_BIT_RCX of
+            0 ->
+                Save = jit_x86_64_asm:pushq(rcx),
+                Restore = jit_x86_64_asm:popq(rcx),
+                <<Save/binary, Mov/binary, Shift/binary, Restore/binary>>;
+            _ ->
+                <<Mov/binary, Shift/binary>>
+        end,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), rcx),
     State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
@@ -2121,6 +2965,66 @@ with_temp(
 %% @param Dest vm or native register to move to
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+
+%%-----------------------------------------------------------------------------
+%% @doc Load both cells of a cons into DISTINCT native registers, each tracked
+%% as holding its destination x register, so a following read of either is
+%% served from the register instead of reloading from memory (the pervasive
+%% tail-recursive list loop reads head and tail right after the match). The
+%% generic two-call path reuses one temp and so evicts the head when it loads
+%% the tail. `ListReg' (the already-unboxed cons pointer) is consumed.
+%% @end
+%% @param State current backend state
+%% @param ListReg native register holding the untagged cons pointer, consumed
+%% @param HeadDest destination for the head cell
+%% @param TailDest destination for the tail cell
+%% @return Updated backend state
+%%-----------------------------------------------------------------------------
+-spec get_list_head_tail(state(), {free, x86_64_register()}, vm_register(), vm_register()) ->
+    state().
+get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
+    H < ?MAX_REG, T < ?MAX_REG, H =/= T
+->
+    #state{stream_module = StreamModule, regs = Regs0} =
+        State1 = pending_elide_prev(pending_elide_prev(State0, H), T),
+    %% ListReg is allocated, so it is not in the available mask and cannot
+    %% collide with either destination; the two destinations are distinct by
+    %% construction.
+    Avail0 = jit_regs:available_regs(Regs0),
+    HeadReg = first_avail(Avail0),
+    TailReg = first_avail(Avail0 band (bnot reg_bit(HeadReg))),
+    Loads = <<
+        (jit_x86_64_asm:movq({?LIST_HEAD_INDEX * 8, ListReg}, HeadReg))/binary,
+        (jit_x86_64_asm:movq({?LIST_TAIL_INDEX * 8, ListReg}, TailReg))/binary
+    >>,
+    StreamA = StreamModule:append(State1#state.stream, Loads),
+    %% Write-through stores, noted one at a time so each pending store records
+    %% the offset of its own `mov'.
+    StH = jit_x86_64_asm:movq(HeadReg, ?X_REG(H)),
+    StreamB = StreamModule:append(StreamA, StH),
+    StateB = pending_note_store(
+        State1#state{stream = StreamB}, H, StreamModule:offset(StreamB) - byte_size(StH)
+    ),
+    StT = jit_x86_64_asm:movq(TailReg, ?X_REG(T)),
+    StreamC = StreamModule:append(StateB#state.stream, StT),
+    StateC = pending_note_store(
+        StateB#state{stream = StreamC}, T, StreamModule:offset(StreamC) - byte_size(StT)
+    ),
+    %% ListReg is dead; head and tail are now tracked in their own registers.
+    Regs1 = jit_regs:free_reg(StateC#state.regs, reg_bit(ListReg)),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, H}),
+    Regs3 = jit_regs:invalidate_vm_loc(Regs2, {x_reg, T}),
+    Regs4 = jit_regs:set_contents(Regs3, HeadReg, {x_reg, H}),
+    Regs5 = jit_regs:set_contents(Regs4, TailReg, {x_reg, T}),
+    StateC#state{regs = Regs5};
+get_list_head_tail(State0, {free, ListReg}, HeadDest, TailDest) ->
+    %% Fallback (y_reg / ptr destinations): the generic two-load form.
+    State1 = move_array_element(State0, ListReg, ?LIST_HEAD_INDEX, HeadDest),
+    State2 = free_native_registers(State1, [HeadDest]),
+    State3 = move_array_element(State2, ListReg, ?LIST_TAIL_INDEX, TailDest),
+    State4 = free_native_registers(State3, [ListReg]),
+    free_native_registers(State4, [TailDest]).
+
 -spec move_array_element(
     State :: state(),
     Reg :: x86_64_register(),
@@ -2872,6 +3776,21 @@ move_imported_bif_to_native_register(
     Bit = reg_bit(PtrReg),
     Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, PtrReg), Bit),
     {State0#state{stream = Stream1, regs = Regs1}, PtrReg}.
+
+%% module_index << 24 (the high half of a cp or a catch term) in a freshly
+%% allocated register: one load of the precomputed jit_state->cp_base.
+-spec get_cp_base(state()) -> {state(), x86_64_register()}.
+get_cp_base(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_x86_64_asm:movq(?JITSTATE_CPBASE, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
 
 get_module_index(
     #state{
@@ -3741,6 +4660,262 @@ call_primitive_with_cp_direct(State0, Primitive, Args) ->
     {State2, ResultReg} = call_primitive(State1, Primitive, Args),
     State3 = direct_dispatch(State2, ResultReg, true),
     rewrite_cp_offset(State3, RewriteOffset).
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_FUN/OP_CALL_FUN2 with an inline fast path for a local fun:
+%% resolve the fun's module and label from its boxed representation and the
+%% callee module's fun table, copy the frozen variables into the x registers
+%% and branch to the callee's jump-table entry -- what PRIM_CALL_FUN_DIRECT
+%% does in C. Anything the fast path cannot prove (external fun, arity
+%% mismatch, too many frozen vars, emulated callee) falls through to the
+%% primitive.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_fun_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
+call_fun_with_cp_direct(
+    State0, Primitive, [ctx, jit_state, offset, FunRegArg, ArgsCount] = Args
+) when
+    is_integer(ArgsCount)
+->
+    {State1, RewriteOffset} = set_cp(State0),
+    %% The fast path branches away without a C call, so deferred vm-register
+    %% stores must be committed first (the callee reads ctx->x[]).
+    #state{regs = Regs1} = State2 = pending_clear_all(State1),
+    FunReg =
+        case FunRegArg of
+            {free, FR} -> FR;
+            FR when is_atom(FR) -> FR
+        end,
+    Avail = [R || R <- mask_to_list(jit_regs:available_regs(Regs1)), R =/= FunReg],
+    State3 =
+        case length(Avail) >= 7 of
+            true ->
+                [T0, T1, T2, T3, T4, T5, T6 | _] = Avail,
+                emit_call_fun_fast_path(State2, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6);
+            false ->
+                State2
+        end,
+    {State4, ResultReg} = call_primitive(State3, Primitive, Args),
+    State5 = direct_dispatch(State4, ResultReg, true),
+    rewrite_cp_offset(State5, RewriteOffset).
+
+%% @private
+%% The inline local-fun resolve. Every check that fails branches to the first
+%% instruction after this block (the primitive call the caller emits), so the
+%% code is built back to front: each guard's displacement is the size of
+%% everything that follows it.
+emit_call_fun_fast_path(State0, FunReg, ArgsCount, T0, T1, T2, T3, T4, T5, T6) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    %% Copy the frozen variables from boxed[3..] to x[ArgsCount..]. T6 holds
+    %% n_freeze, already known to be small enough that the range fits.
+    CopyBody = <<
+        (jit_x86_64_asm:movq({0, T1}, T2))/binary,
+        (jit_x86_64_asm:movq(T2, {0, T0}))/binary,
+        (jit_x86_64_asm:addq(8, T1))/binary,
+        (jit_x86_64_asm:addq(8, T0))/binary,
+        (jit_x86_64_asm:subq(1, T6))/binary
+    >>,
+    LoopBack = jit_x86_64_asm:jnz(-(byte_size(CopyBody) + 2)),
+    Copy = <<
+        (jit_x86_64_asm:addq(24, T1))/binary,
+        (jit_x86_64_asm:leaq({16#58 + 8 * ArgsCount, ?CTX_REG}, T0))/binary,
+        (jit_x86_64_asm:testq(T6, T6))/binary,
+        (jit_x86_64_asm:jz(2 + byte_size(CopyBody) + byte_size(LoopBack)))/binary,
+        CopyBody/binary,
+        LoopBack/binary
+    >>,
+    %% Frozen vars in place: switch jit_state to the callee's module and jump
+    %% to its jump-table entry (native_code + label * JUMP_TABLE_ENTRY_SIZE).
+    SegF = <<
+        Copy/binary,
+        (jit_x86_64_asm:movq(T3, ?JITSTATE_MODULE))/binary,
+        (jit_x86_64_asm:movl({0, T3}, T2))/binary,
+        (jit_x86_64_asm:shlq(24, T2))/binary,
+        (jit_x86_64_asm:movq(T2, ?JITSTATE_CPBASE))/binary,
+        (jit_x86_64_asm:movq(T5, T0))/binary,
+        (jit_x86_64_asm:shlq(2, T0))/binary,
+        (jit_x86_64_asm:addq(T5, T0))/binary,
+        (jit_x86_64_asm:addq(T0, T4))/binary,
+        (jit_x86_64_asm:jmpq({T4}))/binary
+    >>,
+    %% Callee label, and its module's native code -- absent means emulated.
+    SegE = <<
+        (jit_x86_64_asm:movl({?FUN_TABLE_LABEL, T4}, T5))/binary,
+        (jit_x86_64_asm:bswapl(T5))/binary,
+        (jit_x86_64_asm:movq({?MODULE_NATIVE_CODE, T3}, T4))/binary,
+        (jit_x86_64_asm:testq(T4, T4))/binary
+    >>,
+    %% arity + frozen vars must fit in the x registers.
+    SegD = jit_x86_64_asm:cmpq(?MAX_REG, T5),
+    %% fun_index -> fun table entry (24 bytes each), then arity and n_freeze
+    %% (both big-endian); the fun's own arity is arity_and_freeze - n_freeze
+    %% and must match the call site.
+    SegC = <<
+        (jit_x86_64_asm:shrq(4, T2))/binary,
+        (jit_x86_64_asm:movq({?MODULE_FUN_TABLE, T3}, T4))/binary,
+        (jit_x86_64_asm:movq(T2, T0))/binary,
+        (jit_x86_64_asm:shlq(3, T0))/binary,
+        (jit_x86_64_asm:addq(T0, T4))/binary,
+        (jit_x86_64_asm:shlq(1, T0))/binary,
+        (jit_x86_64_asm:addq(T0, T4))/binary,
+        (jit_x86_64_asm:movl({?FUN_TABLE_ARITY, T4}, T5))/binary,
+        (jit_x86_64_asm:bswapl(T5))/binary,
+        (jit_x86_64_asm:movl({?FUN_TABLE_N_FREEZE, T4}, T6))/binary,
+        (jit_x86_64_asm:bswapl(T6))/binary,
+        (jit_x86_64_asm:movq(T5, T0))/binary,
+        (jit_x86_64_asm:subq(T6, T0))/binary,
+        (jit_x86_64_asm:cmpq(ArgsCount, T0))/binary
+    >>,
+    %% boxed[1] is a Module* (pointer-aligned) for a local fun, or a tagged
+    %% atom for an external one.
+    SegB = <<
+        (jit_x86_64_asm:movq({8, T1}, T3))/binary,
+        (jit_x86_64_asm:testq(3, T3))/binary
+    >>,
+    %% Unbox the fun (verify_is_function already checked the boxed header);
+    %% boxed[2] is the fun index (a small int) for a local fun, or the
+    %% function name (an atom) for an external one.
+    SegA = <<
+        (jit_x86_64_asm:movq(FunReg, T1))/binary,
+        (jit_x86_64_asm:andq(-4, T1))/binary,
+        (jit_x86_64_asm:movq({16, T1}, T2))/binary,
+        (jit_x86_64_asm:movq(T2, T6))/binary,
+        (jit_x86_64_asm:andq(16#F, T6))/binary,
+        (jit_x86_64_asm:cmpq(16#F, T6))/binary
+    >>,
+    Slow = fun(JccFun, Rest) ->
+        {_RelocOffset, Jcc} = JccFun(6 + byte_size(Rest)),
+        <<Jcc/binary, Rest/binary>>
+    end,
+    Tail5 = Slow(fun jit_x86_64_asm:jz_rel32/1, SegF),
+    Tail4 = Slow(fun jit_x86_64_asm:ja_rel32/1, <<SegE/binary, Tail5/binary>>),
+    Tail3 = Slow(fun jit_x86_64_asm:jnz_rel32/1, <<SegD/binary, Tail4/binary>>),
+    Tail2 = Slow(fun jit_x86_64_asm:jnz_rel32/1, <<SegC/binary, Tail3/binary>>),
+    Tail1 = Slow(fun jit_x86_64_asm:jnz_rel32/1, <<SegB/binary, Tail2/binary>>),
+    Code = <<SegA/binary, Tail1/binary>>,
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_EXT/OP_CALL_EXT_LAST with an inline fast path for a target
+%% that is already resolved to native code: read the imported function, check
+%% it has been upgraded to a ModuleNativeFunction, switch jit_state to the
+%% callee's module and branch straight to its native entry -- what
+%% PRIM_CALL_EXT_DIRECT does in C, without the call round trip. Anything else
+%% (unresolved import, BIF, NIF, emulated target) falls through to the
+%% primitive.
+%%
+%% Unlike aarch64 no acquire load is needed for func->type: on x86-64 every
+%% ordinary load is an acquire, so a plain `movl' already orders against the
+%% release store of the in-place ModuleFunction -> ModuleNativeFunction
+%% upgrade in jit.c.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_ext_with_cp_direct(state(), non_neg_integer(), non_neg_integer(), [arg()]) -> state().
+call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
+    {State1, RewriteOffset} = set_cp(State0),
+    %% The fast path branches away without a C call: deferred vm-register
+    %% stores must be committed first (the callee reads ctx->x[]).
+    #state{regs = Regs1} = State2 = pending_clear_all(State1),
+    Avail = mask_to_list(jit_regs:available_regs(Regs1)),
+    State3 =
+        case length(Avail) >= 4 andalso ?IS_SINT32_T(Index * 8) of
+            true ->
+                [T0, T1, T2, T3 | _] = Avail,
+                emit_call_ext_fast_path(State2, Index, T0, T1, T2, T3);
+            false ->
+                State2
+        end,
+    {State4, ResultReg} = call_primitive(State3, Primitive, Args),
+    State5 = direct_dispatch(State4, ResultReg, true),
+    rewrite_cp_offset(State5, RewriteOffset).
+
+%% @private
+%% The inline resolved call_ext; the type-check branch targets the first
+%% instruction after this block, i.e. the primitive call the caller emits.
+emit_call_ext_fast_path(State0, Index, T0, T1, T2, T3) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    Code = call_ext_fast_path_code(Index, T0, T1, T2, T3, <<>>, true),
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%% @private
+%% Shared body of the two inline resolved call_ext forms. `Extra' is emitted
+%% between the type check and the module switch (the frame pop of
+%% CALL_EXT_LAST); `ClearCont' clears any stale continuation, as the *_direct
+%% C wrappers do, which only the non-tail form needs.
+call_ext_fast_path_code(Index, T0, T1, T2, T3, Extra, ClearCont) ->
+    %% func = jit_state->module->imported_funcs[Index]
+    Head = <<
+        (jit_x86_64_asm:movq(?JITSTATE_MODULE, T0))/binary,
+        (jit_x86_64_asm:movq({?MODULE_IMPORTED_FUNCS, T0}, T0))/binary,
+        (jit_x86_64_asm:movq({Index * 8, T0}, T1))/binary,
+        %% func->type must be ModuleNativeFunction (7).
+        (jit_x86_64_asm:movl({0, T1}, T2))/binary,
+        (jit_x86_64_asm:cmpl(7, T2))/binary
+    >>,
+    ContClear =
+        case ClearCont of
+            true -> jit_x86_64_asm:movq(0, ?JITSTATE_CONTINUATION);
+            false -> <<>>
+        end,
+    Tail = <<
+        ContClear/binary,
+        Extra/binary,
+        %% target Module* and native entry point
+        (jit_x86_64_asm:movq({8, T1}, T3))/binary,
+        (jit_x86_64_asm:movq({16, T1}, T1))/binary,
+        %% jit_state_set_module: module + cp_base (module_index << 24)
+        (jit_x86_64_asm:movq(T3, ?JITSTATE_MODULE))/binary,
+        (jit_x86_64_asm:movl({0, T3}, T2))/binary,
+        (jit_x86_64_asm:shlq(24, T2))/binary,
+        (jit_x86_64_asm:movq(T2, ?JITSTATE_CPBASE))/binary,
+        %% branch to the callee's native entry
+        (jit_x86_64_asm:jmpq({T1}))/binary
+    >>,
+    {_RelocOffset, Jne} = jit_x86_64_asm:jnz_rel32(6 + byte_size(Tail)),
+    <<Head/binary, Jne/binary, Tail/binary>>.
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with the same inline resolved fast
+%% path as call_ext_with_cp_direct/4. Tail position: no cp is set here; for
+%% CALL_EXT_LAST (NWords >= 0) the fast path also pops the frame
+%% (cp = e[NWords], e += NWords + 1) exactly like the primitive would.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_ext_last_direct(state(), non_neg_integer(), non_neg_integer(), integer(), [arg()]) ->
+    state().
+call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
+    #state{regs = Regs1} = State1 = pending_clear_all(State0),
+    Avail = mask_to_list(jit_regs:available_regs(Regs1)),
+    State2 =
+        case
+            length(Avail) >= 4 andalso ?IS_SINT32_T(Index * 8) andalso
+                ?IS_SINT32_T(NWords * 8)
+        of
+            true ->
+                [T0, T1, T2, T3 | _] = Avail,
+                emit_call_ext_last_fast_path(State1, Index, NWords, T0, T1, T2, T3);
+            false ->
+                State1
+        end,
+    call_primitive_direct(State2, Primitive, Args).
+
+%% @private
+emit_call_ext_last_fast_path(State0, Index, NWords, T0, T1, T2, T3) ->
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    FramePop =
+        case NWords >= 0 of
+            true ->
+                %% cp = e[NWords]; e += NWords + CP_SIZE_IN_TERMS
+                <<
+                    (jit_x86_64_asm:movq({NWords * 8, ?E_REG}, T2))/binary,
+                    (jit_x86_64_asm:movq(T2, ?CP))/binary,
+                    (jit_x86_64_asm:addq((NWords + 1) * 8, ?E_REG))/binary
+                >>;
+            false ->
+                <<>>
+        end,
+    Code = call_ext_fast_path_code(Index, T0, T1, T2, T3, FramePop, false),
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
 
 %% Tail-position variant: no cp is set (the callee returns to the caller's
 %% caller) and STAY cannot occur, so only bit 0 is dispatched on. Code after
