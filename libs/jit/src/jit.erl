@@ -2066,6 +2066,68 @@ emit_pass(<<?OP_BS_MATCH_STRING, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt9 = MMod:free_native_registers(MSt8, [BSOffsetReg, MatchStateRegPtr]),
     ?ASSERT_ALL_NATIVE_FREE(MSt9),
     emit_pass(Rest4, MMod, MSt9, State0);
+% 90
+%% OTP 27 (and 26) only, see OP_BS_ADD below: bs_put_binary copies a bitstring
+%% segment into ctx->bs at ctx->bs_offset. The copy primitive takes the segment
+%% size as a term (`all\' copies the whole source) and returns the number of bits
+%% written, which is what the offset advances by.
+emit_pass(<<?OP_BS_PUT_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {Unit, Rest3} = decode_literal(Rest2),
+    {Flags, Rest4} = decode_literal(Rest3),
+    {MSt2, Src, Rest5} = decode_typed_compact_term(Rest4, MMod, MSt1, State0),
+    ?TRACE("OP_BS_PUT_BINARY ~p,~p,~p,~p,~p\n", [Fail, Size, Unit, Flags, Src]),
+    %% The emulator only builds unsigned big-endian binaries here.
+    MSt3 =
+        case Flags of
+            0 ->
+                MSt2;
+            _ ->
+                MMod:call_primitive_last(MSt2, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
+                ])
+        end,
+    MSt4 = legacy_put_binary_check(Src, Size, Unit, Fail, MMod, MSt3),
+    {MSt5, SizeInBits} = legacy_segment_size_term(MMod, MSt4, Size, Unit, Fail),
+    {MSt6, BsReg} = MMod:get_bs(MSt5),
+    {MSt7, OffsetReg} = MMod:get_bs_offset(MSt6),
+    {MSt8, CopiedBits} = MMod:call_primitive(MSt7, ?PRIM_BITSTRING_COPY_BINARY, [
+        {free, BsReg}, {free, OffsetReg}, unwrap_typed(Src), SizeInBits
+    ]),
+    MSt9 = MMod:if_block(MSt8, {CopiedBits, '<', 0}, fun(BlockSt) ->
+        MMod:call_primitive_last(BlockSt, ?PRIM_HANDLE_ERROR, [
+            ctx, jit_state, offset
+        ])
+    end),
+    {MSt10, NewOffsetReg} = MMod:get_bs_offset(MSt9),
+    MSt11 = MMod:add(MSt10, NewOffsetReg, CopiedBits),
+    MSt12 = MMod:set_bs_offset(MSt11, NewOffsetReg),
+    MSt13 = MMod:free_native_registers(MSt12, [NewOffsetReg, CopiedBits]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt13),
+    emit_pass(Rest5, MMod, MSt13, State0);
+% 92
+%% OTP 27 (and 26) only, see OP_BS_ADD below: bs_put_string copies a literal
+%% string from the module's string table into ctx->bs at ctx->bs_offset.
+emit_pass(<<?OP_BS_PUT_STRING, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Size, Rest1} = decode_literal(Rest0),
+    {Offset, Rest2} = decode_literal(Rest1),
+    ?TRACE("OP_BS_PUT_STRING ~p,~p\n", [Size, Offset]),
+    BitSize = Size * 8,
+    {MSt1, BsReg} = MMod:get_bs(MSt0),
+    {MSt2, OffsetReg} = MMod:get_bs_offset(MSt1),
+    {MSt3, VoidResult} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_COPY_MODULE_STR, [
+        ctx, jit_state, {free, BsReg}, {free, OffsetReg}, Offset, BitSize
+    ]),
+    MSt4 = MMod:free_native_registers(MSt3, [VoidResult]),
+    {MSt5, NewOffsetReg} = MMod:get_bs_offset(MSt4),
+    MSt6 = MMod:add(MSt5, NewOffsetReg, BitSize),
+    MSt7 = MMod:set_bs_offset(MSt6, NewOffsetReg),
+    MSt8 = MMod:free_native_registers(MSt7, [NewOffsetReg]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    emit_pass(Rest2, MMod, MSt8, State0);
 % 111
 %% OTP 27 (and 26) only: bs_add belongs to the legacy binary construction family
 %% (bs_add, bs_init_bits, bs_append, bs_private_append, bs_put_*, bs_utf*_size),
@@ -9074,6 +9136,60 @@ scale_bits(_MMod, MSt0, SizeValue, Unit) when is_integer(SizeValue) ->
     {MSt0, SizeValue * Unit};
 scale_bits(MMod, MSt0, SizeReg, Unit) ->
     {MMod:mul(MSt0, SizeReg, Unit), SizeReg}.
+
+%% Size of a legacy binary segment as a term, the shape the copy primitive
+%% expects: `all\' passes through, a literal folds at compile time, and anything
+%% else is untagged, scaled by the unit and re-tagged.
+%% OTP 27 (and 26) only: the checks the emulator's OP_BS_PUT_BINARY makes
+%% before copying. The source is a bitstring; `all' takes all of it, which must
+%% then be a multiple of Unit bits; an explicit size is non-negative and no
+%% larger than the source.
+legacy_put_binary_check(Src, ?ALL_ATOM, Unit, Fail, MMod, MSt0) ->
+    MSt1 = verify_is_bitstring(Src, Fail, MMod, MSt0),
+    case Unit of
+        0 ->
+            raise_badarg_or_jump_to_fail_label(Fail, MMod, MSt1);
+        _ ->
+            {MSt2, Reg0} = MMod:copy_to_native_register(MSt1, Src),
+            {MSt3, Bits} = term_bit_size({free, Reg0}, MMod, MSt2),
+            MSt4 = bs_fail_or_badarg_unless_multiple_of_unit(Bits, Unit, Fail, MMod, MSt3),
+            MMod:free_native_registers(MSt4, [Bits])
+    end;
+legacy_put_binary_check(Src, Size, Unit, Fail, MMod, MSt0) when
+    is_integer(Size), Size band 16#F =:= ?TERM_INTEGER_TAG
+->
+    MSt1 = verify_is_bitstring(Src, Fail, MMod, MSt0),
+    case Size bsr 4 of
+        N when N < 0 ->
+            raise_badarg_or_jump_to_fail_label(Fail, MMod, MSt1);
+        N ->
+            {MSt2, Reg0} = MMod:copy_to_native_register(MSt1, Src),
+            {MSt3, Bits} = term_bit_size({free, Reg0}, MMod, MSt2),
+            cond_raise_badarg_or_jump_to_fail_label(
+                {{free, Bits}, '<', N * Unit}, Fail, MMod, MSt3
+            )
+    end;
+legacy_put_binary_check(Src, Size, Unit, Fail, MMod, MSt0) ->
+    MSt1 = verify_is_bitstring(Src, Fail, MMod, MSt0),
+    {MSt2, SizeReg} = term_to_int(Size, Fail, MMod, MSt1),
+    MSt3 = cond_raise_badarg_or_jump_to_fail_label({SizeReg, '<', 0}, Fail, MMod, MSt2),
+    MSt4 = MMod:mul(MSt3, SizeReg, Unit),
+    {MSt5, Reg0} = MMod:copy_to_native_register(MSt4, Src),
+    {MSt6, Bits} = term_bit_size({free, Reg0}, MMod, MSt5),
+    MSt7 = cond_raise_badarg_or_jump_to_fail_label({{free, Bits}, '<', SizeReg}, Fail, MMod, MSt6),
+    MMod:free_native_registers(MSt7, [SizeReg]).
+
+legacy_segment_size_term(_MMod, MSt0, ?ALL_ATOM, _Unit, _Fail) ->
+    {MSt0, ?ALL_ATOM};
+legacy_segment_size_term(_MMod, MSt0, Size, Unit, _Fail) when
+    is_integer(Size), Size band 16#F =:= ?TERM_INTEGER_TAG
+->
+    {MSt0, term_from_int(Unit * (Size bsr 4))};
+legacy_segment_size_term(MMod, MSt0, Size, Unit, Fail) ->
+    {MSt1, SizeReg} = term_to_int(Size, Fail, MMod, MSt0),
+    MSt2 = MMod:mul(MSt1, SizeReg, Unit),
+    {MSt3, SizeReg} = term_from_int(SizeReg, MMod, MSt2),
+    {MSt3, {free, SizeReg}}.
 
 %% Mark a primitive argument as consumed only when it is a register.
 free_if_reg(Value) when is_integer(Value) -> Value;
