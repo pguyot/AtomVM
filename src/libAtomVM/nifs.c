@@ -245,7 +245,9 @@ static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term argv[]);
+#if HAVE_POPEN
 static term nif_os_cmd(Context *ctx, int argc, term argv[]);
+#endif
 static term nif_re_pcre2_compile(Context *ctx, int argc, term argv[]);
 static term nif_re_pcre2_match(Context *ctx, int argc, term argv[]);
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[]);
@@ -860,10 +862,12 @@ static const struct Nif atomvm_set_load_binary_emulated_nif = {
     .nif_ptr = nif_atomvm_set_load_binary_emulated
 };
 
+#if HAVE_POPEN
 static const struct Nif os_cmd_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_os_cmd
 };
+#endif
 
 static const struct Nif re_pcre2_compile_nif = {
     .base.type = NIFFunctionType,
@@ -1198,6 +1202,11 @@ DEFINE_MATH_NIF(tanh)
 #define IF_HAVE_KILL(expr) (expr)
 #else
 #define IF_HAVE_KILL(expr) NULL
+#endif
+#if HAVE_POPEN
+#define IF_HAVE_POPEN(expr) (expr)
+#else
+#define IF_HAVE_POPEN(expr) NULL
 #endif
 #ifdef AVM_ENABLE_MSACC
 #define IF_MSACC(expr) (expr)
@@ -5272,6 +5281,7 @@ static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term arg
     return OK_ATOM;
 }
 
+#if HAVE_POPEN
 static term nif_os_cmd(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
@@ -5315,6 +5325,7 @@ static term nif_os_cmd(Context *ctx, int argc, term argv[])
     free(out);
     return result;
 }
+#endif
 
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[])
 {
