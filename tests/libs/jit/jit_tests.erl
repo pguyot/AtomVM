@@ -1759,3 +1759,57 @@ bs_put_integer_test_() ->
             jit_xtensa
         ]
     ].
+
+%% Same family: bs_put_string copies a literal from the module string table into
+%% the binary at ctx->bs_offset. Synthetic chunk: label 1, bs_init_bits, then
+%% bs_put_string size=2 offset=0, return, int_code_end.
+-define(CODE_BS_PUT_STRING,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        92, 32, 0, 19, 3>>
+).
+
+bs_put_string_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Stream = compile_stream_for_backend(
+                Backend, ?CODE_BS_PUT_STRING, <<0, 0, 0, 0>>, <<>>
+            ),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
+
+%% Same family: bs_put_binary copies a bitstring segment into the binary at
+%% ctx->bs_offset. Synthetic chunk: label 1, bs_init_bits, then
+%% bs_put_binary {f,0} size=8 unit=1 flags=0 src=x2, return, int_code_end.
+-define(CODE_BS_PUT_BINARY,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        90, 5, 9, 8, 16, 0, 35, 19, 3>>
+).
+
+bs_put_binary_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Stream = compile_stream_for_backend(
+                Backend, ?CODE_BS_PUT_BINARY, <<0, 0, 0, 0>>, <<>>
+            ),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
