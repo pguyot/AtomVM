@@ -2133,6 +2133,46 @@ emit_pass(<<?OP_BS_INIT_WRITABLE, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt7 = MMod:free_native_registers(MSt6, [CreatedBin]),
     ?ASSERT_ALL_NATIVE_FREE(MSt7),
     emit_pass(Rest0, MMod, MSt7, State0);
+% 89
+%% OTP 27 (and 26) only, see OP_BS_ADD above: bs_put_integer writes one integer
+%% segment into the binary bs_init_bits/bs_append recorded in ctx->bs, at
+%% ctx->bs_offset, then advances that offset. The insert primitive is the one
+%% bs_create_bin already uses, and it takes the value as a term, so bignum
+%% sources need no special case here.
+emit_pass(<<?OP_BS_PUT_INTEGER, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {Unit, Rest3} = decode_literal(Rest2),
+    {Flags, Rest4} = decode_literal(Rest3),
+    {MSt2, Src, Rest5} = decode_typed_compact_term(Rest4, MMod, MSt1, State0),
+    ?TRACE("OP_BS_PUT_INTEGER ~p,~p,~p,~p,~p\n", [Fail, Size, Unit, Flags, Src]),
+    MSt3 = verify_is_any_integer(Src, Fail, MMod, MSt2),
+    {MSt4, SizeValue} = term_to_int(Size, Fail, MMod, MSt3),
+    %% Field width in bits is Size * Unit; a literal size folds at compile time,
+    %% a register one is scaled in place.
+    {MSt5, NumBits} = scale_bits(MMod, MSt4, SizeValue, Unit),
+    {MSt6, BsReg} = MMod:get_bs(MSt5),
+    {MSt7, OffsetReg} = MMod:get_bs_offset(MSt6),
+    %% The source is passed as the VM operand it already is: the backends load it
+    %% straight into the parameter register, one native register less to shuffle
+    %% (armv6m runs out otherwise). The binary, the offset and a non-literal
+    %% width are consumed by the call, and recomputed after it -- cheaper than
+    %% keeping them live across it.
+    {MSt9, BoolResult} = MMod:call_primitive(MSt7, ?PRIM_BITSTRING_INSERT_INTEGER, [
+        {free, BsReg}, {free, OffsetReg}, unwrap_typed(Src), free_if_reg(NumBits), Flags
+    ]),
+    MSt10 = cond_raise_badarg_or_jump_to_fail_label(
+        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt9
+    ),
+    {MSt11, SizeValue2} = term_to_int(Size, Fail, MMod, MSt10),
+    {MSt12, NumBits2} = scale_bits(MMod, MSt11, SizeValue2, Unit),
+    {MSt13, NewOffsetReg} = MMod:get_bs_offset(MSt12),
+    MSt14 = MMod:add(MSt13, NewOffsetReg, NumBits2),
+    MSt15 = MMod:set_bs_offset(MSt14, NewOffsetReg),
+    MSt16 = MMod:free_native_registers(MSt15, [NewOffsetReg, NumBits2]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt16),
+    emit_pass(Rest5, MMod, MSt16, State0);
 % 137
 %% OTP 27 (and 26) only, see OP_BS_ADD above: bs_init_bits allocates the binary
 %% that the bs_put_* opcodes of the legacy family then fill in place, recording
@@ -9069,6 +9109,17 @@ raise_out_of_memory_if_invalid(Reg, MMod, MSt0) ->
             ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
         ])
     end).
+
+%% Field width in bits of a legacy bit-syntax segment: a literal size folds at
+%% compile time, a register one is scaled in place.
+scale_bits(_MMod, MSt0, SizeValue, Unit) when is_integer(SizeValue) ->
+    {MSt0, SizeValue * Unit};
+scale_bits(MMod, MSt0, SizeReg, Unit) ->
+    {MMod:mul(MSt0, SizeReg, Unit), SizeReg}.
+
+%% Mark a primitive argument as consumed only when it is a register.
+free_if_reg(Value) when is_integer(Value) -> Value;
+free_if_reg(Reg) -> {free, Reg}.
 
 %% OTP 27 (and 26) only, see OP_BS_ADD: allocate the binary the legacy bs_put_*
 %% opcodes fill in place. Mirrors the emulator's OP_BS_INIT_BITS: whole bytes in

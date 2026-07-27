@@ -74,6 +74,9 @@
     load_be_unsigned/3,
     store_be/4,
     set_bs/2,
+    get_bs/1,
+    get_bs_offset/1,
+    set_bs_offset/2,
     copy_to_native_register/2,
     get_array_element/3,
     increment_sp/2,
@@ -4977,6 +4980,30 @@ set_bs(#state{stream_module = StreamModule, stream = Stream0} = State0, TermReg)
     I2 = jit_x86_64_asm:movq(0, ?BS_OFFSET),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     State0#state{stream = Stream1}.
+
+%% @doc Load ctx->bs, the binary the legacy bs_put_* opcodes fill in place.
+-spec get_bs(state()) -> {state(), x86_64_register()}.
+get_bs(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_x86_64_asm:movq(?BS, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Load ctx->bs_offset, the bit offset the next segment is written at.
+-spec get_bs_offset(state()) -> {state(), x86_64_register()}.
+get_bs_offset(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_x86_64_asm:movq(?BS_OFFSET, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Store ctx->bs_offset after a segment has been written.
+-spec set_bs_offset(state(), x86_64_register()) -> state().
+set_bs_offset(#state{stream_module = StreamModule, stream = Stream0} = State0, OffsetReg) ->
+    I1 = jit_x86_64_asm:movq(OffsetReg, ?BS_OFFSET),
+    State0#state{stream = StreamModule:append(Stream0, I1)}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state

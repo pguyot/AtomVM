@@ -78,6 +78,9 @@
     move_to_array_element/4,
     move_to_array_element/5,
     set_bs/2,
+    get_bs/1,
+    get_bs_offset/1,
+    set_bs_offset/2,
     copy_to_native_register/2,
     get_array_element/3,
     increment_sp/2,
@@ -1027,6 +1030,35 @@ set_bs(State0, TermLocal) ->
         (jit_wasm32_asm:i32_store(2, ?CTX_BS_OFFSET))/binary,
         (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
         (jit_wasm32_asm:i32_const(0))/binary,
+        (jit_wasm32_asm:i32_store(2, ?CTX_BS_OFFSET_OFFSET))/binary
+    >>,
+    emit(State0, Code).
+
+%% @doc Load ctx->bs, the binary the legacy bs_put_* opcodes fill in place.
+get_bs(State0) ->
+    {State1, Local} = alloc_local(State0),
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?CTX_BS_OFFSET))/binary,
+        (jit_wasm32_asm:local_set(Local))/binary
+    >>,
+    {emit(State1, Code), Local}.
+
+%% @doc Load ctx->bs_offset, the bit offset the next segment is written at.
+get_bs_offset(State0) ->
+    {State1, Local} = alloc_local(State0),
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:i32_load(2, ?CTX_BS_OFFSET_OFFSET))/binary,
+        (jit_wasm32_asm:local_set(Local))/binary
+    >>,
+    {emit(State1, Code), Local}.
+
+%% @doc Store ctx->bs_offset after a segment has been written.
+set_bs_offset(State0, OffsetLocal) ->
+    Code = <<
+        (jit_wasm32_asm:local_get(?CTX_LOCAL))/binary,
+        (jit_wasm32_asm:local_get(OffsetLocal))/binary,
         (jit_wasm32_asm:i32_store(2, ?CTX_BS_OFFSET_OFFSET))/binary
     >>,
     emit(State0, Code).
