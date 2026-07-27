@@ -55,6 +55,9 @@
     move_to_array_element/4,
     move_to_array_element/5,
     set_bs/2,
+    get_bs/1,
+    get_bs_offset/1,
+    set_bs_offset/2,
     copy_to_native_register/2,
     get_array_element/3,
     increment_sp/2,
@@ -4346,6 +4349,33 @@ set_bs(
     I3 = jit_xtensa_asm:s32i(Temp, BaseReg2, Off2),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     State0#state{stream = Stream1}.
+
+%% @doc Load ctx->bs, the binary the legacy bs_put_* opcodes fill in place.
+-spec get_bs(state()) -> {state(), xtensa_register()}.
+get_bs(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    {BaseReg, Off} = ?BS,
+    I1 = array_load_code(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Load ctx->bs_offset, the bit offset the next segment is written at.
+-spec get_bs_offset(state()) -> {state(), xtensa_register()}.
+get_bs_offset(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    {BaseReg, Off} = ?BS_OFFSET,
+    I1 = array_load_code(Reg, BaseReg, Off),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Store ctx->bs_offset after a segment has been written.
+-spec set_bs_offset(state(), xtensa_register()) -> state().
+set_bs_offset(#state{stream_module = StreamModule, stream = Stream0} = State0, OffsetReg) ->
+    {BaseReg, Off} = ?BS_OFFSET,
+    I1 = array_store_code(OffsetReg, BaseReg, Off),
+    State0#state{stream = StreamModule:append(Stream0, I1)}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state

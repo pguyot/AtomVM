@@ -59,6 +59,9 @@
     move_to_array_element/4,
     move_to_array_element/5,
     set_bs/2,
+    get_bs/1,
+    get_bs_offset/1,
+    set_bs_offset/2,
     copy_to_native_register/2,
     get_array_element/3,
     increment_sp/2,
@@ -4729,6 +4732,42 @@ set_bs(
     ),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), Temp2),
     State0#state{stream = Stream1, regs = Regs1}.
+
+%% @doc Load ctx->bs, the binary the legacy bs_put_* opcodes fill in place.
+-spec get_bs(state()) -> {state(), armv6m_register()}.
+get_bs(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_armv6m_asm:ldr(Reg, ?BS),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Load ctx->bs_offset, the bit offset the next segment is written at.
+%% ?BS_OFFSET sits past the Thumb ldr immediate range, so the address is
+%% materialized first (see set_bs/2).
+-spec get_bs_offset(state()) -> {state(), armv6m_register()}.
+get_bs_offset(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    {?CTX_REG, BsOffsetOff} = ?BS_OFFSET,
+    I1 = mov_offset_code(Reg, BsOffsetOff),
+    I2 = jit_armv6m_asm:add(Reg, ?CTX_REG),
+    I3 = jit_armv6m_asm:ldr(Reg, {Reg, 0}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Store ctx->bs_offset after a segment has been written.
+-spec set_bs_offset(state(), armv6m_register()) -> state().
+set_bs_offset(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, OffsetReg
+) ->
+    Temp = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(OffsetReg))),
+    {?CTX_REG, BsOffsetOff} = ?BS_OFFSET,
+    I1 = mov_offset_code(Temp, BsOffsetOff),
+    I2 = jit_armv6m_asm:add(Temp, ?CTX_REG),
+    I3 = jit_armv6m_asm:str(OffsetReg, {Temp, 0}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Temp)}.
 
 %%-----------------------------------------------------------------------------
 %% @param State current state
