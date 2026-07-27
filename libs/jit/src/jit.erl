@@ -2133,6 +2133,37 @@ emit_pass(<<?OP_BS_INIT_WRITABLE, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt7 = MMod:free_native_registers(MSt6, [CreatedBin]),
     ?ASSERT_ALL_NATIVE_FREE(MSt7),
     emit_pass(Rest0, MMod, MSt7, State0);
+% 137
+%% OTP 27 (and 26) only, see OP_BS_ADD above: bs_init_bits allocates the binary
+%% that the bs_put_* opcodes of the legacy family then fill in place, recording
+%% it in ctx->bs with a zero bit offset. A non-byte-aligned total is stored whole
+%% and the destination gets a sub-binary carrying the trailing bit count, exactly
+%% as bs_create_bin does.
+emit_pass(<<?OP_BS_INIT_BITS, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {Words, Rest3} = decode_literal(Rest2),
+    {Live, Rest4} = decode_literal(Rest3),
+    {Flags, Rest5} = decode_literal(Rest4),
+    {MSt2, Dest, Rest6} = decode_dest(Rest5, MMod, MSt1),
+    ?TRACE("OP_BS_INIT_BITS ~p,~p,~p,~p,~p,~p\n", [Fail, Size, Words, Live, Flags, Dest]),
+    %% The emulator rejects any flag here (only unsigned big-endian is built).
+    MSt3 =
+        case Flags of
+            0 ->
+                MSt2;
+            _ ->
+                MMod:call_primitive_last(MSt2, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?UNSUPPORTED_ATOM
+                ])
+        end,
+    {MSt4, SizeBits} = term_to_int(Size, Fail, MMod, MSt3),
+    MSt5 = emit_pass_bs_init_bits(
+        MMod, MSt4, SizeBits, Words, Live, Dest
+    ),
+    ?ASSERT_ALL_NATIVE_FREE(MSt5),
+    emit_pass(Rest6, MMod, MSt5, State0);
 % 136
 emit_pass(<<?OP_TRIM, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -9038,6 +9069,67 @@ raise_out_of_memory_if_invalid(Reg, MMod, MSt0) ->
             ctx, jit_state, offset, ?OUT_OF_MEMORY_ATOM
         ])
     end).
+
+%% OTP 27 (and 26) only, see OP_BS_ADD: allocate the binary the legacy bs_put_*
+%% opcodes fill in place. Mirrors the emulator's OP_BS_INIT_BITS: whole bytes in
+%% a binary recorded in ctx->bs (with a zero bit offset), and a sub-binary
+%% carrying the trailing bits handed to the destination register.
+emit_pass_bs_init_bits(MMod, MSt0, TotalBits, Words, Live, Dest) when is_integer(TotalBits) ->
+    ByteSize = (TotalBits + 7) div 8,
+    Trailing = TotalBits rem 8,
+    Extra =
+        case Trailing of
+            0 -> 0;
+            _ -> ?TERM_BOXED_SUB_BINARY_SIZE
+        end,
+    HeapSize = Words + term_binary_heap_size(ByteSize, MMod) + Extra,
+    {MSt1, MemoryEnsureFreeReg} = MMod:call_primitive(
+        MSt0, ?PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS, [
+            ctx, jit_state, HeapSize, Live, ?MEMORY_CAN_SHRINK
+        ]
+    ),
+    MSt2 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt1),
+    {MSt3, CreatedBin} = MMod:call_primitive(MSt2, ?PRIM_TERM_CREATE_EMPTY_BINARY, [ctx, ByteSize]),
+    MSt4 = raise_out_of_memory_if_invalid(CreatedBin, MMod, MSt3),
+    MSt5 = MMod:set_bs(MSt4, CreatedBin),
+    {MSt6, Result} =
+        case Trailing of
+            0 ->
+                {MSt5, CreatedBin};
+            _ ->
+                MMod:call_primitive(MSt5, ?PRIM_BS_CREATE_BIN_WRAP, [
+                    ctx, {free, CreatedBin}, TotalBits
+                ])
+        end,
+    MSt7 = MMod:move_to_vm_register(MSt6, Result, Dest),
+    MMod:free_native_registers(MSt7, [Result, Dest]);
+emit_pass_bs_init_bits(MMod, MSt0, TotalBitsReg, Words, Live, Dest) ->
+    %% Dynamic size: round up to whole bytes for the allocation, and reserve the
+    %% sub-binary unconditionally -- the trailing bit count is only known at run
+    %% time, and PRIM_BS_CREATE_BIN_WRAP returns the binary itself when the total
+    %% is byte aligned.
+    {MSt1, BitsCopy} = MMod:copy_to_native_register(MSt0, TotalBitsReg),
+    MSt2 = MMod:add(MSt1, BitsCopy, 7),
+    {MSt3, ByteSizeReg} = MMod:shift_right(MSt2, {free, BitsCopy}, 3),
+    {MSt4, ByteSizeCopy} = MMod:copy_to_native_register(MSt3, ByteSizeReg),
+    {MSt5, HeapSizeReg} = term_binary_heap_size({free, ByteSizeCopy}, MMod, MSt4),
+    MSt6 = MMod:add(MSt5, HeapSizeReg, Words + ?TERM_BOXED_SUB_BINARY_SIZE),
+    {MSt7, MemoryEnsureFreeReg} = MMod:call_primitive(
+        MSt6, ?PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS, [
+            ctx, jit_state, {free, HeapSizeReg}, Live, ?MEMORY_CAN_SHRINK
+        ]
+    ),
+    MSt8 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt7),
+    {MSt9, CreatedBin} = MMod:call_primitive(MSt8, ?PRIM_TERM_CREATE_EMPTY_BINARY, [
+        ctx, {free, ByteSizeReg}
+    ]),
+    MSt10 = raise_out_of_memory_if_invalid(CreatedBin, MMod, MSt9),
+    MSt11 = MMod:set_bs(MSt10, CreatedBin),
+    {MSt12, Result} = MMod:call_primitive(MSt11, ?PRIM_BS_CREATE_BIN_WRAP, [
+        ctx, {free, CreatedBin}, {free, TotalBitsReg}
+    ]),
+    MSt13 = MMod:move_to_vm_register(MSt12, Result, Dest),
+    MMod:free_native_registers(MSt13, [Result, Dest]).
 
 term_binary_heap_size(Size, MMod) when is_integer(Size) ->
     case MMod:word_size() of
