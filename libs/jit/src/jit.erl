@@ -2070,6 +2070,47 @@ emit_pass(<<?OP_BS_MATCH_STRING, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt9 = MMod:free_native_registers(MSt8, [BSOffsetReg, MatchStateRegPtr]),
     ?ASSERT_ALL_NATIVE_FREE(MSt9),
     emit_pass(Rest4, MMod, MSt9, State0);
+% 111
+%% OTP 27 (and 26) only: bs_add belongs to the legacy binary construction family
+%% (bs_add, bs_init_bits, bs_append, bs_private_append, bs_put_*, bs_utf*_size),
+%% which those releases emit in place of bs_create_bin when a module is compiled
+%% with `no_bs_create_bin'. OTP 28 and later never emit it -- the compiler has no
+%% option to go back to the legacy instructions -- so this clause is dead code on
+%% anything newer, and it is only reachable from modules compiled by OTP =< 27.
+%%
+%% It accumulates the size of the binary about to be built, ahead of the
+%% bs_init_bits / bs_append that allocates it: Dest = (Src1 + Src2) * Unit, with
+%% both operands verified to be integers, like the emulator's OP_BS_ADD.
+emit_pass(<<?OP_BS_ADD, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Src1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Src2, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
+    {Unit, Rest4} = decode_literal(Rest3),
+    {MSt3, Dest, Rest5} = decode_dest(Rest4, MMod, MSt2),
+    ?TRACE("OP_BS_ADD ~p,~p,~p,~p,~p\n", [Fail, Src1, Src2, Unit, Dest]),
+    {MSt4, Val1} = term_to_int(Src1, Fail, MMod, MSt3),
+    {MSt5, Val2} = term_to_int(Src2, Fail, MMod, MSt4),
+    {MSt6, SumReg} =
+        case {Val1, Val2} of
+            {V1, V2} when is_integer(V1), is_integer(V2) ->
+                MMod:move_to_native_register(MSt5, V1 + V2);
+            {V1, V2} when is_integer(V1) ->
+                {MMod:add(MSt5, V2, V1), V2};
+            {V1, V2} when is_integer(V2) ->
+                {MMod:add(MSt5, V1, V2), V1};
+            {V1, V2} ->
+                MSt5a = MMod:add(MSt5, V1, V2),
+                {MMod:free_native_registers(MSt5a, [V2]), V1}
+        end,
+    MSt7 = MMod:mul(MSt6, SumReg, Unit),
+    %% Re-tag the byte/bit count as a small integer.
+    MSt8 = MMod:shift_left(MSt7, SumReg, 4),
+    MSt9 = MMod:or_(MSt8, SumReg, ?TERM_INTEGER_TAG),
+    MSt10 = MMod:move_to_vm_register(MSt9, SumReg, Dest),
+    MSt11 = MMod:free_native_registers(MSt10, [SumReg, Dest]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt11),
+    emit_pass(Rest5, MMod, MSt11, State0);
 % 133
 emit_pass(<<?OP_BS_INIT_WRITABLE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),

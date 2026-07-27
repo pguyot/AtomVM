@@ -258,7 +258,12 @@ check_lines_table(<<LinesCount:16, _Lines:(LinesCount * 6)/binary>>) -> ok.
 
 backend_to_arch(jit_x86_64) -> ?JIT_ARCH_X86_64;
 backend_to_arch(jit_aarch64) -> ?JIT_ARCH_AARCH64;
-backend_to_arch(jit_armv6m) -> ?JIT_ARCH_ARMV6M.
+backend_to_arch(jit_armv6m) -> ?JIT_ARCH_ARMV6M;
+backend_to_arch(jit_riscv32) -> ?JIT_ARCH_RISCV32;
+backend_to_arch(jit_riscv64) -> ?JIT_ARCH_RISCV64;
+backend_to_arch(jit_arm32) -> ?JIT_ARCH_ARM32;
+backend_to_arch(jit_wasm32) -> ?JIT_ARCH_WASM32;
+backend_to_arch(jit_xtensa) -> ?JIT_ARCH_XTENSA.
 
 compile_stream_for_backend(Backend, CodeChunk, AtomChunk, TypeChunk) ->
     compile_stream_for_backend(Backend, CodeChunk, AtomChunk, TypeChunk, fun(_) ->
@@ -885,7 +890,6 @@ if_block_unsigned_less_than_test_() ->
         end}
      || Backend <- Backends
     ].
-
 
 %%-----------------------------------------------------------------------------
 %% Tagged-tuple (record) fusion tests
@@ -1654,5 +1658,40 @@ backends_track_record_types_test_() ->
             jit_riscv64,
             jit_wasm32,
             jit_xtensa
+        ]
+    ].
+
+%% OTP 27 (and 26) only: those releases emit the legacy binary construction
+%% family (bs_add, bs_init_bits, bs_append, bs_put_*) in place of bs_create_bin
+%% when a module is compiled with `no_bs_create_bin'; OTP 28+ never emit it.
+%% AtomVM's own test_no_bs_create_bin is compiled that way on OTP =< 27, so a JIT
+%% build on OTP 27 stops at the precompile step on any opcode of the family the
+%% JIT does not implement -- hence this fixture, which is version independent.
+%%
+%% Synthetic chunk: label 1, bs_add {f,0} x0 x1 unit=1 -> x2, return, int_code_end.
+%% (label operands are u-encoded, hence 16 for label 1 and 5 for {f,0})
+-define(CODE_BS_ADD,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 111, 5, 3, 19, 16, 35,
+        19, 3>>
+).
+
+bs_add_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Stream = compile_stream_for_backend(
+                Backend, ?CODE_BS_ADD, <<0, 0, 0, 0>>, <<>>
+            ),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+            %% wasm32 is excluded: it has no DWARF support and this suite is
+            %% built with -DJIT_DWARF
         ]
     ].
