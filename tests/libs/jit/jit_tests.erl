@@ -1731,3 +1731,31 @@ bs_init_bits_test_() ->
             jit_xtensa
         ]
     ].
+
+%% Same family: bs_put_integer writes a segment into the binary bs_init_bits
+%% allocated, at ctx->bs_offset, and advances that offset. Synthetic chunk:
+%% label 1, bs_init_bits {f,0} x0 words=0 live=1 flags=0 -> x1,
+%% bs_put_integer {f,0} size=x2 unit=1 flags=0 src=x3, return, int_code_end.
+-define(CODE_BS_PUT_INTEGER,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        89, 5, 35, 16, 0, 51, 19, 3>>
+).
+
+bs_put_integer_test_() ->
+    [
+        {atom_to_list(Backend), fun() ->
+            Stream = compile_stream_for_backend(
+                Backend, ?CODE_BS_PUT_INTEGER, <<0, 0, 0, 0>>, <<>>
+            ),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].

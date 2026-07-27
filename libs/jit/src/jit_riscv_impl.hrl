@@ -3773,6 +3773,34 @@ set_bs(
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     State0#state{stream = Stream1, regs = Regs1}.
 
+%% @doc Load ctx->bs, the binary the legacy bs_put_* opcodes fill in place.
+get_bs(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    {BaseReg, Off} = ?BS,
+    I1 = array_load_code(Reg, BaseReg, Off, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Load ctx->bs_offset, the bit offset the next segment is written at.
+get_bs_offset(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    {BaseReg, Off} = ?BS_OFFSET,
+    I1 = array_load_code(Reg, BaseReg, Off, Reg),
+    Stream1 = StreamModule:append(Stream0, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% @doc Store ctx->bs_offset after a segment has been written.
+set_bs_offset(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, OffsetReg
+) ->
+    Scratch = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(OffsetReg))),
+    {BaseReg, Off} = ?BS_OFFSET,
+    I1 = array_store_code(BaseReg, OffsetReg, Off, Scratch),
+    Stream1 = StreamModule:append(Stream0, I1),
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Scratch)}.
+
 %%-----------------------------------------------------------------------------
 %% @param State current state
 %% @param SortedLines line information, sorted by offset
