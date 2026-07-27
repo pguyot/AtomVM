@@ -573,15 +573,15 @@ posix_kill(_OsPid, _Signal) ->
 %%-----------------------------------------------------------------------------
 %% @doc Enable microstate accounting and reduction-sampled hotness profiling,
 %%      resetting every counter. Modeled on BEAM's
-%%      `erlang:system_flag(microstate_accounting, true)`: each scheduler
-%%      thread's time is bucketed into `emulator` (running process code,
-%%      interpreted or JIT-compiled), `gc`, `scheduler` (run-queue/timer-wheel
-%%      bookkeeping) and `sleep` (blocked in the I/O poller).
+%%      `erlang:system_flag(microstate_accounting, true)': each scheduler
+%%      thread's time is bucketed into `emulator' (running process code,
+%%      interpreted or JIT-compiled), `gc', `scheduler' (run-queue/timer-wheel
+%%      bookkeeping) and `sleep' (blocked in the I/O poller).
 %%
 %%      Hotness is sampled once per process reduction slice (not on a
 %%      wall-clock timer) at the module:function/arity the process was
 %%      executing when it stopped running, so it is coarser than
-%%      `eprof`/`fprof`'s exact call time but needs no per-instruction or
+%%      the exact call time of `eprof'/`fprof', but needs no per-instruction or
 %%      per-JIT-backend instrumentation. Overhead while enabled is one
 %%      monotonic clock read per scheduler state transition and per
 %%      reduction slice; while disabled (the default) it is a single branch.
@@ -592,22 +592,22 @@ profile_start() ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------
-%% @doc Disable profiling (see `profile_start/0`) and return the stats
-%%      collected since the last `profile_start/0`, one entry per scheduler
+%% @doc Disable profiling (see `profile_start/0') and return the stats
+%%      collected since the last `profile_start/0', one entry per scheduler
 %%      OS thread:
-%%      `[{SchedulerIndex, [{State, Nanoseconds}], [{{Module, Function, Arity, Line}, Count}]}]`.
+%%      `[{SchedulerIndex, [{State, Nanoseconds}], [{{Module, Function, Arity, Line}, Count}]}]'.
 %%
-%%      `Function` is `undefined` and `Arity` is `-1` when a sampled position
+%%      `Function' is `undefined' and `Arity' is `-1' when a sampled position
 %%      could not be resolved to a function. This always happens for
 %%      JIT-compiled code (native code can only be resolved to module
 %%      granularity, not to a specific function -- see msacc.c) unless the
 %%      VM was built with JIT line profiling enabled (a separate,
 %%      off-by-default build option: it adds real per-line overhead to
 %%      every JIT-compiled module, not just while profiling), in which case
-%%      native samples get a real `Line` instead, still with `Function`
-%%      `undefined`. `Line` is `0` when no line information is available at
+%%      native samples get a real `Line' instead, still with `Function'
+%%      `undefined'. `Line' is `0' when no line information is available at
 %%      all (native code without JIT line profiling); it is always populated
-%%      for interpreted code. Hotspot entries are unsorted; sort by `Count`
+%%      for interpreted code. Hotspot entries are unsorted; sort by `Count'
 %%      to find the busiest lines/functions.
 %% @end
 %%-----------------------------------------------------------------------------
