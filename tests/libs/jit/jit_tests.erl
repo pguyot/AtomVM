@@ -1695,3 +1695,39 @@ bs_add_test_() ->
             %% built with -DJIT_DWARF
         ]
     ].
+
+%% Same family, next opcode: bs_init_bits allocates the binary the bs_put_*
+%% opcodes then fill. Synthetic chunk: label 1,
+%% bs_init_bits {f,0} x0 words=0 live=1 flags=0 -> x1, return, int_code_end.
+-define(CODE_BS_INIT_BITS,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        19, 3>>
+).
+
+%% Same, with a literal size (33 bits: not byte aligned, so the result is wrapped
+%% in a sub-binary), which takes the compile-time sizing path instead.
+-define(CODE_BS_INIT_BITS_LITERAL,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 9, 33, 0, 16, 0,
+        19, 19, 3>>
+).
+
+bs_init_bits_test_() ->
+    [
+        {atom_to_list(Backend) ++ " " ++ Label, fun() ->
+            Stream = compile_stream_for_backend(Backend, Code, <<0, 0, 0, 0>>, <<>>),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || {Label, Code} <- [
+            {"dynamic size", ?CODE_BS_INIT_BITS},
+            {"literal size", ?CODE_BS_INIT_BITS_LITERAL}
+        ],
+        Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
