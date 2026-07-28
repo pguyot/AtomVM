@@ -1153,7 +1153,13 @@ call_primitive(StateP, Primitive, Args0) ->
     %% The function pointer is loaded from the pinned table after argument
     %% setup, directly in call_func_ptr0.
     Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
-    call_func_ptr0(StateP, {primitive, Primitive}, Args, prim_pure(Primitive)).
+    Reload =
+        case {prim_pure(Primitive), prim_returns_context(Primitive)} of
+            {true, _} -> none;
+            {_, true} -> deferred;
+            _ -> here
+        end,
+    call_func_ptr0(StateP, {primitive, Primitive}, Args, Reload).
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a jump (call without return) to a primitive with arguments. This
@@ -1245,7 +1251,13 @@ return_if_not_equal_to_ctx(
         end,
     I4 = jit_x86_64_asm:retq(),
     I2 = jit_x86_64_asm:jz(byte_size(I3) + byte_size(I4) + 2),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
+    %% Falling through means the primitive stayed with this context, so it is
+    %% still alive and hp/e can be reloaded from it -- which the call itself
+    %% deferred, precisely because the other edge may have freed it.
+    RL = reload_hp_e_code(),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, RL/binary>>
+    ),
     RegBit = reg_bit(Reg),
     State#state{
         stream = Stream1,
@@ -2377,11 +2389,17 @@ shift_by_cl(
 call_func_ptr(StateP, FuncPtrTuple, Args) ->
     call_func_ptr0(StateP, FuncPtrTuple, Args, false).
 
+%% `Reload' says what to do about the hp/e pinned registers after the call:
+%% `none' for a pure primitive (they stay authoritative across it), `here' to
+%% reload them from ctx right after the call, and `deferred' for a primitive
+%% that may return a different Context -- reading ctx then would touch a
+%% process this call just terminated, so the dispatch that follows reloads on
+%% the paths where ctx is still alive.
 -spec call_func_ptr0(
     state(),
     {free, x86_64_register()} | {primitive, non_neg_integer()},
     [arg()],
-    boolean()
+    none | here | deferred | boolean()
 ) ->
     {state(), x86_64_register()}.
 call_func_ptr0(
@@ -2446,9 +2464,9 @@ call_func_ptr0(
     %% a coherent heap/stack state. Skipped for pure primitives (prim_pure/1).
     WB =
         case Pure of
-            true ->
+            Skip when Skip =:= true orelse Skip =:= none ->
                 <<>>;
-            false ->
+            _ ->
                 <<
                     (jit_x86_64_asm:movq(?HP_REG, ?HEAP_PTR))/binary,
                     (jit_x86_64_asm:movq(?E_REG, ?Y_REGS))/binary
@@ -2493,13 +2511,10 @@ call_func_ptr0(
     %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
     RL =
         case Pure of
-            true ->
-                <<>>;
-            false ->
-                <<
-                    (jit_x86_64_asm:movq(?HEAP_PTR, ?HP_REG))/binary,
-                    (jit_x86_64_asm:movq(?Y_REGS, ?E_REG))/binary
-                >>
+            true -> <<>>;
+            none -> <<>>;
+            deferred -> <<>>;
+            _ -> reload_hp_e_code()
         end,
     Stream9 = StreamModule:append(Stream8, <<PopBin/binary, RL/binary>>),
     ResultBit = reg_bit(ResultReg),
@@ -2513,6 +2528,14 @@ call_func_ptr0(
         },
         ResultReg
     }.
+
+%% @private
+%% Refresh the pinned hp/e registers from the (live) context.
+reload_hp_e_code() ->
+    <<
+        (jit_x86_64_asm:movq(?HEAP_PTR, ?HP_REG))/binary,
+        (jit_x86_64_asm:movq(?Y_REGS, ?E_REG))/binary
+    >>.
 
 -spec set_args(state(), [arg()]) -> state().
 set_args(State0, Args) ->
@@ -4927,19 +4950,25 @@ direct_dispatch(
         end,
     IJmpCont = jit_x86_64_asm:jmpq(?JITSTATE_CONTINUATION),
     ITest0 = jit_x86_64_asm:testb(1, ResultReg),
+    %% The primitive may have terminated this process, in which case it returns
+    %% a plain (untagged) pointer to another Context and ctx is already freed:
+    %% the hp/e reload is deferred to here, past the untagged early-out, so it
+    %% only ever reads a live context.
+    RL = reload_hp_e_code(),
     Code =
         case TestStay of
             true ->
                 ITest1 = jit_x86_64_asm:testb(2, ResultReg),
                 IJnz1 = jit_x86_64_asm:jnz(2 + byte_size(IJmpCont) + byte_size(MovRet)),
                 IJz0 = jit_x86_64_asm:jz(
-                    2 + byte_size(ITest1) + byte_size(IJnz1) + byte_size(IJmpCont)
+                    2 + byte_size(RL) + byte_size(ITest1) + byte_size(IJnz1) +
+                        byte_size(IJmpCont)
                 ),
-                <<ITest0/binary, IJz0/binary, ITest1/binary, IJnz1/binary, IJmpCont/binary,
-                    MovRet/binary>>;
+                <<ITest0/binary, IJz0/binary, RL/binary, ITest1/binary, IJnz1/binary,
+                    IJmpCont/binary, MovRet/binary>>;
             false ->
-                IJz0 = jit_x86_64_asm:jz(2 + byte_size(IJmpCont)),
-                <<ITest0/binary, IJz0/binary, IJmpCont/binary, MovRet/binary>>
+                IJz0 = jit_x86_64_asm:jz(2 + byte_size(RL) + byte_size(IJmpCont)),
+                <<ITest0/binary, IJz0/binary, RL/binary, IJmpCont/binary, MovRet/binary>>
         end,
     Stream1 = StreamModule:append(Stream0, Code),
     free_native_register(State0#state{stream = Stream1}, ResultReg).
