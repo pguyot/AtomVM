@@ -130,7 +130,7 @@
 % -define(MEMORY_NO_SHRINK, 0).
 -define(MEMORY_CAN_SHRINK, 1).
 % -define(MEMORY_FORCE_SHRINK, 2).
-% -define(MEMORY_NO_GC, 3).
+-define(MEMORY_NO_GC, 3).
 
 % n_words parameter values for ?PRIM_CALL_EXT
 % n_words >= 0 means CALL_EXT_LAST (deallocate n_words from stack)

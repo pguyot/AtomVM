@@ -2111,6 +2111,32 @@ emit_pass(<<?OP_BS_PUT_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt13 = MMod:free_native_registers(MSt12, [NewOffsetReg, CopiedBits]),
     ?ASSERT_ALL_NATIVE_FREE(MSt13),
     emit_pass(Rest5, MMod, MSt13, State0);
+% 91
+%% OTP 27 (and 26) only, see OP_BS_ADD below: bs_put_float writes one float
+%% segment into ctx->bs at ctx->bs_offset.
+emit_pass(<<?OP_BS_PUT_FLOAT, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {Unit, Rest3} = decode_literal(Rest2),
+    {Flags, Rest4} = decode_literal(Rest3),
+    {MSt2, Src, Rest5} = decode_typed_compact_term(Rest4, MMod, MSt1, State0),
+    ?TRACE("OP_BS_PUT_FLOAT ~p,~p,~p,~p,~p\n", [Fail, Size, Unit, Flags, Src]),
+    {MSt3, SizeValue} = float_segment_size(Size, Fail, MMod, MSt2),
+    {MSt4, NumBits} = scale_bits(MMod, MSt3, SizeValue, Unit),
+    {MSt5, BsReg} = MMod:get_bs(MSt4),
+    {MSt6, OffsetReg} = MMod:get_bs_offset(MSt5),
+    {MSt7, BoolResult} = MMod:call_primitive(MSt6, ?PRIM_BITSTRING_INSERT_FLOAT, [
+        {free, BsReg}, {free, OffsetReg}, unwrap_typed(Src), free_if_reg(NumBits), Flags
+    ]),
+    MSt8 = cond_raise_badarg_or_jump_to_fail_label(
+        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt7
+    ),
+    {MSt9, SizeValue2} = float_segment_size(Size, Fail, MMod, MSt8),
+    {MSt10, NumBits2} = scale_bits(MMod, MSt9, SizeValue2, Unit),
+    MSt11 = advance_bs_offset(MMod, MSt10, NumBits2),
+    ?ASSERT_ALL_NATIVE_FREE(MSt11),
+    emit_pass(Rest5, MMod, MSt11, State0);
 % 92
 %% OTP 27 (and 26) only, see OP_BS_ADD below: bs_put_string copies a literal
 %% string from the module's string table into ctx->bs at ctx->bs_offset.
@@ -2132,6 +2158,74 @@ emit_pass(<<?OP_BS_PUT_STRING, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt8 = MMod:free_native_registers(MSt7, [NewOffsetReg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt8),
     emit_pass(Rest2, MMod, MSt8, State0);
+% 144, 146
+%% OTP 27 (and 26) only, see OP_BS_ADD below: bs_utf8_size / bs_utf16_size
+%% compute the encoded size, in bytes, of a code point ahead of the matching
+%% bs_put_utf8 / bs_put_utf16.
+emit_pass(<<?OP_BS_UTF8_SIZE, Rest0/binary>>, MMod, MSt0, State0) ->
+    emit_pass_bs_utf_size(?PRIM_BITSTRING_UTF8_SIZE, Rest0, MMod, MSt0, State0);
+emit_pass(<<?OP_BS_UTF16_SIZE, Rest0/binary>>, MMod, MSt0, State0) ->
+    emit_pass_bs_utf_size(?PRIM_BITSTRING_UTF16_SIZE, Rest0, MMod, MSt0, State0);
+% 145
+%% OTP 27 (and 26) only, see OP_BS_ADD below: bs_put_utf8 encodes a code point
+%% into ctx->bs at ctx->bs_offset and advances it by the encoded size, which the
+%% insert primitive returns in bytes.
+emit_pass(<<?OP_BS_PUT_UTF8, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {_Flags, Rest2} = decode_literal(Rest1),
+    {MSt1, Src, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt0, State0),
+    ?TRACE("OP_BS_PUT_UTF8 ~p,~p\n", [Fail, Src]),
+    {MSt2, SrcValue} = term_to_int(Src, Fail, MMod, MSt1),
+    {MSt3, BsReg} = MMod:get_bs(MSt2),
+    {MSt4, OffsetReg} = MMod:get_bs_offset(MSt3),
+    {MSt5, Size} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_UTF8, [
+        {free, BsReg}, {free, OffsetReg}, free_if_reg(SrcValue)
+    ]),
+    MSt6 = cond_raise_badarg_or_jump_to_fail_label({Size, '==', 0}, Fail, MMod, MSt5),
+    MSt7 = MMod:mul(MSt6, Size, 8),
+    MSt8 = advance_bs_offset(MMod, MSt7, Size),
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    emit_pass(Rest3, MMod, MSt8, State0);
+% 147
+%% OTP 27 (and 26) only, see OP_BS_ADD below.
+emit_pass(<<?OP_BS_PUT_UTF16, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {Flags, Rest2} = decode_literal(Rest1),
+    {MSt1, Src, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt0, State0),
+    ?TRACE("OP_BS_PUT_UTF16 ~p,~p,~p\n", [Fail, Flags, Src]),
+    {MSt2, SrcValue} = term_to_int(Src, Fail, MMod, MSt1),
+    {MSt3, BsReg} = MMod:get_bs(MSt2),
+    {MSt4, OffsetReg} = MMod:get_bs_offset(MSt3),
+    {MSt5, Size} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_UTF16, [
+        {free, BsReg}, {free, OffsetReg}, free_if_reg(SrcValue), Flags
+    ]),
+    MSt6 = cond_raise_badarg_or_jump_to_fail_label({Size, '==', 0}, Fail, MMod, MSt5),
+    MSt7 = MMod:mul(MSt6, Size, 8),
+    MSt8 = advance_bs_offset(MMod, MSt7, Size),
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    emit_pass(Rest3, MMod, MSt8, State0);
+% 148
+%% OTP 27 (and 26) only, see OP_BS_ADD below: utf32 is always four bytes.
+emit_pass(<<?OP_BS_PUT_UTF32, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {Flags, Rest2} = decode_literal(Rest1),
+    {MSt1, Src, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt0, State0),
+    ?TRACE("OP_BS_PUT_UTF32 ~p,~p,~p\n", [Fail, Flags, Src]),
+    {MSt2, SrcValue} = term_to_int(Src, Fail, MMod, MSt1),
+    {MSt3, BsReg} = MMod:get_bs(MSt2),
+    {MSt4, OffsetReg} = MMod:get_bs_offset(MSt3),
+    {MSt5, BoolResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_INSERT_UTF32, [
+        {free, BsReg}, {free, OffsetReg}, free_if_reg(SrcValue), Flags
+    ]),
+    MSt6 = cond_raise_badarg_or_jump_to_fail_label(
+        {'(bool)', {free, BoolResult}, '==', false}, Fail, MMod, MSt5
+    ),
+    MSt7 = advance_bs_offset(MMod, MSt6, 32),
+    ?ASSERT_ALL_NATIVE_FREE(MSt7),
+    emit_pass(Rest3, MMod, MSt7, State0);
 % 111
 %% OTP 27 (and 26) only: bs_add belongs to the legacy binary construction family
 %% (bs_add, bs_init_bits, bs_append, bs_private_append, bs_put_*, bs_utf*_size),
@@ -2266,6 +2360,46 @@ emit_pass(<<?OP_BS_INIT_BITS, Rest0/binary>>, MMod, MSt0, State0) ->
     ),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     emit_pass(Rest6, MMod, MSt5, State0);
+% 134
+%% OTP 27 (and 26) only, see OP_BS_ADD above: bs_append starts a new binary that
+%% carries over the bits of an existing one, leaving ctx->bs_offset at the source
+%% bit size so the following bs_put_* opcodes append to it.
+emit_pass(<<?OP_BS_APPEND, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    %% Extra heap words: the emulator ignores them, the binary is sized exactly.
+    Rest3 = skip_compact_term(Rest2),
+    {Live, Rest4} = decode_literal(Rest3),
+    {Unit, Rest5} = decode_literal(Rest4),
+    {MSt2, Src, Rest6} = decode_typed_compact_term(Rest5, MMod, MSt1, State0),
+    %% Flags: only unsigned big-endian binaries are built here.
+    Rest7 = skip_compact_term(Rest6),
+    {MSt3, Dest, Rest8} = decode_dest(Rest7, MMod, MSt2),
+    ?TRACE("OP_BS_APPEND ~p,~p,~p,~p,~p,~p\n", [Fail, Size, Live, Unit, Src, Dest]),
+    MSt4 = emit_pass_bs_append(
+        legacy_append, MMod, MSt3, Size, Unit, Live, Src, Dest, Fail
+    ),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    emit_pass(Rest8, MMod, MSt4, State0);
+% 135
+%% OTP 27 (and 26) only, see OP_BS_ADD above: bs_private_append is bs_append on a
+%% binary known to have a single reference, so the storage is grown in place when
+%% the source owns whole bytes.
+emit_pass(<<?OP_BS_PRIVATE_APPEND, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Size, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {Unit, Rest3} = decode_literal(Rest2),
+    {MSt2, Src, Rest4} = decode_typed_compact_term(Rest3, MMod, MSt1, State0),
+    Rest5 = skip_compact_term(Rest4),
+    {MSt3, Dest, Rest6} = decode_dest(Rest5, MMod, MSt2),
+    ?TRACE("OP_BS_PRIVATE_APPEND ~p,~p,~p,~p\n", [Fail, Size, Unit, Src, Dest]),
+    MSt4 = emit_pass_bs_append(
+        private_append, MMod, MSt3, Size, Unit, ?MAX_REG, Src, Dest, Fail
+    ),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    emit_pass(Rest6, MMod, MSt4, State0);
 % 136
 emit_pass(<<?OP_TRIM, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -9193,6 +9327,137 @@ legacy_segment_size_term(MMod, MSt0, Size, Unit, Fail) ->
     MSt2 = MMod:mul(MSt1, SizeReg, Unit),
     {MSt3, SizeReg} = term_from_int(SizeReg, MMod, MSt2),
     {MSt3, {free, SizeReg}}.
+
+%% OTP 27 (and 26) only, see OP_BS_ADD: shared body of bs_append and
+%% bs_private_append. Both grow an existing bitstring by Size bits: the source
+%% bit size must be a multiple of Unit, the result is the source content
+%% followed by Size uninitialised bits, and ctx->bs / ctx->bs_offset are left
+%% pointing just past the carried-over content. They differ only in how the
+%% storage is obtained -- a fresh binary the source is copied into, or the
+%% source's own storage grown in place when it owns whole bytes.
+emit_pass_bs_append(Kind, MMod, MSt0, Size, Unit, Live, Src, Dest, Fail) ->
+    MSt1 = verify_is_binary(Src, Fail, MMod, MSt0),
+    {MSt2, SizeBits} = term_to_int(Size, Fail, MMod, MSt1),
+    MSt3 =
+        if
+            %% A negative size, or a unit the source cannot be a multiple of,
+            %% is rejected outright.
+            (is_integer(SizeBits) andalso SizeBits < 0) orelse Unit =:= 0 ->
+                raise_badarg_or_jump_to_fail_label(Fail, MMod, MSt2);
+            is_integer(SizeBits) ->
+                MSt2;
+            true ->
+                cond_raise_badarg_or_jump_to_fail_label({SizeBits, '<', 0}, Fail, MMod, MSt2)
+        end,
+    {MSt4, SrcBits0} = term_bit_size(Src, MMod, MSt3),
+    MSt5 =
+        case Unit of
+            0 -> MSt4;
+            _ -> bs_fail_or_badarg_unless_multiple_of_unit(SrcBits0, Unit, Fail, MMod, MSt4)
+        end,
+    %% Heap need: the binary itself plus, unconditionally, room for the
+    %% sub-binary a non-byte-aligned total needs -- the total is only known at
+    %% run time and PRIM_BS_CREATE_BIN_WRAP allocates nothing when it is aligned.
+    MSt6 = MMod:add(MSt5, SrcBits0, SizeBits),
+    {MSt7, ByteSize0} = MMod:copy_to_native_register(MSt6, SrcBits0),
+    MSt8 = MMod:add(MSt7, ByteSize0, 7),
+    {MSt9, ByteSize1} = MMod:shift_right(MSt8, {free, ByteSize0}, 3),
+    {MSt10, HeapSize} = term_binary_heap_size({free, ByteSize1}, MMod, MSt9),
+    MSt11 = MMod:add(MSt10, HeapSize, ?TERM_BOXED_SUB_BINARY_SIZE),
+    MSt12 = MMod:free_native_registers(MSt11, [SrcBits0]),
+    {MSt13, Src1} = emit_pass_bs_append_ensure_free(Kind, MMod, MSt12, HeapSize, Live, Src),
+    %% A garbage collection may have moved the source, so everything is
+    %% recomputed from the (reloaded) source term.
+    {MSt14, TotalBits} = term_bit_size(Src1, MMod, MSt13),
+    MSt15 = MMod:add(MSt14, TotalBits, SizeBits),
+    MSt16 = free_if_reg_registers(MMod, MSt15, SizeBits),
+    {MSt17, ByteSize} = MMod:copy_to_native_register(MSt16, TotalBits),
+    MSt18 = MMod:add(MSt17, ByteSize, 7),
+    {MSt19, ByteSize2} = MMod:shift_right(MSt18, {free, ByteSize}, 3),
+    {MSt23, CreatedBin, CopiedBits} =
+        case Kind of
+            private_append ->
+                %% Single-reference source: grow its storage in place when it
+                %% owns whole bytes, clone it otherwise.
+                {MSt20, Bin} = MMod:call_primitive(MSt19, ?PRIM_TERM_REUSE_OR_CLONE_BINARY, [
+                    ctx, Src1, {free, ByteSize2}
+                ]),
+                MSt21 = raise_out_of_memory_if_invalid(Bin, MMod, MSt20),
+                {MSt22, Bits} = term_bit_size(Src1, MMod, MSt21),
+                {MSt22, Bin, Bits};
+            legacy_append ->
+                {MSt20, Bin} = MMod:call_primitive(MSt19, ?PRIM_TERM_CREATE_EMPTY_BINARY, [
+                    ctx, {free, ByteSize2}
+                ]),
+                MSt21 = raise_out_of_memory_if_invalid(Bin, MMod, MSt20),
+                {MSt22, Bits} = MMod:call_primitive(MSt21, ?PRIM_BITSTRING_COPY_BINARY, [
+                    Bin, 0, Src1, ?ALL_ATOM
+                ]),
+                {MSt22, Bin, Bits}
+        end,
+    MSt24 = MMod:set_bs(MSt23, CreatedBin),
+    MSt25 = MMod:set_bs_offset(MSt24, CopiedBits),
+    MSt26 = MMod:free_native_registers(MSt25, [CopiedBits]),
+    {MSt27, Result} = MMod:call_primitive(MSt26, ?PRIM_BS_CREATE_BIN_WRAP, [
+        ctx, {free, CreatedBin}, {free, TotalBits}
+    ]),
+    MSt28 = MMod:move_to_vm_register(MSt27, Result, Dest),
+    MMod:free_native_registers(MSt28, [Result, Dest]).
+
+%% bs_append may collect, and the source is then a root that has to survive it;
+%% bs_private_append never collects (its source is about to be grown in place,
+%% which a moving collector would invalidate), so it needs no root at all.
+emit_pass_bs_append_ensure_free(legacy_append, MMod, MSt0, HeapSize, Live, Src) ->
+    memory_ensure_free_with_extra_root(Src, Live, {free, HeapSize}, MMod, MSt0);
+emit_pass_bs_append_ensure_free(private_append, MMod, MSt0, HeapSize, _Live, Src) ->
+    {MSt1, MemoryEnsureFreeReg} = MMod:call_primitive(MSt0, ?PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS, [
+        ctx, jit_state, {free, HeapSize}, 0, ?MEMORY_NO_GC
+    ]),
+    MSt2 = handle_error_if({'(bool)', {free, MemoryEnsureFreeReg}, '==', false}, MMod, MSt1),
+    {MSt2, Src}.
+
+%% Free a value that may be either a native register or a compile-time constant.
+free_if_reg_registers(_MMod, MSt0, Value) when is_integer(Value) -> MSt0;
+free_if_reg_registers(MMod, MSt0, Reg) -> MMod:free_native_registers(MSt0, [Reg]).
+
+%% Unconditional badarg, or a jump to the opcode's fail label when it has one.
+raise_badarg_or_jump_to_fail_label(0, MMod, MSt0) ->
+    MMod:call_primitive_last(MSt0, ?PRIM_RAISE_ERROR, [ctx, jit_state, offset, ?BADARG_ATOM]);
+raise_badarg_or_jump_to_fail_label(Fail, MMod, MSt0) ->
+    MMod:jump_to_label(MSt0, Fail).
+
+%% Size operand of a legacy float segment: `nil\' means the default 64 bits, see
+%% OP_BS_PUT_FLOAT in the emulator.
+float_segment_size(?TERM_NIL, _Fail, _MMod, MSt0) ->
+    {MSt0, 64};
+float_segment_size(Size, Fail, MMod, MSt0) ->
+    term_to_int(Size, Fail, MMod, MSt0).
+
+%% Advance ctx->bs_offset by a segment width in bits, after the segment has been
+%% written. The offset is re-read rather than kept live across the insert call:
+%% the register-poor backends cannot shuffle one more argument.
+advance_bs_offset(MMod, MSt0, Bits) ->
+    {MSt1, OffsetReg} = MMod:get_bs_offset(MSt0),
+    MSt2 = MMod:add(MSt1, OffsetReg, Bits),
+    MSt3 = MMod:set_bs_offset(MSt2, OffsetReg),
+    MMod:free_native_registers(MSt3, [OffsetReg, Bits]).
+
+%% bs_utf8_size / bs_utf16_size: encoded size in bytes of a code point, as a
+%% small integer in the destination register.
+emit_pass_bs_utf_size(Primitive, Rest0, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    {MSt1, Src, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Dest, Rest3} = decode_dest(Rest2, MMod, MSt1),
+    ?TRACE("OP_BS_UTF_SIZE ~p,~p,~p\n", [Fail, Src, Dest]),
+    {MSt3, SrcValue} = term_to_int(Src, Fail, MMod, MSt2),
+    {MSt4, SizeReg} = MMod:call_primitive(MSt3, Primitive, [free_if_reg(SrcValue)]),
+    MSt5 = cond_raise_badarg_or_jump_to_fail_label({SizeReg, '==', 0}, Fail, MMod, MSt4),
+    {MSt6, SizeReg} = term_from_int(SizeReg, MMod, MSt5),
+    MSt7 = MMod:move_to_vm_register(MSt6, SizeReg, Dest),
+    MSt8 = MMod:free_native_registers(MSt7, [SizeReg, Dest]),
+    ?ASSERT_ALL_NATIVE_FREE(MSt8),
+    emit_pass(Rest3, MMod, MSt8, State0).
 
 %% Mark a primitive argument as consumed only when it is a register.
 free_if_reg(Value) when is_integer(Value) -> Value;
