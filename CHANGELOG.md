@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
   port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
   images whose root filesystem does not ship libsodium
+- Added JIT support for the legacy binary construction opcodes (`bs_add`, `bs_init_bits`,
+  `bs_append`, `bs_private_append`, `bs_put_integer`, `bs_put_binary`, `bs_put_float`,
+  `bs_put_string`, `bs_utf8_size`, `bs_put_utf8`, `bs_utf16_size`, `bs_put_utf16`,
+  `bs_put_utf32`), which OTP 26 and 27 emit for modules compiled with `no_bs_create_bin`, so
+  the JIT can now be built and run on OTP 27
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.
