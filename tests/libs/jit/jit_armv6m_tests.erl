@@ -4728,6 +4728,51 @@ large_operand_test_() ->
         end}
     ].
 
+%% Both shapes below run out of scratch registers, which a put_map with dozens
+%% of pairs and a five-argument bitstring primitive call really do.
+no_scratch_register_test_() ->
+    [
+        {"move_to_array_element at a large index with every register taken", fun() ->
+            {State0, [Base, Value | _]} = all_registers_allocated_state(),
+            State1 = ?BACKEND:move_to_array_element(State0, Value, Base, 64),
+            large_operand_dump(
+                State1,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+                    "   4:	6b45      	ldr	r5, [r0, #52]	@ 0x34\n"
+                    "   6:	6b84      	ldr	r4, [r0, #56]	@ 0x38\n"
+                    "   8:	6bc3      	ldr	r3, [r0, #60]	@ 0x3c\n"
+                    "   a:	6c01      	ldr	r1, [r0, #64]	@ 0x40\n"
+                    "   c:	3784      	adds	r7, #132	@ 0x84\n"
+                    "   e:	67fe      	str	r6, [r7, #124]	@ 0x7c\n"
+                    "  10:	3f84      	subs	r7, #132	@ 0x84"
+                >>
+            )
+        end},
+        {"a five-argument call whose parameter registers hold later arguments", fun() ->
+            {State0, [R7, R6, R5, R4, _R3, R1]} = all_registers_allocated_state(),
+            {State1, _Result} = ?BACKEND:call_primitive(
+                State0, ?PRIM_BITSTRING_INSERT_INTEGER, [
+                    {free, R6}, {free, R7}, R1, {free, R4}, R5
+                ]
+            ),
+            ?assert(byte_size(?BACKEND:stream(?BACKEND:flush(State1))) > 0)
+        end}
+    ].
+
+%% A state with every allocatable scratch register holding an x register, in
+%% allocation order.
+all_registers_allocated_state() ->
+    lists:foldl(
+        fun(N, {AccState, AccRegs}) ->
+            {NewState, Reg} = ?BACKEND:move_to_native_register(AccState, {x_reg, N}),
+            {NewState, AccRegs ++ [Reg]}
+        end,
+        {large_operand_state(), []},
+        lists:seq(0, 5)
+    ).
+
 large_operand_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
 

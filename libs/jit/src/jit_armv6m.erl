@@ -2484,6 +2484,36 @@ replace_reg0([{free, Reg} | T], Reg, Replacement, Acc) ->
 replace_reg0([Other | T], Reg, Replacement, Acc) ->
     replace_reg0(T, Reg, Replacement, [Other | Acc]).
 
+%% Add (or subtract) an arbitrary immediate to a low register, in the 255-wide
+%% steps Thumb-1 encodes. Only worth it in the no-scratch-register corner: the
+%% usual path materialises the value in a register instead.
+adjust_reg_immediate_code(_OpFun, _Reg, 0) ->
+    <<>>;
+adjust_reg_immediate_code(OpFun, Reg, Value) when Value > 255 ->
+    <<(OpFun(Reg, 255))/binary, (adjust_reg_immediate_code(OpFun, Reg, Value - 255))/binary>>;
+adjust_reg_immediate_code(OpFun, Reg, Value) ->
+    OpFun(Reg, Value).
+
+%% Exchange two registers in the remaining argument list, after their values
+%% have been exchanged in place: the first later reference to each now names the
+%% other. Like replace_reg/3, only the first reference to each is rewritten --
+%% an argument register's value is consumed once.
+swap_reg(Args, Reg1, Reg2) ->
+    swap_reg0(Args, Reg1, Reg2, false, false, []).
+
+swap_reg0([], _Reg1, _Reg2, _Done1, _Done2, Acc) ->
+    lists:reverse(Acc);
+swap_reg0([Reg1 | T], Reg1, Reg2, false, Done2, Acc) ->
+    swap_reg0(T, Reg1, Reg2, true, Done2, [Reg2 | Acc]);
+swap_reg0([{free, Reg1} | T], Reg1, Reg2, false, Done2, Acc) ->
+    swap_reg0(T, Reg1, Reg2, true, Done2, [{free, Reg2} | Acc]);
+swap_reg0([Reg2 | T], Reg1, Reg2, Done1, false, Acc) ->
+    swap_reg0(T, Reg1, Reg2, Done1, true, [Reg1 | Acc]);
+swap_reg0([{free, Reg2} | T], Reg1, Reg2, Done1, false, Acc) ->
+    swap_reg0(T, Reg1, Reg2, Done1, true, [{free, Reg1} | Acc]);
+swap_reg0([Other | T], Reg1, Reg2, Done1, Done2, Acc) ->
+    swap_reg0(T, Reg1, Reg2, Done1, Done2, [Other | Acc]).
+
 set_registers_args0(State, [], [], [], _AvailGP, _StackOffset) ->
     State;
 set_registers_args0(State, [{free, FreeVal} | ArgsT], ArgsRegs, ParamRegs, AvailGP, StackOffset) ->
@@ -2526,6 +2556,30 @@ set_registers_args0(
         false ->
             State1 = set_registers_args1(State0, Arg, ParamReg, StackOffset),
             set_registers_args0(State1, ArgsT, ArgsRegsT, ParamRegsT, AvailGP, StackOffset);
+        true when AvailGP =:= [] andalso is_atom(Arg) andalso Arg =/= ParamReg ->
+            %% The parameter register still holds a later argument and there is
+            %% no scratch register left to park it in. Both are low registers,
+            %% so exchange them in place with the three-eors trick: the
+            %% parameter register ends up with this argument's value and the
+            %% argument's register with what was in the way, which the remaining
+            %% argument list is renamed to match. Flags are dead here, the next
+            %% thing emitted is the call.
+            ?ASSERT(?IS_GPR(Arg)),
+            Swap = <<
+                (jit_armv6m_asm:eors(ParamReg, Arg))/binary,
+                (jit_armv6m_asm:eors(Arg, ParamReg))/binary,
+                (jit_armv6m_asm:eors(ParamReg, Arg))/binary
+            >>,
+            Stream1 = StreamModule:append(State0#state.stream, Swap),
+            NewArgsT = swap_reg(ArgsT, ParamReg, Arg),
+            set_registers_args0(
+                State0#state{stream = Stream1},
+                NewArgsT,
+                ArgsRegsT,
+                ParamRegsT,
+                AvailGP,
+                StackOffset
+            );
         true ->
             [Avail | AvailGPT] = AvailGP,
             I = jit_armv6m_asm:mov(Avail, ParamReg),
@@ -3192,19 +3246,32 @@ move_to_array_element(
     Reg,
     Index
 ) when ?IS_GPR(ValueReg) andalso ?IS_GPR(Reg) andalso is_integer(Index) ->
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
     % For large offsets, split into str immediate (max 124) + remainder in temp register
     Offset = Index * 4,
     Remainder = Offset - 124,
-    % Load offset remainder into temp register
-    State1 = mov_immediate(State0, Temp, Remainder),
-    Stream1 = State1#state.stream,
-    I1 = jit_armv6m_asm:add(Temp, Reg),
-    I2 = jit_armv6m_asm:str(ValueReg, {Temp, 124}),
-    Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
-    State1#state{stream = Stream2, regs = Regs1};
+    case jit_regs:available_regs(Regs0) of
+        0 ->
+            % Every scratch register is taken (a put_map with dozens of pairs
+            % holds them all). Walk the base register to the segment being
+            % written and walk it back, so nothing else has to be spilled.
+            Adjust = adjust_reg_immediate_code(fun jit_armv6m_asm:adds/2, Reg, Remainder),
+            Restore = adjust_reg_immediate_code(fun jit_armv6m_asm:subs/2, Reg, Remainder),
+            I = jit_armv6m_asm:str(ValueReg, {Reg, 124}),
+            Stream1 = StreamModule:append(
+                State0#state.stream, <<Adjust/binary, I/binary, Restore/binary>>
+            ),
+            State0#state{stream = Stream1};
+        Avail ->
+            Temp = first_avail(Avail),
+            % Load offset remainder into temp register
+            State1 = mov_immediate(State0, Temp, Remainder),
+            Stream1 = State1#state.stream,
+            I1 = jit_armv6m_asm:add(Temp, Reg),
+            I2 = jit_armv6m_asm:str(ValueReg, {Temp, 124}),
+            Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
+            Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
+            State1#state{stream = Stream2, regs = Regs1}
+    end;
 move_to_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State0,
