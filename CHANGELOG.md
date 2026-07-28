@@ -129,6 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed `bs_add` scaling the sum of both operands by the unit instead of only the second one
+  (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
+  and 27 out of segments whose total width is neither a whole number of bytes nor under one
+  came out too long
 - Fixed the aarch64 JIT crashing when compiled with DWARF support (the default) on any module
   whose register cache holds a VM x register in x25-x28: the DWARF register table stopped at
   x21, so `dwarf_register_number/1` raised `function_clause` and the module failed to compile
