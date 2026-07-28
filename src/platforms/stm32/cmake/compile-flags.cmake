@@ -33,12 +33,13 @@ set(COMMON_WARN_FLAGS "${COMMON_WARN_FLAGS} -pedantic -Wall -Wextra")
 set(C_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 set(CXX_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 
-# Use C and C++ compiler optimizations for size and speed.
-if (${CMAKE_FLASH_SIZE} STREQUAL "ROM_512K")
-    set(OPTIMIZE_FLAG "-Os")
-else()
-    set(OPTIMIZE_FLAG "-O2")
-endif()
+# Use C and C++ compiler optimizations for size.
+#
+# The firmware budget is the same 512KB on every device -- it is where the AVM
+# partition starts, not how much ROM the part has -- and -O2 overflows it on the
+# larger-HAL families even with minimal opcodes. Rather than keep a list of
+# which families still fit, size-optimize everywhere.
+set(OPTIMIZE_FLAG "-Os")
 
 # Pass them back to the CMake variable
 # -ffunction-sections -fdata-sections enable --gc-sections to remove unused code
