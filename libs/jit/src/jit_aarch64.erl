@@ -755,6 +755,15 @@ call_primitive(
     %% calls go through call_func_ptr directly and keep their ctx argument.)
     Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     Pure = prim_pure(Primitive),
+    %% A primitive that may return a different Context can have terminated
+    %% this one: its call sites reload hp/e themselves, past the untagged
+    %% early-out, where the context is known to be alive.
+    Reload =
+        case {Pure, prim_returns_context(Primitive)} of
+            {true, _} -> none;
+            {_, true} -> deferred;
+            _ -> here
+        end,
     %% Register-cache contents (and the VM x0-x3 homes) survive the call
     %% when the primitive neither collects — pure, or allocating strictly
     %% within the caller's reservation (prim_no_gc) — nor writes VM x
@@ -766,7 +775,7 @@ call_primitive(
         true ->
             %% Direct, loader-relocated call: no table load, emit the branch in
             %% call_func_ptr from the {primitive, _} form.
-            call_func_ptr0(State, {primitive, Primitive}, Args, {Pure, CacheSafe});
+            call_func_ptr0(State, {primitive, Primitive}, Args, {Pure, Reload, CacheSafe});
         false ->
             PrepCall =
                 case Primitive of
@@ -777,7 +786,7 @@ call_primitive(
                 end,
             Stream1 = StreamModule:append(Stream0, PrepCall),
             StateCall = State#state{stream = Stream1},
-            call_func_ptr0(StateCall, {free, ?IP0_REG}, Args, {Pure, CacheSafe})
+            call_func_ptr0(StateCall, {free, ?IP0_REG}, Args, {Pure, Reload, CacheSafe})
     end.
 
 %%-----------------------------------------------------------------------------
@@ -1327,6 +1336,14 @@ reset_regs_fresh(#state{regs = Regs} = State) ->
 %% @param Reg register to compare to (should be {free, Reg} as it's always freed)
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+%% @private
+%% Refresh the pinned hp/e registers from the (live) context.
+reload_hp_e_code() ->
+    <<
+        (jit_aarch64_asm:ldr(?HP_REG, ?HEAP_PTR))/binary,
+        (jit_aarch64_asm:ldr(?E_REG, ?Y_REGS))/binary
+    >>.
+
 -spec return_if_not_equal_to_ctx(state(), {free, aarch64_register()}) -> state().
 return_if_not_equal_to_ctx(
     #state{
@@ -1353,7 +1370,13 @@ return_if_not_equal_to_ctx(
     %% calling, not after, for exactly this reason).
     I4 = jit_aarch64_asm:ret(),
     I2 = jit_aarch64_asm:bcc(eq, 4 + byte_size(I3) + byte_size(I4)),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary>>),
+    %% Falling through means the primitive stayed with this context, so it is
+    %% still alive and hp/e can be reloaded from it -- which the call itself
+    %% deferred, precisely because the other edge may have freed it.
+    RL = reload_hp_e_code(),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, RL/binary>>
+    ),
     Bit = reg_bit(Reg),
     State#state{
         stream = Stream1,
@@ -2468,7 +2491,7 @@ shift_left(
 -spec call_func_ptr(state(), {free, aarch64_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), aarch64_register()}.
 call_func_ptr(#state{} = StateP, FuncPtrTuple, Args) ->
-    call_func_ptr0(StateP, FuncPtrTuple, Args, {false, false}).
+    call_func_ptr0(StateP, FuncPtrTuple, Args, {false, here, false}).
 
 -spec call_func_ptr0(
     state(),
@@ -2481,7 +2504,7 @@ call_func_ptr0(
     #state{} = StateP,
     FuncPtrTuple,
     Args,
-    {Pure, CacheSafe}
+    {Pure, Reload, CacheSafe}
 ) ->
     %% The callee can read any x register from ctx (and clobbers the
     %% register cache): all pending stores must persist. ctx/jit_state args
@@ -2567,9 +2590,9 @@ call_func_ptr0(
     %% neither observe nor move hp/e (see prim_pure/1).
     Stream3b =
         case Pure of
-            true ->
+            Skip when Skip =:= true orelse Skip =:= none ->
                 Stream3;
-            false ->
+            _ ->
                 WB = <<
                     (jit_aarch64_asm:str(?HP_REG, ?HEAP_PTR))/binary,
                     (jit_aarch64_asm:str(?E_REG, ?Y_REGS))/binary
@@ -2620,15 +2643,9 @@ call_func_ptr0(
     Stream6a = pop_registers(SavedRegsOdd, lists:reverse(SavedRegs), StreamModule, Stream5),
     %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
     Stream6b =
-        case Pure of
-            true ->
-                Stream6a;
-            false ->
-                RL = <<
-                    (jit_aarch64_asm:ldr(?HP_REG, ?HEAP_PTR))/binary,
-                    (jit_aarch64_asm:ldr(?E_REG, ?Y_REGS))/binary
-                >>,
-                StreamModule:append(Stream6a, RL)
+        case Reload of
+            here -> StreamModule:append(Stream6a, reload_hp_e_code());
+            _ -> Stream6a
         end,
     %% Reload the VM x0-x3 home registers: a non-cache-safe callee may have
     %% written VM registers or moved terms (GC). After a function call only
@@ -4869,6 +4886,11 @@ call_fun_with_cp_direct(
     State4b = State4#state{stream = StreamModule0:append(Stream4, IPreFlush)},
     {State5, ResultReg} = call_primitive(State4b, Primitive, Args),
     #state{stream_module = StreamModule, stream = Stream5} = State5,
+    %% An untagged result is another Context and this one may already be
+    %% freed, so hp/e are reloaded only past that early-out.
+    RL = reload_hp_e_code(),
+    %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
+    %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
     I3 = jit_aarch64_asm:ret(),
@@ -4876,7 +4898,7 @@ call_fun_with_cp_direct(
     I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
     I6 = jit_aarch64_asm:br(ResultReg),
     Stream6 = StreamModule:append(
-        Stream5, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+        Stream5, <<I1/binary, I2/binary, I3/binary, RL/binary, I4/binary, I5/binary, I6/binary>>
     ),
     State6 = free_native_register(State5#state{stream = Stream6}, ResultReg),
     rewrite_cp_offset(State6, RewriteOffset, RewriteSize).
@@ -5003,6 +5025,11 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
         State4b#state{post_call_xregs = x0}, Primitive, Args
     ),
     #state{stream_module = StreamModule, stream = Stream5} = State5,
+    %% An untagged result is another Context and this one may already be
+    %% freed, so hp/e are reloaded only past that early-out.
+    RL = reload_hp_e_code(),
+    %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
+    %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
     I3 = jit_aarch64_asm:ret(),
@@ -5010,7 +5037,7 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     I5 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 3),
     I6 = jit_aarch64_asm:br(ResultReg),
     Stream6 = StreamModule:append(
-        Stream5, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+        Stream5, <<I1/binary, I2/binary, I3/binary, RL/binary, I4/binary, I5/binary, I6/binary>>
     ),
     State6 = free_native_register(State5#state{stream = Stream6}, ResultReg),
     rewrite_cp_offset(State6, RewriteOffset, RewriteSize).
@@ -5132,13 +5159,18 @@ call_primitive_direct(State0, Primitive, Args) ->
     State0b = State0#state{stream = StreamModule0:append(Stream0, IPreFlush)},
     {State1, ResultReg} = call_primitive(State0b, Primitive, Args),
     #state{stream_module = StreamModule, stream = Stream1} = State1,
+    %% An untagged result is another Context and this one may already be
+    %% freed, so hp/e are reloaded only past that early-out.
+    RL = reload_hp_e_code(),
+    %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
+    %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
     I2 = jit_aarch64_asm:mov(r0, ResultReg),
     I3 = jit_aarch64_asm:ret(),
     I4 = jit_aarch64_asm:and_(ResultReg, ResultReg, bnot 1),
     I5 = jit_aarch64_asm:br(ResultReg),
     Stream2 = StreamModule:append(
-        Stream1, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>
+        Stream1, <<I1/binary, I2/binary, I3/binary, RL/binary, I4/binary, I5/binary>>
     ),
     State2 = free_native_register(State1#state{stream = Stream2}, ResultReg),
     State2#state{regs = jit_regs:invalidate_all(State2#state.regs)}.

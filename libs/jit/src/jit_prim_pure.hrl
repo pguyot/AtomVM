@@ -106,3 +106,19 @@ prim_no_gc(?PRIM_PUT_MAP_ASSOC) -> true;
 prim_no_gc(?PRIM_PUT_MAP_ASSOC_ONE) -> true;
 prim_no_gc(?PRIM_PUT_MAP_EXACT_ONE) -> true;
 prim_no_gc(_) -> false.
+
+%% Primitives that may return a *different* Context than the one passed in,
+%% because they can switch to another process or terminate this one. After
+%% such a call the incoming ctx may already be freed, so the hp/e reload that
+%% normally follows a call must not run before the result has been tested:
+%% the call sites below (return_if_not_equal_to_ctx/2 and direct_dispatch/3)
+%% emit it on the paths that stay with the same, still-live context. Only
+%% primitives whose call sites do that may be listed -- a tail-called
+%% (call_primitive_last) primitive never reloads at all and needs no entry.
+-compile({nowarn_unused_function, [{prim_returns_context, 1}]}).
+
+prim_returns_context(?PRIM_PROCESS_SIGNAL_MESSAGES) -> true;
+prim_returns_context(?PRIM_CALL_EXT_DIRECT) -> true;
+prim_returns_context(?PRIM_CALL_FUN_DIRECT) -> true;
+prim_returns_context(?PRIM_RETURN_DIRECT) -> true;
+prim_returns_context(_) -> false.
