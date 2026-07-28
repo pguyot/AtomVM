@@ -2663,7 +2663,11 @@ static inline bool term_map_probe_elem_covered(term t)
 
 static inline void term_map_probe_init(struct TermMapProbe *probe, term key)
 {
+    // e1 is only read when e0 says the probe is covered, but initialising it
+    // unconditionally keeps the older compilers from reporting it as possibly
+    // uninitialized -- they do not track that correlation.
     probe->e0 = term_invalid_term();
+    probe->e1 = term_invalid_term();
     if (term_is_tuple(key) && term_get_tuple_arity(key) == 2) {
         term a = term_get_tuple_element(key, 0);
         term b = term_get_tuple_element(key, 1);
