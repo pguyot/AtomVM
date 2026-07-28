@@ -604,7 +604,12 @@ size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], s
     size_t v_len = intn_count_digits(n, n_len);
 
 #ifdef __SIZEOF_INT128__
-    if (LIKELY(u_len >= v_len && v_len > 0)) {
+    // The u_len bound is what the fixed-size limb buffers below are sized for.
+    // It always holds (callers cap operands at INTN_MAX_IN_LEN digits), but
+    // spelling it out here is also what tells the compiler the memcpy lengths
+    // are in range -- without it the fortified memcpy reports a bound of up to
+    // SIZE_MAX and the warnings-as-errors builds fail.
+    if (LIKELY(u_len >= v_len && v_len > 0 && u_len <= INTN_DIVMNU_MAX_IN_LEN)) {
         // Pack the little-endian 32-bit digit arrays into 64-bit limbs (a
         // plain copy on little-endian targets, zero-padded to even counts)
         // and divide with 64-bit digits.
