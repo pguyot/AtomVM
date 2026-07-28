@@ -75,6 +75,14 @@ start() ->
         end
     ),
 
+    %% missing length as well: the header must be bounds-checked before any of
+    %% it is read, or validation reads past the end of the buffer
+    ok = assert_badarg(
+        fun() ->
+            erlang:binary_to_term(<<131, 110>>)
+        end
+    ),
+
     %% 264-bit values fit every build (the bignum cap is at least 1280 bits)
     true = test_reverse(
         erlang:binary_to_integer(
