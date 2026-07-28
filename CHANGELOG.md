@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep on every collection), inspect with `process_info/2`
 - Added support for non-byte-aligned bitstrings
 - Added support for native records introduced with OTP29
+- Added JIT support for the legacy binary construction opcodes (`bs_add`, `bs_init_bits`,
+  `bs_append`, `bs_private_append`, `bs_put_integer`, `bs_put_binary`, `bs_put_float`,
+  `bs_put_string`, `bs_utf8_size`, `bs_put_utf8`, `bs_utf16_size`, `bs_put_utf16`,
+  `bs_put_utf32`), which OTP 26 and 27 emit for modules compiled with `no_bs_create_bin`, so
+  the JIT can now be built and run on OTP 27
 - Added inline JIT code generation for double-precision floating-point arithmetic
   (`fadd`/`fsub`/`fmul`/`fdiv`) on the x86_64 and aarch64 backends, including the
   non-finite-result check, instead of calling the C float primitives
