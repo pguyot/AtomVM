@@ -170,9 +170,18 @@ if(NOT AVM_DISABLE_JIT)
     # jit-${arch}.avm is the AOT-compiled JIT compiler itself (jit, jit_${arch},
     # jit_${arch}_asm, jit_stream_flash, ...): code_server needs it on-device to
     # runtime-JIT plain BEAM modules such as test_jit_runtime_guarded.
-    set(atomvmlib_avm
-        "HostAtomVM-prefix/src/HostAtomVM-build/libs/esp32boot/esp32boot-${AVM_JIT_TARGET_ARCH}.avm"
-        "HostAtomVM-prefix/src/HostAtomVM-build/libs/jit/src/jit-${AVM_JIT_TARGET_ARCH}.avm")
+    if(IDF_TARGET STREQUAL "esp32")
+        # The original esp32 (lx6) skips test_jit_runtime -- its legacy flash
+        # MMU cannot read data through the IROM window -- so the AOT JIT
+        # compiler is 2.2MB of dead weight there, and the embedded pack lives
+        # in the app's DROM window, which that chip caps at 4MB.
+        set(atomvmlib_avm
+            "HostAtomVM-prefix/src/HostAtomVM-build/libs/esp32boot/esp32boot-${AVM_JIT_TARGET_ARCH}.avm")
+    else()
+        set(atomvmlib_avm
+            "HostAtomVM-prefix/src/HostAtomVM-build/libs/esp32boot/esp32boot-${AVM_JIT_TARGET_ARCH}.avm"
+            "HostAtomVM-prefix/src/HostAtomVM-build/libs/jit/src/jit-${AVM_JIT_TARGET_ARCH}.avm")
+    endif()
 else()
     set(erlang_test_beams_to_package ${erlang_test_beams})
     set(erlang_test_beams_depends ${erlang_test_beams})
