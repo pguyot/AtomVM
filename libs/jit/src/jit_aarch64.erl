@@ -1344,6 +1344,32 @@ reload_hp_e_code() ->
         (jit_aarch64_asm:ldr(?E_REG, ?Y_REGS))/binary
     >>.
 
+%% @private
+%% Everything re-read out of ctx after a call: hp/e unless the primitive is
+%% pure, plus the VM x0-x3 home registers unless the call is cache safe.
+%% After a function call only x0 is live (post_call_xregs = x0): x1-x3 are
+%% dead by the BEAM calling convention and every write refreshes home and
+%% memory together, so their stale homes are never read.
+post_call_reload_code(Reload, CacheSafe, PostCallXRegs) ->
+    HPE =
+        case Reload of
+            none -> <<>>;
+            _ -> reload_hp_e_code()
+        end,
+    XRL =
+        case {CacheSafe, PostCallXRegs} of
+            {true, _} ->
+                <<>>;
+            {false, x0} ->
+                jit_aarch64_asm:ldr(r25, {?CTX_REG, 16#58});
+            {false, all} ->
+                <<
+                    (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
+                    (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
+                >>
+        end,
+    <<HPE/binary, XRL/binary>>.
+
 -spec return_if_not_equal_to_ctx(state(), {free, aarch64_register()}) -> state().
 return_if_not_equal_to_ctx(
     #state{
@@ -1373,7 +1399,11 @@ return_if_not_equal_to_ctx(
     %% Falling through means the primitive stayed with this context, so it is
     %% still alive and hp/e can be reloaded from it -- which the call itself
     %% deferred, precisely because the other edge may have freed it.
-    RL = reload_hp_e_code(),
+    %% The full post-call reload, deferred by the call itself: a
+    %% Context-returning primitive is never cache safe, and the x1-x3 homes are
+    %% dead here, so reloading all four unconditionally is both correct and
+    %% independent of the pre-call state the call site no longer has.
+    RL = post_call_reload_code(here, false, all),
     Stream1 = StreamModule:append(
         Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, RL/binary>>
     ),
@@ -2641,33 +2671,16 @@ call_func_ptr0(
         end,
 
     Stream6a = pop_registers(SavedRegsOdd, lists:reverse(SavedRegs), StreamModule, Stream5),
-    %% Reload hp/e: the callee (or a GC it triggered) may have moved them.
-    Stream6b =
-        case Reload of
-            here -> StreamModule:append(Stream6a, reload_hp_e_code());
-            _ -> Stream6a
-        end,
-    %% Reload the VM x0-x3 home registers: a non-cache-safe callee may have
-    %% written VM registers or moved terms (GC). After a function call only
-    %% x0 is live (post_call_xregs = x0): x1-x3 are dead by the BEAM calling
-    %% convention and every write refreshes home and memory together, so
-    %% their stale homes are never read.
+    %% Everything that has to be re-read out of ctx after the call: hp/e, and
+    %% the VM x0-x3 home registers when the callee may have written VM
+    %% registers or moved terms. A primitive that can terminate the process
+    %% leaves ctx freed, so for those this whole block is deferred to the
+    %% dispatch, on the edges where the context is still ours.
+    PostCall = post_call_reload_code(Reload, CacheSafe, State0#state.post_call_xregs),
     Stream6 =
-        case CacheSafe of
-            true ->
-                Stream6b;
-            false ->
-                XRL =
-                    case State0#state.post_call_xregs of
-                        x0 ->
-                            jit_aarch64_asm:ldr(r25, {?CTX_REG, 16#58});
-                        all ->
-                            <<
-                                (jit_aarch64_asm:ldp(r25, r26, {?CTX_REG, 16#58}))/binary,
-                                (jit_aarch64_asm:ldp(r27, r28, {?CTX_REG, 16#68}))/binary
-                            >>
-                    end,
-                StreamModule:append(Stream6b, XRL)
+        case Reload of
+            deferred -> Stream6a;
+            _ -> StreamModule:append(Stream6a, PostCall)
         end,
 
     ResultBit = reg_bit(ResultReg),
@@ -4888,7 +4901,11 @@ call_fun_with_cp_direct(
     #state{stream_module = StreamModule, stream = Stream5} = State5,
     %% An untagged result is another Context and this one may already be
     %% freed, so hp/e are reloaded only past that early-out.
-    RL = reload_hp_e_code(),
+    %% The full post-call reload, deferred by the call itself: a
+    %% Context-returning primitive is never cache safe, and the x1-x3 homes are
+    %% dead here, so reloading all four unconditionally is both correct and
+    %% independent of the pre-call state the call site no longer has.
+    RL = post_call_reload_code(here, false, all),
     %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
     %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
@@ -5027,7 +5044,11 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     #state{stream_module = StreamModule, stream = Stream5} = State5,
     %% An untagged result is another Context and this one may already be
     %% freed, so hp/e are reloaded only past that early-out.
-    RL = reload_hp_e_code(),
+    %% The full post-call reload, deferred by the call itself: a
+    %% Context-returning primitive is never cache safe, and the x1-x3 homes are
+    %% dead here, so reloading all four unconditionally is both correct and
+    %% independent of the pre-call state the call site no longer has.
+    RL = post_call_reload_code(here, false, all),
     %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
     %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
@@ -5161,7 +5182,11 @@ call_primitive_direct(State0, Primitive, Args) ->
     #state{stream_module = StreamModule, stream = Stream1} = State1,
     %% An untagged result is another Context and this one may already be
     %% freed, so hp/e are reloaded only past that early-out.
-    RL = reload_hp_e_code(),
+    %% The full post-call reload, deferred by the call itself: a
+    %% Context-returning primitive is never cache safe, and the x1-x3 homes are
+    %% dead here, so reloading all four unconditionally is both correct and
+    %% independent of the pre-call state the call site no longer has.
+    RL = post_call_reload_code(here, false, all),
     %% Bit 0 clear falls through to the mov/ret; the taken branch lands on the
     %% reload, which is why the displacement does not count RL.
     I1 = jit_aarch64_asm:tbnz(ResultReg, 0, 12),
