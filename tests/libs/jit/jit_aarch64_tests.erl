@@ -526,6 +526,32 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
+%% The hp/e reload must sit past the untagged early-out: an untagged result is
+%% another Context and this one may already have been freed by the primitive.
+call_primitive_direct_reloads_after_early_out_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:call_primitive_direct(State0, ?PRIM_RETURN_DIRECT, [ctx, jit_state]),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	b9001278 	str	w24, [x19, #16]\n"
+            "   4:	f9418e90 	ldr	x16, [x20, #792]\n"
+            "   8:	f9000eb6 	str	x22, [x21, #24]\n"
+            "   c:	f9002ab7 	str	x23, [x21, #80]\n"
+            "  10:	d63f0200 	blr	x16\n"
+            "  14:	f9401a7e 	ldr	x30, [x19, #48]\n"
+            "  18:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
+            "  1c:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
+            "  20:	37000060 	tbnz	w0, #0, 0x2c\n"
+            "  24:	aa0003e0 	mov	x0, x0\n"
+            "  28:	d65f03c0 	ret\n"
+            "  2c:	f9400eb6 	ldr	x22, [x21, #24]\n"
+            "  30:	f9402ab7 	ldr	x23, [x21, #80]\n"
+            "  34:	927ff800 	and	x0, x0, #0xfffffffffffffffe\n"
+            "  38:	d61f0000 	br	x0"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 return_if_not_equal_to_ctx_test_() ->
     {setup,
         fun() ->
@@ -549,13 +575,13 @@ return_if_not_equal_to_ctx_test_() ->
                             "   8:	f9002ab7 	str	x23, [x21, #80]\n"
                             "   c:	d63f0200 	blr	x16\n"
                             "  10:	f9401a7e 	ldr	x30, [x19, #48]\n"
-                            "  14:	f9400eb6 	ldr	x22, [x21, #24]\n"
-                            "  18:	f9402ab7 	ldr	x23, [x21, #80]\n"
-                            "  1c:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
-                            "  20:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
-                            "  24:	eb15001f 	cmp	x0, x21\n"
-                            "  28:	54000040 	b.eq	0x30\n"
-                            "  2c:	d65f03c0 	ret"
+                            "  14:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
+                            "  18:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
+                            "  1c:	eb15001f 	cmp	x0, x21\n"
+                            "  20:	54000040 	b.eq	0x28\n"
+                            "  24:	d65f03c0 	ret\n"
+                            "  28:	f9400eb6 	ldr	x22, [x21, #24]\n"
+                            "  2c:	f9402ab7 	ldr	x23, [x21, #80]"
                         >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -577,15 +603,15 @@ return_if_not_equal_to_ctx_test_() ->
                             "   8:	f9002ab7 	str	x23, [x21, #80]\n"
                             "   c:	d63f0200 	blr	x16\n"
                             "  10:	f9401a7e 	ldr	x30, [x19, #48]\n"
-                            "  14:	f9400eb6 	ldr	x22, [x21, #24]\n"
-                            "  18:	f9402ab7 	ldr	x23, [x21, #80]\n"
-                            "  1c:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
-                            "  20:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
-                            "  24:	aa0003e7 	mov	x7, x0\n"
-                            "  28:	eb1500ff 	cmp	x7, x21\n"
-                            "  2c:	54000060 	b.eq	0x38\n"
-                            "  30:	aa0703e0 	mov	x0, x7\n"
-                            "  34:	d65f03c0 	ret"
+                            "  14:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
+                            "  18:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
+                            "  1c:	aa0003e7 	mov	x7, x0\n"
+                            "  20:	eb1500ff 	cmp	x7, x21\n"
+                            "  24:	54000060 	b.eq	0x30\n"
+                            "  28:	aa0703e0 	mov	x0, x7\n"
+                            "  2c:	d65f03c0 	ret\n"
+                            "  30:	f9400eb6 	ldr	x22, [x21, #24]\n"
+                            "  34:	f9402ab7 	ldr	x23, [x21, #80]"
                         >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end)
@@ -1661,13 +1687,13 @@ wait_timeout_test() ->
         "  34:	f9002ab7 	str	x23, [x21, #80]\n"
         "  38:	d63f0200 	blr	x16\n"
         "  3c:	f9401a7e 	ldr	x30, [x19, #48]\n"
-        "  40:	f9400eb6 	ldr	x22, [x21, #24]\n"
-        "  44:	f9402ab7 	ldr	x23, [x21, #80]\n"
-        "  48:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
-        "  4c:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
-        "  50:	eb15001f 	cmp	x0, x21\n"
-        "  54:	54000040 	b.eq	0x5c\n"
-        "  58:	d65f03c0 	ret\n"
+        "  40:	a945eab9 	ldp	x25, x26, [x21, #88]\n"
+        "  44:	a946f2bb 	ldp	x27, x28, [x21, #104]\n"
+        "  48:	eb15001f 	cmp	x0, x21\n"
+        "  4c:	54000040 	b.eq	0x54\n"
+        "  50:	d65f03c0 	ret\n"
+        "  54:	f9400eb6 	ldr	x22, [x21, #24]\n"
+        "  58:	f9402ab7 	ldr	x23, [x21, #80]\n"
         "  5c:	f9408690 	ldr	x16, [x20, #264]\n"
         "  60:	d2800040 	mov	x0, #0x2\n"
         "  64:	d63f0200 	blr	x16\n"

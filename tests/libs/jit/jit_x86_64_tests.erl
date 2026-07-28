@@ -592,6 +592,29 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     >>,
     ?assertStream(x86_64, Dump, Stream).
 
+%% The hp/e reload must sit past the untagged early-out: an untagged result is
+%% another Context and this one may already have been freed by the primitive.
+call_primitive_direct_reloads_after_early_out_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:call_primitive_direct(State0, ?PRIM_RETURN_DIRECT, [ctx, jit_state]),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	50                   	push   %rax\n"
+            "   1:	4d 89 66 18          	mov    %r12,0x18(%r14)\n"
+            "   5:	4d 89 7e 50          	mov    %r15,0x50(%r14)\n"
+            "   9:	48 8b 83 18 03 00 00 	mov    0x318(%rbx),%rax\n"
+            "  10:	ff d0                	call   *%rax\n"
+            "  12:	41 5b                	pop    %r11\n"
+            "  14:	a8 01                	test   $0x1,%al\n"
+            "  16:	74 0c                	je     0x24\n"
+            "  18:	4d 8b 66 18          	mov    0x18(%r14),%r12\n"
+            "  1c:	4d 8b 7e 50          	mov    0x50(%r14),%r15\n"
+            "  20:	41 ff 65 08          	jmp    *0x8(%r13)\n"
+            "  24:	c3                   	ret"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 return_if_not_equal_to_ctx_test_() ->
     {setup,
         fun() ->
@@ -616,11 +639,11 @@ return_if_not_equal_to_ctx_test_() ->
                             "   9:	48 8b 83 a8 00 00 00 	mov    0xa8(%rbx),%rax\n"
                             "  10:	ff d0                	call   *%rax\n"
                             "  12:	41 5b                	pop    %r11\n"
-                            "  14:	4d 8b 66 18          	mov    0x18(%r14),%r12\n"
-                            "  18:	4d 8b 7e 50          	mov    0x50(%r14),%r15\n"
-                            "  1c:	4c 39 f0             	cmp    %r14,%rax\n"
-                            "  1f:	74 01                	je     0x22\n"
-                            "  21:	c3                   	ret"
+                            "  14:	4c 39 f0             	cmp    %r14,%rax\n"
+                            "  17:	74 01                	je     0x1a\n"
+                            "  19:	c3                   	ret\n"
+                            "  1a:	4d 8b 66 18          	mov    0x18(%r14),%r12\n"
+                            "  1e:	4d 8b 7e 50          	mov    0x50(%r14),%r15"
                         >>,
                     ?assertStream(x86_64, Dump, Stream)
                 end),
@@ -643,13 +666,13 @@ return_if_not_equal_to_ctx_test_() ->
                             "   9:	48 8b 83 a8 00 00 00 	mov    0xa8(%rbx),%rax\n"
                             "  10:	ff d0                	call   *%rax\n"
                             "  12:	41 5b                	pop    %r11\n"
-                            "  14:	4d 8b 66 18          	mov    0x18(%r14),%r12\n"
-                            "  18:	4d 8b 7e 50          	mov    0x50(%r14),%r15\n"
-                            "  1c:	49 89 c3             	mov    %rax,%r11\n"
-                            "  1f:	4d 39 f3             	cmp    %r14,%r11\n"
-                            "  22:	74 04                	je     0x28\n"
-                            "  24:	4c 89 d8             	mov    %r11,%rax\n"
-                            "  27:	c3                   	ret"
+                            "  14:	49 89 c3             	mov    %rax,%r11\n"
+                            "  17:	4d 39 f3             	cmp    %r14,%r11\n"
+                            "  1a:	74 04                	je     0x20\n"
+                            "  1c:	4c 89 d8             	mov    %r11,%rax\n"
+                            "  1f:	c3                   	ret\n"
+                            "  20:	4d 8b 66 18          	mov    0x18(%r14),%r12\n"
+                            "  24:	4d 8b 7e 50          	mov    0x50(%r14),%r15"
                         >>,
                     ?assertStream(x86_64, Dump, Stream)
                 end)
