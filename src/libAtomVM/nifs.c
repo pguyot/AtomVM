@@ -5306,14 +5306,20 @@ static term nif_os_cmd(Context *ctx, int argc, term argv[])
     while ((r = fread(out + len, 1, capacity - len, fp)) > 0) {
         len += r;
         if (len == capacity) {
-            capacity *= 2;
-            char *new_out = realloc(out, capacity);
+            // Grown with malloc/memcpy rather than realloc: gcc 12's
+            // -Wuse-after-free cannot tell that the old pointer is still
+            // valid when realloc fails, and flags the free on that path.
+            size_t new_capacity = capacity * 2;
+            char *new_out = malloc(new_capacity);
             if (IS_NULL_PTR(new_out)) {
                 free(out);
                 pclose(fp);
                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
             }
+            memcpy(new_out, out, len);
+            free(out);
             out = new_out;
+            capacity = new_capacity;
         }
     }
     pclose(fp);
