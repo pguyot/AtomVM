@@ -496,18 +496,23 @@ static int divmnu32(
 
 #ifdef __SIZEOF_INT128__
 
-// 64-bit-digit Knuth D with unsigned __int128 intermediates: half the digit
+// `__int128' is a GNU extension; `__extension__' keeps -Wpedantic (which
+// -DAVM_WARNINGS_ARE_ERRORS turns into an error) from rejecting it.
+__extension__ typedef unsigned __int128 avm_uint128_t;
+__extension__ typedef __int128 avm_int128_t;
+
+// 64-bit-digit Knuth D with 128-bit intermediates: half the digit
 // count of divmnu32 halves the qhat divisions and the mul-subtract steps,
 // which dominate bignum div/rem (intn_divu was 2/3 of bigint pow_mod time
 // with 32-bit digits).
 static int divmnu64(
     uint64_t q[], uint64_t r[], const uint64_t u[], const uint64_t v[], int m, int n)
 {
-    const unsigned __int128 b = ((unsigned __int128) 1) << 64;
-    unsigned __int128 qhat;
-    unsigned __int128 rhat;
-    unsigned __int128 p;
-    __int128 t, k;
+    const avm_uint128_t b = ((avm_uint128_t) 1) << 64;
+    avm_uint128_t qhat;
+    avm_uint128_t rhat;
+    avm_uint128_t p;
+    avm_int128_t t, k;
     int s, i, j;
 
     if (m < n || n <= 0 || v[n - 1] == 0) {
@@ -517,9 +522,9 @@ static int divmnu64(
     if (n == 1) {
         k = 0;
         for (j = m - 1; j >= 0; j--) {
-            unsigned __int128 acc = ((unsigned __int128) (uint64_t) k << 64) + u[j];
+            avm_uint128_t acc = ((avm_uint128_t) (uint64_t) k << 64) + u[j];
             q[j] = (uint64_t) (acc / v[0]);
-            k = (__int128) (acc - (unsigned __int128) q[j] * v[0]);
+            k = (avm_int128_t) (acc - (avm_uint128_t) q[j] * v[0]);
         }
         if (r != NULL) {
             r[0] = (uint64_t) k;
@@ -532,24 +537,24 @@ static int divmnu64(
     s = __builtin_clzll(v[n - 1]); // 0 <= s <= 63.
     uint64_t vn[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2];
     for (i = n - 1; i > 0; i--) {
-        vn[i] = (v[i] << s) | (uint64_t) ((unsigned __int128) v[i - 1] >> (64 - s));
+        vn[i] = (v[i] << s) | (uint64_t) ((avm_uint128_t) v[i - 1] >> (64 - s));
     }
     vn[0] = v[0] << s;
 
     uint64_t un[(INTN_DIVMNU_MAX_IN_LEN + 1) / 2 + 1];
-    un[m] = (uint64_t) ((unsigned __int128) u[m - 1] >> (64 - s));
+    un[m] = (uint64_t) ((avm_uint128_t) u[m - 1] >> (64 - s));
     for (i = m - 1; i > 0; i--) {
-        un[i] = (u[i] << s) | (uint64_t) ((unsigned __int128) u[i - 1] >> (64 - s));
+        un[i] = (u[i] << s) | (uint64_t) ((avm_uint128_t) u[i - 1] >> (64 - s));
     }
     un[0] = u[0] << s;
 
     for (j = m - n; j >= 0; j--) {
-        unsigned __int128 num = ((unsigned __int128) un[j + n] << 64) + un[j + n - 1];
+        avm_uint128_t num = ((avm_uint128_t) un[j + n] << 64) + un[j + n - 1];
         qhat = num / vn[n - 1];
         rhat = num - qhat * vn[n - 1];
     again:
         if (qhat >= b
-            || (unsigned __int128) (uint64_t) qhat * vn[n - 2]
+            || (avm_uint128_t) (uint64_t) qhat * vn[n - 2]
                 > (rhat << 64) + un[j + n - 2]) {
             qhat = qhat - 1;
             rhat = rhat + vn[n - 1];
@@ -560,12 +565,12 @@ static int divmnu64(
 
         k = 0;
         for (i = 0; i < n; i++) {
-            p = (unsigned __int128) (uint64_t) qhat * vn[i];
-            t = (__int128) ((unsigned __int128) un[i + j] - k - (uint64_t) p);
+            p = (avm_uint128_t) (uint64_t) qhat * vn[i];
+            t = (avm_int128_t) ((avm_uint128_t) un[i + j] - k - (uint64_t) p);
             un[i + j] = (uint64_t) t;
-            k = (__int128) (p >> 64) - (t >> 64);
+            k = (avm_int128_t) (p >> 64) - (t >> 64);
         }
-        t = (__int128) ((unsigned __int128) un[j + n] - k);
+        t = (avm_int128_t) ((avm_uint128_t) un[j + n] - k);
         un[j + n] = (uint64_t) t;
 
         q[j] = (uint64_t) qhat;
@@ -573,7 +578,7 @@ static int divmnu64(
             q[j] = q[j] - 1;
             k = 0;
             for (i = 0; i < n; i++) {
-                t = (__int128) ((unsigned __int128) un[i + j] + vn[i] + k);
+                t = (avm_int128_t) ((avm_uint128_t) un[i + j] + vn[i] + k);
                 un[i + j] = (uint64_t) t;
                 k = t >> 64;
             }
@@ -583,7 +588,7 @@ static int divmnu64(
 
     if (r != NULL) {
         for (i = 0; i < n - 1; i++) {
-            r[i] = (un[i] >> s) | (uint64_t) ((unsigned __int128) un[i + 1] << (64 - s));
+            r[i] = (un[i] >> s) | (uint64_t) ((avm_uint128_t) un[i + 1] << (64 - s));
         }
         r[n - 1] = un[n - 1] >> s;
     }
