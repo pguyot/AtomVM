@@ -7308,8 +7308,11 @@ static term nif_code_all_available(Context *ctx, int argc, term argv[])
         avmpack_fold(&acc, avmpack_data->data, nif_code_all_available_fold);
     }
 
+    // Snapshot the count once: it is an int, and comparing it against a size_t
+    // index is a signedness mismatch the warnings-as-errors builds reject.
+    size_t loaded_modules_count = ctx->global->loaded_modules_count;
     size_t loaded_names_len = 0;
-    for (size_t ix = 0; ix < ctx->global->loaded_modules_count; ix++) {
+    for (size_t ix = 0; ix < loaded_modules_count; ix++) {
         Module *module = globalcontext_get_module_by_index(ctx->global, ix);
         if (IS_NULL_PTR(module)) {
             continue;
