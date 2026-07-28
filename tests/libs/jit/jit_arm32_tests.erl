@@ -1929,6 +1929,29 @@ large_operand_extra_test_() ->
         end}
     ].
 
+%% The literal pool is normally flushed at terminal instructions only. A long
+%% chain of conditional branches -- a select_val over many values, say -- emits
+%% thousands of bytes without reaching one, so a literal loaded before the chain
+%% would end up further from its own pool than the 4095 byte range of the
+%% pc-relative ldr that reads it, and laying the pool out would fail.
+literal_pool_across_long_branch_chain_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State0a, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    %% Not encodable as an ARM immediate, so it goes through the literal pool.
+    State1 = ?BACKEND:add(State0a, Reg, 16#12345678),
+    State2 = lists:foldl(
+        %% Comparison values stay ARM-encodable immediates on purpose: a value
+        %% needing the pool itself would keep it fed and hide the problem.
+        fun(N, AccState) ->
+            ?BACKEND:jump_to_label_cond(AccState, {Reg, '==', N rem 256}, 1)
+        end,
+        State1,
+        lists:seq(1, 2000)
+    ),
+    State3 = ?BACKEND:add_label(State2, 1),
+    Stream = ?BACKEND:stream(?BACKEND:flush(State3)),
+    ?assert(byte_size(Stream) > 4095).
+
 large_operand_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
 
