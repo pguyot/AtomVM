@@ -1787,6 +1787,141 @@ bs_put_string_test_() ->
         ]
     ].
 
+%% Same family: bs_put_float writes a float segment into the binary at
+%% ctx->bs_offset. Synthetic chunk: label 1, bs_init_bits, then
+%% bs_put_float {f,0} size=x2 unit=1 flags=0 src=x3, return, int_code_end.
+-define(CODE_BS_PUT_FLOAT,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        91, 5, 35, 16, 0, 51, 19, 3>>
+).
+
+%% Same, with the size operand left as `nil', which the emulator reads as the
+%% default 64 bits.
+-define(CODE_BS_PUT_FLOAT_NIL_SIZE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        91, 5, 2, 16, 0, 51, 19, 3>>
+).
+
+bs_put_float_test_() ->
+    [
+        {atom_to_list(Backend) ++ " " ++ Label, fun() ->
+            Stream = compile_stream_for_backend(Backend, Code, <<0, 0, 0, 0>>, <<>>),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || {Label, Code} <- [
+            {"dynamic size", ?CODE_BS_PUT_FLOAT},
+            {"nil size", ?CODE_BS_PUT_FLOAT_NIL_SIZE}
+        ],
+        Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
+
+%% Same family: the utf opcodes. bs_utf8_size / bs_utf16_size size a code point
+%% ahead of the matching put, and bs_put_utf8 / bs_put_utf16 / bs_put_utf32
+%% encode it into the binary at ctx->bs_offset. Synthetic chunks: label 1,
+%% bs_init_bits, then the opcode, return, int_code_end.
+-define(CODE_BS_UTF8_SIZE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        144, 5, 3, 35, 19, 3>>
+).
+-define(CODE_BS_UTF16_SIZE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        146, 5, 3, 35, 19, 3>>
+).
+-define(CODE_BS_PUT_UTF8,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        145, 5, 0, 35, 19, 3>>
+).
+-define(CODE_BS_PUT_UTF16,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        147, 5, 0, 35, 19, 3>>
+).
+-define(CODE_BS_PUT_UTF32,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 137, 5, 3, 0, 16, 0, 19,
+        148, 5, 0, 35, 19, 3>>
+).
+
+bs_utf_test_() ->
+    [
+        {atom_to_list(Backend) ++ " " ++ Label, fun() ->
+            Stream = compile_stream_for_backend(Backend, Code, <<0, 0, 0, 0>>, <<>>),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || {Label, Code} <- [
+            {"bs_utf8_size", ?CODE_BS_UTF8_SIZE},
+            {"bs_utf16_size", ?CODE_BS_UTF16_SIZE},
+            {"bs_put_utf8", ?CODE_BS_PUT_UTF8},
+            {"bs_put_utf16", ?CODE_BS_PUT_UTF16},
+            {"bs_put_utf32", ?CODE_BS_PUT_UTF32}
+        ],
+        Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
+
+%% Same family: bs_append and bs_private_append start a binary that carries over
+%% the bits of an existing one. The two bs_append variants differ in whether the
+%% source register is already covered by the live count, which decides whether it
+%% has to be saved across the collection.
+%% Synthetic chunk: label 1,
+%% bs_append {f,0} size=x2 extra=0 live=1 unit=8 src=x0 flags=0 -> x1,
+%% return, int_code_end.
+-define(CODE_BS_APPEND,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 134, 5, 35, 0, 16, 128,
+        3, 0, 19, 19, 3>>
+).
+%% Same, with the source in x2, past the live count, so it is saved and reloaded.
+-define(CODE_BS_APPEND_SRC_ABOVE_LIVE,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 134, 5, 51, 0, 16, 128,
+        35, 0, 19, 19, 3>>
+).
+%% bs_private_append {f,0} size=x2 unit=8 src=x0 flags=0 -> x1.
+-define(CODE_BS_PRIVATE_APPEND,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 135, 5, 35, 128, 3, 0,
+        19, 19, 3>>
+).
+%% Same, with a literal size, which folds the negative-size check away.
+-define(CODE_BS_PRIVATE_APPEND_LITERAL,
+    <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 180, 0, 0, 0, 2, 0, 0, 0, 1, 1, 16, 135, 5, 9, 8, 128, 3, 0,
+        19, 19, 3>>
+).
+
+bs_append_test_() ->
+    [
+        {atom_to_list(Backend) ++ " " ++ Label, fun() ->
+            Stream = compile_stream_for_backend(Backend, Code, <<0, 0, 0, 0>>, <<>>),
+            ?assert(byte_size(Stream) > 0)
+        end}
+     || {Label, Code} <- [
+            {"bs_append", ?CODE_BS_APPEND},
+            {"bs_append src above live", ?CODE_BS_APPEND_SRC_ABOVE_LIVE},
+            {"bs_private_append", ?CODE_BS_PRIVATE_APPEND},
+            {"bs_private_append literal size", ?CODE_BS_PRIVATE_APPEND_LITERAL}
+        ],
+        Backend <- [
+            jit_aarch64,
+            jit_x86_64,
+            jit_arm32,
+            jit_armv6m,
+            jit_riscv32,
+            jit_riscv64,
+            jit_xtensa
+        ]
+    ].
+
 %% Same family: bs_put_binary copies a bitstring segment into the binary at
 %% ctx->bs_offset. Synthetic chunk: label 1, bs_init_bits, then
 %% bs_put_binary {f,0} size=8 unit=1 flags=0 src=x2, return, int_code_end.
