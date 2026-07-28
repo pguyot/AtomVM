@@ -5440,12 +5440,12 @@ get_vm_record_type(#state{regs = Regs}, VmLoc) ->
 -ifdef(JIT_DWARF).
 %%-----------------------------------------------------------------------------
 %% @doc Return the DWARF register number for the ctx parameter
-%% @returns The DWARF register number where ctx is passed (x0/r0 in aarch64)
+%% @returns The DWARF register number of the pinned ctx register
 %% @end
 %%-----------------------------------------------------------------------------
 -spec dwarf_ctx_register() -> non_neg_integer().
 dwarf_ctx_register() ->
-    ?DWARF_X0_REG_AARCH64.
+    dwarf_register_number(?CTX_REG).
 
 -spec dwarf_register_number(atom()) -> non_neg_integer().
 dwarf_register_number(r0) -> 0;

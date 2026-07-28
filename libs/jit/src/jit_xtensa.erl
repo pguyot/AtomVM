@@ -4675,12 +4675,12 @@ dwarf_x_reg_offset() ->
 -ifdef(JIT_DWARF).
 %%-----------------------------------------------------------------------------
 %% @doc Return the DWARF register number for the ctx parameter
-%% @returns The DWARF register number where ctx is passed (a2 in Xtensa)
+%% @returns The DWARF register number of the pinned ctx register
 %% @end
 %%-----------------------------------------------------------------------------
 -spec dwarf_ctx_register() -> non_neg_integer().
 dwarf_ctx_register() ->
-    ?DWARF_A2_REG_XTENSA.
+    dwarf_register_number(?CTX_REG).
 
 -spec dwarf_register_number(xtensa_register()) -> non_neg_integer().
 dwarf_register_number(Reg) -> jit_xtensa_asm:reg_to_num(Reg).
