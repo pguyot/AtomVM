@@ -33,19 +33,13 @@ set(COMMON_WARN_FLAGS "${COMMON_WARN_FLAGS} -pedantic -Wall -Wextra")
 set(C_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 set(CXX_WARN_FLAGS "${COMMON_WARN_FLAGS}")
 
-# Use C and C++ compiler optimizations for size and speed.
+# Use C and C++ compiler optimizations for size.
 #
-# 512KB-ROM devices are always size-optimized. Larger-ROM devices use -O2 and
-# rely on minimal opcodes to fit the firmware budget, except the STM32H5 family
-# whose HAL is large enough that -O2 still overflows the 512KB budget even with
-# minimal opcodes, so size-optimize it too.
-if (${CMAKE_FLASH_SIZE} STREQUAL "ROM_512K")
-    set(OPTIMIZE_FLAG "-Os")
-elseif (DEVICE MATCHES "^stm32h5")
-    set(OPTIMIZE_FLAG "-Os")
-else()
-    set(OPTIMIZE_FLAG "-O2")
-endif()
+# The firmware budget is the same 512KB on every device -- it is where the AVM
+# partition starts, not how much ROM the part has -- and -O2 overflows it on the
+# larger-HAL families even with minimal opcodes. Rather than keep a list of
+# which families still fit, size-optimize everywhere.
+set(OPTIMIZE_FLAG "-Os")
 
 # Pass them back to the CMake variable
 # -ffunction-sections -fdata-sections enable --gc-sections to remove unused code
