@@ -286,7 +286,16 @@ define_if_function_exists(libAtomVM unlink "unistd.h" PRIVATE HAVE_UNLINK)
 define_if_function_exists(libAtomVM rmdir "unistd.h" PRIVATE HAVE_RMDIR)
 define_if_function_exists(libAtomVM execve "unistd.h" PRIVATE HAVE_EXECVE)
 define_if_function_exists(libAtomVM kill "signal.h" PRIVATE HAVE_KILL)
-define_if_function_exists(libAtomVM popen "stdio.h" PRIVATE HAVE_POPEN)
+# popen() needs a hosted environment with a process spawner. The check below
+# compiles against the toolchain's default C library headers, which is not the
+# library a bare-metal target links: the stm32 firmware links picolibc, which
+# has no process support, while the arm-none-eabi toolchain's own newlib
+# headers declare popen -- so the check succeeds and the build then fails on an
+# implicit declaration. There is nothing to detect on a target with no
+# operating system, so do not look.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
+    define_if_function_exists(libAtomVM popen "stdio.h" PRIVATE HAVE_POPEN)
+endif()
 define_if_function_exists(libAtomVM tcgetattr "termios.h" PRIVATE HAVE_TCGETATTR)
 define_if_function_exists(libAtomVM closefrom "unistd.h" PRIVATE HAVE_CLOSEFROM)
 define_if_function_exists(libAtomVM getcwd "unistd.h" PUBLIC HAVE_GETCWD)
