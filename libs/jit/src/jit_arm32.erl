@@ -4288,7 +4288,7 @@ dwarf_x_reg_offset() ->
 %%-----------------------------------------------------------------------------
 -spec dwarf_ctx_register() -> non_neg_integer().
 dwarf_ctx_register() ->
-    ?DWARF_R0_REG_ARM32.
+    dwarf_register_number(?CTX_REG).
 
 -spec dwarf_register_number(atom()) -> non_neg_integer().
 dwarf_register_number(r0) -> 0;

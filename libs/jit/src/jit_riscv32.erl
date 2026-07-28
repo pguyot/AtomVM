@@ -524,10 +524,24 @@ dwarf_x_reg_offset() ->
 -ifdef(JIT_DWARF).
 -spec dwarf_ctx_register() -> non_neg_integer().
 dwarf_ctx_register() ->
-    ?DWARF_A0_REG_RISCV.
+    dwarf_register_number(?CTX_REG).
 
-%% RISC-V DWARF register numbers: a0-a7 = 10-17, t0-t6 = 5-7,28-31
+%% RISC-V DWARF register numbers are the x register numbers:
+%% a0-a7 = x10-x17, t0-t2 = x5-x7, t3-t6 = x28-x31, s0-s1 = x8-x9,
+%% s2-s11 = x18-x27.
 -spec dwarf_register_number(atom()) -> non_neg_integer().
+dwarf_register_number(s0) -> 8;
+dwarf_register_number(s1) -> 9;
+dwarf_register_number(s2) -> 18;
+dwarf_register_number(s3) -> 19;
+dwarf_register_number(s4) -> 20;
+dwarf_register_number(s5) -> 21;
+dwarf_register_number(s6) -> 22;
+dwarf_register_number(s7) -> 23;
+dwarf_register_number(s8) -> 24;
+dwarf_register_number(s9) -> 25;
+dwarf_register_number(s10) -> 26;
+dwarf_register_number(s11) -> 27;
 dwarf_register_number(a0) -> 10;
 dwarf_register_number(a1) -> 11;
 dwarf_register_number(a2) -> 12;
