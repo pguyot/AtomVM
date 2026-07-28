@@ -494,7 +494,11 @@ static int divmnu32(
     return 0;
 }
 
-#ifdef __SIZEOF_INT128__
+// The 64-bit-limb path packs the 32-bit digit array into limbs with a plain
+// memcpy, which is only the identity on a little-endian target; big-endian
+// builds (s390x) use the 32-bit-digit division below.
+#if defined(__SIZEOF_INT128__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define INTN_HAVE_DIVMNU64
 
 // `__int128' is a GNU extension; `__extension__' keeps -Wpedantic (which
 // -DAVM_WARNINGS_ARE_ERRORS turns into an error) from rejecting it.
@@ -595,7 +599,7 @@ static int divmnu64(
     return 0;
 }
 
-#endif // __SIZEOF_INT128__
+#endif // INTN_HAVE_DIVMNU64
 
 size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], size_t n_len,
     intn_digit_t q_out[], intn_digit_t r_out[], size_t *r_out_len)
@@ -603,7 +607,7 @@ size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], s
     size_t u_len = intn_count_digits(m, m_len);
     size_t v_len = intn_count_digits(n, n_len);
 
-#ifdef __SIZEOF_INT128__
+#ifdef INTN_HAVE_DIVMNU64
     // The u_len bound is what the fixed-size limb buffers below are sized for.
     // It always holds (callers cap operands at INTN_MAX_IN_LEN digits), but
     // spelling it out here is also what tells the compiler the memcpy lengths
