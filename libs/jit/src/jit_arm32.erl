@@ -1037,7 +1037,11 @@ jump_to_label_cond(State0, Cond, Label) ->
                     }
                 }
         end,
-    State3.
+    % A chain of conditional branches (a long select_val, say) emits thousands
+    % of bytes without ever reaching a terminal instruction, which is where the
+    % pool would otherwise be flushed. Check here too, or the pending literals
+    % end up out of reach of their own ldr.
+    maybe_flush_literal_pool(State3).
 
 %% ARM condition-code inversion: flips the low bit of the 4-bit encoding.
 -spec invert_cc(jit_arm32_asm:cc()) -> jit_arm32_asm:cc().
@@ -3646,12 +3650,17 @@ maybe_flush_literal_pool(#state{literal_pool = []} = State) ->
 maybe_flush_literal_pool(
     #state{stream_module = StreamModule, stream = Stream0, literal_pool = LP} = State
 ) ->
-    % Determine the offset of the last item.
+    % Determine the offset of the oldest pending item.
     Offset = StreamModule:offset(Stream0),
     {Addr, _, _} = lists:last(LP),
-    % Heuristically set the threshold at 2048 (half the 4095 range of ARM32 ldr).
+    % Worst-case reach once the pool is laid out here: the oldest ldr (whose pc
+    % is its own address + 8) has to reach the *last* word of the pool, so the
+    % pool's own size counts against the 4095 byte range of an ARM32 ldr. Flush
+    % at half of what is left, so that the code emitted between two checks has
+    % room before the limit is actually reached.
+    Reach = Offset - Addr - 8 + length(LP) * 4,
     if
-        Offset - Addr > 2048 ->
+        Reach > 2048 ->
             NbLiterals = length(LP),
             % ARM32: all instructions are 4-byte, no alignment needed
             Continuation = NbLiterals * 4 + 4,
@@ -4196,7 +4205,7 @@ add_label(StateP, Label) ->
     %% Unknown predecessors may join here: pending stores not in the label's
     %% live-in mask are dead and get nop'd; those in the mask keep their store.
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
-        State0 = pending_flush_label(StateP, Label),
+        State0 = maybe_flush_literal_pool(pending_flush_label(StateP, Label)),
     Offset0 = StreamModule:offset(Stream0),
     Regs1 = jit_regs:invalidate_all(Regs0),
     add_label(State0#state{regs = Regs1}, Label, Offset0).
