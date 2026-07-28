@@ -1446,6 +1446,9 @@ static int calculate_simple_heap_usage(const uint8_t *external_term_buf, size_t 
             uint8_t sign;
             const uint8_t *int_bytes;
             if (external_term_buf[0] == SMALL_BIG_EXT) {
+                if (UNLIKELY(remaining < SMALL_BIG_EXT_BASE_SIZE)) {
+                    return INVALID_TERM_SIZE;
+                }
                 num_bytes = external_term_buf[1];
                 base_size = SMALL_BIG_EXT_BASE_SIZE;
                 sign = external_term_buf[2];
