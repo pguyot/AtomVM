@@ -2247,19 +2247,21 @@ emit_pass(<<?OP_BS_ADD, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_BS_ADD ~p,~p,~p,~p,~p\n", [Fail, Src1, Src2, Unit, Dest]),
     {MSt4, Val1} = term_to_int(Src1, Fail, MMod, MSt3),
     {MSt5, Val2} = term_to_int(Src2, Fail, MMod, MSt4),
-    {MSt6, SumReg} =
+    %% Dest = Src1 + Src2 * Unit: only the second operand is scaled.
+    {MSt7, SumReg} =
         case {Val1, Val2} of
             {V1, V2} when is_integer(V1), is_integer(V2) ->
-                MMod:move_to_native_register(MSt5, V1 + V2);
-            {V1, V2} when is_integer(V1) ->
-                {MMod:add(MSt5, V2, V1), V2};
+                MMod:move_to_native_register(MSt5, V1 + V2 * Unit);
             {V1, V2} when is_integer(V2) ->
-                {MMod:add(MSt5, V1, V2), V1};
+                {MMod:add(MSt5, V1, V2 * Unit), V1};
+            {V1, V2} when is_integer(V1) ->
+                MSt6 = MMod:mul(MSt5, V2, Unit),
+                {MMod:add(MSt6, V2, V1), V2};
             {V1, V2} ->
-                MSt5a = MMod:add(MSt5, V1, V2),
-                {MMod:free_native_registers(MSt5a, [V2]), V1}
+                MSt6 = MMod:mul(MSt5, V2, Unit),
+                MSt6a = MMod:add(MSt6, V1, V2),
+                {MMod:free_native_registers(MSt6a, [V2]), V1}
         end,
-    MSt7 = MMod:mul(MSt6, SumReg, Unit),
     %% Re-tag the byte/bit count as a small integer.
     MSt8 = MMod:shift_left(MSt7, SumReg, 4),
     MSt9 = MMod:or_(MSt8, SumReg, ?TERM_INTEGER_TAG),

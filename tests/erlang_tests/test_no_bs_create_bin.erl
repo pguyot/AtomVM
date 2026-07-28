@@ -175,25 +175,41 @@ test_bitstring_source() ->
     %% a /binary segment rejects a partial source rather than truncating it
     badarg = expect_error(fun() -> append_binary_to(Bits1, id(<<1, 2>>)) end),
 
+    %% bs_add scales only its second operand by the unit. A field whose width
+    %% is neither a whole number of bytes nor under one is summed by two bs_add
+    %% opcodes, the second with a non-zero first operand, which is where a
+    %% (Src1 + Src2) * Unit reading of it shows up as a too-long result.
+    <<1:1, 16#123456789A:41>> = put_int41_after(Bits1, id(16#123456789A)),
+    <<5:3, 16#123456789A:41>> = put_int41_after(Bits3, id(16#123456789A)),
+
     ok = check_wide_int_after(Bits1),
     ok.
 
 -if(?OTP_RELEASE =< 27).
 %% A big integer (> 64 bits) written by the legacy bs_put_integer opcode at a
-%% non-byte-aligned offset is not supported: the whole-byte bignum writer
-%% cannot place it, so AtomVM rejects it rather than misplacing the bits.
-%% BEAM builds it, so check only on AtomVM.
+%% non-byte-aligned offset: the interpreter's whole-byte bignum writer cannot
+%% place it and rejects it rather than misplacing the bits, while the JIT's
+%% writer is bit-granular and builds it, like BEAM and like the bs_create_bin
+%% path OTP 28+ takes. Accept either, but nothing in between.
 check_wide_int_after(Bits1) ->
     case erlang:system_info(machine) of
         "ATOM" ->
-            %% the interpreter raises unsupported, the JIT badarg; either way it
-            %% must reject rather than misplace the bits
-            case expect_error(fun() -> put_wide_int_after(Bits1, id(1 bsl 100)) end) of
+            case value_or_error(fun() -> put_wide_int_after(Bits1, id(1 bsl 100)) end) of
                 unsupported -> ok;
-                badarg -> ok
+                badarg -> ok;
+                %% Bits1 is <<1:1>>, so the result is a 1 bit then 1 bsl 100 in
+                %% 101 bits.
+                <<3:2, 0:100>> -> ok
             end;
         _ ->
             ok
+    end.
+
+value_or_error(Fun) ->
+    try
+        Fun()
+    catch
+        error:Reason -> Reason
     end.
 -else.
 %% OTP 28+ has no no_bs_create_bin, so this segment goes through bs_create_bin,
@@ -209,6 +225,9 @@ check_wide_int_after(Bits1) ->
 
 put_wide_int_after(Bits, V) ->
     <<Bits/bitstring, V:101>>.
+
+put_int41_after(Bits, V) ->
+    <<Bits/bitstring, V:41>>.
 
 copy_bitstring(Bits) ->
     <<Bits/bitstring>>.
