@@ -3726,7 +3726,8 @@ schedule_in:
 
                 TRACE("bs_add/5, fail=%i src1=" AVM_INT_FMT " src2=" AVM_INT_FMT " unit=%u dreg=%c%i\n", fail, src1_val, src2_val, (unsigned) unit, T_DEST_REG(dreg));
 
-                WRITE_REGISTER(dreg, term_from_int((src1_val + src2_val) * unit));
+                // Only the second operand is scaled: Dest = Src1 + Src2 * Unit
+                WRITE_REGISTER(dreg, term_from_int(src1_val + src2_val * unit));
                 break;
             }
 
