@@ -2116,6 +2116,14 @@ COLD_FUNC void module_cp_to_label_offset(term cp, Module **cp_mod, int *label, s
         *cp_mod = mod;
     }
 
+    // Stacktrace sizing resolves only cp_mod/mod_offset (label and l_off NULL);
+    // the label-table scan below produces nothing for those callers, so skip it.
+    // Worth doing even though this function is COLD_FUNC: an exception-heavy
+    // program (the Erlang compiler running on AtomVM) sizes a lot of stacktraces.
+    if (label == NULL && l_off == NULL) {
+        return;
+    }
+
 #ifndef AVM_NO_JIT
     if (mod->native_code) {
 #ifdef JIT_JUMPTABLE_IS_DATA

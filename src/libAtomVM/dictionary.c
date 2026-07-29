@@ -30,6 +30,22 @@ static DictionaryFunctionResult dictionary_find(
     struct ListHead *dictionary, term key, struct DictEntry **found, GlobalContext *global)
 {
     struct ListHead *item;
+    if ((key & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        // =:= against an immediate key is plain word equality, so the scan needs
+        // no term_compare per entry -- get/put with an atom key is a hot path.
+        // This relies on bigints being normalized to their canonical form
+        // (dc73d25fa), without which a boxed term could hold a value that fits
+        // the small-int range and get/1 would miss an existing key.
+        LIST_FOR_EACH (item, dictionary) {
+            struct DictEntry *entry = GET_LIST_ENTRY(item, struct DictEntry, head);
+            if (entry->key == key) {
+                *found = entry;
+                return DictionaryOk;
+            }
+        }
+        *found = NULL;
+        return DictionaryOk;
+    }
     LIST_FOR_EACH (item, dictionary) {
         struct DictEntry *entry = GET_LIST_ENTRY(item, struct DictEntry, head);
         TermCompareResult result = term_compare(entry->key, key, TermCompareExact, global);

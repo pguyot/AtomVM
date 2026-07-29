@@ -18,6 +18,13 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
+// glibc gates cpu_set_t / CPU_ZERO / CPU_SET / pthread_setaffinity_np (used by
+// scheduler_bind_to_core below) behind _GNU_SOURCE, which must be defined before
+// any system header is included.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "smp.h"
 
 #ifndef AVM_NO_SMP
@@ -26,8 +33,84 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
+#endif
+
 #include "scheduler.h"
 #include "utils.h"
+
+// Bind each spawned sub-scheduler thread to a distinct logical core so its
+// per-scheduler hot data (heap-block cache, mailbox, registers) stays
+// cache-local. The main thread (index 0) is left to the OS. On Linux this is a
+// hard affinity; on macOS THREAD_AFFINITY_POLICY is a locality hint, and a
+// no-op on Apple silicon.
+//
+// Like BEAM's +sbt, binding is a deployment policy rather than a universal win
+// (it hurts when the process shares the machine), so it is opt-in.
+// Index 0 is the main thread, which is left to the OS.
+static int ATOMIC scheduler_core_index = 1;
+
+// A duplicate index only affects placement, never correctness, so the
+// non-atomic fallback is acceptable on platforms without C11 atomics.
+static int scheduler_next_core_index(void)
+{
+#if defined(HAVE_ATOMIC) && !defined(HAVE_PLATFORM_ATOMIC_H)
+    return atomic_fetch_add(&scheduler_core_index, 1);
+#else
+    return scheduler_core_index++;
+#endif
+}
+
+static void scheduler_bind_to_core(int index)
+{
+    const char *bind = getenv("AVM_SCHEDULER_BIND");
+    if (bind == NULL || bind[0] == '0' || bind[0] == '\0') {
+        return;
+    }
+#if defined(__linux__)
+    // Enumerate the CPUs this process is actually permitted to run on:
+    // _SC_NPROCESSORS_ONLN counts host cores, which may include CPUs excluded
+    // by a cgroup/taskset cpuset, and setting affinity to one of those fails.
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+        return;
+    }
+    int allowed_count = CPU_COUNT(&allowed);
+    if (allowed_count <= 1) {
+        return;
+    }
+    int nth = index % allowed_count;
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        if (!CPU_ISSET(cpu, &allowed)) {
+            continue;
+        }
+        if (nth-- == 0) {
+            cpu_set_t set;
+            CPU_ZERO(&set);
+            CPU_SET(cpu, &set);
+            (void) pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+            return;
+        }
+    }
+#elif defined(__APPLE__)
+    long ncores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncores <= 1) {
+        return;
+    }
+    thread_affinity_policy_data_t policy = { .affinity_tag = (int) (index % ncores) + 1 };
+    (void) thread_policy_set(pthread_mach_thread_np(pthread_self()),
+        THREAD_AFFINITY_POLICY, (thread_policy_t) &policy, THREAD_AFFINITY_POLICY_COUNT);
+#else
+    UNUSED(index);
+#endif
+}
 
 struct Mutex
 {
@@ -83,6 +166,7 @@ static void *scheduler_thread_entry_point(void *arg)
 #else
     g_sub_main_thread = true;
 #endif
+    scheduler_bind_to_core(scheduler_next_core_index());
     return (void *) (uintptr_t) scheduler_entry_point((GlobalContext *) arg);
 }
 

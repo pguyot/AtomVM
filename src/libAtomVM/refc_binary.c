@@ -42,7 +42,7 @@ struct RefcBinary *refc_binary_create_resource(size_t size, struct ResourceType 
     }
     list_init(&refc->head);
     refc->ref_count = 0;
-    refc->size = size;
+    refc->capacity = size;
     refc->resource_type = resource_type;
 
     return refc;
@@ -137,7 +137,7 @@ term refc_binary_create_binary_info(Context *ctx)
     LIST_FOR_EACH (item, refc_binaries) {
         struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
         term t = term_alloc_tuple(2, &ctx->heap);
-        term_put_tuple_element(t, 0, term_from_int(refc->size));
+        term_put_tuple_element(t, 0, term_from_int(refc->capacity));
         term_put_tuple_element(t, 1, term_from_int(refc_binary_get_refcount(refc)));
         ret = term_list_prepend(t, ret, &ctx->heap);
     }
@@ -152,7 +152,7 @@ size_t refc_binary_total_size(Context *ctx)
     struct ListHead *refc_binaries = synclist_rdlock(&ctx->global->refc_binaries);
     LIST_FOR_EACH (item, refc_binaries) {
         struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
-        size += refc->size;
+        size += refc->capacity;
     }
     synclist_unlock(&ctx->global->refc_binaries);
     return size;
@@ -173,7 +173,7 @@ COLD_FUNC void refc_binary_dump_info(Context *ctx)
     LIST_FOR_EACH (item, refc_binaries) {
         struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
         count++;
-        total_size += refc->size;
+        total_size += refc->capacity;
     }
 
     fprintf(stderr, "refc_binary_count = %d\n", (int) count);
@@ -195,7 +195,7 @@ COLD_FUNC void refc_binary_dump_info(Context *ctx)
 
         // Try to insert into top 5
         for (size_t i = 0; i < TOP_N; i++) {
-            if (top[i] == NULL || refc->size > top[i]->size) {
+            if (top[i] == NULL || refc->capacity > top[i]->capacity) {
                 // Shift down
                 for (size_t j = TOP_N - 1; j > i; j--) {
                     top[j] = top[j - 1];
@@ -215,8 +215,8 @@ COLD_FUNC void refc_binary_dump_info(Context *ctx)
         struct RefcBinary *refc = top[i];
         fprintf(stderr, "  [%zu] size=%d bytes (%.1f%%), refcount=%d",
             top_indices[i],
-            (int) refc->size,
-            (double) refc->size * 100.0 / (double) total_size,
+            (int) refc->capacity,
+            (double) refc->capacity * 100.0 / (double) total_size,
             (int) refc_binary_get_refcount(refc));
 
         if (refc->resource_type) {
@@ -225,14 +225,14 @@ COLD_FUNC void refc_binary_dump_info(Context *ctx)
 
         // Print first 32 bytes as hex
         fprintf(stderr, "\n      data: ");
-        size_t print_size = refc->size < 32 ? refc->size : 32;
+        size_t print_size = refc->capacity < 32 ? refc->capacity : 32;
         for (size_t j = 0; j < print_size; j++) {
             fprintf(stderr, "%02x", refc->data[j]);
             if (j % 4 == 3 && j < print_size - 1) {
                 fprintf(stderr, " ");
             }
         }
-        if (refc->size > 32) {
+        if (refc->capacity > 32) {
             fprintf(stderr, "...");
         }
         fprintf(stderr, "\n");

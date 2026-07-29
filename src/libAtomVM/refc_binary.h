@@ -59,7 +59,11 @@ struct RefcBinary
     //   [dying:1 | monitor_refc:7/15 | ref_count:24/48]
     // (7+24 on 32-bit, 15+48 on 64-bit).
     size_t ATOMIC ref_count;
-    size_t size;
+    // Bytes allocated for `data`, which term_reuse_binary may grow past the
+    // logical size a term exposes (that lives in the boxed term, see
+    // term_binary_size). Memory accounting must use this, term contents the
+    // logical size.
+    size_t capacity;
     struct ResourceType *resource_type; // Resource type or NULL for regular refc binaries.
     uint8_t data[];
 };

@@ -545,7 +545,11 @@ term bif_erlang_unique_integer_1(Context *ctx, uint32_t fail_label, term arg1)
 
 static inline term make_boxed_int(Context *ctx, uint32_t fail_label, uint32_t live, avm_int_t value)
 {
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    // Only call the allocator when the heap actually lacks space: integer
+    // loops box a result per iteration, and the call's shrink evaluation
+    // is pure overhead then.
+    if (context_avail_free_memory(ctx) < BOXED_INT_SIZE
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR_BIF(fail_label, OUT_OF_MEMORY_ATOM);
     }
 
@@ -555,7 +559,8 @@ static inline term make_boxed_int(Context *ctx, uint32_t fail_label, uint32_t li
 #if BOXED_TERMS_REQUIRED_FOR_INT64 > 1
 static inline term make_boxed_int64(Context *ctx, uint32_t fail_label, uint32_t live, avm_int64_t value)
 {
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT64_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    if (context_avail_free_memory(ctx) < BOXED_INT64_SIZE
+        && UNLIKELY(memory_ensure_free_with_roots(ctx, BOXED_INT64_SIZE, live, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR_BIF(fail_label, OUT_OF_MEMORY_ATOM);
     }
 

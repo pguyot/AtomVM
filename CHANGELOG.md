@@ -71,6 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TERM_BOXED_REFERENCE_MAX_SIZE` to fit any reference. `REF_SIZE` still expands to the short
   reference size, but now emits a compiler warning
 - On ESP32 platform, when starting wifi as a station (client), disable wifi power save so TCP servers are reachable
+- On macOS, the monotonic clock now uses `CLOCK_UPTIME_RAW` (`mach_absolute_time`, as BEAM does)
+  instead of the more expensive `CLOCK_MONOTONIC`. Unlike `CLOCK_MONOTONIC` it does not advance
+  while the system is asleep, so timers armed before a sleep fire that much later
+- Generic UNIX scheduler threads can be pinned to distinct cores by setting the
+  `AVM_SCHEDULER_BIND` environment variable to a non-zero value (off by default, like BEAM's `+sbt`)
+- Heap shrinking is now skipped when the young heap already sits at `min_heap_size`, and the
+  `setelement/3` and boxed-integer paths only call the allocator when space is actually short.
+  Processes that allocate a large heap and then free most of it may hold their peak size longer
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and

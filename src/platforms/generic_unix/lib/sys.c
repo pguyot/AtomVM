@@ -347,8 +347,14 @@ static inline void sys_poll_events_with_poll(GlobalContext *glb, int timeout_ms)
 void sys_poll_events(GlobalContext *glb, int timeout_ms) CLANG_THREAD_SANITIZE_SAFE
 {
     // Optimization: do not go into poll(2) or kqueue(2) if we have nothing to
-    // wait on.
-    if (timeout_ms == 0 && synclist_is_empty(&glb->listeners) && synclist_is_empty(&glb->select_events)) {
+    // wait on. The emptiness checks are unlocked single pointer reads: if a
+    // listener or select event is concurrently added we merely skip one
+    // zero-timeout poll and it is picked up on the next scheduler iteration
+    // (blocking polls, timeout_ms != 0, never take this fast path). Taking
+    // the rwlocks here would put two lock/unlock pairs on every scheduler
+    // yield.
+    if (timeout_ms == 0 && list_is_empty(synclist_nolock(&glb->listeners))
+        && list_is_empty(synclist_nolock(&glb->select_events))) {
         return;
     }
 
@@ -399,7 +405,20 @@ void sys_time(struct timespec *t)
 
 void sys_monotonic_time(struct timespec *t)
 {
+#ifdef __APPLE__
+    // On macOS, CLOCK_MONOTONIC is emulated from the kernel boottime and is
+    // several times more expensive than CLOCK_UPTIME_RAW, which is
+    // mach_absolute_time (a commpage read). The scheduler reads this clock on
+    // every timer arm/expiry check, so it is on the message-passing hot path.
+    //
+    // The two differ in more than cost: CLOCK_UPTIME_RAW does not advance while
+    // the system is asleep, so a timer armed before the machine sleeps fires
+    // that much later. This matches BEAM, whose macOS monotonic clock is also
+    // mach_absolute_time.
+    if (UNLIKELY(clock_gettime(CLOCK_UPTIME_RAW, t))) {
+#else
     if (UNLIKELY(clock_gettime(CLOCK_MONOTONIC, t))) {
+#endif
         fprintf(stderr, "Failed clock_gettime.\n");
         AVM_ABORT();
     }

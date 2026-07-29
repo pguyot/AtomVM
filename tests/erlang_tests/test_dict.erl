@@ -43,7 +43,27 @@ start() ->
     _ = stringize(333222),
     "undefined" = erlang:atom_to_list(the_erase(6)),
     ok = test_put_get_erase(),
+    ok = test_immediate_key_identity(),
     W.
+
+%% dictionary_find scans immediate keys by word equality, which is only correct
+%% because a value fitting the small-int range is never boxed. Look the key up
+%% again through terms built by producers other than the literal: arithmetic,
+%% binary_to_term, and a wide bit-syntax segment, which goes through the bigint
+%% builder and so must be normalized back to a small int.
+test_immediate_key_identity() ->
+    undefined = put(id(7), seven),
+    seven = get(id(3 + 4)),
+    seven = get(binary_to_term(term_to_binary(id(7)))),
+    seven = get(u72(<<7:72>>)),
+    undefined = put(id(-7), minus_seven),
+    minus_seven = get(id(0 - 7)),
+    minus_seven = get(binary_to_term(term_to_binary(id(-7)))),
+    minus_seven = get(s72(<<-7:72/signed>>)),
+    seven = erase(id(7)),
+    minus_seven = erase(id(-7)),
+    undefined = get(id(7)),
+    ok.
 
 put_int(N) ->
     put(stringize(id(factorial(id(N)))), stringize(id(factorial(id(N))) * 2)).
@@ -90,3 +110,11 @@ test_get_0_erase_0() ->
     [] = get(),
     [] = erase(),
     ok.
+
+u72(Bin) ->
+    <<X:72>> = Bin,
+    X.
+
+s72(Bin) ->
+    <<X:72/signed>> = Bin,
+    X.
