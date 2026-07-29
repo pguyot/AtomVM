@@ -269,7 +269,13 @@ jobs:
       timeout-minutes: 20
       working-directory: build
       run: |
-        ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm
+        # test_serial_dist_socat is a known socat/distribution timing flake on
+        # the macOS runner (ping_timeout). Kill leftover socat/epmd first so a
+        # retry starts clean.
+        "${GITHUB_WORKSPACE}/.github/scripts/retry-flaky.sh" 2 3 test_estdlib -- \
+          sh -c 'pkill -9 -f socat 2>/dev/null || true
+                 pkill -9 epmd 2>/dev/null || true
+                 ./src/AtomVM ./tests/libs/estdlib/test_estdlib.avm'
 
     - name: "Test: test_eavmlib.avm"
       timeout-minutes: 10

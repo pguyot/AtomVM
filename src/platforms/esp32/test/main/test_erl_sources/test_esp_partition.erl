@@ -26,12 +26,44 @@ start() ->
     ok = esp:partition_erase_range(<<"data">>, 0),
     ok = esp:partition_write(<<"data">>, 0, <<"hello">>),
     {ok, <<"hello">>} = esp:partition_read(<<"data">>, 0, 5),
-    {ok, <<"hello">>} = esp:partition_mmap(<<"data">>, 0, 5),
+    ok = mmap_expect(<<"hello">>),
     ok = esp:partition_erase_range(<<"data">>, 0, 4096),
     ok = esp:partition_write(<<"data">>, 0, <<"world">>),
     {ok, <<"world">>} = esp:partition_read(<<"data">>, 0, 5),
-    {ok, <<"world">>} = esp:partition_mmap(<<"data">>, 0, 5),
+    ok = mmap_expect(<<"world">>),
     0.
+
+%% Map the partition in a short-lived process. A mapping lives until its
+%% resource-backed binary is collected (the resource destructor calls
+%% esp_partition_munmap), and MMU-mapped chips (esp32c3/s3) refuse to map the
+%% same paddr block twice; whether the caller's dead mapping has been
+%% collected by the time of a second mmap depends on execution mode and GC
+%% timing (JIT-compiled code allocates less, and a dead tuple parked in a
+%% stale x register survives even an explicit garbage_collect). Scoping the
+%% mapping to a terminated process guarantees release; the bounded retry
+%% absorbs the window where 'DOWN' was delivered but the mapping resource is
+%% still being torn down.
+mmap_expect(Expected) ->
+    mmap_expect(Expected, 100, no_failure).
+
+mmap_expect(_Expected, 0, LastCrash) ->
+    {error, LastCrash};
+mmap_expect(Expected, Retries, _LastCrash) ->
+    {Pid, Ref} = spawn_opt(
+        fun() ->
+            {ok, Expected} = esp:partition_mmap(<<"data">>, 0, 5)
+        end,
+        [monitor]
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, normal} ->
+            ok;
+        {'DOWN', Ref, process, Pid, Crash} ->
+            receive
+            after 10 -> ok
+            end,
+            mmap_expect(Expected, Retries - 1, Crash)
+    end.
 
 %% Wokwi uses the 4MB test/partitions.csv layout; QEMU/JIT tests use
 %% the larger 8MB partitions-test.csv layout.

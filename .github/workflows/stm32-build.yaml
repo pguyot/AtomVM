@@ -39,7 +39,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device:
+        # The matrix dimension is the configuration, not the device: an `include'
+        # entry whose keys match an existing combination is merged into that job
+        # rather than adding one, so two entries for the same device would
+        # collapse into a single job (the last value winning) and one of the two
+        # configurations would silently never be built.
+        config:
           - stm32f407vgt6
           - stm32f411ceu6
           - stm32f429zit6
@@ -55,8 +60,10 @@ jobs:
           - stm32f207zgt6
           - stm32u375rgt6
           - stm32g0b1ret6
+          - stm32h562rgt6-usb-cdc
         include:
-          - device: stm32f407vgt6
+          - config: stm32f407vgt6
+            device: stm32f407vgt6
             max_size: 524288
             renode_platform: stm32f4.repl
             avm_address: "0x08080000"
@@ -65,45 +72,57 @@ jobs:
             # occurs, causing the BME280 sensor to get stuck in Reading
             # state and ignore subsequent writes.
             tests: "boot gpio spi crypto uart"
-          - device: stm32f411ceu6
+          - config: stm32f411ceu6
+            device: stm32f411ceu6
             max_size: 393216
             renode_platform: stm32f4.repl
             avm_address: "0x08060000"
             # No RNG peripheral on F411, so the firmware has no crypto NIFs
             # (mbedTLS is excluded by STM32_HAS_RNG in CMake).
             tests: "boot gpio spi uart"
-          - device: stm32f429zit6
+          - config: stm32f429zit6
+            device: stm32f429zit6
             max_size: 524288
-          - device: stm32h743vit6
+          - config: stm32h743vit6
+            device: stm32h743vit6
             max_size: 524288
             renode_platform: stm32h743.repl
             avm_address: "0x08080000"
             tests: "boot gpio i2c spi crypto uart"
-          - device: stm32h743zit6
+          - config: stm32h743zit6
+            device: stm32h743zit6
             max_size: 524288
-          - device: stm32u585ait6q
+          - config: stm32u585ait6q
+            device: stm32u585ait6q
             max_size: 524288
-          - device: stm32wb55rg
+          - config: stm32wb55rg
+            device: stm32wb55rg
             max_size: 524288
-          - device: stm32h562rgt6
+          - config: stm32h562rgt6
+            device: stm32h562rgt6
             max_size: 524288
             usb-cdc: "OFF"
-          - device: stm32h562rgt6
+          - config: stm32h562rgt6-usb-cdc
+            device: stm32h562rgt6
             max_size: 524288
             usb-cdc: "ON"
-          - device: stm32f746zgt6
+          - config: stm32f746zgt6
+            device: stm32f746zgt6
             max_size: 524288
             renode_platform: stm32f746.repl
             avm_address: "0x08080000"
             tests: "boot gpio i2c spi crypto uart"
-          - device: stm32g474ret6
+          - config: stm32g474ret6
+            device: stm32g474ret6
             max_size: 393216
             # 384 KB flash: exclude mbedTLS/crypto (~38 KB) to fit the whole
             # firmware. G474 has an RNG, so crypto is opt-out via the flag.
             disable-crypto: "ON"
-          - device: stm32l476rgt6
+          - config: stm32l476rgt6
+            device: stm32l476rgt6
             max_size: 524288
-          - device: stm32l562qei6
+          - config: stm32l562qei6
+            device: stm32l562qei6
             max_size: 393216
             renode_platform: stm32l562.repl
             avm_address: "0x08060000"
@@ -113,11 +132,14 @@ jobs:
             # 512 KB flash with avm_address=0x08060000 leaves only 128 KB,
             # but the crypto AVM is 207 KB and gets truncated.
             tests: "boot gpio spi uart"
-          - device: stm32f207zgt6
+          - config: stm32f207zgt6
+            device: stm32f207zgt6
             max_size: 524288
-          - device: stm32u375rgt6
+          - config: stm32u375rgt6
+            device: stm32u375rgt6
             max_size: 524288
-          - device: stm32g0b1ret6
+          - config: stm32g0b1ret6
+            device: stm32g0b1ret6
             max_size: 393216
             renode_platform: stm32g0b1.repl
             avm_address: "0x08060000"
@@ -162,7 +184,7 @@ jobs:
         build-mode: manual
         queries: +./code-queries/term-to-non-term-func.ql,./code-queries/non-term-to-term-func.ql,./code-queries/mismatched-atom-string-length.ql,./code-queries/mismatched-free-type.ql,./code-queries/term-use-after-gc.ql,./code-queries/allocations-exceeding-ensure-free.ql,./code-queries/allocations-without-ensure-free.ql
 
-    - name: "Build for ${{ matrix.device }}"
+    - name: "Build for ${{ matrix.config }}"
       shell: bash
       working-directory: ./src/platforms/stm32/
       run: |
@@ -176,7 +198,7 @@ jobs:
       if: matrix.device == 'stm32f407vgt6'
       uses: github/codeql-action/analyze@v4
 
-    - name: "Check firmware size for ${{ matrix.device }}"
+    - name: "Check firmware size for ${{ matrix.config }}"
       shell: bash
       working-directory: ./src/platforms/stm32/build
       run: |
@@ -224,7 +246,10 @@ jobs:
           PLATFORM="@platforms/cpus/${{ matrix.renode_platform }}"
         fi
         for TEST in ${{ matrix.tests }}; do
-          renode-test "src/platforms/stm32/tests/renode/stm32_${TEST}_test.robot" \
+          # Renode emulation is non-deterministic and its UART terminal tester
+          # occasionally stalls (a known flake, present on release-0.7).
+          "${GITHUB_WORKSPACE}/.github/scripts/retry-flaky.sh" 3 5 "renode $TEST" -- \
+            renode-test "src/platforms/stm32/tests/renode/stm32_${TEST}_test.robot" \
             --variable ELF:@$PWD/src/platforms/stm32/build/AtomVM-${{ matrix.device }}.elf \
             --variable AVM:@$PWD/build-host/src/platforms/stm32/tests/test_erl_sources/stm32_${TEST}_test.avm \
             --variable AVM_ADDRESS:${{ matrix.avm_address }} \
