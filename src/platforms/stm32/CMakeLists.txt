@@ -156,6 +156,18 @@ if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
     include(cmake/stm32_tinyusb.cmake)
 endif()
 
+# Minimal opcodes reduce VM size by excluding the legacy binary-construction
+# opcodes (bs_add, bs_init_bits, bs_append, bs_put_*) and the bs_match/
+# bs_ensure fallbacks. OTP 25 and later emit bs_create_bin instead, so this
+# only excludes modules compiled by OTP 24 or earlier, or with +no_bs_match /
+# +no_ssa_opt_bs_ensure / +no_bs_create_bin. The bare-metal STM32 firmware
+# shares a fixed flash budget on every device, so it is enabled for all STM32
+# targets; pass -DAVM_MINIMAL_OPCODES=OFF to keep the full opcode set.
+if (NOT DEFINED AVM_MINIMAL_OPCODES)
+    message(STATUS "Enabling minimal opcodes for ${DEVICE} to reduce binary size")
+    set(AVM_MINIMAL_OPCODES ON)
+endif()
+
 # Include additional compilation flags (must come after dev_config sets CMAKE_FLASH_SIZE)
 include(cmake/compile-flags.cmake)
 

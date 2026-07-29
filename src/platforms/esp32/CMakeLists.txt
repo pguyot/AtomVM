@@ -50,8 +50,10 @@ if (${IDF_TARGET} MATCHES "esp32s2|esp32c2|esp32c3|esp32c5|esp32c6|esp32c61|esp3
     set(HAVE_PLATFORM_ATOMIC_H ON)
 endif()
 
-# ESP32-C5 has limited flash space, use minimal opcodes to reduce VM size
-if (${IDF_TARGET} STREQUAL "esp32c5" AND NOT DEFINED AVM_MINIMAL_OPCODES)
+# ESP32-C5 and -C6 have limited flash space, use minimal opcodes to reduce VM
+# size (the -C6 release image otherwise overflows the factory partition).
+# Anchored: an unanchored "esp32c6" would also match the distinct esp32c61.
+if (${IDF_TARGET} MATCHES "^esp32(c5|c6)$" AND NOT DEFINED AVM_MINIMAL_OPCODES)
     message(STATUS "Enabling minimal opcodes for ${IDF_TARGET} to reduce binary size")
     set(AVM_MINIMAL_OPCODES ON)
 endif()
@@ -96,6 +98,16 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig")
         file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig" "${_sdkconfig_content}")
         message(STATUS "Updated sdkconfig partition table to ${AVM_PARTITION_TABLE_FILENAME}")
     endif()
+endif()
+
+# A libsodium build no longer fits the factory partition at IDF's default -Og.
+# Scope -Os to that configuration: with -Os the xtensa backend lays out the
+# opcode switch in context.c so that a `j` lands outside its +/-128 KiB range,
+# which the assembler rejects on esp32s3.
+if (AVM_USE_LIBSODIUM)
+    set(AVM_ESP32_OPTIMIZATION "CONFIG_COMPILER_OPTIMIZATION_SIZE=y")
+else()
+    set(AVM_ESP32_OPTIMIZATION "")
 endif()
 
 if (ATOMVM_RELEASE)

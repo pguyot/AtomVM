@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TERM_BOXED_REFERENCE_MAX_SIZE` to fit any reference. `REF_SIZE` still expands to the short
   reference size, but now emits a compiler warning
 - On ESP32 platform, when starting wifi as a station (client), disable wifi power save so TCP servers are reachable
+- ESP32 builds with `-DAVM_USE_LIBSODIUM=ON` are now compiled with `-Os` instead of IDF's default
+  `-Og`, so the image still fits the factory partition
+- STM32 and ESP32-C6 firmware are now built with `AVM_MINIMAL_OPCODES` to fit their flash budget.
+  These images no longer run modules compiled by OTP 24 or earlier, or with `+no_bs_create_bin`,
+  `+no_bs_match` or `+no_ssa_opt_bs_ensure`; rebuild with `-DAVM_MINIMAL_OPCODES=OFF` if needed
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and

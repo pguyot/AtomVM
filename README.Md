@@ -87,6 +87,11 @@ are already supported.
 
 AtomVM is tested with code compiled with any version from OTP 21 to 27 (29 is supported only in `main` branch).
 
+The STM32 and ESP32-C5/C6 firmware images are built with `AVM_MINIMAL_OPCODES` to fit their
+flash budget, which drops the legacy binary-construction opcodes. On those targets, modules
+must be compiled with OTP 25 or later (or without `+no_bs_create_bin`); rebuild with
+`-DAVM_MINIMAL_OPCODES=OFF` if you need the full opcode set.
+
 Crashes may still occur in edge cases, so we recommend using either the
 [latest stable release](https://github.com/atomvm/AtomVM/releases)
 [(v0.6.x)](https://github.com/atomvm/AtomVM/tree/release-0.6) or the

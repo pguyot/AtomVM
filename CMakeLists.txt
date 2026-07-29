@@ -42,7 +42,7 @@ option(AVM_BUILD_RUNTIME_ONLY "Only build the AtomVM runtime" OFF)
 option(COVERAGE "Build for code coverage" OFF)
 option(AVM_PRINT_PROCESS_CRASH_DUMPS "Print crash reports when processes die with non-standard reasons" ON)
 option(AVM_USE_LIBSODIUM "Enable optional libsodium backend for Ed25519 curve" OFF)
-option(AVM_MINIMAL_OPCODES "Reduce VM size by excluding opcodes for optional compiler flags (no_bs_match, no_ssa_opt_bs_ensure)" OFF)
+option(AVM_MINIMAL_OPCODES "Reduce VM size by excluding opcodes for optional compiler flags (no_bs_match, no_ssa_opt_bs_ensure, no_bs_create_bin); also excludes the legacy binary construction opcodes emitted by OTP 24 and earlier" OFF)
 
 # JIT & execution of precompiled code
 if(NOT Erlang_VERSION VERSION_GREATER_EQUAL "28")
