@@ -104,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `term_is_uint32` accepting big integers whose low 64 bits are within range on 32-bit
   builds, which made `erlang:crc32/2`, `erlang:crc32_combine/3` and `crypto:pbkdf2_hmac/5`
   silently truncate huge integer arguments instead of raising `badarg`
+- Fixed the `network` mdns configuration to read the documented `host` key; the previously
+  required, undocumented `hostname` key is still accepted
 
 ## [0.7.0-alpha.1] - 2026-04-06
 
