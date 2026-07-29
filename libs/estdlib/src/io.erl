@@ -252,12 +252,25 @@ put_chars(standard_io, Chars) ->
     Self = self(),
     case erlang:group_leader() of
         Self ->
-            console:print(Chars);
+            console:print(encode_unicode(Chars));
         Leader ->
             execute_request(Leader, {put_chars, unicode, Chars})
     end;
 put_chars(standard_error, Chars) ->
-    console:print_err(Chars).
+    console:print_err(encode_unicode(Chars)).
+
+%% @private
+%% console:print/1 and print_err/1 take iodata, so codepoints above 255 raise
+%% badarg. Encode to UTF-8 first, matching the group-leader path and BEAM's
+%% default unicode output. A binary is already UTF-8 bytes, and invalid
+%% chardata falls back to the original term (which raises as before).
+encode_unicode(Chars) when is_binary(Chars) ->
+    Chars;
+encode_unicode(Chars) ->
+    case unicode:characters_to_binary(Chars, unicode, utf8) of
+        Bin when is_binary(Bin) -> Bin;
+        _Error -> Chars
+    end.
 
 %% @private
 convert_request({requests, Requests}) ->

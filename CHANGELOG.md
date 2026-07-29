@@ -104,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `term_is_uint32` accepting big integers whose low 64 bits are within range on 32-bit
   builds, which made `erlang:crc32/2`, `erlang:crc32_combine/3` and `crypto:pbkdf2_hmac/5`
   silently truncate huge integer arguments instead of raising `badarg`
+- Fixed `io_lib:write_atom/1` (and therefore `~p`/`~w`) rendering the empty atom `''` as nothing,
+  making it indistinguishable from the empty list
+- Fixed `io:put_chars/1,2` and `io:format/2,3` raising `badarg` on codepoints above 255 when
+  writing to `standard_io`/`standard_error` from the group leader itself; such chardata is now
+  UTF-8 encoded as BEAM does. Code that already passed pre-encoded UTF-8 as a list of bytes
+  (rather than as a binary or as codepoints) will now see that list encoded a second time
 
 ## [0.7.0-alpha.1] - 2026-04-06
 

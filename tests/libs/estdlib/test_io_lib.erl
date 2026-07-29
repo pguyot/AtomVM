@@ -34,6 +34,7 @@ test() ->
     ok = test_write_string(),
     ok = test_chars_length(),
     ok = test_printable_list(),
+    ok = test_io_format_unicode(),
     ok.
 
 test_format() ->
@@ -289,6 +290,13 @@ test_write_atom() ->
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(helloWorld)), "helloWorld"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(hello_world)), "hello_world"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom('hello\'world')), "'hello\\'world'"),
+    % The empty atom must render as '', not as nothing (which would be
+    % indistinguishable from the empty list).
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom('')), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [''])), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~w", [''])), "''"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [['']])), "['']"),
+    ?ASSERT_MATCH(?FLT(io_lib:format("~p", [[a, '']])), "[a,'']"),
     ok.
 
 test_write_string() ->
@@ -312,6 +320,18 @@ test_printable_list() ->
     ?ASSERT_MATCH(io_lib:printable_list([1, 2, 3]), false),
     ?ASSERT_MATCH(io_lib:printable_list([1, 2, -3]), false),
     ?ASSERT_MATCH(io_lib:printable_list(foo), false),
+    ok.
+
+%% Codepoints above 255 used to raise badarg in console:print. id/1 keeps the
+%% atom out of the literal pool.
+test_io_format_unicode() ->
+    ?ASSERT_MATCH(io:format("~p~n", [id('原子')]), ok),
+    ?ASSERT_MATCH(io:format("~w~n", [id('原子')]), ok),
+    ?ASSERT_MATCH(io:format("~p~n", [id(['原子', "café"])]), ok),
+    ?ASSERT_MATCH(io:put_chars(unicode:characters_to_binary("原子", utf8)), ok),
+    % standard_error goes through console:print_err/1 and needs the same encoding
+    ?ASSERT_MATCH(io:format(standard_error, "~p~n", [id('原子')]), ok),
+    ?ASSERT_MATCH(io:put_chars(standard_error, [16#539F, 16#5B50, $\n]), ok),
     ok.
 
 id(X) ->
