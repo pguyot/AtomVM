@@ -33,6 +33,7 @@
     fwrite/2,
     latin1_char_list/1,
     write_atom/1,
+    write_atom_as_latin1/1,
     write_binary/3,
     printable_list/1,
     write_string/1,
@@ -384,6 +385,26 @@ write_atom(Atom) ->
         true -> [$', AtomStr, $'];
         false -> write_atom_maybe_quote_escape(AtomStr)
     end.
+
+%%-----------------------------------------------------------------------------
+%% @param   Atom atom to write
+%% @returns the atom as a quoted-if-needed latin1 string
+%% @doc     Same as `write_atom/1', but codepoints above 255 are escaped as
+%%          `\x{H...}'. Such a codepoint always forces `write_atom/1' to quote,
+%%          so escaping its output cannot produce an unquoted escape sequence.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec write_atom_as_latin1(Atom :: atom()) -> chars().
+write_atom_as_latin1(Atom) ->
+    escape_non_latin1(lists:flatten(write_atom(Atom))).
+
+%% @private
+escape_non_latin1([]) ->
+    [];
+escape_non_latin1([C | T]) when C > 255 ->
+    [$\\, $x, ${, integer_to_list(C, 16), $} | escape_non_latin1(T)];
+escape_non_latin1([C | T]) ->
+    [C | escape_non_latin1(T)].
 
 %% @private
 write_atom_maybe_quote_escape([C | _T] = AtomStr) when C < $a orelse C > $z ->

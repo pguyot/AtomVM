@@ -46,6 +46,7 @@ test() ->
     ok = test_start_link(),
     ok = test_start_monitor(),
     ok = test_start_name(),
+    ok = test_gen_start(),
     ok = test_continue(),
     ok = test_init_exception(),
     ok = test_late_reply(),
@@ -130,6 +131,43 @@ test_start_name() ->
     % Demonitor to avoid any DOWN message
     true = demonitor(MonitorRef),
     ok = gen_server:stop(Pid3),
+    undefined = whereis(?MODULE),
+    ok.
+
+%% gen:start/5,6 is the OTP-private entry point Elixir's GenServer.start*
+%% functions call. It exists on BEAM too, so this runs on both.
+test_gen_start() ->
+    {ok, Pid1} = gen:start(gen_server, nolink, ?MODULE, [], []),
+    pong = gen_server:call(Pid1, ping),
+    ok = gen_server:stop(Pid1),
+
+    PreviousTrapExit = erlang:process_flag(trap_exit, true),
+    {ok, Pid2} = gen:start(gen_server, link, ?MODULE, [], []),
+    pong = gen_server:call(Pid2, ping),
+    ok = gen_server:stop(Pid2),
+    normal =
+        receive
+            {'EXIT', Pid2, Reason} -> Reason
+        after 5000 -> timeout
+        end,
+    true = erlang:process_flag(trap_exit, PreviousTrapExit),
+
+    % monitor must yield {ok, {Pid, Ref}}, not proc_lib's raw {Result, Ref}
+    {ok, {Pid3, Ref3}} = gen:start(gen_server, monitor, ?MODULE, [], []),
+    true = is_pid(Pid3),
+    true = is_reference(Ref3),
+    pong = gen_server:call(Pid3, ping),
+    ok = gen_server:cast(Pid3, crash),
+    ok =
+        receive
+            {'DOWN', Ref3, process, Pid3, _Reason} -> ok
+        after 30000 -> timeout
+        end,
+
+    undefined = whereis(?MODULE),
+    {ok, Pid4} = gen:start(gen_server, nolink, {local, ?MODULE}, ?MODULE, [], []),
+    Pid4 = whereis(?MODULE),
+    ok = gen_server:stop(Pid4),
     undefined = whereis(?MODULE),
     ok.
 

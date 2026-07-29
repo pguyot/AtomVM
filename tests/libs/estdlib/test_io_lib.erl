@@ -31,6 +31,7 @@ test() ->
     ok = test_latin1_char_list(),
     ok = test_write(),
     ok = test_write_atom(),
+    ok = test_write_atom_as_latin1(),
     ok = test_write_string(),
     ok = test_chars_length(),
     ok = test_printable_list(),
@@ -289,6 +290,18 @@ test_write_atom() ->
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(helloWorld)), "helloWorld"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom(hello_world)), "hello_world"),
     ?ASSERT_MATCH(?FLT(io_lib:write_atom('hello\'world')), "'hello\\'world'"),
+    ok.
+
+test_write_atom_as_latin1() ->
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(foo)), "foo"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1('Has Space')), "'Has Space'"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1('if')), "'if'"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(undefined)), "undefined"),
+    % Codepoints above 255 are escaped -- this is the only thing that
+    % distinguishes this function from write_atom/1. list_to_atom/1 keeps the
+    % atom out of the literal pool.
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(list_to_atom([16#65E5]))), "'\\x{65E5}'"),
+    ?ASSERT_MATCH(?FLT(io_lib:write_atom_as_latin1(list_to_atom([16#65E5, $b]))), "'\\x{65E5}b'"),
     ok.
 
 test_write_string() ->
