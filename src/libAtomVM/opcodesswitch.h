@@ -1659,7 +1659,13 @@ int context_execute_loop(Context *ctx, Module *mod, const char *function_name, i
 #if AVM_NO_JIT
     ctx->saved_ip = mod->labels[label];
 #elif AVM_NO_EMU
-    assert(mod->native_code);
+    if (UNLIKELY(mod->native_code == NULL)) {
+        fprintf(stderr,
+            "No native code for %s/%i in this JIT-only build. "
+            "Precompile the AVM (including atomvmlib) with jit_precompile.\n",
+            function_name, arity);
+        return 0;
+    }
 #ifdef JIT_JUMPTABLE_IS_DATA
     ctx->saved_function_ptr = (NativeContinuation) (label + 1);
 #else
