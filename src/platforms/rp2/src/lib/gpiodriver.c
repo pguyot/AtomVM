@@ -190,6 +190,9 @@ static term nif_gpio_digital_write(Context *ctx, int argc, term argv[])
         gpio_put(gpio_num, level);
 #ifdef LIB_PICO_CYW43_ARCH
     } else if (term_is_tuple(gpio_pin)) {
+        if (UNLIKELY(term_get_tuple_arity(gpio_pin) != 2)) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
         term gpio_bank_atom = term_get_tuple_element(gpio_pin, 0);
         VALIDATE_VALUE(gpio_bank_atom, term_is_atom);
         if (UNLIKELY(gpio_bank_atom != WL_ATOM)) {
@@ -197,10 +200,12 @@ static term nif_gpio_digital_write(Context *ctx, int argc, term argv[])
         }
         term pin_term = term_get_tuple_element(gpio_pin, 1);
         VALIDATE_VALUE(pin_term, term_is_integer);
-        gpio_num = (uint) term_to_int32(pin_term);
-        if (UNLIKELY((gpio_num == -1) || (gpio_num > 1))) {
+        // Only WL_GPIO0 and WL_GPIO1 are writable.
+        int32_t pin_num = term_to_int32(pin_term);
+        if (UNLIKELY(pin_num < 0 || pin_num > 1)) {
             RAISE_ERROR(BADARG_ATOM);
         }
+        gpio_num = (uint) pin_num;
         cyw43_arch_gpio_put(gpio_num, level);
 #endif
     } else {
@@ -226,6 +231,9 @@ static term nif_gpio_digital_read(Context *ctx, int argc, term argv[])
         level = gpio_get(gpio_num);
 #ifdef LIB_PICO_CYW43_ARCH
     } else if (term_is_tuple(gpio_pin)) {
+        if (UNLIKELY(term_get_tuple_arity(gpio_pin) != 2)) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
         term gpio_bank_atom = term_get_tuple_element(gpio_pin, 0);
         VALIDATE_VALUE(gpio_bank_atom, term_is_atom);
         if (UNLIKELY(gpio_bank_atom != WL_ATOM)) {
