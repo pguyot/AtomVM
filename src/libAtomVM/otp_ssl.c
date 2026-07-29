@@ -52,8 +52,10 @@
 #define MBEDTLS_PRIVATE(member) member
 #endif
 
-// Default read buffer if mbedtls_ssl_get_max_in_record_payload fails
-#define DEFAULT_READ_BUFFER_FALLBACK 512
+// Read size used to pump the TLS state machine when no decoded application
+// data is pending yet (see nif_ssl_read). This is what mbedTLS 2.x builds
+// have always used, as mbedtls_ssl_get_max_in_record_payload is 3.x-only.
+#define SSL_READ_PUMP_SIZE 512
 
 #if defined(MBEDTLS_DEBUG_C) && defined(ENABLE_TRACE)
 
@@ -645,13 +647,14 @@ static term nif_ssl_read(Context *ctx, int argc, term argv[])
     if (len < 0) {
         RAISE_ERROR(BADARG_ATOM);
     }
-#if MBEDTLS_VERSION_NUMBER >= 0x03000000
     if (len == 0) {
-        len = mbedtls_ssl_get_max_in_record_payload(&context_rsrc->context);
-    }
-#endif
-    if (len <= 0) {
-        len = DEFAULT_READ_BUFFER_FALLBACK;
+        // Size to the decoded bytes actually pending rather than the maximum
+        // record payload: a 16 KB contiguous allocation per read fragments and
+        // OOMs small MCU heaps. With nothing pending, pump the state machine
+        // with a small buffer; the rest of the record stays inside mbedTLS and
+        // the next read sizes itself exactly.
+        size_t avail = mbedtls_ssl_get_bytes_avail(&context_rsrc->context);
+        len = (avail > 0) ? (avm_int_t) avail : SSL_READ_PUMP_SIZE;
     }
     size_t ensure_packet_avail = term_binary_data_size_in_terms(len) + BINARY_HEADER_SIZE;
     size_t requested_size = TUPLE_SIZE(2) + ensure_packet_avail;

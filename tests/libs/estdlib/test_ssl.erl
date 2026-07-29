@@ -54,6 +54,7 @@ test_ssl() ->
     ok = test_connect_error(),
     ok = test_send_recv(),
     ok = test_send_recv_zero(),
+    ok = test_send_recv_across_pump_boundary(),
     ok = ssl:stop(),
     ok.
 
@@ -89,5 +90,22 @@ test_send_recv_zero() ->
         <<"GET / HTTP/1.1\r\nHost: test.atomvm.org\r\nUser-Agent: ">>, UserAgent, <<"\r\n\r\n">>
     ]),
     {ok, <<"HTTP/1.1 200 OK", _/binary>>} = ssl:recv(SSLSocket, 0),
+    ok = ssl:close(SSLSocket),
+    ok.
+
+%% The first read of a record is bounded by the pump buffer, so recv/2 with a
+%% Length larger than that has to reassemble across several nif_read calls.
+%% Length is bounded (not 0) so this cannot block on a keep-alive connection.
+test_send_recv_across_pump_boundary() ->
+    {ok, SSLSocket} = ssl:connect("test.atomvm.org", 443, [
+        {verify, verify_none}, {active, false}, {binary, true}
+    ]),
+    UserAgent = erlang:system_info(machine),
+    ok = ssl:send(SSLSocket, [
+        <<"GET / HTTP/1.1\r\nHost: test.atomvm.org\r\nUser-Agent: ">>, UserAgent, <<"\r\n\r\n">>
+    ]),
+    {ok, Data} = ssl:recv(SSLSocket, 2048),
+    2048 = byte_size(Data),
+    <<"HTTP/1.1 200 OK\r\n", _/binary>> = Data,
     ok = ssl:close(SSLSocket),
     ok.

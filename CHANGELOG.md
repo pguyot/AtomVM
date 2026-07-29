@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TERM_BOXED_REFERENCE_MAX_SIZE` to fit any reference. `REF_SIZE` still expands to the short
   reference size, but now emits a compiler warning
 - On ESP32 platform, when starting wifi as a station (client), disable wifi power save so TCP servers are reachable
+- `ssl:recv/2` with `Length = 0` now returns the bytes the TLS state machine has already decoded
+  instead of allocating a maximum-sized (16 KB) record buffer per call. The first read of a
+  record returns at most 512 bytes and the remainder is returned by the next call, so callers
+  that assumed a single `recv(Socket, 0)` yielded a whole record must loop
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
