@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `onRunTrackedJs`, `onGetTrackedObjects` and `onTrackedObjectDelete` hooks, which embedders may
   override to customize what tracking means
 - Added `string:to_integer/1`
+- Added `io_lib:write_atom_as_latin1/1`
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
