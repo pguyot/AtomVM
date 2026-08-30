@@ -51,6 +51,7 @@ extern "C" {
 #endif
 
 struct Context;
+struct Monitor;
 
 #ifndef TYPEDEF_CONTEXT
 #define TYPEDEF_CONTEXT
@@ -167,13 +168,6 @@ struct ImmediateRefSignal
 
     term immediate;
     uint64_t ref_ticks;
-};
-
-struct MonitorPointerSignal
-{
-    MailboxMessage base;
-
-    struct Monitor *monitor;
 };
 
 typedef struct
@@ -328,11 +322,11 @@ void mailbox_send_ref_signal(Context *c, enum MessageType type, uint64_t ref_tic
 void mailbox_send_immediate_ref_signal(Context *c, enum MessageType type, term immediate, uint64_t ref_ticks);
 
 /**
- * @brief Sends a ref immediate signal to a certain mailbox.
+ * @brief Sends a monitor as an intrusive signal to a certain mailbox.
  *
  * @param c the process context.
  * @param type the type of the signal
- * @param monitor the monitor
+ * @param monitor ownership transferred to the receiving context
  */
 void mailbox_send_monitor_signal(Context *c, enum MessageType type, struct Monitor *monitor);
 

@@ -1326,6 +1326,8 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
     bool handle_error = false;
     bool reprocess_outer = false;
     while (signal_message) {
+        MailboxMessage *next = signal_message->next;
+        bool dispose_signal = true;
         switch (signal_message->type) {
             case KillSignal: {
                 struct TermSignal *kill_signal
@@ -1414,9 +1416,10 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
                 break;
             }
             case MonitorSignal: {
-                struct MonitorPointerSignal *monitor_signal
-                    = CONTAINER_OF(signal_message, struct MonitorPointerSignal, base);
-                context_add_monitor(ctx, monitor_signal->monitor);
+                struct Monitor *monitor
+                    = CONTAINER_OF(signal_message, struct Monitor, monitor_signal);
+                context_add_monitor(ctx, monitor);
+                dispose_signal = false;
                 break;
             }
             case DemonitorSignal: {
@@ -1470,8 +1473,9 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
                 UNREACHABLE();
             }
         }
-        MailboxMessage *next = signal_message->next;
-        mailbox_message_dispose(signal_message, &ctx->heap);
+        if (dispose_signal) {
+            mailbox_message_dispose(signal_message, &ctx->heap);
+        }
         signal_message = next;
         if (UNLIKELY(reprocess_outer && signal_message == NULL)) {
             reprocess_outer = false;
