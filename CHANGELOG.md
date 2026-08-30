@@ -108,6 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reduced the number of instructions and branches the JIT emits for `+` and `-` on small
   integers: both operand tag tests fold into one, and on aarch64 and arm32 the overflow test
   folds into that same branch
+- Fixed `div` and `rem` by a literal calling the BIF instead of dividing inline when the
+  compiler typed the dividend as an integer without bounding its range, which made knowing the
+  operand's type slower than not knowing it
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
