@@ -85,7 +85,7 @@ fi
 # --- 2. Precompile each .beam for the target --------------------------------
 OUT_DIR="${BUILD_DIR}/benchmark-aot-${TARGET}"
 AOT_DIR="${OUT_DIR}/${TARGET}"
-rm -rf "${OUT_DIR}"
+rm -rf "${AOT_DIR}"
 mkdir -p "${AOT_DIR}"
 
 BEAMS=$(ls "${EBIN}"/*.beam)
@@ -97,7 +97,7 @@ erl -pa "${JIT_BEAMS}" -noshell -s jit_precompile -s init stop -- \
     "${TARGET}" "${AOT_DIR}/" ${BEAMS}
 
 # --- 3. Pack the precompiled beams into an avm ------------------------------
-AVM="${OUT_DIR}/benchmark-${TARGET}.avm"
+AVM="${OUT_DIR}/${START_MODULE}-${TARGET}.avm"
 echo "==> packbeam create ${AVM} (start module: ${START_MODULE})"
 # shellcheck disable=SC2086
 "${PACKBEAM}" create --prune --start "${START_MODULE}" "${AVM}" "${AOT_DIR}"/*.beam
