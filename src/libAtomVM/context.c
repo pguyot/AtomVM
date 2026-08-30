@@ -59,6 +59,17 @@
 #endif
 #define BYTES_PER_TERM (TERM_BITS / 8)
 
+#define LINK_INDEX_MIN_LINKS 8
+#define LINK_INDEX_MIN_CAPACITY 16
+#define LINK_FILTER_TAG ((uintptr_t) 1)
+
+struct LinkIndex
+{
+    size_t count;
+    size_t capacity;
+    struct Monitor *entries[];
+};
+
 // active_alias_count saturates at this value instead of wrapping to 0. A wrap would make
 // context_find_alias skip the list walk and silently drop every alias of the process. A
 // saturated count is only reset to 0 when the last monitor of the process goes away.
@@ -67,6 +78,9 @@
 static struct Monitor *context_monitors_handle_terminate(Context *ctx);
 static void context_distribution_handle_terminate(Context *ctx);
 static void destroy_extended_registers(Context *ctx, unsigned int live);
+static void context_link_index_destroy(Context *ctx);
+static void context_link_index_insert(Context *ctx, struct Monitor *monitor);
+static void context_remove_link(Context *ctx, struct Monitor *monitor);
 
 Context *context_new(GlobalContext *glb)
 {
@@ -135,6 +149,7 @@ Context *context_new(GlobalContext *glb)
     timer_list_item_init(&ctx->timer_list_head, 0);
 
     list_init(&ctx->monitors_head);
+    ctx->link_state = LINK_FILTER_TAG;
 
     ctx->trap_exit = false;
 #ifdef ENABLE_ADVANCED_TRACE
@@ -282,6 +297,7 @@ void context_destroy(Context *ctx)
     // When monitor message is sent, process is no longer in the table
     // and is no longer registered either.
     struct Monitor *remaining_monitors = context_monitors_handle_terminate(ctx);
+    context_link_index_destroy(ctx);
 
     globalcontext_processes_index_unlock(ctx->global, ctx->process_id);
     synclist_unlock(&ctx->global->processes_table);
@@ -507,18 +523,9 @@ bool context_process_link_exit_signal(Context *ctx, struct TermSignal *signal)
 {
     term link_pid = term_get_tuple_element(signal->signal_term, 1);
     // Always remove link.
-    struct ListHead *item;
-    LIST_FOR_EACH (item, &ctx->monitors_head) {
-        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
-        if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
-            struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
-            if (link->link_local_process_id == link_pid) {
-                // Remove link
-                list_remove(&monitor->monitor_list_head);
-                free(link);
-                break;
-            }
-        }
+    struct Monitor *monitor = context_find_link(ctx, link_pid);
+    if (monitor != NULL) {
+        context_remove_link(ctx, monitor);
     }
     // Determine if we are trapping exits
     if (ctx->trap_exit) {
@@ -700,10 +707,17 @@ size_t context_message_queue_len(Context *ctx)
 size_t context_size(Context *ctx)
 {
     size_t messages_size = mailbox_size(&ctx->mailbox);
+    struct LinkIndex *link_index = (ctx->link_state & LINK_FILTER_TAG) == 0
+        ? (struct LinkIndex *) ctx->link_state
+        : NULL;
+    size_t link_index_size = link_index == NULL
+        ? 0
+        : sizeof(struct LinkIndex) + link_index->capacity * sizeof(struct Monitor *);
 
     // TODO include ctx->platform_data
     return sizeof(Context)
         + messages_size
+        + link_index_size
         + memory_heap_memory_size(&ctx->heap) * BYTES_PER_TERM;
 }
 
@@ -1091,6 +1105,255 @@ struct Monitor *monitor_link_new(term link_pid)
     }
 }
 
+static size_t link_index_hash(term pid)
+{
+    uintptr_t value = (uintptr_t) pid;
+#if UINTPTR_MAX > UINT32_MAX
+    value ^= value >> 33;
+    value *= UINT64_C(0xff51afd7ed558ccd);
+    value ^= value >> 33;
+#else
+    value ^= value >> 16;
+    value *= UINT32_C(0x7feb352d);
+    value ^= value >> 15;
+#endif
+    return (size_t) value;
+}
+
+static struct LinkIndex *context_link_index(const Context *ctx)
+{
+    return (ctx->link_state & LINK_FILTER_TAG) == 0
+        ? (struct LinkIndex *) ctx->link_state
+        : NULL;
+}
+
+static void context_link_filter_rebuild(Context *ctx)
+{
+    uintptr_t filter = LINK_FILTER_TAG;
+    struct ListHead *item;
+    LIST_FOR_EACH (item, &ctx->monitors_head) {
+        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+        if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+            struct LinkLocalMonitor *link
+                = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+            filter |= context_link_filter_bit(link->link_local_process_id);
+        }
+    }
+    ctx->link_state = filter;
+}
+
+static struct Monitor *link_index_find(const struct LinkIndex *index, term pid)
+{
+    size_t mask = index->capacity - 1;
+    size_t slot = link_index_hash(pid) & mask;
+    while (index->entries[slot] != NULL) {
+        struct LinkLocalMonitor *link
+            = CONTAINER_OF(index->entries[slot], struct LinkLocalMonitor, monitor);
+        if (link->link_local_process_id == pid) {
+            return index->entries[slot];
+        }
+        slot = (slot + 1) & mask;
+    }
+    return NULL;
+}
+
+static void link_index_insert_raw(struct LinkIndex *index, struct Monitor *monitor)
+{
+    struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+    size_t mask = index->capacity - 1;
+    size_t slot = link_index_hash(link->link_local_process_id) & mask;
+    while (index->entries[slot] != NULL) {
+        slot = (slot + 1) & mask;
+    }
+    index->entries[slot] = monitor;
+    index->count++;
+}
+
+static struct LinkIndex *link_index_new(size_t capacity)
+{
+    struct LinkIndex *index
+        = calloc(1, sizeof(struct LinkIndex) + capacity * sizeof(struct Monitor *));
+    if (index != NULL) {
+        index->capacity = capacity;
+    }
+    return index;
+}
+
+static bool context_link_index_build(Context *ctx, size_t local_links)
+{
+    size_t capacity = LINK_INDEX_MIN_CAPACITY;
+    while (capacity < local_links * 2) {
+        capacity *= 2;
+    }
+    struct LinkIndex *index = link_index_new(capacity);
+    if (index == NULL) {
+        return false;
+    }
+    struct ListHead *item;
+    LIST_FOR_EACH (item, &ctx->monitors_head) {
+        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+        if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+            link_index_insert_raw(index, monitor);
+        }
+    }
+    ctx->link_state = (uintptr_t) index;
+    return true;
+}
+
+static void context_link_index_destroy(Context *ctx)
+{
+    free(context_link_index(ctx));
+    ctx->link_state = LINK_FILTER_TAG;
+}
+
+static void context_link_index_demote(Context *ctx)
+{
+    free(context_link_index(ctx));
+    context_link_filter_rebuild(ctx);
+}
+
+static bool context_link_index_grow(Context *ctx)
+{
+    struct LinkIndex *old_index = context_link_index(ctx);
+    struct LinkIndex *new_index = link_index_new(old_index->capacity * 2);
+    if (new_index == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < old_index->capacity; i++) {
+        if (old_index->entries[i] != NULL) {
+            link_index_insert_raw(new_index, old_index->entries[i]);
+        }
+    }
+    free(old_index);
+    ctx->link_state = (uintptr_t) new_index;
+    return true;
+}
+
+static void context_link_index_insert(Context *ctx, struct Monitor *monitor)
+{
+    if (monitor->monitor_type != CONTEXT_MONITOR_LINK_LOCAL) {
+        return;
+    }
+    struct LinkIndex *link_index = context_link_index(ctx);
+    if (link_index != NULL) {
+        if ((link_index->count + 1) * 2 > link_index->capacity
+            && !context_link_index_grow(ctx)) {
+            // The intrusive list remains authoritative on allocation failure.
+            context_link_index_demote(ctx);
+            return;
+        }
+        link_index_insert_raw(context_link_index(ctx), monitor);
+        return;
+    }
+
+    size_t local_links = 0;
+    struct ListHead *item;
+    LIST_FOR_EACH (item, &ctx->monitors_head) {
+        struct Monitor *entry = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+        if (entry->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+            local_links++;
+        }
+    }
+    if (local_links >= LINK_INDEX_MIN_LINKS && context_link_index_build(ctx, local_links)) {
+        return;
+    }
+    // Either this process is still small or the index could not be allocated:
+    // the filter must describe every local link, including this one.
+    struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+    ctx->link_state |= context_link_filter_bit(link->link_local_process_id);
+}
+
+static void link_index_remove_raw(struct LinkIndex *index, struct Monitor *monitor)
+{
+    struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+    size_t mask = index->capacity - 1;
+    size_t hole = link_index_hash(link->link_local_process_id) & mask;
+    while (index->entries[hole] != monitor) {
+        if (index->entries[hole] == NULL) {
+            return;
+        }
+        hole = (hole + 1) & mask;
+    }
+
+    size_t scan = (hole + 1) & mask;
+    while (index->entries[scan] != NULL) {
+        struct LinkLocalMonitor *candidate
+            = CONTAINER_OF(index->entries[scan], struct LinkLocalMonitor, monitor);
+        size_t home = link_index_hash(candidate->link_local_process_id) & mask;
+        if (((scan - home) & mask) > ((hole - home) & mask)) {
+            index->entries[hole] = index->entries[scan];
+            hole = scan;
+        }
+        scan = (scan + 1) & mask;
+    }
+    index->entries[hole] = NULL;
+    index->count--;
+}
+
+static void context_remove_link(Context *ctx, struct Monitor *monitor)
+{
+    struct LinkIndex *link_index = context_link_index(ctx);
+    bool rebuild_filter = false;
+    if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+        if (link_index != NULL) {
+            link_index_remove_raw(link_index, monitor);
+            if (link_index->count < LINK_INDEX_MIN_LINKS) {
+                // Demote: the filter is rebuilt below, once the monitor is out
+                // of the list it is rebuilt from.
+                ctx->link_state = LINK_FILTER_TAG;
+                free(link_index);
+                rebuild_filter = true;
+            }
+        } else {
+            rebuild_filter = true;
+        }
+    }
+    list_remove(&monitor->monitor_list_head);
+    if (rebuild_filter) {
+        context_link_filter_rebuild(ctx);
+    }
+    monitor_destroy(monitor);
+}
+
+struct Monitor *context_find_link(Context *ctx, term link_pid)
+{
+    struct ListHead *item;
+    if (term_is_local_pid_or_port(link_pid)) {
+        struct LinkIndex *link_index = context_link_index(ctx);
+        if (link_index != NULL) {
+            return link_index_find(link_index, link_pid);
+        }
+        if (!context_maybe_has_local_link(ctx, link_pid)) {
+            return NULL;
+        }
+        LIST_FOR_EACH (item, &ctx->monitors_head) {
+            struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+            if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+                struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+                if (link->link_local_process_id == link_pid) {
+                    return monitor;
+                }
+            }
+        }
+    } else if (term_is_external_pid(link_pid)) {
+        term node = term_get_external_node(link_pid);
+        uint32_t pid_number = term_get_external_pid_process_id(link_pid);
+        uint32_t pid_serial = term_get_external_pid_serial(link_pid);
+        uint32_t creation = term_get_external_node_creation(link_pid);
+        LIST_FOR_EACH (item, &ctx->monitors_head) {
+            struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+            if (monitor->monitor_type == CONTEXT_MONITOR_LINK_REMOTE) {
+                struct LinkRemoteMonitor *link = CONTAINER_OF(monitor, struct LinkRemoteMonitor, monitor);
+                if (link->node == node && link->pid_number == pid_number
+                    && link->pid_serial == pid_serial && link->creation == creation) {
+                    return monitor;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 struct Monitor *monitor_new(term monitor_pid, uint64_t ref_ticks, enum ContextMonitorType monitor_type)
 {
     assert(monitor_type == CONTEXT_MONITOR_MONITORING_LOCAL
@@ -1180,6 +1443,18 @@ void monitor_destroy(struct Monitor *monitor)
 
 bool context_add_monitor(Context *ctx, struct Monitor *new_monitor)
 {
+    if (new_monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+        struct LinkLocalMonitor *new_link
+            = CONTAINER_OF(new_monitor, struct LinkLocalMonitor, monitor);
+        if (context_find_link(ctx, new_link->link_local_process_id) != NULL) {
+            free(new_link);
+            return false;
+        }
+        list_append(&ctx->monitors_head, &new_monitor->monitor_list_head);
+        context_link_index_insert(ctx, new_monitor);
+        return true;
+    }
+
     struct ListHead *item;
     LIST_FOR_EACH (item, &ctx->monitors_head) {
         struct Monitor *existing = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
@@ -1261,103 +1536,70 @@ bool context_add_monitor(Context *ctx, struct Monitor *new_monitor)
 
 bool context_set_unlink_id(Context *ctx, term link_pid, uint64_t *unlink_id)
 {
-    struct ListHead *item;
-    LIST_FOR_EACH (item, &ctx->monitors_head) {
-        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
-        if (term_is_local_pid_or_port(link_pid) && monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
-            struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
-            if (link->link_local_process_id == link_pid) {
-                if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
-                    uint64_t new_id = globalcontext_get_ref_ticks(ctx->global);
-                    link->unlink_id = new_id;
-                    *unlink_id = new_id;
-                    return true;
-                } else {
-                    return false;
-                }
-            }
-        } else if (term_is_external_pid(link_pid) && monitor->monitor_type == CONTEXT_MONITOR_LINK_REMOTE) {
-            struct LinkRemoteMonitor *link = CONTAINER_OF(monitor, struct LinkRemoteMonitor, monitor);
-            if (link->node == term_get_external_node(link_pid)
-                && link->pid_number == term_get_external_pid_process_id(link_pid)
-                && link->pid_serial == term_get_external_pid_serial(link_pid)
-                && link->creation == term_get_external_node_creation(link_pid)) {
-                if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
-                    uint64_t new_id = globalcontext_get_ref_ticks(ctx->global);
-                    link->unlink_id = new_id;
-                    *unlink_id = new_id;
-                    return true;
-                } else {
-                    return false;
-                }
-            }
-        }
+    struct Monitor *monitor = context_find_link(ctx, link_pid);
+    if (monitor == NULL) {
+        return false;
     }
-    return false;
+    uint64_t *link_unlink_id;
+    if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+        struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+        link_unlink_id = &link->unlink_id;
+    } else {
+        struct LinkRemoteMonitor *link = CONTAINER_OF(monitor, struct LinkRemoteMonitor, monitor);
+        link_unlink_id = &link->unlink_id;
+    }
+    if (*link_unlink_id == UNLINK_ID_LINK_ACTIVE) {
+        uint64_t new_id = globalcontext_get_ref_ticks(ctx->global);
+        *link_unlink_id = new_id;
+        *unlink_id = new_id;
+        return true;
+    } else {
+        return false;
+    }
 }
 
 void context_ack_unlink(Context *ctx, term link_pid, uint64_t unlink_id, bool process_table_locked)
 {
-    struct ListHead *item;
-    LIST_FOR_EACH (item, &ctx->monitors_head) {
-        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
-        if (term_is_local_pid_or_port(link_pid) && monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
-            struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
-            if (link->link_local_process_id == link_pid) {
-                if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
-                    // Send ack and remove link
-                    int local_process_id = term_to_local_process_id(link_pid);
-                    Context *target;
-                    if (process_table_locked) {
-                        target = globalcontext_get_process_nolock(ctx->global, local_process_id);
-                    } else {
-                        target = globalcontext_get_process_lock(ctx->global, local_process_id);
-                    }
-                    if (LIKELY(target)) {
-                        term self_pid = term_pid_or_port_from_context(ctx);
-                        mailbox_send_immediate_ref_signal(target, UnlinkIDAckSignal, self_pid, unlink_id);
-                        if (!process_table_locked) {
-                            globalcontext_get_process_unlock(ctx->global, target);
-                        }
-                    }
-                    list_remove(&monitor->monitor_list_head);
-                    free(link);
-                }
-                return;
+    struct Monitor *monitor = context_find_link(ctx, link_pid);
+    if (monitor == NULL) {
+        return;
+    }
+    if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+        struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+        if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
+            int local_process_id = term_to_local_process_id(link_pid);
+            Context *target;
+            if (process_table_locked) {
+                target = globalcontext_get_process_nolock(ctx->global, local_process_id);
+            } else {
+                target = globalcontext_get_process_lock(ctx->global, local_process_id);
             }
-        } else if (term_is_external_pid(link_pid) && monitor->monitor_type == CONTEXT_MONITOR_LINK_REMOTE) {
-            struct LinkRemoteMonitor *link = CONTAINER_OF(monitor, struct LinkRemoteMonitor, monitor);
-            if (link->node == term_get_external_node(link_pid)
-                && link->pid_number == term_get_external_pid_process_id(link_pid)
-                && link->pid_serial == term_get_external_pid_serial(link_pid)
-                && link->creation == term_get_external_node_creation(link_pid)) {
-                if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
-                    // Send ack and remove link
-                    dist_send_unlink_id_ack(unlink_id, term_from_local_process_id(ctx->process_id), link_pid, ctx);
-                    list_remove(&monitor->monitor_list_head);
-                    free(link);
+            if (LIKELY(target)) {
+                term self_pid = term_pid_or_port_from_context(ctx);
+                mailbox_send_immediate_ref_signal(target, UnlinkIDAckSignal, self_pid, unlink_id);
+                if (!process_table_locked) {
+                    globalcontext_get_process_unlock(ctx->global, target);
                 }
-                return;
             }
+            context_remove_link(ctx, monitor);
+        }
+    } else {
+        struct LinkRemoteMonitor *link = CONTAINER_OF(monitor, struct LinkRemoteMonitor, monitor);
+        if (link->unlink_id == UNLINK_ID_LINK_ACTIVE) {
+            dist_send_unlink_id_ack(
+                unlink_id, term_from_local_process_id(ctx->process_id), link_pid, ctx);
+            context_remove_link(ctx, monitor);
         }
     }
 }
 
 void context_unlink_ack(Context *ctx, term link_pid, uint64_t unlink_id)
 {
-    struct ListHead *item;
-    LIST_FOR_EACH (item, &ctx->monitors_head) {
-        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
-        if (monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
-            struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
-            if (link->link_local_process_id == link_pid) {
-                if (link->unlink_id == unlink_id) {
-                    // Remove link
-                    list_remove(&monitor->monitor_list_head);
-                    free(link);
-                }
-                return;
-            }
+    struct Monitor *monitor = context_find_link(ctx, link_pid);
+    if (monitor != NULL && monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
+        struct LinkLocalMonitor *link = CONTAINER_OF(monitor, struct LinkLocalMonitor, monitor);
+        if (link->unlink_id == unlink_id) {
+            context_remove_link(ctx, monitor);
         }
     }
 }

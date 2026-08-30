@@ -95,6 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT now inlines `erlang:map_size/1` when the `Type` chunk proves the argument is a map, reading
   the size directly (handling both the flat and tree map representations) instead of calling the
   BIF
+- Improved performance of `erlang:link/1` and `erlang:unlink/1`: a process with many local links
+  looks them up through an index instead of walking its monitor list, an absent link is rejected
+  without any walk at all, and a call that has nothing to do no longer takes the process table lock
+  nor allocates. Creating a link or a monitor now costs one allocation instead of two
+- Improved performance of sending a message whose term is built out of immediates, lists and
+  tuples, which is copied to the mailbox in a single pass
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
