@@ -6132,7 +6132,7 @@ static term nif_erlang_demonitor(Context *ctx, int argc, term argv[])
     uint64_t ref_ticks = term_to_ref_ticks(ref);
 
     bool is_monitoring;
-    term monitor_pid = context_get_monitor_pid(ctx, ref_ticks, &is_monitoring);
+    term monitor_pid = context_take_monitor(ctx, ref_ticks, &is_monitoring);
     bool result;
     if (UNLIKELY(term_is_invalid_term(monitor_pid))) {
         result = false;
@@ -6140,7 +6140,6 @@ static term nif_erlang_demonitor(Context *ctx, int argc, term argv[])
         if (UNLIKELY(!is_monitoring)) {
             return !info ? TRUE_ATOM : FALSE_ATOM;
         }
-        context_demonitor(ctx, ref_ticks);
         int local_process_id = term_to_local_process_id(monitor_pid);
         Context *target = globalcontext_get_process_lock(ctx->global, local_process_id);
         if (target) {
