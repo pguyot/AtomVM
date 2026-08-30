@@ -861,6 +861,12 @@ unsigned long memory_estimate_usage(term t)
 {
     unsigned long acc = 0;
 
+    // An immediate occupies no storage of its own and is by far the most
+    // common argument: answer without setting up a traversal stack.
+    if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        return 0;
+    }
+
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         // TODO: handle failed malloc
