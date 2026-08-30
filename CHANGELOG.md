@@ -93,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   small-integer arithmetic fast paths once, out of line at the module tail, instead of at each
   of the three conditions that select it. The standard library shrinks by 0.5% to 1.9%
   depending on the target, and arithmetic-heavy modules by up to 23%
+- Reduced the number of instructions and branches the JIT emits for `+` and `-` on small
+  integers: both operand tag tests fold into one, and on aarch64 and arm32 the overflow test
+  folds into that same branch
 
 ### Fixed
 - Fixed maps decoded by `binary_to_term/1,2` and received over distribution keeping the
