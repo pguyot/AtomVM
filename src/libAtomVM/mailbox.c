@@ -137,8 +137,12 @@ void mailbox_message_dispose(MailboxMessage *m, Heap *heap)
             break;
         }
         case MonitorSignal: {
-            struct MonitorPointerSignal *monitor_signal = CONTAINER_OF(m, struct MonitorPointerSignal, base);
-            free(monitor_signal);
+            // The signal node is overlaid with the monitor's list head, so the
+            // monitor is the message. Signal loops that install it take it out
+            // of the list before disposing of anything, hence reaching this
+            // point means the monitor was never installed and is owned here.
+            struct Monitor *monitor = CONTAINER_OF(m, struct Monitor, monitor_signal);
+            monitor_destroy(monitor);
             break;
         }
         case GCSignal:
@@ -384,16 +388,9 @@ void mailbox_send_immediate_ref_signal(Context *c, enum MessageType type, term i
 
 void mailbox_send_monitor_signal(Context *c, enum MessageType type, struct Monitor *monitor)
 {
-    struct MonitorPointerSignal *monitor_signal = malloc(sizeof(struct MonitorPointerSignal));
-    if (IS_NULL_PTR(monitor_signal)) {
-        // FIXME this function returns void, so the caller is not told the allocation failed
-        fprintf(stderr, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
-        return;
-    }
-    monitor_signal->base.type = type;
-    monitor_signal->monitor = monitor;
-
-    mailbox_post_message(c, &monitor_signal->base);
+    assert(type == MonitorSignal);
+    monitor->monitor_signal.type = type;
+    mailbox_post_message(c, &monitor->monitor_signal);
 }
 
 void mailbox_send_empty_body_signal(Context *c, enum MessageType type)

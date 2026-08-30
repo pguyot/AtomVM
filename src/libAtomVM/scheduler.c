@@ -90,6 +90,8 @@ static void scheduler_process_native_signal_messages(Context *ctx)
     MailboxMessage *signal_message = mailbox_process_outer_list_native(&ctx->mailbox);
     bool reprocess_outer = false;
     while (signal_message) {
+        MailboxMessage *next = signal_message->next;
+        bool dispose_signal = true;
         switch (signal_message->type) {
             case KillSignal: {
                 struct TermSignal *kill_signal = CONTAINER_OF(signal_message, struct TermSignal, base);
@@ -103,9 +105,10 @@ static void scheduler_process_native_signal_messages(Context *ctx)
                 break;
             }
             case MonitorSignal: {
-                struct MonitorPointerSignal *monitor_signal
-                    = CONTAINER_OF(signal_message, struct MonitorPointerSignal, base);
-                context_add_monitor(ctx, monitor_signal->monitor);
+                struct Monitor *monitor
+                    = CONTAINER_OF(signal_message, struct Monitor, monitor_signal);
+                context_add_monitor(ctx, monitor);
+                dispose_signal = false;
                 break;
             }
             case DemonitorSignal: {
@@ -150,8 +153,9 @@ static void scheduler_process_native_signal_messages(Context *ctx)
                 UNREACHABLE();
             }
         }
-        MailboxMessage *next = signal_message->next;
-        mailbox_message_dispose(signal_message, &ctx->heap);
+        if (dispose_signal) {
+            mailbox_message_dispose(signal_message, &ctx->heap);
+        }
         signal_message = next;
         if (UNLIKELY(reprocess_outer && signal_message == NULL)) {
             reprocess_outer = false;
