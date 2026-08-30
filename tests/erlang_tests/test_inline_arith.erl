@@ -50,6 +50,8 @@
     untyped_mul/2,
     untyped_div_lit/1,
     untyped_rem_lit/1,
+    wide_div_lit/2,
+    wide_rem_lit/2,
     untyped_divrem_dense/1,
     bignum_then_band/1,
     lcg_loop/2,
@@ -167,6 +169,14 @@ untyped_mul(X, Y) -> id(X) * id(Y).
 
 untyped_div_lit(X) -> id(X) div 3.
 untyped_rem_lit(X) -> id(X) rem 3.
+
+% Dividend the compiler proves is an integer but whose range it does not know,
+% divided by a literal: {tr,_,{t_integer,any}} against {integer,3}. Neither the
+% shift-by-power-of-two form nor the unguarded inline divide applies, and the
+% clause used to give up and call the BIF instead of trying the runtime
+% both-small guard.
+wide_div_lit(X, Y) when is_integer(X), is_integer(Y) -> (X * Y) div 3.
+wide_rem_lit(X, Y) when is_integer(X), is_integer(Y) -> (X * Y) rem 3.
 
 % Dense sequence: a bignum div/rem (taking the runtime fallback) immediately
 % followed by a small div whose result is matched without an intervening call.
@@ -378,6 +388,20 @@ start() ->
     1 = ?MODULE:untyped_rem_lit(10),
     -1 = ?MODULE:untyped_rem_lit(-10),
     0 = ?MODULE:untyped_rem_lit(999999999999999999999),
+    % Typed-but-unbounded dividend, literal divisor.
+    0 = ?MODULE:wide_div_lit(1, 2),
+    1 = ?MODULE:wide_div_lit(1, 3),
+    33 = ?MODULE:wide_div_lit(11, 9),
+    -1 = ?MODULE:wide_div_lit(-1, 3),
+    -33 = ?MODULE:wide_div_lit(-10, 10),
+    2 = ?MODULE:wide_rem_lit(11, 4),
+    -2 = ?MODULE:wide_rem_lit(-11, 4),
+    0 = ?MODULE:wide_rem_lit(3, 5),
+    % Small-integer boundary and bignum operands take the runtime fallback.
+    192153584101141162 = ?MODULE:wide_div_lit(576460752303423487, 1),
+    -192153584101141162 = ?MODULE:wide_div_lit(-576460752303423488, 1),
+    333333333333333333333 = ?MODULE:wide_div_lit(999999999999999999999, 1),
+    0 = ?MODULE:wide_rem_lit(999999999999999999999, 1),
 
     % Regression: bignum div/rem fallback immediately followed by a small div
     % whose result is matched without an intervening call.
