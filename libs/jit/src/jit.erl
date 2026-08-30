@@ -5475,10 +5475,28 @@ op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
             )
     end.
 
-%% Hot arm of the runtime + / - fast path: load both operands, branch to Cold
-%% unless both are small integers, then compute in place on the tagged first
-%% operand (see the correctness note above) and branch to Cold on overflow.
+%% Hot arm of the runtime + / - fast path.
+%%
+%% A backend that can fold the two tag tests and the overflow test into a single
+%% branch (addsub_smallint_fused) gets that form: the operands are only read, so
+%% no unaliasing copy is needed either. Otherwise the tests are three separate
+%% branches to the same cold arm, computing in place on the tagged first operand
+%% (see the correctness note above).
 op_gc_bif2_addsub_hot(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
+    case erlang:function_exported(MMod, addsub_smallint_fused, 4) of
+        true ->
+            {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+            {MSt2, R2} = MMod:move_to_native_register(MSt1, UArg2),
+            {MSt3, Res} = MMod:addsub_smallint_fused(MSt2, Op, R1, R2),
+            MSt4 = MMod:free_native_registers(MSt3, [R1, R2]),
+            MSt5 = cond_jump_to_label(smallint_fused_fail, Cold, MMod, MSt4),
+            MSt6 = MMod:move_to_vm_register(MSt5, Res, Dest),
+            MMod:free_native_registers(MSt6, [Res, Dest]);
+        false ->
+            op_gc_bif2_addsub_hot_split(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold)
+    end.
+
+op_gc_bif2_addsub_hot_split(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
     {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
     {MSt2, R2} =
@@ -5486,12 +5504,7 @@ op_gc_bif2_addsub_hot(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
             R1 -> MMod:copy_to_native_register(MSt2a, R2a);
             _ -> {MSt2a, R2a}
         end,
-    MSt3 = cond_jump_to_label(
-        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt2
-    ),
-    MSt4 = cond_jump_to_label(
-        {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt3
-    ),
+    MSt4 = both_small_ints_or_jump(MMod, MSt2, R1, R2, Cold),
     {MSt5, TmpS} = MMod:and_(MSt4, {free, R2}, bnot (?TERM_IMMED_TAG_MASK)),
     MSt6 =
         case Op of
@@ -5502,6 +5515,18 @@ op_gc_bif2_addsub_hot(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
     MSt8 = cond_jump_to_label(overflow_set, Cold, MMod, MSt7),
     MSt9 = MMod:move_to_vm_register(MSt8, R1, Dest),
     MMod:free_native_registers(MSt9, [R1, Dest]).
+
+%% One test for both tags instead of one each: TERM_INTEGER_TAG is all ones
+%% in the tag field, so `R1 band R2' has a full tag field exactly when both
+%% operands do, and no other term type has one. Backends without conditional
+%% execution still get one branch here rather than two.
+%% Reg1 and Reg2 are left untouched.
+both_small_ints_or_jump(MMod, MSt0, Reg1, Reg2, Label) ->
+    {MSt1, Folded0} = MMod:copy_to_native_register(MSt0, Reg1),
+    {MSt2, Folded} = MMod:and_(MSt1, {free, Folded0}, Reg2),
+    cond_jump_to_label(
+        {{free, Folded}, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Label, MMod, MSt2
+    ).
 
 %% Interleaved form, for backends without deferred blocks: the fallback is
 %% emitted at each of the three sites that select it.
@@ -5684,12 +5709,7 @@ op_gc_bif2_addsub_hot_nf(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
             R1 -> MMod:copy_to_native_register(MSt2a, R2a);
             _ -> {MSt2a, R2a}
         end,
-    MSt3 = cond_jump_to_label(
-        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt2
-    ),
-    MSt4 = cond_jump_to_label(
-        {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt3
-    ),
+    MSt4 = both_small_ints_or_jump(MMod, MSt2, R1, R2, Cold),
     {MSt5, CheckReg} =
         case Op of
             '+' -> MMod:add_overflow_check(MSt4, R1, R2);
