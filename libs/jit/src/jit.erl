@@ -5881,6 +5881,52 @@ op_gc_bif2_mul_runtime(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
 op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2Tagged, Dest) ->
     UArg1 = unwrap_typed(Arg1),
     DivisorValue = Arg2Tagged bsr 4,
+    case outline_cold_arm(MMod, Dest) of
+        true ->
+            outlined_cold_arm(
+                MMod,
+                MSt0,
+                fun(CSt, Site) ->
+                    op_gc_bif2_default(
+                        MMod, CSt, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest, Site
+                    )
+                end,
+                fun(HSt0, Cold) ->
+                    {HSt1, R1} = MMod:move_to_native_register(HSt0, UArg1),
+                    HSt2 = cond_jump_to_label(
+                        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                        Cold,
+                        MMod,
+                        HSt1
+                    ),
+                    divrem_lit_smallint_body(MMod, HSt2, BackendOp, R1, DivisorValue, Dest)
+                end
+            );
+        false ->
+            op_gc_bif2_divrem_lit_runtime_inline(
+                MMod, MSt0, FailLabel, Live, Bif, BackendOp, UArg1, Arg2Tagged, DivisorValue, Dest
+            )
+    end.
+
+%% Untag the dividend in place, divide by the literal, re-tag into Dest.
+divrem_lit_smallint_body(MMod, MSt0, BackendOp, R1, DivisorValue, Dest) ->
+    {MSt1, R1} = MMod:shift_right_arith(MSt0, {free, R1}, 4),
+    {MSt2, Divisor} = MMod:move_to_native_register(MSt1, DivisorValue),
+    {MSt3, ResReg} = MMod:BackendOp(MSt2, R1, Divisor),
+    MSt4 = MMod:shift_left(MSt3, ResReg, 4),
+    MSt5 = MMod:or_(MSt4, ResReg, ?TERM_INTEGER_TAG),
+    MSt6 = MMod:move_to_vm_register(MSt5, ResReg, Dest),
+    %% R1 is not consumed by the backend div/rem (the result may land in a
+    %% different register); leaving it allocated leaked a register per emitted
+    %% div/rem -- harmless while the old call_ext_last emission reset the masks
+    %% at every external call, fatal (mask exhaustion at OP_RETURN) once direct
+    %% dispatch preserved them. Freeing R1 twice when the backend returns the
+    %% dividend register itself is a no-op.
+    MMod:free_native_registers(MSt6, [ResReg, R1, Divisor, Dest]).
+
+op_gc_bif2_divrem_lit_runtime_inline(
+    MMod, MSt0, FailLabel, Live, Bif, BackendOp, UArg1, Arg2Tagged, DivisorValue, Dest
+) ->
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
     MMod:if_else_block(
         MSt1,
@@ -5892,20 +5938,7 @@ op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1,
         end,
         %% Small integer: untag R1 in place, native div/rem, re-tag in place.
         fun(BSt0) ->
-            {BSt1, R1} = MMod:shift_right_arith(BSt0, {free, R1}, 4),
-            {BSt2, Divisor} = MMod:move_to_native_register(BSt1, DivisorValue),
-            {BSt3, ResReg} = MMod:BackendOp(BSt2, R1, Divisor),
-            BSt4 = MMod:shift_left(BSt3, ResReg, 4),
-            BSt5 = MMod:or_(BSt4, ResReg, ?TERM_INTEGER_TAG),
-            BSt6 = MMod:move_to_vm_register(BSt5, ResReg, Dest),
-            %% R1 is not consumed by the backend div/rem (the result may land
-            %% in a different register); leaving it allocated leaked a
-            %% register per emitted div/rem — harmless while the old
-            %% call_ext_last emission reset the masks at every external
-            %% call, fatal (mask exhaustion at OP_RETURN) once direct
-            %% dispatch preserved them. Freeing R1 twice when the backend
-            %% returns the dividend register itself is a no-op.
-            MMod:free_native_registers(BSt6, [ResReg, R1, Divisor, Dest])
+            divrem_lit_smallint_body(MMod, BSt0, BackendOp, R1, DivisorValue, Dest)
         end
     ).
 
@@ -6788,7 +6821,9 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
                     MSt7 = MMod:move_to_vm_register(MSt6, QuotientReg, Dest),
                     MMod:free_native_registers(MSt7, [QuotientReg, Reg1, Reg2, Dest]);
                 false ->
-                    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+                    op_gc_bif2_divrem_lit_fallback(
+                        div_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
+                    )
             end
     end;
 op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
@@ -6836,7 +6871,9 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
                     MSt7 = MMod:move_to_vm_register(MSt6, RemReg, Dest),
                     MMod:free_native_registers(MSt7, [RemReg, Reg1, Reg2, Dest]);
                 false ->
-                    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+                    op_gc_bif2_divrem_lit_fallback(
+                        rem_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
+                    )
             end
     end;
 op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
@@ -6858,6 +6895,26 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             )
     end.
 
+%% A literal divisor whose dividend the compiler could not pin down well enough
+%% to inline unguarded. This is the same situation the untyped dispatch clause
+%% handles, so use the same emitter: knowing the type is an integer must never
+%% produce worse code than not knowing it at all. Falls back to the plain BIF
+%% call only when the runtime path does not apply.
+op_gc_bif2_divrem_lit_fallback(
+    BackendOp, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
+) ->
+    case
+        Arg2Value >= 1 andalso erlang:function_exported(MMod, supports_div, 1) andalso
+            MMod:supports_div(MSt0) andalso addsub_fastpath_reloadable(Arg1)
+    of
+        true ->
+            op_gc_bif2_divrem_lit_runtime(
+                MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2, Dest
+            );
+        false ->
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
 %% @doc Inline div/rem when both operands are proven integers (any range) and
 %% the divisor is proven positive (so it is never 0 and never -1, ruling out
 %% div-by-zero and the MIN div -1 overflow). The operands may still be bignums
@@ -6867,7 +6924,21 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
 %% case (e.g. `X rem I` in a loop where the compiler proves I >= 1 but unbounded
 %% above). Op is rem_ or div_.
 op_gc_bif2_div_rem_guarded(Op, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    Outline =
+        outline_cold_arm(MMod, Dest) andalso addsub_fastpath_reloadable(Arg1) andalso
+            addsub_fastpath_reloadable(Arg2),
     case can_inline_div_guarded(Range1, Range2, MMod, MSt0) of
+        true when Outline ->
+            outlined_cold_arm(
+                MMod,
+                MSt0,
+                fun(CSt, Site) ->
+                    op_gc_bif2_default(MMod, CSt, FailLabel, Live, Bif, Arg1, Arg2, Dest, Site)
+                end,
+                fun(HSt0, Cold) ->
+                    op_gc_bif2_div_rem_hot(Op, MMod, HSt0, Arg1, Arg2, Dest, Cold)
+                end
+            );
         true ->
             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
             {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
@@ -6886,22 +6957,35 @@ op_gc_bif2_div_rem_guarded(Op, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Des
                     op_gc_bif2_default(MMod, BSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
                 end,
                 fun(BSt0) ->
-                    %% Fast path: both small ints. Untag, native op, retag.
-                    {BSt1, R1} = MMod:copy_to_native_register(BSt0, Reg1),
-                    {BSt2, R1} = MMod:shift_right_arith(BSt1, {free, R1}, 4),
-                    {BSt3, R2} = MMod:copy_to_native_register(BSt2, Reg2),
-                    {BSt4, R2} = MMod:shift_right_arith(BSt3, {free, R2}, 4),
-                    {BSt5, ResReg} = MMod:Op(BSt4, R1, R2),
-                    BSt6 = MMod:shift_left(BSt5, ResReg, 4),
-                    BSt7 = MMod:or_(BSt6, ResReg, ?TERM_INTEGER_TAG),
-                    BSt8 = MMod:move_to_vm_register(BSt7, ResReg, Dest),
-                    MMod:free_native_registers(BSt8, [ResReg, R1, R2])
+                    div_rem_smallint_body(Op, MMod, BSt0, Reg1, Reg2, Dest)
                 end
             ),
             MMod:free_native_registers(MSt5, [Reg1, Reg2, Dest]);
         false ->
             op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
     end.
+
+%% Hot arm of the guarded div/rem: branch to Cold unless both operands are small
+%% integers, then divide natively.
+op_gc_bif2_div_rem_hot(Op, MMod, MSt0, Arg1, Arg2, Dest, Cold) ->
+    {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+    {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+    MSt3 = both_small_ints_or_jump(MMod, MSt2, Reg1, Reg2, Cold),
+    MSt4 = div_rem_smallint_body(Op, MMod, MSt3, Reg1, Reg2, Dest),
+    MMod:free_native_registers(MSt4, [Reg1, Reg2, Dest]).
+
+%% Untag both operands, divide natively, retag into Dest. Reg1 and Reg2 are left
+%% alone, so the caller can still hand the originals to the BIF.
+div_rem_smallint_body(Op, MMod, MSt0, Reg1, Reg2, Dest) ->
+    {MSt1, R1} = MMod:copy_to_native_register(MSt0, Reg1),
+    {MSt2, R1} = MMod:shift_right_arith(MSt1, {free, R1}, 4),
+    {MSt3, R2} = MMod:copy_to_native_register(MSt2, Reg2),
+    {MSt4, R2} = MMod:shift_right_arith(MSt3, {free, R2}, 4),
+    {MSt5, ResReg} = MMod:Op(MSt4, R1, R2),
+    MSt6 = MMod:shift_left(MSt5, ResReg, 4),
+    MSt7 = MMod:or_(MSt6, ResReg, ?TERM_INTEGER_TAG),
+    MSt8 = MMod:move_to_vm_register(MSt7, ResReg, Dest),
+    MMod:free_native_registers(MSt8, [ResReg, R1, R2]).
 
 %% @doc Like can_inline_div but for the runtime-guarded path: requires the
 %% backend to support native div, and the divisor range to prove the divisor is
