@@ -249,7 +249,14 @@ typedef enum
  */
 struct Monitor
 {
-    struct ListHead monitor_list_head;
+    // A monitor is either in transit as a mailbox signal or installed in a
+    // context list, never both. Overlay those two intrusive nodes so creation
+    // needs one allocation rather than a monitor plus a signal wrapper.
+    union
+    {
+        struct ListHead monitor_list_head;
+        MailboxMessage monitor_signal;
+    };
     enum ContextMonitorType monitor_type;
 };
 

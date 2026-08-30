@@ -834,6 +834,8 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         bool handle_error = false;                                                              \
         bool reprocess_outer = false;                                                           \
         while (signal_message) {                                                                \
+            MailboxMessage *next = signal_message->next;                                       \
+            bool dispose_signal = true;                                                        \
             switch (signal_message->type) {                                                     \
                 case KillSignal: {                                                              \
                     struct TermSignal *kill_signal                                              \
@@ -922,9 +924,10 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                     break;                                                                      \
                 }                                                                               \
                 case MonitorSignal: {                                                           \
-                    struct MonitorPointerSignal *monitor_signal                                 \
-                        = CONTAINER_OF(signal_message, struct MonitorPointerSignal, base);      \
-                    context_add_monitor(ctx, monitor_signal->monitor);                          \
+                    struct Monitor *monitor                                                     \
+                        = CONTAINER_OF(signal_message, struct Monitor, monitor_signal);          \
+                    context_add_monitor(ctx, monitor);                                          \
+                    dispose_signal = false;                                                     \
                     break;                                                                      \
                 }                                                                               \
                 case DemonitorSignal: {                                                         \
@@ -953,8 +956,9 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
                     UNREACHABLE();                                                              \
                 }                                                                               \
             }                                                                                   \
-            MailboxMessage *next = signal_message->next;                                        \
-            mailbox_message_dispose(signal_message, &ctx->heap);                                \
+            if (dispose_signal) {                                                               \
+                mailbox_message_dispose(signal_message, &ctx->heap);                            \
+            }                                                                                   \
             signal_message = next;                                                              \
             if (UNLIKELY(reprocess_outer && signal_message == NULL)) {                          \
                 reprocess_outer = false;                                                        \
