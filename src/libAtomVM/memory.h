@@ -341,6 +341,36 @@ term memory_copy_term_tree_to_storage(term *storage, term **heap_end, term t);
 unsigned long memory_estimate_usage(term t);
 
 /**
+ * @brief calculates the storage size of a shallow term
+ *
+ * @details a shallow term is built out of immediates, lists and tuples only,
+ * nested no deeper than an internal limit. Such a term owns no boxed leaf,
+ * hence no off-heap binary, and it can be copied in a single recursive pass
+ * without a traversal stack and without building an mso list. This is the
+ * shape of the vast majority of messages, `{From, {call, Args}}` included.
+ * @param t root term to measure.
+ * @param size on output and on success, the storage size in term units, not
+ * counting the mso list slot.
+ * @returns \c true when \c t is shallow, \c false when it must be copied with
+ * memory_copy_term_tree_to_storage.
+ */
+bool memory_estimate_shallow_usage(term t, unsigned long *size);
+
+/**
+ * @brief copies a shallow term to a storage, typically for mailbox messages
+ *
+ * @details this is the single-pass counterpart of
+ * memory_copy_term_tree_to_storage. It must only be called for a term that
+ * memory_estimate_shallow_usage accepted, with a storage of the size it
+ * returned plus the mso list slot.
+ * @param storage storage for the copied data, should be large enough
+ * @param heap_end on output, pointer to the end of the term.
+ * @param t term to copy
+ * @returns the new term, that is stored in the storage.
+ */
+term memory_copy_shallow_term_to_storage(term *storage, term **heap_end, term t);
+
+/**
  * @brief append a fragment to a heap. The MSO list is merged. The fragment will then be owned by the heap.
  *
  * @param heap the heap to append the fragment to

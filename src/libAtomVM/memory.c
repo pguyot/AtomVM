@@ -18,6 +18,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -747,6 +748,111 @@ term memory_copy_term_tree_to_storage(term *storage, term **heap_end, term t)
     term *heap_ptr = storage + STORAGE_HEAP_START_INDEX;
     storage[STORAGE_MSO_LIST_INDEX] = term_nil(); // mso_list
     term result = memory_copy_term_tree_internal(&heap_ptr, &storage[STORAGE_MSO_LIST_INDEX], t);
+    *heap_end = heap_ptr;
+    return result;
+}
+
+// Nesting depth beyond which a term is copied by the general path instead.
+// Bounds the recursion below, which runs on the caller's C stack.
+#define SHALLOW_MAX_DEPTH 8
+
+static bool memory_estimate_shallow(term t, unsigned long *acc, unsigned int depth)
+{
+    if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        return true;
+    }
+    if (depth == 0) {
+        return false;
+    }
+    if (term_is_nonempty_list(t)) {
+        do {
+            if (UNLIKELY(*acc > ULONG_MAX - CONS_SIZE)) {
+                return false;
+            }
+            *acc += CONS_SIZE;
+            term head = term_get_list_head(t);
+            if ((head & TERM_PRIMARY_MASK) != TERM_PRIMARY_IMMED
+                && !memory_estimate_shallow(head, acc, depth - 1)) {
+                return false;
+            }
+            t = term_get_list_tail(t);
+        } while (term_is_nonempty_list(t));
+        // Improper lists are allowed, as long as the tail is an immediate.
+        return (t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED;
+    }
+    if (!term_is_tuple(t)) {
+        return false;
+    }
+    unsigned long arity = (unsigned long) term_get_tuple_arity(t);
+    if (UNLIKELY(*acc > ULONG_MAX - arity - 1)) {
+        return false;
+    }
+    *acc += arity + 1;
+    for (unsigned long i = 0; i < arity; i++) {
+        term element = term_get_tuple_element(t, (int) i);
+        if ((element & TERM_PRIMARY_MASK) != TERM_PRIMARY_IMMED
+            && !memory_estimate_shallow(element, acc, depth - 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool memory_estimate_shallow_usage(term t, unsigned long *size)
+{
+    unsigned long words = 0;
+    if (!memory_estimate_shallow(t, &words, SHALLOW_MAX_DEPTH)) {
+        return false;
+    }
+    *size = words;
+    return true;
+}
+
+// Mirrors memory_estimate_shallow, allocating exactly the words it counted.
+static term memory_copy_shallow(term t, term **heap_ptr)
+{
+    if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        return t;
+    }
+    if (term_is_nonempty_list(t)) {
+        term *cons = *heap_ptr;
+        *heap_ptr += CONS_SIZE;
+        term result = ((term) cons) | TERM_PRIMARY_LIST;
+        for (;;) {
+            term head = term_get_list_head(t);
+            cons[LIST_HEAD_INDEX] = (head & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED
+                ? head
+                : memory_copy_shallow(head, heap_ptr);
+            t = term_get_list_tail(t);
+            if (!term_is_nonempty_list(t)) {
+                cons[LIST_TAIL_INDEX] = t;
+                return result;
+            }
+            term *next = *heap_ptr;
+            *heap_ptr += CONS_SIZE;
+            cons[LIST_TAIL_INDEX] = ((term) next) | TERM_PRIMARY_LIST;
+            cons = next;
+        }
+    }
+    term *tuple = *heap_ptr;
+    int arity = term_get_tuple_arity(t);
+    *heap_ptr += arity + 1;
+    tuple[0] = ((term) arity << 6) | TERM_BOXED_TUPLE;
+    for (int i = 0; i < arity; i++) {
+        term element = term_get_tuple_element(t, i);
+        tuple[i + 1] = (element & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED
+            ? element
+            : memory_copy_shallow(element, heap_ptr);
+    }
+    return ((term) tuple) | TERM_PRIMARY_BOXED;
+}
+
+term memory_copy_shallow_term_to_storage(term *storage, term **heap_end, term t)
+{
+    term *heap_ptr = storage + STORAGE_HEAP_START_INDEX;
+    // A shallow term holds no off-heap binary, so the mso list stays empty.
+    storage[STORAGE_MSO_LIST_INDEX] = term_nil();
+    term result = memory_copy_shallow(t, &heap_ptr);
     *heap_end = heap_ptr;
     return result;
 }
