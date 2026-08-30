@@ -20,7 +20,7 @@
 
 -module(test_monitor).
 
--export([start/0]).
+-export([start/0, monitor_idle/0]).
 
 start() ->
     ok = test_monitor_normal(),
@@ -76,6 +76,7 @@ start() ->
     ok = test_alias_count_saturation(),
     ok = test_binary_to_term_invalid_process_ref(),
     ok = test_alias_ref_ordering(),
+    ok = test_many_monitors_demonitor(),
     0.
 
 %% An alias sorts after every plain reference whichever was created first. Two
@@ -963,4 +964,59 @@ wait_registered(Name, N) ->
     case whereis(Name) of
         undefined -> wait_registered(Name, N - 1);
         _ -> ok
+    end.
+
+%% A process holding many monitors demonitors each of them. Exercises the two
+%% shortcuts taken on that path: installing a monitor whose reference is newer
+%% than every one held skips the duplicate scan, and demonitor/1 finds and
+%% removes in a single pass. Self-monitoring is included because it is the one
+%% case where two entries share a reference (the monitoring and the monitored
+%% side both live in this process).
+test_many_monitors_demonitor() ->
+    Pids = spawn_idle(32, []),
+    Refs = monitor_all(Pids, []),
+    %% Every reference must still resolve to its own monitor.
+    ok = demonitor_all(Refs),
+    %% Demonitoring twice is a no-op, and the monitors really are gone.
+    ok = demonitor_again(Refs),
+    SelfRef = monitor(process, self()),
+    false = demonitor(SelfRef, [info]),
+    %% Installing after the churn still works, and still finds its own monitor.
+    [Extra | _] = Pids,
+    ExtraRef = monitor(process, Extra),
+    true = demonitor(ExtraRef, [info]),
+    stop_all(Pids),
+    ok.
+
+monitor_all([], Acc) ->
+    Acc;
+monitor_all([Pid | Tail], Acc) ->
+    monitor_all(Tail, [{Pid, monitor(process, Pid)} | Acc]).
+
+demonitor_all([]) ->
+    ok;
+demonitor_all([{_Pid, Ref} | Tail]) ->
+    true = demonitor(Ref, [info]),
+    demonitor_all(Tail).
+
+demonitor_again([]) ->
+    ok;
+demonitor_again([{_Pid, Ref} | Tail]) ->
+    false = demonitor(Ref, [info]),
+    demonitor_again(Tail).
+
+spawn_idle(0, Acc) ->
+    Acc;
+spawn_idle(N, Acc) ->
+    spawn_idle(N - 1, [spawn_opt(?MODULE, monitor_idle, [], []) | Acc]).
+
+stop_all([]) ->
+    ok;
+stop_all([Pid | Tail]) ->
+    Pid ! stop,
+    stop_all(Tail).
+
+monitor_idle() ->
+    receive
+        stop -> ok
     end.

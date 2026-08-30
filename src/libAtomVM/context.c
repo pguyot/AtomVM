@@ -150,6 +150,7 @@ Context *context_new(GlobalContext *glb)
 
     list_init(&ctx->monitors_head);
     ctx->link_state = LINK_FILTER_TAG;
+    ctx->max_monitor_ref_ticks = 0;
 
     ctx->trap_exit = false;
 #ifdef ENABLE_ADVANCED_TRACE
@@ -1441,6 +1442,33 @@ void monitor_destroy(struct Monitor *monitor)
     }
 }
 
+// The ref_ticks a monitor is keyed by, for every type that has one. The two
+// link halves are keyed by the pid of the other end instead.
+static bool monitor_ref_ticks(const struct Monitor *monitor, uint64_t *ref_ticks)
+{
+    switch (monitor->monitor_type) {
+        case CONTEXT_MONITOR_MONITORING_LOCAL:
+        case CONTEXT_MONITOR_MONITORED_LOCAL:
+        case CONTEXT_MONITOR_MONITORED_LOCAL_ALIAS:
+            *ref_ticks = CONTAINER_OF(monitor, struct MonitorLocalMonitor, monitor)->ref_ticks;
+            return true;
+        case CONTEXT_MONITOR_MONITORING_LOCAL_REGISTEREDNAME:
+            *ref_ticks = CONTAINER_OF(monitor, struct MonitorLocalRegisteredNameMonitor, monitor)
+                             ->ref_ticks;
+            return true;
+        case CONTEXT_MONITOR_ALIAS:
+            *ref_ticks = CONTAINER_OF(monitor, struct MonitorAlias, monitor)->ref_ticks;
+            return true;
+        case CONTEXT_MONITOR_RESOURCE:
+            *ref_ticks = CONTAINER_OF(monitor, struct ResourceContextMonitor, monitor)->ref_ticks;
+            return true;
+        case CONTEXT_MONITOR_LINK_LOCAL:
+        case CONTEXT_MONITOR_LINK_REMOTE:
+            return false;
+    }
+    return false;
+}
+
 bool context_add_monitor(Context *ctx, struct Monitor *new_monitor)
 {
     if (new_monitor->monitor_type == CONTEXT_MONITOR_LINK_LOCAL) {
@@ -1452,6 +1480,22 @@ bool context_add_monitor(Context *ctx, struct Monitor *new_monitor)
         }
         list_append(&ctx->monitors_head, &new_monitor->monitor_list_head);
         context_link_index_insert(ctx, new_monitor);
+        return true;
+    }
+
+    // A reference newer than every monitor this process has been given cannot
+    // duplicate one of them, and a process that holds many monitors would
+    // otherwise walk all of them on every monitor/1.
+    uint64_t new_ref_ticks;
+    if (monitor_ref_ticks(new_monitor, &new_ref_ticks)
+        && new_ref_ticks > ctx->max_monitor_ref_ticks) {
+        ctx->max_monitor_ref_ticks = new_ref_ticks;
+        list_append(&ctx->monitors_head, &new_monitor->monitor_list_head);
+        if (new_monitor->monitor_type == CONTEXT_MONITOR_ALIAS) {
+            if (LIKELY(ctx->active_alias_count < ACTIVE_ALIAS_COUNT_SATURATED)) {
+                ctx->active_alias_count++;
+            }
+        }
         return true;
     }
 
@@ -1525,6 +1569,9 @@ bool context_add_monitor(Context *ctx, struct Monitor *new_monitor)
             }
         }
     }
+    // No update of max_monitor_ref_ticks here: reaching this point means the
+    // reference is not newer than it, and lowering it would let a later
+    // duplicate skip the scan above.
     list_append(&ctx->monitors_head, &new_monitor->monitor_list_head);
     if (new_monitor->monitor_type == CONTEXT_MONITOR_ALIAS) {
         if (LIKELY(ctx->active_alias_count < ACTIVE_ALIAS_COUNT_SATURATED)) {
@@ -1602,6 +1649,56 @@ void context_unlink_ack(Context *ctx, term link_pid, uint64_t unlink_id)
             context_remove_link(ctx, monitor);
         }
     }
+}
+
+term context_take_monitor(Context *ctx, uint64_t ref_ticks, bool *is_monitoring)
+{
+    struct MonitorAlias *alias = context_find_alias(ctx, ref_ticks);
+    if (alias != NULL && alias->alias_type != ContextMonitorAliasExplicitUnalias) {
+        context_unalias(ctx, alias);
+    }
+
+    struct ListHead *item;
+    LIST_FOR_EACH (item, &ctx->monitors_head) {
+        struct Monitor *monitor = GET_LIST_ENTRY(item, struct Monitor, monitor_list_head);
+        switch (monitor->monitor_type) {
+            case CONTEXT_MONITOR_MONITORING_LOCAL:
+            case CONTEXT_MONITOR_MONITORED_LOCAL:
+            case CONTEXT_MONITOR_MONITORED_LOCAL_ALIAS: {
+                struct MonitorLocalMonitor *local_monitor
+                    = CONTAINER_OF(monitor, struct MonitorLocalMonitor, monitor);
+                if (local_monitor->ref_ticks != ref_ticks) {
+                    break;
+                }
+                term monitor_obj = local_monitor->monitor_obj;
+                *is_monitoring = monitor->monitor_type == CONTEXT_MONITOR_MONITORING_LOCAL;
+                if (*is_monitoring) {
+                    list_remove(&monitor->monitor_list_head);
+                    free(local_monitor);
+                }
+                return monitor_obj;
+            }
+            case CONTEXT_MONITOR_MONITORING_LOCAL_REGISTEREDNAME: {
+                struct MonitorLocalRegisteredNameMonitor *registered_monitor = CONTAINER_OF(
+                    monitor, struct MonitorLocalRegisteredNameMonitor, monitor);
+                if (registered_monitor->ref_ticks != ref_ticks) {
+                    break;
+                }
+                term monitor_pid
+                    = term_from_local_process_id(registered_monitor->monitor_process_id);
+                *is_monitoring = true;
+                list_remove(&monitor->monitor_list_head);
+                free(registered_monitor);
+                return monitor_pid;
+            }
+            case CONTEXT_MONITOR_LINK_LOCAL:
+            case CONTEXT_MONITOR_LINK_REMOTE:
+            case CONTEXT_MONITOR_RESOURCE:
+            case CONTEXT_MONITOR_ALIAS:
+                break;
+        }
+    }
+    return term_invalid_term();
 }
 
 void context_demonitor(Context *ctx, uint64_t ref_ticks)
