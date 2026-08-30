@@ -127,6 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved performance of SMP scheduler. As a result, resources selected with `enif_select` and
   stopped with the `ERL_NIF_SELECT_STOP_SCHEDULED` result are now released asynchronously by the
   scheduler polling events, staying within the boundaries of the BEAM `enif_select` specification
+- Improved performance of `erlang:link/1` and `erlang:unlink/1`: a process with many local links
+  looks them up through an index instead of walking its monitor list, an absent link is rejected
+  without any walk at all, and a call that has nothing to do no longer takes the process table lock
+  nor allocates. Creating a link or a monitor now costs one allocation instead of two
+- Improved performance of sending a message whose term is built out of immediates, lists and
+  tuples, which is copied to the mailbox in a single pass
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
