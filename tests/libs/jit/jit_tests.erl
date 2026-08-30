@@ -1537,7 +1537,24 @@ sizing_emit_flash_identity_test() ->
     {Bytes, _Horizon} = jit_stream_flash_mock:flush(Backend:stream(EmitState1)),
     ?assertEqual(Reference, Bytes).
 
+%% A gc_bif div by a literal whose typed dividend has an UNBOUNDED t_integer
+%% range: neither the shift-by-power-of-two form nor the unguarded inline divide
+%% applies, so it must fall back to the same runtime small-integer fast path the
+%% untyped case uses, not to the BIF call. Knowing an operand is an integer must
+%% never produce worse code than not knowing it at all.
+gc_bif_div_unbounded_range_runtime_fastpath_test_() ->
+    [
+        ?_test(gc_bif_div_unbounded_range_runtime_fastpath(Backend))
+     || Backend <- [jit_x86_64, jit_aarch64]
+    ].
+
+gc_bif_div_unbounded_range_runtime_fastpath(Backend) ->
+    gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, 'div', 2}, {t_integer, any}).
+
 gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
+    gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, '+', 2}, {t_integer, {0, '+inf'}}).
+
+gc_bif_unbounded_range_runtime_fastpath(Backend, MFA, Type) ->
     TypedChunk =
         <<16:32, 0:32, 125:32, 1:32, 1:32,
             %% label 1
@@ -1549,13 +1566,13 @@ gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
     UntypedChunk =
         <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, 125, 16#05, 16#20, 16#00, 16#03, 16#21, 16#13,
             3>>,
-    ImportResolver = fun(0) -> {erlang, '+', 2} end,
+    ImportResolver = fun(0) -> MFA end,
     TypedCode = jit_tests_common:compile_chunk(
         Backend,
         TypedChunk,
         fun(_) -> undefined end,
         fun(_) -> undefined end,
-        fun(1) -> {t_integer, {0, '+inf'}} end,
+        fun(1) -> Type end,
         ImportResolver,
         fun(_) -> false end
     ),
