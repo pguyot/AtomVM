@@ -77,6 +77,7 @@
     or_/3,
     add/3,
     add_overflow/3,
+    addsub_smallint_fused/4,
     sub/3,
     sub_overflow/3,
     mul/3,
@@ -1095,6 +1096,15 @@ invert_cc(le) -> gt.
 
 -spec if_block_cond(state(), condition()) ->
     {state(), jit_arm32_asm:cc(), non_neg_integer()}.
+%% smallint_fused_fail: flags set by a preceding addsub_smallint_fused; Z is
+%% set iff both operands were small integers and the result is in range. Run the
+%% block (the cold arm) when they were not; skip it (branch) when they were.
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0, smallint_fused_fail
+) ->
+    I = jit_arm32_asm:b(eq, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, eq, 0};
 %% overflow_set: flags set by a preceding adds/subs; run the block when V
 %% (signed overflow) is set, skip it (branch) when overflow is clear.
 if_block_cond(#state{stream_module = StreamModule, stream = Stream0} = State0, overflow_set) ->
@@ -3747,6 +3757,39 @@ sub(#state{stream_module = StreamModule, regs = Regs0} = State0, Reg, Val) ->
     Stream2 = StreamModule:append(Stream1, I),
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Reg),
     State1#state{stream = Stream2, regs = jit_regs:set_available_regs(Regs1, Avail)}.
+
+%% Compute `Reg1 Op Reg2' for two tagged terms, setting the flags so that the
+%% `smallint_fused_fail' condition is false exactly when both operands were
+%% small integers and the result did not overflow. See the aarch64 backend for
+%% the reasoning; A32 predication gives the same single-branch shape, with a
+%% conditional CMP standing in for CCMP.
+-spec addsub_smallint_fused(state(), '+' | '-', arm32_register(), arm32_register()) ->
+    {state(), arm32_register()}.
+addsub_smallint_fused(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, Reg1, Reg2
+) ->
+    Available0 = jit_regs:available_regs(Regs0),
+    ResultReg = first_avail(Available0),
+    Tmp = first_avail(Available0 band bnot reg_bit(ResultReg)),
+    I0 = jit_arm32_asm:bic(al, Tmp, Reg2, ?TERM_IMMED_TAG_MASK),
+    I1 =
+        case Op of
+            '+' -> jit_arm32_asm:adds(al, ResultReg, Reg1, Tmp);
+            '-' -> jit_arm32_asm:subs(al, ResultReg, Reg1, Tmp)
+        end,
+    I2 = jit_arm32_asm:and_(al, Tmp, Reg1, Reg2),
+    I3 = jit_arm32_asm:and_(al, Tmp, Tmp, ?TERM_IMMED_TAG_MASK),
+    %% Force a tag mismatch when the arithmetic overflowed, then compare
+    %% unconditionally. A predicated compare would not do: skipping it leaves
+    %% the flags of the adds/subs, and those can carry Z alongside V
+    %% (0x80000000 + 0x80000000 is zero and overflows), which would select the
+    %% fast path for a result that is not a small integer.
+    I4 = jit_arm32_asm:mov(vs, Tmp, 0),
+    I5 = jit_arm32_asm:cmp(al, Tmp, ?TERM_INTEGER_TAG),
+    Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary, I5/binary>>,
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Tmp), ResultReg),
+    Regs2 = jit_regs:alloc_reg(Regs1, reg_bit(ResultReg)),
+    {State#state{stream = StreamModule:append(Stream0, Code), regs = Regs2}, ResultReg}.
 
 %% Add register Val to Reg in place, setting flags (V on signed overflow);
 %% testable with the `overflow_set' if-condition.

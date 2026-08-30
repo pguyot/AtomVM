@@ -28,6 +28,7 @@
     madd/4,
     b/1,
     bcc/2,
+    ccmp/4,
     bl/1,
     blr/1,
     br/1,
@@ -1059,43 +1060,56 @@ bcc(Cond, Offset) when
 ->
     error({unencodable_offset, Offset});
 bcc(Cond, Offset) when is_atom(Cond), is_integer(Offset) ->
-    CondNum =
-        case Cond of
-            % Equal (Z set)
-            eq -> 0;
-            % Not equal (Z clear)
-            ne -> 1;
-            % Carry set
-            cs -> 2;
-            % Carry clear
-            cc -> 3;
-            % Minus (N set)
-            mi -> 4;
-            % Plus (N clear)
-            pl -> 5;
-            % Overflow set
-            vs -> 6;
-            % Overflow clear
-            vc -> 7;
-            % Higher (unsigned)
-            hi -> 8;
-            % Lower or same (unsigned)
-            ls -> 9;
-            % Greater than or equal (signed)
-            ge -> 10;
-            % Less than (signed)
-            lt -> 11;
-            % Greater than (signed)
-            gt -> 12;
-            % Less than or equal (signed)
-            le -> 13;
-            % Always
-            al -> 14;
-            % Never
-            nv -> 15
-        end,
     Offset19 = Offset div 4,
-    <<(16#54000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor CondNum):32/little>>.
+    <<(16#54000000 bor ((Offset19 band 16#7FFFF) bsl 5) bor cc_to_num(Cond)):32/little>>.
+
+%% Condition code encoding, shared by every conditional instruction.
+-spec cc_to_num(cc()) -> 0..15.
+% Equal (Z set)
+cc_to_num(eq) -> 0;
+% Not equal (Z clear)
+cc_to_num(ne) -> 1;
+% Carry set
+cc_to_num(cs) -> 2;
+% Carry clear
+cc_to_num(cc) -> 3;
+% Minus (N set)
+cc_to_num(mi) -> 4;
+% Plus (N clear)
+cc_to_num(pl) -> 5;
+% Overflow set
+cc_to_num(vs) -> 6;
+% Overflow clear
+cc_to_num(vc) -> 7;
+% Higher (unsigned)
+cc_to_num(hi) -> 8;
+% Lower or same (unsigned)
+cc_to_num(ls) -> 9;
+% Greater than or equal (signed)
+cc_to_num(ge) -> 10;
+% Less than (signed)
+cc_to_num(lt) -> 11;
+% Greater than (signed)
+cc_to_num(gt) -> 12;
+% Less than or equal (signed)
+cc_to_num(le) -> 13;
+% Always
+cc_to_num(al) -> 14;
+% Never
+cc_to_num(nv) -> 15.
+
+%% Emit a conditional compare against an immediate: when Cond holds, compare Rn
+%% with Imm and set the flags from it; otherwise set the flags to Nzcv. This is
+%% how two independent tests are folded into one branch.
+-spec ccmp(aarch64_gpr_register(), 0..31, 0..15, cc()) -> binary().
+ccmp(Rn, Imm, Nzcv, Cond) when
+    is_atom(Rn), is_integer(Imm), Imm >= 0, Imm =< 31, is_integer(Nzcv), Nzcv >= 0, Nzcv =< 15
+->
+    RnNum = reg_to_num(Rn),
+    %% CCMP (immediate), 64-bit: 11111010010iiiii cccc10nnnnn0vvvv
+    <<
+        (16#FA400800 bor (Imm bsl 16) bor (cc_to_num(Cond) bsl 12) bor (RnNum bsl 5) bor Nzcv):32/little
+    >>.
 
 %% Emit a compare and branch on zero
 -spec cbz(aarch64_gpr_register(), integer()) -> binary().
