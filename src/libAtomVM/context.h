@@ -41,6 +41,7 @@ extern "C" {
 #endif
 
 struct Module;
+struct LinkIndex;
 
 #ifndef TYPEDEF_MODULE
 #define TYPEDEF_MODULE
@@ -156,6 +157,13 @@ struct Context
     // probe is moot.)
     term *shrink_probe_heap_end;
 
+    // Local link lookup state: either a pointer to a lazily allocated
+    // LinkIndex for a process with many local links, or a tagged Bloom filter
+    // of the local links of a small process. The intrusive monitor list stays
+    // canonical either way, so a small process allocates no table and a failed
+    // allocation only costs speed.
+    uintptr_t link_state;
+
     // saved state when scheduled out
     Module *saved_module;
     union
@@ -217,6 +225,35 @@ struct Context
     uint32_t current_line;
 #endif
 };
+
+#define CONTEXT_LINK_FILTER_BITS (sizeof(uintptr_t) * 8)
+
+/**
+ * @brief Bit of the small-process link filter that the given pid maps to.
+ *
+ * @details Bit zero doubles as the tag that tells a filter from a LinkIndex
+ * pointer, so a pid mapping to it merely yields a harmless false positive.
+ */
+static inline uintptr_t context_link_filter_bit(term pid)
+{
+    uint32_t value = (uint32_t) term_to_local_process_id(pid);
+    value ^= value >> 6;
+    // Bit zero tags the filter. Mapping a PID to bit zero only causes a
+    // harmless false positive.
+    return (uintptr_t) 1 << (value & (CONTEXT_LINK_FILTER_BITS - 1));
+}
+
+/**
+ * @brief Whether the process may hold a local link to the given pid or port.
+ *
+ * @details Cheap negative test: a false answer is conclusive, a true answer
+ * means context_find_link must be called.
+ */
+static inline bool context_maybe_has_local_link(const Context *ctx, term pid)
+{
+    return (ctx->link_state & 1) == 0
+        || (ctx->link_state & context_link_filter_bit(pid)) != 0;
+}
 
 #ifndef TYPEDEF_CONTEXT
 #define TYPEDEF_CONTEXT
@@ -599,6 +636,19 @@ bool context_get_process_info(Context *ctx, term *out, size_t *term_size, term a
  * @return the allocated monitor or NULL if allocation failed
  */
 struct Monitor *monitor_link_new(term link_pid);
+
+/**
+ * @brief Find a local or remote link by pid.
+ *
+ * @details The returned pointer remains owned by the context. This function is
+ * intended for the context owner and callers that otherwise synchronize access
+ * to the context's monitor list.
+ *
+ * @param ctx the context whose links are searched
+ * @param link_pid local or external pid/port identifying the other half
+ * @returns the link monitor, or NULL when no relation exists
+ */
+struct Monitor *context_find_link(Context *ctx, term link_pid);
 
 /**
  * @brief Create a monitor on a process.

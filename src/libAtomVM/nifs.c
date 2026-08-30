@@ -6167,6 +6167,11 @@ static term nif_erlang_link(Context *ctx, int argc, term argv[])
     term target_pid = argv[0];
 
     if (term_is_local_pid_or_port(target_pid)) {
+        // link/1 is idempotent. Check the caller-owned relation before taking
+        // the process-table lock or allocating the two link halves.
+        if (UNLIKELY(context_find_link(ctx, target_pid) != NULL)) {
+            return TRUE_ATOM;
+        }
         int local_process_id = term_to_local_process_id(target_pid);
         Context *target = globalcontext_get_process_lock(ctx->global, local_process_id);
         if (IS_NULL_PTR(target)) {
@@ -6211,6 +6216,9 @@ static term nif_erlang_link(Context *ctx, int argc, term argv[])
 
         return TRUE_ATOM;
     } else if (term_is_external_pid(target_pid)) {
+        if (UNLIKELY(context_find_link(ctx, target_pid) != NULL)) {
+            return TRUE_ATOM;
+        }
         struct Monitor *self_link = monitor_link_new(target_pid);
         if (IS_NULL_PTR(self_link)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -6234,6 +6242,12 @@ static term nif_erlang_unlink(Context *ctx, int argc, term argv[])
     term target_pid = argv[0];
 
     if (term_is_local_pid_or_port(target_pid)) {
+        // unlink/1 is also idempotent. An absent local relation needs neither
+        // a target lookup nor a process-table lock.
+        if (LIKELY(!context_maybe_has_local_link(ctx, target_pid))
+            || LIKELY(context_find_link(ctx, target_pid) == NULL)) {
+            return TRUE_ATOM;
+        }
         int local_process_id = term_to_local_process_id(target_pid);
         Context *target = globalcontext_get_process_lock(ctx->global, local_process_id);
         if (IS_NULL_PTR(target)) {
@@ -6250,6 +6264,9 @@ static term nif_erlang_unlink(Context *ctx, int argc, term argv[])
         mailbox_send_immediate_ref_signal(target, UnlinkIDSignal, self_pid, unlink_id);
         globalcontext_get_process_unlock(ctx->global, target);
     } else if (term_is_external_pid(target_pid)) {
+        if (LIKELY(context_find_link(ctx, target_pid) == NULL)) {
+            return TRUE_ATOM;
+        }
         uint64_t unlink_id;
         if (UNLIKELY(!context_set_unlink_id(ctx, target_pid, &unlink_id))) {
             return TRUE_ATOM;
