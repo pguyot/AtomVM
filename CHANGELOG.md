@@ -105,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   small-integer arithmetic fast paths once, out of line at the module tail, instead of at each
   of the three conditions that select it. The standard library shrinks by 0.5% to 1.9%
   depending on the target, and arithmetic-heavy modules by up to 23%
+- Reduced the number of instructions and branches the JIT emits for `+` and `-` on small
+  integers: both operand tag tests fold into one, and on aarch64 and arm32 the overflow test
+  folds into that same branch
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
