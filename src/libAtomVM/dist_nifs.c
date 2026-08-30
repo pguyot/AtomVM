@@ -495,6 +495,8 @@ static term nif_erlang_dist_ctrl_put_data(Context *ctx, int argc, term argv[])
             if (LIKELY(target)) {
                 mailbox_send_monitor_signal(target, MonitorSignal, remote_link);
                 globalcontext_get_process_unlock(ctx->global, target);
+            } else {
+                monitor_destroy(remote_link);
             }
             break;
         }

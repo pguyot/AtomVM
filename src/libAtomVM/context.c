@@ -202,6 +202,8 @@ void context_destroy(Context *ctx)
     // Also process ProcessInfoRequestSignal so caller isn't trapped waiting
     MailboxMessage *signal_message = mailbox_process_outer_list_native(&ctx->mailbox);
     while (signal_message) {
+        MailboxMessage *next = signal_message->next;
+        bool dispose_signal = true;
         switch (signal_message->type) {
             case ProcessInfoRequestSignal: {
                 struct ProcessInfoRequestSignal *request_signal
@@ -216,9 +218,10 @@ void context_destroy(Context *ctx)
                 break;
             }
             case MonitorSignal: {
-                struct MonitorPointerSignal *monitor_signal
-                    = CONTAINER_OF(signal_message, struct MonitorPointerSignal, base);
-                (void) context_add_monitor(ctx, monitor_signal->monitor);
+                struct Monitor *monitor
+                    = CONTAINER_OF(signal_message, struct Monitor, monitor_signal);
+                (void) context_add_monitor(ctx, monitor);
+                dispose_signal = false;
                 break;
             }
             case UnlinkIDSignal: {
@@ -270,8 +273,9 @@ void context_destroy(Context *ctx)
                 UNREACHABLE();
             }
         }
-        MailboxMessage *next = signal_message->next;
-        mailbox_message_dispose(signal_message, &ctx->heap);
+        if (dispose_signal) {
+            mailbox_message_dispose(signal_message, &ctx->heap);
+        }
         signal_message = next;
     }
 
