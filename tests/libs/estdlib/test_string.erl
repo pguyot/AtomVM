@@ -89,21 +89,35 @@ test_to_integer() ->
     {BigOkInt, []} = string:to_integer(BigOk),
     true = is_integer(BigOkInt) andalso BigOkInt > 0,
     {BigOkInt, <<>>} = string:to_integer(BigOkBin),
-    %% Oversized for AtomVM (~272 bits); OTP accepts arbitrary size.
-    BigOver = lists:duplicate(80, $9),
-    BigOverBin = list_to_binary(BigOver),
+    %% Oversized for AtomVM; OTP accepts arbitrary size. AtomVM's bignum cap
+    %% is a build knob (AVM_INTN_MAX_BITS, at least 1280 bits), so the first
+    %% oversized width is discovered at runtime rather than hardcoded.
     case erlang:system_info(machine) of
         "BEAM" ->
+            BigOver = lists:duplicate(80, $9),
+            BigOverBin = list_to_binary(BigOver),
             {BigOverInt, []} = string:to_integer(BigOver),
             true = is_integer(BigOverInt) andalso BigOverInt > BigOkInt,
             {BigOverInt, <<>>} = string:to_integer(BigOverBin),
             ok;
         _ ->
+            BigOver = lists:duplicate(oversized_digits(80), $9),
+            BigOverBin = list_to_binary(BigOver),
             {error, badarg} = string:to_integer(BigOver),
             {error, badarg} = string:to_integer(BigOverBin),
             ok
     end,
     ok.
+
+%% Smallest all-nines width, doubling from N, that exceeds this build's
+%% bignum cap. The cap is set by AVM_INTN_MAX_BITS and so cannot be
+%% hardcoded; the guard bounds the probe rather than looping forever if a
+%% build turns out to have no cap at all.
+oversized_digits(N) when N =< 1 bsl 20 ->
+    case string:to_integer(lists:duplicate(N, $9)) of
+        {error, badarg} -> N;
+        _ -> oversized_digits(N * 2)
+    end.
 
 test_to_upper() ->
     ?ASSERT_MATCH(string:to_upper(""), ""),
