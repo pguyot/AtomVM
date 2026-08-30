@@ -157,6 +157,12 @@ struct Context
     // probe is moot.)
     term *shrink_probe_heap_end;
 
+    // Largest ref_ticks of any monitor ever installed here. Every monitor
+    // except the two link halves is keyed by a ref_ticks drawn from a global
+    // monotonic counter, so one that exceeds this cannot duplicate an existing
+    // entry and does not need the duplicate scan.
+    uint64_t max_monitor_ref_ticks;
+
     // Local link lookup state: either a pointer to a lazily allocated
     // LinkIndex for a process with many local links, or a tagged Bloom filter
     // of the local links of a small process. The intrusive monitor list stays
@@ -746,6 +752,24 @@ void context_unlink_ack(Context *ctx, term link_pid, uint64_t unlink_id);
  * @param ctx the context being executed (monitoring or monitored)
  * @param ref_ticks reference of the monitor to remove
  */
+/**
+ * @brief Find the monitor for a reference and remove it if this process is the
+ * monitoring side.
+ *
+ * @details This is what demonitor/1 needs, in one pass over the monitor list
+ * instead of a lookup followed by a removal. A process that holds many monitors
+ * walks that list for every demonitor, so the second pass is not free.
+ * Deactivates the reference's alias, like context_demonitor.
+ *
+ * @param ctx the context to search
+ * @param ref_ticks the reference of the monitor
+ * @param is_monitoring on output, whether this process was the monitoring side,
+ * which is also whether the monitor was removed
+ * @returns the other end of the monitor, or an invalid term when the reference
+ * matches no monitor
+ */
+term context_take_monitor(Context *ctx, uint64_t ref_ticks, bool *is_monitoring);
+
 void context_demonitor(Context *ctx, uint64_t ref_ticks);
 
 /**
