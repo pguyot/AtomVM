@@ -260,7 +260,12 @@ void mailbox_post_message(Context *c, MailboxMessage *m)
 
 MailboxMessage *mailbox_message_create_from_term(enum MessageType type, term t)
 {
-    unsigned long estimated_mem_usage = memory_estimate_usage(t) + 1; // mso_list
+    // Most messages are shallow (an immediate, a list of immediates or a tuple
+    // of those) and are copied in a single pass, without a traversal stack.
+    unsigned long shallow_mem_usage;
+    bool is_shallow = memory_estimate_shallow_usage(t, &shallow_mem_usage);
+    unsigned long estimated_mem_usage
+        = (is_shallow ? shallow_mem_usage : memory_estimate_usage(t)) + 1; // mso_list
 
     size_t base_size = type == NormalMessage ? sizeof(Message) : sizeof(struct TermSignal);
     void *msg_buf = malloc(base_size + estimated_mem_usage * sizeof(term));
@@ -272,13 +277,17 @@ MailboxMessage *mailbox_message_create_from_term(enum MessageType type, term t)
     if (type == NormalMessage) {
         Message *msg = msg_buf;
         msg->base.type = NormalMessage;
-        msg->message = memory_copy_term_tree_to_storage(msg->storage, &msg->heap_end, t);
+        msg->message = is_shallow
+            ? memory_copy_shallow_term_to_storage(msg->storage, &msg->heap_end, t)
+            : memory_copy_term_tree_to_storage(msg->storage, &msg->heap_end, t);
 
         return &msg->base;
     } else {
         struct TermSignal *ts = msg_buf;
         ts->base.type = type;
-        ts->signal_term = memory_copy_term_tree_to_storage(ts->storage, &ts->heap_end, t);
+        ts->signal_term = is_shallow
+            ? memory_copy_shallow_term_to_storage(ts->storage, &ts->heap_end, t)
+            : memory_copy_term_tree_to_storage(ts->storage, &ts->heap_end, t);
 
         return &ts->base;
     }
