@@ -143,6 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `div` and `rem` by a literal calling the BIF instead of dividing inline when the
   compiler typed the dividend as an integer without bounding its range, which made knowing the
   operand's type slower than not knowing it
+- Improved performance of term size queries on immediates, which no longer set up a traversal
+  stack to conclude that an atom or a small integer occupies no storage
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and
