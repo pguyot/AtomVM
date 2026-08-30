@@ -5387,6 +5387,9 @@ op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
     end.
 
 op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, offset).
+
+op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, SiteOffset) ->
     CappedLive =
         if
             Live > ?MAX_REG -> ?MAX_REG;
@@ -5396,7 +5399,38 @@ op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
     {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
         ctx, FailLabel, CappedLive, {free, Arg1}, {free, Arg2}
     ]),
-    bif_faillabel_test(FailLabel, MMod, MSt4, {free, ResultReg}, {free, Dest}).
+    bif_faillabel_test(FailLabel, MMod, MSt4, {free, ResultReg}, {free, Dest}, SiteOffset).
+
+%% Whether the cold arm of a small-integer fast path can be moved out of line.
+%% Needs a backend that can defer a block to the module tail and that can branch
+%% to a label on a condition, and a destination the outlined block can still
+%% address (an extended register lives in a native register the block no longer
+%% has).
+outline_cold_arm(MMod, Dest) ->
+    (element(1, Dest) =:= x_reg orelse element(1, Dest) =:= y_reg) andalso
+        erlang:function_exported(MMod, add_deferred_stub, 2).
+
+%% Emit a fast path whose cold arm lives at the module tail.
+%%
+%% HotFn is given a `Cold' label to branch to; every condition that selects the
+%% cold arm becomes one forward branch, so the block is emitted once however
+%% many of them there are (a two-operand small-integer test has three: two tag
+%% checks and the overflow check). ColdFn's block runs there and branches back
+%% to the join.
+%%
+%% The block is entered with a fresh register state, so it must not depend on
+%% anything the hot path loaded -- it re-reads its operands from their VM
+%% registers, which is what the reloadable test above guarantees. Both arms
+%% leave every native register free, and the join label invalidates the register
+%% cache, which is what merging an arm that called a BIF used to yield anyway.
+outlined_cold_arm(MMod, MSt0, ColdFn, HotFn) ->
+    JoinRef = make_ref(),
+    SiteOffset = MMod:offset(MSt0),
+    {MSt1, ColdRef} = MMod:add_deferred_stub(MSt0, fun(BSt0) ->
+        MMod:jump_to_label(ColdFn(BSt0, SiteOffset), JoinRef)
+    end),
+    MSt2 = HotFn(MSt1, ColdRef),
+    MMod:add_label(MSt2, JoinRef).
 
 %% An operand is "reloadable" for the add/sub fast path if its source can be
 %% read again (for the BIF fallback) after we have loaded it: VM registers and
@@ -5421,6 +5455,57 @@ addsub_fastpath_reloadable(_) -> false.
 op_gc_bif2_addsub_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
+    case outline_cold_arm(MMod, Dest) of
+        true ->
+            outlined_cold_arm(
+                MMod,
+                MSt0,
+                fun(CSt, Site) ->
+                    op_gc_bif2_default(
+                        MMod, CSt, FailLabel, Live, Bif, UArg1, UArg2, Dest, Site
+                    )
+                end,
+                fun(HSt0, Cold) ->
+                    op_gc_bif2_addsub_hot(MMod, HSt0, Op, UArg1, UArg2, Dest, Cold)
+                end
+            );
+        false ->
+            op_gc_bif2_addsub_runtime_inline(
+                MMod, MSt0, FailLabel, Live, Bif, Op, UArg1, UArg2, Dest
+            )
+    end.
+
+%% Hot arm of the runtime + / - fast path: load both operands, branch to Cold
+%% unless both are small integers, then compute in place on the tagged first
+%% operand (see the correctness note above) and branch to Cold on overflow.
+op_gc_bif2_addsub_hot(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
+    MSt3 = cond_jump_to_label(
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt2
+    ),
+    MSt4 = cond_jump_to_label(
+        {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt3
+    ),
+    {MSt5, TmpS} = MMod:and_(MSt4, {free, R2}, bnot (?TERM_IMMED_TAG_MASK)),
+    MSt6 =
+        case Op of
+            '+' -> MMod:add_overflow(MSt5, R1, TmpS);
+            '-' -> MMod:sub_overflow(MSt5, R1, TmpS)
+        end,
+    MSt7 = MMod:free_native_registers(MSt6, [TmpS]),
+    MSt8 = cond_jump_to_label(overflow_set, Cold, MMod, MSt7),
+    MSt9 = MMod:move_to_vm_register(MSt8, R1, Dest),
+    MMod:free_native_registers(MSt9, [R1, Dest]).
+
+%% Interleaved form, for backends without deferred blocks: the fallback is
+%% emitted at each of the three sites that select it.
+op_gc_bif2_addsub_runtime_inline(MMod, MSt0, FailLabel, Live, Bif, Op, UArg1, UArg2, Dest) ->
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
     {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
     %% When both operands are the same VM location (e.g. `B + B`), the second
@@ -5495,6 +5580,43 @@ op_gc_bif2_addsub_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2Ta
             '-' when Delta0 >= 0 -> {sub, Delta0};
             '-' -> {add, -Delta0}
         end,
+    case outline_cold_arm(MMod, Dest) of
+        true ->
+            outlined_cold_arm(
+                MMod,
+                MSt0,
+                fun(CSt, Site) ->
+                    op_gc_bif2_default(
+                        MMod, CSt, FailLabel, Live, Bif, UArg1, Arg2Tagged, Dest, Site
+                    )
+                end,
+                fun(HSt0, Cold) ->
+                    {HSt1, R1} = MMod:move_to_native_register(HSt0, UArg1),
+                    HSt2 = cond_jump_to_label(
+                        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG},
+                        Cold,
+                        MMod,
+                        HSt1
+                    ),
+                    HSt3 =
+                        case EffOp of
+                            add -> MMod:add_overflow(HSt2, R1, Mag);
+                            sub -> MMod:sub_overflow(HSt2, R1, Mag)
+                        end,
+                    HSt4 = cond_jump_to_label(overflow_set, Cold, MMod, HSt3),
+                    HSt5 = MMod:move_to_vm_register(HSt4, R1, Dest),
+                    MMod:free_native_registers(HSt5, [R1, Dest])
+                end
+            );
+        false ->
+            op_gc_bif2_addsub_lit_runtime_inline(
+                MMod, MSt0, FailLabel, Live, Bif, EffOp, Mag, UArg1, Arg2Tagged, Dest
+            )
+    end.
+
+op_gc_bif2_addsub_lit_runtime_inline(
+    MMod, MSt0, FailLabel, Live, Bif, EffOp, Mag, UArg1, Arg2Tagged, Dest
+) ->
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
     Fallback = fun(BSt0) ->
         BSt1 = MMod:free_native_registers(BSt0, [R1]),
@@ -5531,6 +5653,54 @@ op_gc_bif2_addsub_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2Ta
 op_gc_bif2_addsub_runtime_nf(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest) ->
     UArg1 = unwrap_typed(Arg1),
     UArg2 = unwrap_typed(Arg2),
+    case outline_cold_arm(MMod, Dest) of
+        true ->
+            outlined_cold_arm(
+                MMod,
+                MSt0,
+                fun(CSt, Site) ->
+                    op_gc_bif2_default(
+                        MMod, CSt, FailLabel, Live, Bif, UArg1, UArg2, Dest, Site
+                    )
+                end,
+                fun(HSt0, Cold) ->
+                    op_gc_bif2_addsub_hot_nf(MMod, HSt0, Op, UArg1, UArg2, Dest, Cold)
+                end
+            );
+        false ->
+            op_gc_bif2_addsub_runtime_nf_inline(
+                MMod, MSt0, FailLabel, Live, Bif, Op, UArg1, UArg2, Dest
+            )
+    end.
+
+%% Hot arm of the flagless runtime + / - fast path (see the flag-based
+%% op_gc_bif2_addsub_hot): the overflow check is a computed value rather than a
+%% flag, so it becomes one more branch to the same outlined cold arm.
+op_gc_bif2_addsub_hot_nf(MMod, MSt0, Op, UArg1, UArg2, Dest, Cold) ->
+    {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
+    {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
+    {MSt2, R2} =
+        case R2a of
+            R1 -> MMod:copy_to_native_register(MSt2a, R2a);
+            _ -> {MSt2a, R2a}
+        end,
+    MSt3 = cond_jump_to_label(
+        {R1, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt2
+    ),
+    MSt4 = cond_jump_to_label(
+        {R2, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Cold, MMod, MSt3
+    ),
+    {MSt5, CheckReg} =
+        case Op of
+            '+' -> MMod:add_overflow_check(MSt4, R1, R2);
+            '-' -> MMod:sub_overflow_check(MSt4, R1, R2)
+        end,
+    MSt6 = cond_jump_to_label({{free, CheckReg}, '!=', 0}, Cold, MMod, MSt5),
+    MSt7 = MMod:or_(MSt6, R1, ?TERM_INTEGER_TAG),
+    MSt8 = MMod:move_to_vm_register(MSt7, R1, Dest),
+    MMod:free_native_registers(MSt8, [R1, R2, Dest]).
+
+op_gc_bif2_addsub_runtime_nf_inline(MMod, MSt0, FailLabel, Live, Bif, Op, UArg1, UArg2, Dest) ->
     {MSt1, R1} = MMod:move_to_native_register(MSt0, UArg1),
     {MSt2a, R2a} = MMod:move_to_native_register(MSt1, UArg2),
     %% When both operands are the same VM location (e.g. `B + B`), the second
@@ -8045,7 +8215,12 @@ supports_deferred_raise(MMod) ->
 %% and its dedup are emitted later by flush_deferred_raises/2. SiteOffset is
 %% captured here so the outlined raise reports the site's line, not the tail's.
 cond_raise_outlined(Cond, Prim, ExtraArgs, MMod, MSt0) ->
-    SiteOffset = MMod:offset(MSt0),
+    cond_raise_outlined(Cond, Prim, ExtraArgs, MMod, MSt0, MMod:offset(MSt0)).
+
+%% Same, for a site whose offset is not the current one: code outlined to the
+%% module tail must still report the offset of the opcode it belongs to, or the
+%% stacktrace names whatever the tail happens to sit after.
+cond_raise_outlined(Cond, Prim, ExtraArgs, MMod, MSt0, SiteOffset) ->
     StubRef = make_ref(),
     MSt1 = cond_jump_to_label(Cond, StubRef, MMod, MSt0),
     MMod:add_deferred_raise(MSt1, StubRef, SiteOffset, Prim, ExtraArgs).
@@ -8810,12 +8985,17 @@ emit_pass_float3(Primitive, Rest0, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     emit_pass(Rest4, MMod, MSt2, State0).
 
-bif_faillabel_test(FailLabel, MMod, MSt0, {free, ResultReg}, {free, Dest}) when FailLabel > 0 ->
+bif_faillabel_test(FailLabel, MMod, MSt0, Result, Dest) ->
+    bif_faillabel_test(FailLabel, MMod, MSt0, Result, Dest, offset).
+
+bif_faillabel_test(FailLabel, MMod, MSt0, {free, ResultReg}, {free, Dest}, _SiteOffset) when
+    FailLabel > 0
+->
     MSt1 = cond_jump_to_label({ResultReg, '==', 0}, FailLabel, MMod, MSt0),
     MSt2 = MMod:move_to_vm_register(MSt1, ResultReg, Dest),
     MMod:free_native_registers(MSt2, [ResultReg, Dest]);
-bif_faillabel_test(0, MMod, MSt0, {free, ResultReg}, {free, Dest}) ->
-    MSt1 = handle_error_if({ResultReg, '==', 0}, MMod, MSt0),
+bif_faillabel_test(0, MMod, MSt0, {free, ResultReg}, {free, Dest}, SiteOffset) ->
+    MSt1 = handle_error_if({ResultReg, '==', 0}, MMod, MSt0, SiteOffset),
     MSt2 = MMod:move_to_vm_register(MSt1, ResultReg, Dest),
     MMod:free_native_registers(MSt2, [ResultReg, Dest]).
 
@@ -8873,10 +9053,14 @@ record_continuation_line(MMod, MSt, #state{current_line = Line, line_offsets = A
 
 finalize_pass(MMod, MSt0, #state{line_offsets = Lines}) ->
     ?TRACE("SECOND PASS -- ~B lines\n", [length(Lines)]),
-    % Emit any deferred (outlined) raise stubs at the module tail, before the
-    % label/line metadata function, so their branches resolve in update_branches.
-    MStF0 = flush_deferred_raises(MMod, MSt0),
-    MStF = flush_deferred_stubs(MMod, MStF0),
+    % Emit the outlined tails before the label/line metadata function, so their
+    % branches resolve in update_branches. Stubs first: an outlined cold arm
+    % ends in the ordinary error test, which registers a deferred raise, so the
+    % raises must be taken after the stub bodies have been emitted. A raise body
+    % only tail-calls, hence one more stub round is enough to reach the fixpoint.
+    MStF0 = flush_deferred_stubs(MMod, MSt0),
+    MStF1 = flush_deferred_raises(MMod, MStF0),
+    MStF = flush_deferred_stubs(MMod, MStF1),
     % Add extra function that returns labels and line information
     MSt1 = MMod:add_label(MStF, 0),
     SortedLines = lists:keysort(2, Lines),
@@ -9247,12 +9431,19 @@ term_get_tuple_arity(Tuple, MMod, MSt0) ->
     {MSt4, ArityReg}.
 
 handle_error_if(Cond, MMod, MSt0) ->
+    handle_error_if(Cond, MMod, MSt0, offset).
+
+%% SiteOffset is the symbolic `offset' (the current one) or the integer offset
+%% of the site this code was outlined from.
+handle_error_if(Cond, MMod, MSt0, SiteOffset) ->
     case supports_deferred_raise(MMod) of
-        true ->
+        true when SiteOffset =:= offset ->
             cond_raise_outlined(Cond, ?PRIM_HANDLE_ERROR, [], MMod, MSt0);
+        true ->
+            cond_raise_outlined(Cond, ?PRIM_HANDLE_ERROR, [], MMod, MSt0, SiteOffset);
         false ->
             MMod:if_block(MSt0, Cond, fun(BSt0) ->
-                MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
+                MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, SiteOffset])
             end)
     end.
 

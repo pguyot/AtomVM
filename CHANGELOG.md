@@ -133,6 +133,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nor allocates. Creating a link or a monitor now costs one allocation instead of two
 - Improved performance of sending a message whose term is built out of immediates, lists and
   tuples, which is copied to the mailbox in a single pass
+- Reduced the size of JIT-generated code on every backend by emitting the fallback of the
+  small-integer arithmetic fast paths once, out of line at the module tail, instead of at each
+  of the three conditions that select it. The standard library shrinks by 0.5% to 1.9%
+  depending on the target, and arithmetic-heavy modules by up to 23%
 
 ### Removed
 - Removed `ahttp_client` support for obsolete line folding (RFC 9112 §5.2); folded header and

@@ -40,6 +40,9 @@
     call_primitive_with_cp/3,
     return_if_not_equal_to_ctx/2,
     jump_to_label/2,
+    add_deferred_stub/2,
+    take_deferred_stubs/1,
+    reset_regs_fresh/1,
     jump_to_continuation/2,
     jump_to_offset/2,
     cond_jump_to_label/3,
@@ -193,7 +196,10 @@
     live_masks = undefined :: undefined | #{non_neg_integer() => non_neg_integer()},
     pending_x = #{} ::
         #{non_neg_integer() => {non_neg_integer(), non_neg_integer(), non_neg_integer()}},
-    cond_depth = 0 :: non_neg_integer()
+    cond_depth = 0 :: non_neg_integer(),
+    %% Blocks deferred to the module tail (jit:flush_deferred_stubs/2):
+    %% the cold arms outlined out of the fast paths.
+    deferred_stubs = [] :: [{reference(), fun((state()) -> state())}]
 }).
 
 -type state() :: #state{}.
@@ -364,6 +370,33 @@ stream(#state{stream = Stream}) ->
 -spec offset(state()) -> non_neg_integer().
 offset(#state{stream_module = StreamModule, stream = Stream}) ->
     StreamModule:offset(Stream).
+
+%%-----------------------------------------------------------------------------
+%% @doc Register a block to be emitted at the module tail, and return the label
+%% that reaches it. The block is the cold arm of one specific site, which
+%% branches to it and which the block branches back to; keeping it out of line
+%% leaves the hot path contiguous and emits it once however many conditions
+%% select it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_deferred_stub(state(), fun((state()) -> state())) -> {state(), reference()}.
+add_deferred_stub(#state{deferred_stubs = DS} = State, BodyFun) ->
+    Ref = make_ref(),
+    {State#state{deferred_stubs = [{Ref, BodyFun} | DS]}, Ref}.
+
+-spec take_deferred_stubs(state()) -> {[{reference(), fun((state()) -> state())}], state()}.
+take_deferred_stubs(#state{deferred_stubs = DS} = State) ->
+    {lists:reverse(DS), State#state{deferred_stubs = []}}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Reset register tracking to a fresh state, used at the head of an
+%% outlined block: it is entered only by its site's branch, so it owns every
+%% register and depends on none.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec reset_regs_fresh(state()) -> state().
+reset_regs_fresh(#state{regs = Regs} = State) ->
+    State#state{regs = jit_regs:set_masks(jit_regs:invalidate_all(Regs), ?AVAILABLE_REGS_MASK, 0)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Flush the stream.
