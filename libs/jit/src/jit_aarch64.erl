@@ -89,6 +89,7 @@
     or_/3,
     add/3,
     add_overflow/3,
+    addsub_smallint_fused/4,
     sub/3,
     sub_overflow/3,
     mul/3,
@@ -2252,6 +2253,17 @@ if_block_cond(
     {State2, {tbz, Reg, 0}, 0};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
+    smallint_fused_fail
+) ->
+    %% Flags set by a preceding addsub_smallint_fused: Z is set iff both
+    %% operands were small integers and the result is in range. Execute the
+    %% block (the cold arm) when they were not; branch over it (skip) when the
+    %% fast path holds.
+    I = jit_aarch64_asm:bcc(eq, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    {State0#state{stream = Stream1}, eq, 0};
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     overflow_set
 ) ->
     %% Flags set by a preceding adds/subs. Execute the block when V (signed
@@ -4109,6 +4121,50 @@ sub(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     Stream1 = StreamModule:append(Stream0, I1),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Compute `Reg1 Op Reg2\' for two tagged terms, and set the flags so that
+%% the `smallint_fused_fail\' condition is false exactly when both operands were
+%% small integers and the result did not overflow.
+%%
+%% @details The two tests fold into one branch. TERM_INTEGER_TAG is all ones in
+%% the tag field, so `Reg1 band Reg2\' has a full tag field exactly when both
+%% operands do, and no other term type has one. The arithmetic runs first, on
+%% the tagged first operand and the untagged second, which keeps the result
+%% correctly tagged and makes signed overflow of the tagged operation coincide
+%% with leaving the small-integer range. `ccmp\' then compares the folded tag
+%% only when the overflow flag is clear, and forces a mismatch otherwise.
+%%
+%% Reg1 and Reg2 are only read, so they may be the same register (`B + B\'), and
+%% the caller can still re-read the originals on the cold path.
+%% @end
+%% @param State current backend state
+%% @param Op `+\' or `-\'
+%% @param Reg1 first operand, tagged
+%% @param Reg2 second operand, tagged
+%% @return the new state and the register holding the tagged result
+%%-----------------------------------------------------------------------------
+-spec addsub_smallint_fused(state(), '+' | '-', aarch64_register(), aarch64_register()) ->
+    {state(), aarch64_register()}.
+addsub_smallint_fused(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Op, Reg1, Reg2
+) ->
+    Available0 = jit_regs:available_regs(Regs0),
+    ResultReg = first_avail(Available0),
+    Tmp = first_avail(Available0 band bnot reg_bit(ResultReg)),
+    I0 = jit_aarch64_asm:and_(Tmp, Reg2, bnot ?TERM_IMMED_TAG_MASK),
+    I1 =
+        case Op of
+            '+' -> jit_aarch64_asm:adds(ResultReg, Reg1, Tmp);
+            '-' -> jit_aarch64_asm:subs(ResultReg, Reg1, Tmp)
+        end,
+    I2 = jit_aarch64_asm:and_(Tmp, Reg1, Reg2),
+    I3 = jit_aarch64_asm:and_(Tmp, Tmp, ?TERM_IMMED_TAG_MASK),
+    I4 = jit_aarch64_asm:ccmp(Tmp, ?TERM_INTEGER_TAG, 0, vc),
+    Code = <<I0/binary, I1/binary, I2/binary, I3/binary, I4/binary>>,
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Tmp), ResultReg),
+    Regs2 = jit_regs:alloc_reg(Regs1, reg_bit(ResultReg)),
+    {State#state{stream = StreamModule:append(Stream0, Code), regs = Regs2}, ResultReg}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Add Val to Reg in place, setting condition flags (V on signed

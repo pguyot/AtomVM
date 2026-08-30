@@ -504,6 +504,24 @@ str_test_() ->
         )
     ].
 
+ccmp_test_() ->
+    [
+        %% Conditional compare against an immediate: fold a second test into the
+        %% flags set by the previous instruction.
+        ?_assertAsmEqual(
+            <<16#fa4f7900:32/little>>, "ccmp x8, #15, #0, vc", jit_aarch64_asm:ccmp(r8, 15, 0, vc)
+        ),
+        ?_assertAsmEqual(
+            <<16#fa4f7800:32/little>>, "ccmp x0, #15, #0, vc", jit_aarch64_asm:ccmp(r0, 15, 0, vc)
+        ),
+        ?_assertAsmEqual(
+            <<16#fa4f0900:32/little>>, "ccmp x8, #15, #0, eq", jit_aarch64_asm:ccmp(r8, 15, 0, eq)
+        ),
+        ?_assertAsmEqual(
+            <<16#fa477904:32/little>>, "ccmp x8, #7, #4, vc", jit_aarch64_asm:ccmp(r8, 7, 4, vc)
+        )
+    ].
+
 cmp_test_() ->
     [
         % cmp reg, reg
