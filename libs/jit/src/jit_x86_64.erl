@@ -32,6 +32,7 @@
     add_deferred_raise/5,
     take_deferred_raises/1,
     take_deferred_stubs/1,
+    add_deferred_stub/2,
     map_get_stub_call/3,
     compare_stub_call/3,
     reset_regs_fresh/1,
@@ -498,6 +499,18 @@ stub_ref(#state{stubs = Stubs, deferred_stubs = DS} = State, Key, BodyFun) ->
                 Ref
             }
     end.
+
+%%-----------------------------------------------------------------------------
+%% @doc Register a block to be emitted at the module tail, and return the label
+%% that reaches it. Unlike stub_ref/3 the block is never shared: it is the cold
+%% arm of one specific site, which branches to it and which the block branches
+%% back to. Keeping it out of line leaves the hot path contiguous.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec add_deferred_stub(state(), fun((state()) -> state())) -> {state(), reference()}.
+add_deferred_stub(#state{deferred_stubs = DS} = State, BodyFun) ->
+    Ref = make_ref(),
+    {State#state{deferred_stubs = [{Ref, BodyFun} | DS]}, Ref}.
 
 -spec take_deferred_stubs(state()) -> {[{reference(), fun((state()) -> state())}], state()}.
 take_deferred_stubs(#state{deferred_stubs = DS} = State) ->
