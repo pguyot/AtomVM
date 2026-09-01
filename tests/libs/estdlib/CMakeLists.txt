@@ -59,6 +59,7 @@ set(ERLANG_MODULES
     test_sys
     test_proplists
     test_erlang
+    test_ets
     test_queue
     test_timer
     test_supervisor
