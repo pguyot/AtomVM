@@ -291,9 +291,13 @@ define_if_function_exists(libAtomVM kill "signal.h" PRIVATE HAVE_KILL)
 # library a bare-metal target links: the stm32 firmware links picolibc, which
 # has no process support, while the arm-none-eabi toolchain's own newlib
 # headers declare popen -- so the check succeeds and the build then fails on an
-# implicit declaration. There is nothing to detect on a target with no
-# operating system, so do not look.
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
+# implicit declaration. Bare-metal toolchains also set
+# CMAKE_TRY_COMPILE_TARGET_TYPE to STATIC_LIBRARY (the pico SDK does), which
+# stops every probe short of linking, so a declared-but-absent popen is only
+# caught when the firmware itself is linked. There is nothing to detect on a
+# target with no operating system, so do not look.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Generic"
+    AND NOT CMAKE_TRY_COMPILE_TARGET_TYPE STREQUAL "STATIC_LIBRARY")
     define_if_function_exists(libAtomVM popen "stdio.h" PRIVATE HAVE_POPEN)
 endif()
 define_if_function_exists(libAtomVM tcgetattr "termios.h" PRIVATE HAVE_TCGETATTR)
