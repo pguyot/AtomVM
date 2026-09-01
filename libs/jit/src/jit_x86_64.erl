@@ -29,6 +29,7 @@
     set_live_masks/2,
     supports_loop_residency/0,
     supports_inline_tuple2_eq/0,
+    supports_select_val_binary_search/0,
     add_deferred_raise/5,
     take_deferred_raises/1,
     take_deferred_stubs/1,
@@ -475,6 +476,13 @@ supports_loop_residency() -> false.
 %% written against the generic backend API, so this is a pure opt-in.
 -spec supports_inline_tuple2_eq() -> true.
 supports_inline_tuple2_eq() ->
+    true.
+
+%% Capability marker: the generic layer emits OP_SELECT_VAL as a binary search
+%% over the unsigned tagged words (see jit:op_select_val_int_dispatch/5) on
+%% backends exporting this.
+-spec supports_select_val_binary_search() -> true.
+supports_select_val_binary_search() ->
     true.
 
 %%-----------------------------------------------------------------------------
