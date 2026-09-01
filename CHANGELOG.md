@@ -103,6 +103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
   proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
   immediate-tag test and the `term_compare` fallback of the untyped path
+- arm32 JIT now dispatches external calls in generated code instead of returning to the C
+  scheduler loop for every one: `call_ext`, `call_ext_last`/`call_ext_only` and the
+  cross-module `return` take the `*_direct` primitives, and an already-resolved call to a
+  native-loaded function is resolved inline out of `module->imported_funcs` and branched to
+  with no C call at all (the x86_64 and aarch64 backends already did both). The ESTONE
+  `fcalls` micro is 1.8x faster, with its tail external calls now at parity with the GRiSP
+  BEAM arm32 JIT
 - JIT now inlines `erlang:map_size/1` when the `Type` chunk proves the argument is a map, reading
   the size directly (handling both the flat and tree map representations) instead of calling the
   BIF

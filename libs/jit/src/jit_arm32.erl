@@ -87,6 +87,9 @@
     decrement_reductions_and_maybe_schedule_next/1,
     call_or_schedule_next/2,
     call_only_or_schedule_next/2,
+    call_ext_with_cp_direct/4,
+    call_ext_last_direct/5,
+    call_primitive_direct/3,
     call_func_ptr/3,
     return_labels_and_lines/2,
     add_label/2,
@@ -244,6 +247,15 @@
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#6C}).
+-define(MODULE_IMPORTED_FUNCS(ModuleReg), {ModuleReg, 16#48}).
+%% struct ModuleFunction: base.type, then the resolved target and its native
+%% entry point. ModuleNativeFunction is enum FunctionType's value 7.
+-define(MODULE_FUNCTION_TYPE(FuncReg), {FuncReg, 0}).
+-define(MODULE_FUNCTION_TARGET(FuncReg), {FuncReg, 4}).
+-define(MODULE_FUNCTION_ENTRY_POINT(FuncReg), {FuncReg, 8}).
+-define(MODULE_NATIVE_FUNCTION_TYPE, 7).
+%% cp_t is two terms wide on 32-bit (CP_SIZE_IN_TERMS).
+-define(CP_SIZE_IN_TERMS, 2).
 
 -define(JUMP_TABLE_ENTRY_SIZE, 8).
 
@@ -620,7 +632,18 @@ call_primitive(StateP, Primitive, Args0) ->
     %% calls go through call_func_ptr directly and keep their ctx argument.)
     Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
     %% The callee reads ctx->x: any pending x store must stay.
-    call_primitive0(pending_clear_all(StateP), Primitive, Args).
+    call_primitive0(pending_clear_all(StateP), Primitive, Args, reload).
+
+%% As call_primitive/3, but without the post-call reload of the pinned e
+%% register. The *_direct primitives may return another Context because this
+%% process terminated, in which case ctx is already freed and reloading
+%% ctx->e would read freed memory: the caller emits the reload itself, past
+%% the untagged-result early-out (see direct_dispatch/3).
+-spec call_primitive_no_reload(state(), non_neg_integer(), [arg()]) ->
+    {state(), arm32_register()}.
+call_primitive_no_reload(StateP, Primitive, Args0) ->
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    call_primitive0(pending_clear_all(StateP), Primitive, Args, no_reload).
 
 call_primitive0(
     #state{
@@ -629,13 +652,18 @@ call_primitive0(
         regs = Regs0
     } = State,
     Primitive,
-    Args
+    Args,
+    Mode0
 ) ->
     Available = jit_regs:available_regs(Regs0),
-    Pure = prim_pure(Primitive),
+    Mode =
+        case prim_pure(Primitive) of
+            true -> pure;
+            false -> Mode0
+        end,
     case Available of
         0 ->
-            call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
+            call_func_ptr0(State, {primitive, Primitive}, Args, Mode);
         _ ->
             % Use an available register for loading the function pointer
             TempReg = first_avail(Available),
@@ -647,7 +675,7 @@ call_primitive0(
                 stream = Stream1,
                 regs = jit_regs:alloc_reg(Regs1, TempBit)
             },
-            call_func_ptr0(StateCall, {free, TempReg}, Args, Pure)
+            call_func_ptr0(StateCall, {free, TempReg}, Args, Mode)
     end.
 
 %%-----------------------------------------------------------------------------
@@ -1712,7 +1740,7 @@ call_func_ptr(StateP, FuncPtrTuple, Args) ->
     %% args are NOT filtered here: BIFs and computed function pointers take
     %% ctx explicitly (set_registers_args materializes it from r11);
     %% primitive calls are filtered in call_primitive/call_primitive_last.
-    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args, false).
+    call_func_ptr0(pending_clear_all(StateP), FuncPtrTuple, Args, reload).
 
 call_func_ptr0(
     #state{
@@ -1722,7 +1750,7 @@ call_func_ptr0(
     } = State0,
     FuncPtrTuple,
     Args,
-    Pure
+    Mode
 ) ->
     AvailableRegs0Mask = jit_regs:available_regs(Regs0),
     UsedRegs0Mask = jit_regs:used_regs(Regs0),
@@ -1868,9 +1896,9 @@ call_func_ptr0(
     %% Write e back to ctx: the callee — and any GC it triggers — must see a
     %% coherent stack state. Skipped for pure primitives (prim_pure/1).
     State4b =
-        case Pure of
-            true -> State4;
-            false -> emit_e_writeback(State4)
+        case Mode of
+            pure -> State4;
+            _ -> emit_e_writeback(State4)
         end,
     Stream4 = State4b#state.stream,
 
@@ -1929,9 +1957,9 @@ call_func_ptr0(
     Stream7b = pop_registers(lists:reverse(SavedRegs), StreamModule, Stream7),
     %% Reload e: the callee (or a GC it triggered) may have moved it.
     Stream8 =
-        case Pure of
-            true -> Stream7b;
-            false -> StreamModule:append(Stream7b, jit_arm32_asm:ldr(al, ?E_REG, ?Y_REGS))
+        case Mode of
+            reload -> StreamModule:append(Stream7b, jit_arm32_asm:ldr(al, ?E_REG, ?Y_REGS));
+            _ -> Stream7b
         end,
 
     AvailableRegs2 = lists:delete(ResultReg, AvailableRegs1),
@@ -4096,6 +4124,211 @@ set_cp(State0) ->
     Stream2 = StreamModule:append(Stream1, Code),
     State3 = State2#state{stream = Stream2},
     {State3, MOVOffset, TempReg}.
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_EXT with direct dispatch: the primitive resolves the callee
+%% and returns a tagged result the call site acts on in generated code,
+%% instead of returning to the C dispatch loop for it to re-enter native
+%% code. See direct_dispatch/3 for the result encoding.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_ext_with_cp_direct(state(), non_neg_integer(), non_neg_integer(), [arg()]) -> state().
+call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
+    {State1, LiteralOffset} = set_cp_direct(State0),
+    State1b = emit_call_ext_fast_path(State1, Index, no_frame_pop),
+    {State2, ResultReg} = call_primitive_no_reload(State1b, Primitive, Args),
+    %% JIT_NATIVE_STAY (a NIF that returned to this very call site) falls
+    %% through the dispatch block, so the resume point -- and with it the cp
+    %% this site just stored -- is the instruction after it.
+    State3 = direct_dispatch(State2, ResultReg, true),
+    State4 = free_native_register(State3, ResultReg),
+    State5 = rewrite_cp_literal(State4, LiteralOffset),
+    State5#state{regs = jit_regs:invalidate_all(State5#state.regs)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Tail-position variant of call_ext_with_cp_direct: no cp is set (the
+%% callee returns to this caller's caller), but the dispatch on the tagged
+%% result is the same. Used for OP_CALL_EXT_LAST/ONLY and for OP_RETURN's
+%% cross-module path. Code after this is unreachable from this site.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_primitive_direct(state(), non_neg_integer(), [arg()]) -> state().
+call_primitive_direct(State0, Primitive, Args) ->
+    {State1, ResultReg} = call_primitive_no_reload(State0, Primitive, Args),
+    State2 = direct_dispatch(State1, ResultReg, false),
+    State3 = free_native_register(State2, ResultReg),
+    State4 = State3#state{regs = jit_regs:invalidate_all(State3#state.regs)},
+    flush_literal_pool(State4).
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with the same inline resolved fast
+%% path as call_ext_with_cp_direct. Tail position: no cp is set here; for
+%% CALL_EXT_LAST (NWords >= 0) the fast path also pops the frame exactly like
+%% the primitive would.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_ext_last_direct(state(), non_neg_integer(), non_neg_integer(), integer(), [arg()]) ->
+    state().
+call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
+    State1 = emit_call_ext_fast_path(State0, Index, NWords),
+    call_primitive_direct(State1, Primitive, Args).
+
+%% @private
+%% Resolve module->imported_funcs[Index] inline and branch to the callee's
+%% native entry, so an already-resolved cross-module call costs no C call at
+%% all. Anything else -- an unresolved import, a BIF, a NIF, a target not yet
+%% native-loaded -- falls through to the primitive, whose tagged-result
+%% dispatch is unchanged. Emits nothing when the offsets do not fit an ldr
+%% immediate or there are too few scratch registers.
+-spec emit_call_ext_fast_path(state(), non_neg_integer(), integer() | no_frame_pop) -> state().
+emit_call_ext_fast_path(StateP, Index, NWords) ->
+    %% The fast path branches to the callee without a C call, and the callee
+    %% reads ctx->x: deferred x stores must be committed before the branch,
+    %% not by the primitive call that only the slow path reaches.
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
+        State0 = pending_clear_all(StateP),
+    Avail = mask_to_list(jit_regs:available_regs(Regs0)),
+    FramePopFits =
+        case NWords of
+            no_frame_pop -> true;
+            N when N < 0 -> true;
+            N -> N * 4 + 4 =< 4095
+        end,
+    case length(Avail) >= 3 andalso Index * 4 =< 4095 andalso FramePopFits of
+        false ->
+            State0;
+        true ->
+            [T0, T1, T2 | _] = Avail,
+            %% ctx->cp = load_cp(ctx->e + NWords); ctx->e += NWords + CP_SIZE_IN_TERMS.
+            %% cp_t spans two words on 32-bit, so it moves in two halves.
+            FramePop =
+                case is_integer(NWords) andalso NWords >= 0 of
+                    true ->
+                        <<
+                            (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4}))/binary,
+                            (jit_arm32_asm:str(al, T2, ?CP))/binary,
+                            (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4 + 4}))/binary,
+                            (jit_arm32_asm:str(al, T2, ?CP_MODULE))/binary,
+                            (jit_arm32_asm:add(
+                                al, ?E_REG, ?E_REG, (NWords + ?CP_SIZE_IN_TERMS) * 4
+                            ))/binary
+                        >>;
+                    false ->
+                        <<>>
+                end,
+            Head = <<
+                (jit_arm32_asm:ldr(al, T0, ?JITSTATE_MODULE(?JITSTATE_REG)))/binary,
+                (jit_arm32_asm:ldr(al, T0, ?MODULE_IMPORTED_FUNCS(T0)))/binary,
+                (jit_arm32_asm:ldr(al, T1, {T0, Index * 4}))/binary,
+                (jit_arm32_asm:ldr(al, T2, ?MODULE_FUNCTION_TYPE(T1)))/binary,
+                (jit_arm32_asm:cmp(al, T2, ?MODULE_NATIVE_FUNCTION_TYPE))/binary
+            >>,
+            Tail = <<
+                %% Acquire, pairing with the release store of the in-place
+                %% ModuleFunction -> ModuleNativeFunction upgrade in jit.c: an
+                %% upgraded type must imply the entry point written before it.
+                %% The branch above is only a control dependency, which ARM
+                %% lets the target loads speculate past, so carry the type
+                %% value into their base register instead -- an address
+                %% dependency is ordered, and unlike dmb it exists on ARMv6.
+                %% The and also leaves T2 zeroed for the continuation store.
+                (jit_arm32_asm:and_(al, T2, T2, 0))/binary,
+                (jit_arm32_asm:add(al, T1, T1, T2))/binary,
+                %% Clear any stale continuation, like the *_direct C wrappers.
+                (jit_arm32_asm:str(al, T2, ?JITSTATE_CONTINUATION(?JITSTATE_REG)))/binary,
+                FramePop/binary,
+                (jit_arm32_asm:ldr(al, T2, ?MODULE_FUNCTION_TARGET(T1)))/binary,
+                (jit_arm32_asm:ldr(al, T1, ?MODULE_FUNCTION_ENTRY_POINT(T1)))/binary,
+                (jit_arm32_asm:str(al, T2, ?JITSTATE_MODULE(?JITSTATE_REG)))/binary,
+                (jit_arm32_asm:bx(al, T1))/binary
+            >>,
+            %% Not ModuleNativeFunction: skip the whole tail and take the
+            %% primitive that follows this block.
+            IBne = jit_arm32_asm:b(ne, 4 + byte_size(Tail)),
+            Code = <<Head/binary, IBne/binary, Tail/binary>>,
+            State0#state{stream = StreamModule:append(Stream0, Code)}
+    end.
+
+%% @private
+%% Dispatch on a *_direct primitive's tagged result (jit.c, JIT_DIRECT_TAGGED
+%% and JIT_NATIVE_STAY):
+%%   bit 0 clear           -- a Context *: return it to the C dispatch loop.
+%%   bits 0 and 1 set (3)  -- JIT_NATIVE_STAY: the continuation is this site's
+%%                            own fall-through, so just carry on inline. Only
+%%                            reachable from call sites that set a cp, hence
+%%                            the TestStay flag.
+%%   bit 0 set, bit 1 clear -- a tagged native entry point: branch to it.
+%% The e reload sits past the untagged early-out: an untagged result is
+%% another Context, and this one may already be freed.
+-spec direct_dispatch(state(), arm32_register(), boolean()) -> state().
+direct_dispatch(
+    #state{stream_module = StreamModule, stream = Stream0} = State0, ResultReg, TestStay
+) ->
+    MovRet =
+        case ResultReg of
+            r0 -> <<>>;
+            _ -> jit_arm32_asm:mov(al, r0, ResultReg)
+        end,
+    IRet = jit_arm32_asm:bx(al, lr),
+    IReload = jit_arm32_asm:ldr(al, ?E_REG, ?Y_REGS),
+    IClearTag = jit_arm32_asm:bic(al, ResultReg, ResultReg, 3),
+    IBranch = jit_arm32_asm:bx(al, ResultReg),
+    ITest0 = jit_arm32_asm:tst(al, ResultReg, 1),
+    %% Skip the return path when bit 0 is set.
+    IBne0 = jit_arm32_asm:b(ne, 4 + byte_size(MovRet) + byte_size(IRet)),
+    Tail =
+        case TestStay of
+            true ->
+                ITest1 = jit_arm32_asm:tst(al, ResultReg, 2),
+                %% Bit 1 set as well: JIT_NATIVE_STAY, fall through past the
+                %% branch pair to the instruction after this block.
+                IBne1 = jit_arm32_asm:b(
+                    ne, 4 + byte_size(IClearTag) + byte_size(IBranch)
+                ),
+                <<ITest1/binary, IBne1/binary, IClearTag/binary, IBranch/binary>>;
+            false ->
+                <<IClearTag/binary, IBranch/binary>>
+        end,
+    Code = <<ITest0/binary, IBne0/binary, MovRet/binary, IRet/binary, IReload/binary, Tail/binary>>,
+    State0#state{stream = StreamModule:append(Stream0, Code)}.
+
+%% @private
+%% cp for a call site whose fall-through is reachable (call_ext_with_cp_direct).
+%% set_cp/1 cannot be used there: when the return offset does not fit an ARM
+%% rotated immediate it appends the literal at the resume point, which the
+%% JIT_NATIVE_STAY path would then execute. Reserve the literal here instead,
+%% inside the never-executed shadow of an unconditional branch, so the layout
+%% is the same whatever the offset turns out to be.
+-spec set_cp_direct(state()) -> {state(), non_neg_integer()}.
+set_cp_direct(State0) ->
+    {#state{stream_module = StreamModule, stream = Stream0} = State1, ModReg} =
+        get_module(State0),
+    IModStore = jit_arm32_asm:str(al, ModReg, ?CP_MODULE),
+    Stream1 = StreamModule:append(Stream0, IModStore),
+    State2 = free_native_register(State1#state{stream = Stream1}, ModReg),
+    TempReg = first_avail(jit_regs:available_regs(State2#state.regs)),
+    %% ldr reads at pc+8, i.e. the literal two instructions down; the branch
+    %% over it lands on the str.
+    ILoad = jit_arm32_asm:ldr(al, TempReg, {pc, 0}),
+    ISkip = jit_arm32_asm:b(al, 8),
+    LiteralOffset = StreamModule:offset(Stream1) + byte_size(ILoad) + byte_size(ISkip),
+    IStore = jit_arm32_asm:str(al, TempReg, ?CP),
+    Stream2 = StreamModule:append(
+        Stream1, <<ILoad/binary, ISkip/binary, 0:32, IStore/binary>>
+    ),
+    {State2#state{stream = Stream2}, LiteralOffset}.
+
+%% @private
+%% Patch set_cp_direct/1's reserved literal with the resume offset, now that
+%% the whole call sequence has been emitted and the resume point is known.
+-spec rewrite_cp_literal(state(), non_neg_integer()) -> state().
+rewrite_cp_literal(
+    #state{stream_module = StreamModule, stream = Stream0, offset = CodeOffset} = State0,
+    LiteralOffset
+) ->
+    OffsetImm = (StreamModule:offset(Stream0) - CodeOffset) bsl 2,
+    Stream1 = StreamModule:replace(Stream0, LiteralOffset, <<OffsetImm:32/little>>),
+    State0#state{stream = Stream1}.
 
 -spec rewrite_cp_offset(state(), non_neg_integer(), arm32_register()) -> state().
 rewrite_cp_offset(
