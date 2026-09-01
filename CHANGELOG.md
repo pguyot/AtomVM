@@ -236,6 +236,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the arm32, xtensa, riscv32 and riscv64 JIT backends crashing on tuple element access
   past the load/store displacement range of the architecture (index 1024 on arm32, 256 on
   xtensa, 512 on riscv32, 256 on riscv64) for some destination shapes
+- Fixed `'$$'` in an `ets:select/2,3` match specification body returning the bound variables
+  sorted as atoms rather than by number, so a match specification binding ten or more variables
+  listed `'$10'` before `'$2'`
+- Fixed `bs_add` scaling the sum of both operands by the unit instead of only the second one
+  (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
+  and 27 out of segments whose total width is neither a whole number of bytes nor under one
+  came out too long
 
 ## [0.7.0-beta.0] - 2026-09-28
 
