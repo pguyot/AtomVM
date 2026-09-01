@@ -32,6 +32,7 @@ test() ->
     ok = test_send_after_2(),
     ok = test_send_after_3(),
     ok = test_apply_after(),
+    ok = test_tc(),
     ok.
 
 test_timer() ->
@@ -130,3 +131,9 @@ test_apply_after() ->
         after 10000 ->
             {error, timeout}
         end.
+
+test_tc() ->
+    {Elapsed, {hello, world}} = timer:tc(erlang, list_to_tuple, [[hello, world]]),
+    ok = etest:assert_true(is_integer(Elapsed)),
+    ok = etest:assert_true(Elapsed >= 0),
+    ok.
