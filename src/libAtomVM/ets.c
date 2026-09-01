@@ -617,6 +617,69 @@ ets_result_t ets_to_list_maybe_gc(term name_or_ref, term *ret, Context *ctx)
     return EtsOk;
 }
 
+// Keys come from the ETS heap, copy them to the process heap. An invalid term
+// marks the end of the traversal and is passed through as is.
+static ets_result_t copy_key_maybe_gc(term key, term *ret, Context *ctx)
+{
+    if (term_is_invalid_term(key)) {
+        *ret = key;
+        return EtsOk;
+    }
+
+    size_t key_size = memory_estimate_usage(key);
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, key_size, 0, NULL, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        return EtsAllocationError;
+    }
+    *ret = memory_copy_term_tree(&ctx->heap, key);
+    return EtsOk;
+}
+
+ets_result_t ets_first_maybe_gc(term name_or_ref, term *ret, Context *ctx)
+{
+    assert(ret != NULL);
+
+    struct EtsTable *table = get_table(
+        &ctx->global->ets,
+        name_or_ref,
+        ctx->process_id,
+        TableAccessRead);
+
+    if (table == NULL) {
+        return EtsBadAccess;
+    }
+
+    ets_result_t result = copy_key_maybe_gc(ets_multimap_first_key(table->multimap), ret, ctx);
+
+    SMP_UNLOCK(table);
+
+    return result;
+}
+
+ets_result_t ets_next_maybe_gc(term name_or_ref, term key, term *ret, Context *ctx)
+{
+    assert(ret != NULL);
+
+    struct EtsTable *table = get_table(
+        &ctx->global->ets,
+        name_or_ref,
+        ctx->process_id,
+        TableAccessRead);
+
+    if (table == NULL) {
+        return EtsBadAccess;
+    }
+
+    term next_key;
+    ets_result_t result = ets_multimap_next_key(table->multimap, key, &next_key, ctx->global);
+    if (result == EtsOk) {
+        result = copy_key_maybe_gc(next_key, ret, ctx);
+    }
+
+    SMP_UNLOCK(table);
+
+    return result;
+}
+
 void ets_delete_owned_tables(Ets *ets, int32_t process_id, GlobalContext *global)
 {
     struct ListHead *ets_tables = synclist_wrlock(&ets->ets_tables);
