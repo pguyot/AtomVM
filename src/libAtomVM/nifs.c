@@ -242,6 +242,8 @@ static term nif_ets_take(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete(Context *ctx, int argc, term argv[]);
 static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
+static term nif_ets_first(Context *ctx, int argc, term argv[]);
+static term nif_ets_next(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term argv[]);
@@ -846,6 +848,16 @@ static const struct Nif ets_delete_object_nif = {
 static const struct Nif ets_tab2list_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ets_tab2list
+};
+
+static const struct Nif ets_first_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ets_first
+};
+
+static const struct Nif ets_next_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ets_next
 };
 
 static const struct Nif phash2_nif = {
@@ -5380,6 +5392,49 @@ static term nif_ets_tab2list(Context *ctx, int argc, term argv[])
         default:
             UNREACHABLE();
     }
+}
+
+// ets:first/1 and ets:next/2 report the end of the traversal with an invalid
+// term, which is what '$end_of_table' means to Erlang code.
+static term ets_key_or_end_of_table(Context *ctx, term key)
+{
+    return term_is_invalid_term(key)
+        ? globalcontext_make_atom(ctx->global, ATOM_STR("\xD", "$end_of_table"))
+        : key;
+}
+
+static term nif_ets_first(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[0], is_ets_table_id);
+
+    term ret;
+    ets_result_t result = ets_first_maybe_gc(argv[0], &ret, ctx);
+    if (UNLIKELY(result == EtsAllocationError)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    } else if (UNLIKELY(result != EtsOk)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    return ets_key_or_end_of_table(ctx, ret);
+}
+
+static term nif_ets_next(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[0], is_ets_table_id);
+
+    term ret;
+    // Unlike ordered_set tables, which AtomVM does not support, an unknown key
+    // is a badarg rather than the start of a traversal.
+    ets_result_t result = ets_next_maybe_gc(argv[0], argv[1], &ret, ctx);
+    if (UNLIKELY(result == EtsAllocationError)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    } else if (UNLIKELY(result != EtsOk)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    return ets_key_or_end_of_table(ctx, ret);
 }
 
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[])

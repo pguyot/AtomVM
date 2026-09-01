@@ -40,6 +40,7 @@ static ets_result_t node_find(
     EtsMultimapNode **out_node,
     GlobalContext *global);
 static term node_key(EtsMultimap *multimap, EtsMultimapNode *node);
+static term first_key_from_bucket(EtsMultimap *multimap, size_t bucket);
 static void multimap_to_single(EtsMultimap *multimap, GlobalContext *global);
 static void insert_revert(
     EtsMultimap *multimap,
@@ -125,6 +126,39 @@ ets_result_t ets_multimap_lookup(
         (*tuples)[i] = iter->tuple;
     }
 
+    return EtsOk;
+}
+
+term ets_multimap_first_key(EtsMultimap *multimap)
+{
+    return first_key_from_bucket(multimap, 0);
+}
+
+ets_result_t ets_multimap_next_key(
+    EtsMultimap *multimap,
+    term key,
+    term *next_key,
+    GlobalContext *global)
+{
+    assert(next_key != NULL);
+
+    EtsMultimapNode *node;
+    ets_result_t result = node_find(multimap, key, &node, global);
+    if (UNLIKELY(result != EtsOk)) {
+        return result;
+    }
+    if (node == NULL) {
+        return EtsTupleNotExists;
+    }
+
+    if (node->next != NULL) {
+        *next_key = node_key(multimap, node->next);
+        return EtsOk;
+    }
+
+    // Last node of its bucket: resume at the head of the following one.
+    uint32_t idx = term_hash(key, global) % ETS_MULTIMAP_NUM_BUCKETS;
+    *next_key = first_key_from_bucket(multimap, idx + 1);
     return EtsOk;
 }
 
@@ -480,6 +514,16 @@ static term node_key(EtsMultimap *multimap, EtsMultimapNode *node)
     EtsMultimapEntry *entry = node->entries;
     assert(entry != NULL);
     return term_get_tuple_element(entry->tuple, multimap->key_index);
+}
+
+static term first_key_from_bucket(EtsMultimap *multimap, size_t bucket)
+{
+    for (; bucket < ETS_MULTIMAP_NUM_BUCKETS; bucket++) {
+        if (multimap->buckets[bucket] != NULL) {
+            return node_key(multimap, multimap->buckets[bucket]);
+        }
+    }
+    return term_invalid_term();
 }
 
 static EtsMultimapNode *node_new(EtsMultimapNode *next, EtsMultimapEntry *entries)
