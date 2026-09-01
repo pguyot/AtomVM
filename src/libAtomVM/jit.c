@@ -249,6 +249,10 @@ _Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->rema
 _Static_assert(offsetof(JITState, fr) == 0xC, "jit_state->fr is 0xC in 32-bit backends");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
+// Offsets for the inline resolved call_ext fast path.
+_Static_assert(offsetof(Module, imported_funcs) == 0x48, "module->imported_funcs is 0x48 in jit/src/jit_arm32.erl");
+_Static_assert(offsetof(struct ModuleFunction, target) == 0x4, "module_function->target is 0x4 in jit/src/jit_arm32.erl");
+_Static_assert(offsetof(struct ModuleFunction, entry_point) == 0x8, "module_function->entry_point is 0x8 in jit/src/jit_arm32.erl");
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
 _Static_assert(offsetof(JITState, code_base) == 0x10, "jit_state->code_base is 0x10 in jit/src/jit_xtensa.erl");
 #endif
