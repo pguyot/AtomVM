@@ -27,7 +27,7 @@
 %%-----------------------------------------------------------------------------
 -module(timer).
 
--export([sleep/1, send_after/2, send_after/3, apply_after/4, tc/1]).
+-export([sleep/1, send_after/2, send_after/3, apply_after/4, tc/1, tc/3]).
 
 %%-----------------------------------------------------------------------------
 %% @param Timeout number of milliseconds to sleep or `infinity'
@@ -109,3 +109,18 @@ tc(Fun) ->
     T1 = erlang:monotonic_time(),
     Time = erlang:convert_time_unit(T1 - T0, native, microsecond),
     {Time, Value}.
+
+%%-----------------------------------------------------------------------------
+%% @param Module the module of the function to measure.
+%% @param Function the name of the function to measure.
+%% @param Arguments the arguments to call the function with.
+%% @returns `{Time, Value}' where `Time' is the elapsed time in microseconds
+%%          and `Value' is what the function returned.
+%%
+%% @doc Measures the execution time of `Module:Function(Arguments)'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec tc(Module :: module(), Function :: atom(), Arguments :: [term()]) ->
+    {non_neg_integer(), any()}.
+tc(Module, Function, Arguments) ->
+    tc(fun() -> apply(Module, Function, Arguments) end).
