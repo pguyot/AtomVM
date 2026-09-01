@@ -61,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the JIT can now be built and run on OTP 27
 - Added `ets:first/1` and `ets:next/2` to traverse the keys of a table; the traversal order is
   unspecified, as for `set` tables on Erlang/OTP
+- Added `ets:match/2`
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.
