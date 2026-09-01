@@ -24,7 +24,7 @@
 %%-----------------------------------------------------------------------------
 -module(erts_debug).
 
--export([flat_size/1]).
+-export([flat_size/1, size_shared/1]).
 
 %%-----------------------------------------------------------------------------
 %% @param   Term        term to get the size of
@@ -34,4 +34,20 @@
 %%-----------------------------------------------------------------------------
 -spec flat_size(Term :: any()) -> non_neg_integer().
 flat_size(_Term) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Term        term to get the size of
+%% @returns A size
+%% @doc     Return the size, in terms, of a given term, counting subterms that
+%%          are shared within it only once.
+%%
+%%          AtomVM does not preserve sharing: every term copy (message send,
+%%          ETS read, `binary_to_term/1', ...) expands shared subterms, so this
+%%          function currently returns the same value as {@link flat_size/1},
+%%          which is the size the term takes once copied.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec size_shared(Term :: any()) -> non_neg_integer().
+size_shared(_Term) ->
     erlang:nif_error(undefined).
