@@ -90,6 +90,9 @@
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
     call_primitive_direct/3,
+    read_avail_heap_memory/1,
+    read_heap_fragments/1,
+    allocate_frame_fast/2,
     call_func_ptr/3,
     return_labels_and_lines/2,
     add_label/2,
@@ -198,7 +201,8 @@
     {free, arm32_register()} | arm32_register().
 
 -type condition() ::
-    {arm32_register(), '<', integer()}
+    {arm32_register(), '(uint)>', integer()}
+    | {arm32_register(), '<', integer()}
     | {maybe_free_arm32_register(), '<', arm32_register()}
     | {maybe_free_arm32_register(), '<u', arm32_register()}
     | {integer(), '<', maybe_free_arm32_register()}
@@ -229,6 +233,10 @@
 %% primitives listed in jit_prim_pure.hrl.
 -define(E_REG, r8).
 -define(Y_REGS, {?CTX_REG, 16#28}).
+%% ctx->heap: root at 0x4 (its ->next is the pending-fragment list) and
+%% heap_ptr at 0xC. hp is not pinned on arm32, so it is loaded when needed.
+-define(HEAP_ROOT, {?CTX_REG, 16#4}).
+-define(HEAP_PTR, {?CTX_REG, 16#C}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 % ctx->cp is a 64-bit cp_t occupying two slots (little-endian targets):
 % ?CP holds the low word (offset << 2), ?CP_MODULE holds the high word (Module*).
@@ -1146,6 +1154,36 @@ if_block_cond(#state{stream_module = StreamModule, stream = Stream0} = State0, m
     I = jit_arm32_asm:b(eq, 0),
     Stream1 = StreamModule:append(Stream0, I),
     {State0#state{stream = Stream1}, eq, 0};
+%% Handle {Reg, '(uint)>', Val}: unsigned compare, skip the block when Reg is
+%% lower or same. Val is loaded into a temp when it is not an ARM rotated
+%% immediate.
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    {RegOrTuple, '(uint)>', Val}
+) when is_integer(Val) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    Offset0 = StreamModule:offset(Stream0),
+    {State1, CmpRhs} =
+        case jit_arm32_asm:encode_imm(Val) of
+            false ->
+                Temp = first_avail(jit_regs:available_regs(Regs0)),
+                StateT = mov_immediate(State0, Temp, Val),
+                {StateT#state{regs = jit_regs:invalidate_reg(StateT#state.regs, Temp)}, Temp};
+            _ ->
+                {State0, Val}
+        end,
+    Stream1 = State1#state.stream,
+    Offset1 = StreamModule:offset(Stream1),
+    I1 = jit_arm32_asm:cmp(al, Reg, CmpRhs),
+    I2 = jit_arm32_asm:b(ls, 0),
+    Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
+    State2 = if_block_free_reg(RegOrTuple, State1),
+    State3 = State2#state{stream = Stream2},
+    {State3, ls, Offset1 - Offset0 + byte_size(I1)};
 %% Handle {Val, '<', Reg} which means "Val < Reg" or "Reg > Val"
 %% For immediate value 0-255
 if_block_cond(
@@ -3275,7 +3313,6 @@ set_continuation_to_offset(
     } = State = pending_clear_all(StateP),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    TempJitState = first_avail(Avail band (bnot reg_bit(Temp))),
     OffsetRef = make_ref(),
     Offset = StreamModule:offset(Stream0),
     % In ARM32, use add(al, Temp, pc, #imm) as placeholder - will be patched
@@ -3284,12 +3321,10 @@ set_continuation_to_offset(
     ?ASSERT(byte_size(jit_arm32_asm:add(al, Temp, pc, 0)) =:= 4),
     I1 = <<16#FFFFFFFF:32>>,
     BrEntry = {Offset, {add_pc, Temp}},
-    % Load jit_state pointer from stack, then store continuation
-    I2 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_CONTINUATION(TempJitState)),
-    Code = <<I1/binary, I2/binary, I3/binary>>,
+    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_CONTINUATION(?JITSTATE_REG)),
+    Code = <<I1/binary, I3/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Temp), TempJitState),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     {
         State#state{stream = Stream1, branches = Branches#{OffsetRef => [BrEntry]}, regs = Regs1},
         OffsetRef
@@ -3320,15 +3355,11 @@ get_module_index(
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
     RegBit = reg_bit(Reg),
-    Avail1 = Avail band (bnot RegBit),
-    TempJitState = first_avail(Avail1),
-    % Load jit_state pointer from stack, then load module
-    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
+    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(?JITSTATE_REG)),
     I2 = jit_arm32_asm:ldr(al, Reg, ?MODULE_INDEX(Reg)),
-    Code = <<I1a/binary, I1b/binary, I2/binary>>,
+    Code = <<I1b/binary, I2/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(Regs0, TempJitState),
+    Regs1 = Regs0,
     Regs2 = jit_regs:set_contents(Regs1, Reg, module_index),
     Regs3 = jit_regs:alloc_reg(Regs2, RegBit),
     {
@@ -3346,13 +3377,9 @@ get_module(
     Avail = jit_regs:available_regs(Regs0),
     Reg = first_avail(Avail),
     RegBit = reg_bit(Reg),
-    Avail1 = Avail band (bnot RegBit),
-    TempJitState = first_avail(Avail1),
-    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
-    Code = <<I1a/binary, I1b/binary>>,
-    Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, TempJitState), Reg),
+    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(?JITSTATE_REG)),
+    Stream1 = StreamModule:append(Stream0, I1b),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     Regs2 = jit_regs:alloc_reg(Regs1, RegBit),
     {State#state{stream = Stream1, regs = Regs2}, Reg}.
 
@@ -3398,12 +3425,10 @@ get_module_atom_index(
     RegBit = reg_bit(Reg),
     Avail1 = Avail band (bnot RegBit),
     TempJitState = first_avail(Avail1),
-    % Load jit_state pointer from stack, then Reg = jit_state->module
-    I1a = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(TempJitState)),
+    I1b = jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(?JITSTATE_REG)),
     % Reg = module->local_atoms_to_global_table
     I2 = jit_arm32_asm:ldr(al, Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
-    Stream1 = StreamModule:append(Stream0, <<I1a/binary, I1b/binary, I2/binary>>),
+    Stream1 = StreamModule:append(Stream0, <<I1b/binary, I2/binary>>),
     % Reg = local_atoms_to_global_table[AtomIndex] (table is uint32_t[]; each
     % entry is 4 bytes). ldr immediate offset range is 0..4095. For larger
     % offsets, materialize the offset into a temp register (reusing TempJitState,
@@ -3827,7 +3852,9 @@ add_overflow(
     I = jit_arm32_asm:adds(al, Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    State#state{stream = Stream1, regs = Regs1};
+add_overflow(State, Reg, Val) when is_integer(Val) ->
+    addsub_overflow_imm(State, fun jit_arm32_asm:adds/4, Reg, Val).
 
 %% Subtract register Val from Reg in place, setting flags. See add_overflow/3.
 sub_overflow(
@@ -3836,7 +3863,29 @@ sub_overflow(
     I = jit_arm32_asm:subs(al, Reg, Reg, Val),
     Stream1 = StreamModule:append(Stream0, I),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    State#state{stream = Stream1, regs = Regs1}.
+    State#state{stream = Stream1, regs = Regs1};
+sub_overflow(State, Reg, Val) when is_integer(Val) ->
+    addsub_overflow_imm(State, fun jit_arm32_asm:subs/4, Reg, Val).
+
+%% @private
+%% Flag-setting add/sub of a literal: straight to an immediate when it is an
+%% ARM rotated immediate, otherwise through a temporary.
+addsub_overflow_imm(#state{regs = Regs0} = State0, AsmFun, Reg, Val) ->
+    {State1, Rhs} =
+        case jit_arm32_asm:encode_imm(Val) of
+            false ->
+                Temp = first_avail(jit_regs:available_regs(Regs0)),
+                StateT = mov_immediate(State0, Temp, Val),
+                {StateT#state{regs = jit_regs:invalidate_reg(StateT#state.regs, Temp)}, Temp};
+            _ ->
+                {State0, Val}
+        end,
+    #state{stream_module = StreamModule, stream = Stream1, regs = Regs1} = State1,
+    I = AsmFun(al, Reg, Reg, Rhs),
+    State1#state{
+        stream = StreamModule:append(Stream1, I),
+        regs = jit_regs:invalidate_reg(Regs1, Reg)
+    }.
 
 %% Multiply two tagged small integers Reg and Val, leaving the product shifted
 %% into the value field of Reg but WITHOUT the small-integer tag (low bits
@@ -3998,16 +4047,12 @@ decrement_reductions_and_maybe_schedule_next(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    TempJitState = first_avail(Avail band (bnot reg_bit(Temp))),
-    % Load jit_state pointer from stack
-    I0 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    % Load reduction count
-    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
-    % Decrement reduction count
+    % jit_state is pinned: load, decrement and store the reduction count
+    % through it directly.
+    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
     I2 = jit_arm32_asm:subs(al, Temp, Temp, 1),
-    % Store back the decremented value
-    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
-    Stream1 = StreamModule:append(Stream0, <<I0/binary, I1/binary, I2/binary, I3/binary>>),
+    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     BNEOffset = StreamModule:offset(Stream1),
     % Branch if reduction count is not zero
     ?ASSERT(byte_size(jit_arm32_asm:b(ne, 0)) =:= 4),
@@ -4016,7 +4061,7 @@ decrement_reductions_and_maybe_schedule_next(
     AddPCOffset = BNEOffset + byte_size(I4),
     ?ASSERT(byte_size(jit_arm32_asm:add(al, Temp, pc, 0)) =:= 4),
     I5 = <<16#FFFFFFFF:32>>,
-    I6 = jit_arm32_asm:str(al, Temp, ?JITSTATE_CONTINUATION(TempJitState)),
+    I6 = jit_arm32_asm:str(al, Temp, ?JITSTATE_CONTINUATION(?JITSTATE_REG)),
     % Append the instructions to the stream
     Stream2 = StreamModule:append(Stream1, <<I4/binary, I5/binary, I6/binary>>),
     State1 = State0#state{stream = Stream2},
@@ -4057,16 +4102,12 @@ call_only_or_schedule_next(
     } = State0 = pending_filter_label(StateP, Label),
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    TempJitState = first_avail(Avail band (bnot reg_bit(Temp))),
-    % Load jit_state pointer from stack
-    I0 = jit_arm32_asm:mov(al, TempJitState, ?JITSTATE_REG),
-    % Load reduction count
-    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
-    % Decrement reduction count
+    % jit_state is pinned: load, decrement and store the reduction count
+    % through it directly.
+    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
     I2 = jit_arm32_asm:subs(al, Temp, Temp, 1),
-    % Store back the decremented value
-    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(TempJitState)),
-    Stream1 = StreamModule:append(Stream0, <<I0/binary, I1/binary, I2/binary, I3/binary>>),
+    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     % Use trampoline technique: branch if zero (eq) to skip over the long branch
     % If not zero, we want to continue execution at Label
     % If zero, we want to fall through to scheduling code
@@ -4124,6 +4165,63 @@ set_cp(State0) ->
     Stream2 = StreamModule:append(Stream1, Code),
     State3 = State2#state{stream = Stream2},
     {State3, MOVOffset, TempReg}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Words between hp and e, in a freshly allocated register, so
+%% OP_ALLOCATE can decide inline whether the frame fits. Unlike aarch64 and
+%% x86_64, arm32 does not pin hp -- there are no inline heap operations here --
+%% so it is loaded from ctx.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_avail_heap_memory(state()) -> {state(), arm32_register()}.
+read_avail_heap_memory(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_arm32_asm:ldr(al, Reg, ?HEAP_PTR),
+    I2 = jit_arm32_asm:sub(al, Reg, ?E_REG, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Load ctx->heap.root->next into a freshly allocated register, so
+%% OP_DEALLOCATE can test for pending heap fragments inline and only call the
+%% primitive (which compacts them) when there are any.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_heap_fragments(state()) -> {state(), arm32_register()}.
+read_heap_fragments(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = jit_arm32_asm:ldr(al, Reg, ?HEAP_ROOT),
+    I2 = jit_arm32_asm:ldr(al, Reg, {Reg, 0}),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Push a stack frame without calling the allocate primitive, once the
+%% caller has checked there is room: e -= StackNeed + CP_SIZE_IN_TERMS, then
+%% ctx->cp into the new frame. cp is a two-word cp_t on 32-bit, so it moves in
+%% two halves.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec allocate_frame_fast(state(), non_neg_integer()) -> state().
+allocate_frame_fast(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, StackNeed
+) ->
+    Tmp = first_avail(jit_regs:available_regs(Regs0)),
+    Code = <<
+        (jit_arm32_asm:sub(al, ?E_REG, ?E_REG, (StackNeed + ?CP_SIZE_IN_TERMS) * 4))/binary,
+        (jit_arm32_asm:ldr(al, Tmp, ?CP))/binary,
+        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4}))/binary,
+        (jit_arm32_asm:ldr(al, Tmp, ?CP_MODULE))/binary,
+        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4 + 4}))/binary
+    >>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    State#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Tmp)}.
 
 %%-----------------------------------------------------------------------------
 %% @doc OP_CALL_EXT with direct dispatch: the primitive resolves the callee
