@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unspecified, as for `set` tables on Erlang/OTP
 - Added `ets:match/2`
 - Added `timer:tc/3`
+- Added `erts_debug:size_shared/1`. AtomVM does not preserve sharing across term copies, so it
+  returns the same value as `erts_debug:flat_size/1`
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:

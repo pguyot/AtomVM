@@ -256,6 +256,7 @@ struct Test tests[] = {
 
     TEST_CASE_EXPECTED(simple_list_size0, 2),
     TEST_CASE_EXPECTED(simple_list_size1, 10),
+    TEST_CASE_EXPECTED(test_size_shared, 13),
 
     TEST_CASE(tuple_size0),
     TEST_CASE_EXPECTED(tuple_size1, 2),
