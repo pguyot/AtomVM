@@ -167,6 +167,7 @@ erlang:alias/0, &erlang_alias_nif
 erlang:alias/1, &erlang_alias_nif
 erlang:unalias/1, &erlang_unalias_nif
 erts_debug:flat_size/1, &flat_size_nif
+erts_debug:size_shared/1, &flat_size_nif
 erts_internal:cmp_term/2, &erts_internal_cmp_term_nif
 file:get_cwd/0, IF_HAVE_GETCWD_PATHMAX(&file_get_cwd_nif)
 ets:new/2, &ets_new_nif
