@@ -115,6 +115,41 @@ ets_result_t ets_multimap_insert(
     GlobalContext *global);
 
 /**
+ * @brief Get the key of the first node in traversal order.
+ *
+ * @param multimap the multimap
+ * @return the key, or an invalid term if the multimap is empty
+ *
+ * @note Terms returned by this function come from the ETS heap and should be copied
+ *       to the process heap if needed.
+ * @note Traversal order is unspecified but stable as long as the multimap is not
+ *       modified.
+ */
+term ets_multimap_first_key(EtsMultimap *multimap);
+
+/**
+ * @brief Get the key that follows `key` in traversal order.
+ *
+ * @param multimap the multimap
+ * @param key the key to start from
+ * @param[out] next_key the following key, or an invalid term if `key` is the last
+ *             one; must not be NULL
+ * @param global the global context
+ * @return EtsOk on success, EtsTupleNotExists if `key` is not in the multimap,
+ *         otherwise an error status
+ *
+ * @note Terms returned by this function come from the ETS heap and should be copied
+ *       to the process heap if needed.
+ * @note Traversal order is unspecified but stable as long as the multimap is not
+ *       modified.
+ */
+ets_result_t ets_multimap_next_key(
+    EtsMultimap *multimap,
+    term key,
+    term *next_key,
+    GlobalContext *global);
+
+/**
  * @brief Remove all tuples with the given key.
  *
  * @param multimap the multimap

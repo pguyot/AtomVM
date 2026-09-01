@@ -41,6 +41,8 @@
     delete/2,
     delete_object/2,
     tab2list/1,
+    first/1,
+    next/2,
     select/2,
     select/3,
     select_count/2,
@@ -306,6 +308,34 @@ delete_object(_Table, _Object) ->
 %%-----------------------------------------------------------------------------
 -spec tab2list(Table :: table()) -> [tuple()].
 tab2list(_Table) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @returns the first key of the table, or `'$end_of_table'' if it is empty
+%% @doc Return the first key of an ets table.
+%%
+%% Together with {@link next/2} this traverses every key of the table exactly
+%% once. The order is unspecified, as for `set' tables on Erlang/OTP, and the
+%% traversal is only meaningful as long as the table is not modified.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec first(Table :: table()) -> term() | '$end_of_table'.
+first(_Table) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   Key a key present in the table
+%% @returns the key following `Key', or `'$end_of_table'' if `Key' is the last
+%%          one
+%% @doc Return the key following `Key' in an ets table.
+%%
+%% Raises `badarg' if `Key' is not a key of the table. See {@link first/1}.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec next(Table :: table(), Key :: term()) -> term() | '$end_of_table'.
+next(_Table, _Key) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------

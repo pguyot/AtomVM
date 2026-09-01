@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bs_put_string`, `bs_utf8_size`, `bs_put_utf8`, `bs_utf16_size`, `bs_put_utf16`,
   `bs_put_utf32`), which OTP 26 and 27 emit for modules compiled with `no_bs_create_bin`, so
   the JIT can now be built and run on OTP 27
+- Added `ets:first/1` and `ets:next/2` to traverse the keys of a table; the traversal order is
+  unspecified, as for `set` tables on Erlang/OTP
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.
