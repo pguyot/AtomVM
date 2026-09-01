@@ -36,6 +36,7 @@ start() ->
     ok = isolated(fun test_take/0),
     ok = isolated(fun test_delete/0),
     ok = isolated(fun test_delete_object/0),
+    ok = isolated(fun test_traversal/0),
     0.
 
 test_ets_new() ->
@@ -775,6 +776,30 @@ assert_operation(T, Operation, Opts) ->
         _ ->
             Op()
     end.
+
+test_traversal() ->
+    Empty = ets:new(empty, []),
+    '$end_of_table' = ets:first(Empty),
+
+    % A key holding several objects is still visited exactly once.
+    T = new_table(
+        [bag, {keypos, 2}],
+        [{value_a, a}, {value_b1, b}, {value_b2, b}, {value_c, c}]
+    ),
+    [a, b, c] = lists:sort(traverse_keys(T, ets:first(T), [])),
+    assert_badarg(fun() -> ets:next(T, missing) end),
+
+    % More keys than buckets, so the traversal both walks bucket chains and
+    % moves on to the following buckets.
+    Keys = lists:seq(1, 100),
+    Many = new_table([{Key, Key} || Key <- Keys]),
+    Keys = lists:sort(traverse_keys(Many, ets:first(Many), [])),
+    ok.
+
+traverse_keys(_T, '$end_of_table', Acc) ->
+    Acc;
+traverse_keys(T, Key, Acc) ->
+    traverse_keys(T, ets:next(T, Key), [Key | Acc]).
 
 %%-----------------------------------------------------------------------------
 %% @doc Asserts that key can be used for insertion and retrieval of a value.

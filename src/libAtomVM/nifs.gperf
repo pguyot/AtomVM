@@ -185,6 +185,8 @@ ets:delete/1, &ets_delete_nif
 ets:delete/2, &ets_delete_nif
 ets:delete_object/2, &ets_delete_object_nif
 ets:tab2list/1, &ets_tab2list_nif
+ets:first/1, &ets_first_nif
+ets:next/2, &ets_next_nif
 erlang:phash2/1, &phash2_nif
 erlang:phash2/2, &phash2_nif
 atomvm:module_set_emulated/1, &atomvm_module_set_emulated_nif

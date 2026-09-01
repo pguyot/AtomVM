@@ -81,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
   port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
   images whose root filesystem does not ship libsodium
+- Added `ets:first/1` and `ets:next/2` to traverse the keys of a table; the traversal order is
+  unspecified, as for `set` tables on Erlang/OTP
 
 ### Changed
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
