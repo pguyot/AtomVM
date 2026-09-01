@@ -155,6 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed `'$$'` in an `ets:select/2,3` match specification body returning the bound variables
+  sorted as atoms rather than by number, so a match specification binding ten or more variables
+  listed `'$10'` before `'$2'`
 - Fixed `bs_add` scaling the sum of both operands by the unit instead of only the second one
   (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
   and 27 out of segments whose total width is neither a whole number of bytes nor under one

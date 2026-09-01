@@ -505,6 +505,12 @@ ms_variable(Atom) ->
     end.
 
 %% @private
+%% The `N' of a `'$N'' variable atom, which ms_variable/1 has already validated.
+ms_variable_number(Var) ->
+    [$$ | Digits] = atom_to_list(Var),
+    list_to_integer(Digits).
+
+%% @private
 ms_all_digits([]) -> true;
 ms_all_digits([C | T]) when C >= $0, C =< $9 -> ms_all_digits(T);
 ms_all_digits(_) -> false.
@@ -533,8 +539,13 @@ ms_body(Body, Bindings) ->
 ms_expr('$_', #{'$_' := Object}) ->
     Object;
 ms_expr('$$', Bindings) ->
-    Vars = lists:sort(maps:keys(maps:remove('$_', Bindings))),
-    [maps:get(V, Bindings) || V <- Vars];
+    % Bound variables in `'$1'', `'$2'', ... order: sorting the atoms would put
+    % `'$10'' before `'$2''.
+    Numbered = [
+        {ms_variable_number(Var), Value}
+     || {Var, Value} <- maps:to_list(Bindings), Var =/= '$_'
+    ],
+    [Value || {_Number, Value} <- lists:sort(Numbered)];
 ms_expr(Atom, Bindings) when is_atom(Atom) ->
     case ms_variable(Atom) of
         {ok, Var} ->
