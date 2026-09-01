@@ -41,6 +41,7 @@
     delete/2,
     delete_object/2,
     tab2list/1,
+    match/2,
     first/1,
     next/2,
     select/2,
@@ -309,6 +310,19 @@ delete_object(_Table, _Object) ->
 -spec tab2list(Table :: table()) -> [tuple()].
 tab2list(_Table) ->
     erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Table a reference to the ets table
+%% @param   Pattern a match pattern
+%% @returns for each matching object, the list of the values bound to `'$1'',
+%%          `'$2'', ... in the pattern, in that order
+%% @doc Match objects of a table against a match pattern. The order is
+%% unspecified.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec match(Table :: table(), Pattern :: term()) -> [[term()]].
+match(Table, Pattern) ->
+    select(Table, [{Pattern, [], ['$$']}]).
 
 %%-----------------------------------------------------------------------------
 %% @param   Table a reference to the ets table

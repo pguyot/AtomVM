@@ -26,6 +26,7 @@
 
 test() ->
     ok = test_select(),
+    ok = test_match(),
     ok.
 
 test_select() ->
@@ -38,6 +39,18 @@ test_select() ->
     Wide = new_table([{k, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}]),
     WidePattern = {'$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9', '$10', '$11'},
     [[k, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]] = ets:select(Wide, [{WidePattern, [], ['$$']}]),
+    ok.
+
+test_match() ->
+    T = new_table([{a, 1}, {b, 2}, {c, 1}]),
+    [[a], [c]] = lists:sort(ets:match(T, {'$1', 1})),
+    [[2]] = ets:match(T, {b, '$1'}),
+    [[], []] = ets:match(T, {'_', 1}),
+    [] = ets:match(T, {missing, '$1'}),
+
+    % A variable repeated in the pattern must bind to the same value everywhere.
+    Pairs = new_table([{1, 1}, {2, 3}]),
+    [[1]] = ets:match(Pairs, {'$1', '$1'}),
     ok.
 
 new_table(Tuples) ->
