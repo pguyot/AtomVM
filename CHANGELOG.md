@@ -175,6 +175,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed `'$$'` in an `ets:select/2,3` match specification body returning the bound variables
+  sorted as atoms rather than by number, so a match specification binding ten or more variables
+  listed `'$10'` before `'$2'`
+- Fixed `bs_add` scaling the sum of both operands by the unit instead of only the second one
+  (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
+  and 27 out of segments whose total width is neither a whole number of bytes nor under one
+  came out too long
 - Fixed the aarch64 JIT crashing when compiled with DWARF support (the default) on any module
   whose register cache holds a VM x register in x25-x28: the DWARF register table stopped at
   x21, so `dwarf_register_number/1` raised `function_clause` and the module failed to compile

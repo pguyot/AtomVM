@@ -75,6 +75,7 @@ get_non_networking_tests(_OTPVersion) ->
         test_process_info,
         test_proplists,
         test_erlang,
+        test_ets,
         test_queue,
         test_timer,
         test_spawn,
