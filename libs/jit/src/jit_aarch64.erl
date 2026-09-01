@@ -51,6 +51,7 @@
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
     supports_inline_tuple2_eq/0,
+    supports_select_val_binary_search/0,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -5233,6 +5234,13 @@ emit_call_ext_last_fast_path(State0, Index, NWords, T0, T1, T2, T3) ->
 %% (see jit:emit_tuple2_exact_eq/7) on backends exporting this.
 -spec supports_inline_tuple2_eq() -> true.
 supports_inline_tuple2_eq() ->
+    true.
+
+%% Capability marker: the generic layer emits OP_SELECT_VAL as a binary search
+%% over the unsigned tagged words (see jit:op_select_val_int_dispatch/5) on
+%% backends exporting this.
+-spec supports_select_val_binary_search() -> true.
+supports_select_val_binary_search() ->
     true.
 
 %% Tail-position variant of the *_with_cp_direct calls: no cp is set (the

@@ -103,6 +103,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
   proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
   immediate-tag test and the `term_compare` fallback of the untyped path
+- arm32 JIT now pushes and pops a stack frame inline: `allocate`/`allocate_heap` check for room
+  against the pinned `e` and store the two-word `cp_t` themselves, and `deallocate` restores it
+  unless heap fragments are pending, instead of calling a C primitive for each. The inline
+  `allocate` fast path is no longer restricted to 64-bit targets. arm32 also stops copying the
+  pinned `jit_state` register into a scratch before every access to it (reduction decrement,
+  module load, continuation store)
 - arm32 JIT now dispatches external calls in generated code instead of returning to the C
   scheduler loop for every one: `call_ext`, `call_ext_last`/`call_ext_only` and the
   cross-module `return` take the `*_direct` primitives, and an already-resolved call to a

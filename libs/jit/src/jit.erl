@@ -1242,14 +1242,18 @@ emit_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     %% When every case value is a static small-integer immediate, the tagged
     %% compare is type-safe for ANY source (a boxed term's word never equals
     %% an immediate), so no per-entry PRIM_TERM_COMPARE call is needed even
-    %% for untyped sources. For large lists, backends with the '(uint)>'
-    %% condition get a binary-search tree over the unsigned tagged words
-    %% (log2(N) compares, mirroring BeamAsm) instead of a linear chain.
+    %% for untyped sources. For large lists, backends advertising
+    %% supports_select_val_binary_search/0 get a binary-search tree over the
+    %% unsigned tagged words (log2(N) compares, mirroring BeamAsm) instead of a
+    %% linear chain.
     N = ListSize div 2,
     {MSt2, Rest4} =
         case scan_select_val_int_entries(Rest3, N, MMod, []) of
             {ok, Entries, RestAfter} ->
-                case erlang:function_exported(MMod, allocate_frame_fast, 2) andalso N >= 6 of
+                case
+                    erlang:function_exported(MMod, supports_select_val_binary_search, 0) andalso
+                        N >= 6
+                of
                     true ->
                         {
                             op_select_val_int_dispatch(
@@ -6106,12 +6110,12 @@ alloc_tuple(MMod, MSt0, Size) ->
 %% the next deallocate/test_heap slow path (which the GC accounts for
 %% anyway) is safe, and it keeps the check a single compare.
 op_allocate(MMod, MSt0, StackNeed, HeapNeed, Live) when is_integer(HeapNeed) ->
-    case
-        erlang:function_exported(MMod, allocate_frame_fast, 2) andalso
-            MMod:word_size() =:= 8 andalso StackNeed < 500
-    of
+    case erlang:function_exported(MMod, allocate_frame_fast, 2) andalso StackNeed < 500 of
         true ->
-            NeedBytes = (StackNeed + 1 + HeapNeed) * 8,
+            WordSize = MMod:word_size(),
+            %% cp_t is 8 bytes on every target, so it spans two slots on 32-bit
+            %% (CP_SIZE_IN_TERMS); the frame the callee pops must match.
+            NeedBytes = (StackNeed + (8 div WordSize) + HeapNeed) * WordSize,
             {MSt1, AvailReg} = MMod:read_avail_heap_memory(MSt0),
             MMod:if_else_block(
                 MSt1,
