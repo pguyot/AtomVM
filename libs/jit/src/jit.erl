@@ -6591,11 +6591,10 @@ op_gc_bif2_shift_reg_runtime2(MMod, BSt0, Op, R1, R2, Dest, Fallback) ->
                         fun(SSt0) ->
                             {SSt1, Res0} = MMod:copy_to_native_register(SSt0, R1),
                             {SSt2, Res} = MMod:shift_right_arith(SSt1, {free, Res0}, 63),
-                            SSt3 = MMod:shift_left(SSt2, Res, 4),
-                            SSt4 = MMod:or_(SSt3, Res, ?TERM_INTEGER_TAG),
-                            SSt5 = MMod:free_native_registers(SSt4, [R1, R2]),
-                            SSt6 = MMod:move_to_vm_register(SSt5, Res, Dest),
-                            MMod:free_native_registers(SSt6, [Res, Dest])
+                            SSt3 = MMod:or_(SSt2, Res, ?TERM_INTEGER_TAG),
+                            SSt4 = MMod:free_native_registers(SSt3, [R1, R2]),
+                            SSt5 = MMod:move_to_vm_register(SSt4, Res, Dest),
+                            MMod:free_native_registers(SSt5, [Res, Dest])
                         end
                     );
                 'bsl' ->
@@ -6605,21 +6604,23 @@ op_gc_bif2_shift_reg_runtime2(MMod, BSt0, Op, R1, R2, Dest, Fallback) ->
         end,
         fun(CSt00) ->
             CSt0 = MMod:free_native_registers(CSt00, [SCheck]),
-            %% SReg = untagged amount (+4 to also strip/retag R1's
-            %% tag bits in the same shift).
+            %% SReg = untagged amount; bsl adds 4 to it so the same shift
+            %% also strips and retags R1's tag bits.
             {CSt1, SCopy} = MMod:copy_to_native_register(CSt0, R2),
             {CSt2, SReg} = MMod:shift_right_arith(CSt1, {free, SCopy}, 4),
-            CSt3 = MMod:add(CSt2, SReg, 4),
             case Op of
                 'bsr' ->
-                    {CSt4, Res} = MMod:copy_to_native_register(CSt3, R1),
+                    %% Shift the tagged word directly, as in the literal
+                    %% path: the tag bits dragged into the low four are
+                    %% rewritten by the or.
+                    {CSt4, Res} = MMod:copy_to_native_register(CSt2, R1),
                     CSt5 = MMod:shift_right_arith_reg(CSt4, Res, SReg),
-                    CSt6 = MMod:shift_left(CSt5, Res, 4),
-                    CSt7 = MMod:or_(CSt6, Res, ?TERM_INTEGER_TAG),
-                    CSt8 = MMod:free_native_registers(CSt7, [SReg, R1, R2]),
-                    CSt9 = MMod:move_to_vm_register(CSt8, Res, Dest),
-                    MMod:free_native_registers(CSt9, [Res, Dest]);
+                    CSt6 = MMod:or_(CSt5, Res, ?TERM_INTEGER_TAG),
+                    CSt7 = MMod:free_native_registers(CSt6, [SReg, R1, R2]),
+                    CSt8 = MMod:move_to_vm_register(CSt7, Res, Dest),
+                    MMod:free_native_registers(CSt8, [Res, Dest]);
                 'bsl' ->
+                    CSt3 = MMod:add(CSt2, SReg, 4),
                     {CSt4, A0} = MMod:copy_to_native_register(CSt3, R1),
                     {CSt5, A} = MMod:shift_right_arith(CSt4, {free, A0}, 4),
                     {CSt6, V} = MMod:copy_to_native_register(CSt5, A),
@@ -6663,14 +6664,15 @@ op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2Tag
         fun(BSt0) ->
             case Op of
                 'bsr' ->
-                    %% (R1 asr (S+4)) << 4 | tag; asr keeps the sign so
+                    %% Shift the tagged word itself: asr drops S bits of
+                    %% payload and drags the tag bits down into the low
+                    %% four, which the or restores.  asr keeps the sign so
                     %% negative operands are handled (unlike the
                     %% range-typed inline path, which requires Min >= 0).
-                    {BSt1, Res} = MMod:shift_right_arith(BSt0, {free, R1}, S + 4),
-                    BSt2 = MMod:shift_left(BSt1, Res, 4),
-                    BSt3 = MMod:or_(BSt2, Res, ?TERM_INTEGER_TAG),
-                    BSt4 = MMod:move_to_vm_register(BSt3, Res, Dest),
-                    MMod:free_native_registers(BSt4, [Res, Dest]);
+                    {BSt1, Res} = MMod:shift_right_arith(BSt0, {free, R1}, S),
+                    BSt2 = MMod:or_(BSt1, Res, ?TERM_INTEGER_TAG),
+                    BSt3 = MMod:move_to_vm_register(BSt2, Res, Dest),
+                    MMod:free_native_registers(BSt3, [Res, Dest]);
                 'bsl' ->
                     %% A = untagged value; V = A << (S+4) is the shifted
                     %% tagged payload; in range iff (V asr (S+4)) == A.
@@ -6733,16 +6735,15 @@ op_gc_bif2_bsr(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Shift
                     MSt2 = MMod:move_to_vm_register(MSt1, Reg, Dest),
                     MMod:free_native_registers(MSt2, [Reg, Dest]);
                 _ ->
-                    % For non-negative values: shift right by (S+4), shift left by 4, re-tag.
-                    % This avoids a separate tag-stripping instruction: the combined
-                    % shift (S+4) removes both the 4 tag bits and applies the S-bit
-                    % shift in one operation. The tag bits get shifted away since S+4 >= 5.
+                    % Shift the tagged word itself by S and restore the tag:
+                    % with t = v*16+15 and v = q*2^S + r, t >> S is
+                    % q*16 + (16*r + 15) div 2^S, whose second term is in
+                    % [0, 15], so the or rewrites it to the tag.
                     {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
-                    {MSt2, Reg} = MMod:shift_right(MSt1, {free, Reg}, ShiftAmount + 4),
-                    MSt3 = MMod:shift_left(MSt2, Reg, 4),
-                    MSt4 = MMod:or_(MSt3, Reg, ?TERM_INTEGER_TAG),
-                    MSt5 = MMod:move_to_vm_register(MSt4, Reg, Dest),
-                    MMod:free_native_registers(MSt5, [Reg, Dest])
+                    {MSt2, Reg} = MMod:shift_right(MSt1, {free, Reg}, ShiftAmount),
+                    MSt3 = MMod:or_(MSt2, Reg, ?TERM_INTEGER_TAG),
+                    MSt4 = MMod:move_to_vm_register(MSt3, Reg, Dest),
+                    MMod:free_native_registers(MSt4, [Reg, Dest])
             end;
         false ->
             op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, 'bsr', Arg1, Arg2, Dest)
