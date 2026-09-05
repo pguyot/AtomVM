@@ -169,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reduced the number of instructions and branches the JIT emits for `+` and `-` on small
   integers: both operand tag tests fold into one, and on aarch64 and arm32 the overflow test
   folds into that same branch
+- Reduced `bsr` on small integers to a shift and a tag restore in JIT-generated code: shifting
+  the tagged word directly drags the tag bits into the low four, where the retagging `or`
+  rewrites them, so the intermediate left shift is no longer needed. Shift-dominated loops run
+  about 1.2x faster
 - Fixed `div` and `rem` by a literal calling the BIF instead of dividing inline when the
   compiler typed the dividend as an integer without bounding its range, which made knowing the
   operand's type slower than not knowing it
