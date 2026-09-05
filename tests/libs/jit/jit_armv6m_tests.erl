@@ -4758,8 +4758,54 @@ no_scratch_register_test_() ->
                 ]
             ),
             ?assert(byte_size(?BACKEND:stream(?BACKEND:flush(State1))) > 0)
+        end},
+        %% put_map decodes a key while the array pointer and the previous pair
+        %% hold the rest, so a value that is not already in a register has
+        %% nowhere to go. Borrow a pair around a push/pop rather than fail.
+        {"move_to_array_element of an x register with every register taken", fun() ->
+            {State0, [Base | _]} = all_registers_allocated_state(),
+            State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 7}, Base, 1),
+            large_operand_dump(
+                State1,
+                <<
+                    "   0:	6ac7      	ldr	r7, [r0, #44]	@ 0x2c\n"
+                    "   2:	6b06      	ldr	r6, [r0, #48]	@ 0x30\n"
+                    "   4:	6b45      	ldr	r5, [r0, #52]	@ 0x34\n"
+                    "   6:	6b84      	ldr	r4, [r0, #56]	@ 0x38\n"
+                    "   8:	6bc3      	ldr	r3, [r0, #60]	@ 0x3c\n"
+                    "   a:	6c01      	ldr	r1, [r0, #64]	@ 0x40\n"
+                    "   c:	b460      	push	{r5, r6}\n"
+                    "   e:	6c86      	ldr	r6, [r0, #72]	@ 0x48\n"
+                    "  10:	607e      	str	r6, [r7, #4]\n"
+                    "  12:	bc60      	pop	{r5, r6}"
+                >>
+            )
+        end},
+        %% Same shape one register earlier: get_module_atom_index needs a
+        %% second register for the jit_state pointer, and the last free one is
+        %% already the result.
+        {"get_module_atom_index with a single register left", fun() ->
+            {State0, _Regs} = all_but_one_register_allocated_state(),
+            {State1, _Reg} = ?BACKEND:get_module_atom_index(State0, 3),
+            ?assert(byte_size(?BACKEND:stream(?BACKEND:flush(State1))) > 0)
+        end},
+        {"get_module_atom_index of a far atom with a single register left", fun() ->
+            {State0, _Regs} = all_but_one_register_allocated_state(),
+            {State1, _Reg} = ?BACKEND:get_module_atom_index(State0, 1000),
+            ?assert(byte_size(?BACKEND:stream(?BACKEND:flush(State1))) > 0)
         end}
     ].
+
+%% Every allocatable scratch register but one holding an x register.
+all_but_one_register_allocated_state() ->
+    lists:foldl(
+        fun(N, {AccState, AccRegs}) ->
+            {NewState, Reg} = ?BACKEND:move_to_native_register(AccState, {x_reg, N}),
+            {NewState, AccRegs ++ [Reg]}
+        end,
+        {large_operand_state(), []},
+        lists:seq(0, 4)
+    ).
 
 %% A state with every allocatable scratch register holding an x register, in
 %% allocation order.

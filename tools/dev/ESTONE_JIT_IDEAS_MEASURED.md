@@ -202,6 +202,11 @@ backends now check the pool in `move_to_array_element`, and the pool's own
 size counts against the range, which it did not before.  Fixed separately from
 the inline-allocation work; both reproduced on the unmodified backends.
 
+Sweeping the corpus for those fixes also turned up the last module of OTP 29
+that `jit_armv6m` could not compile at all — `ssh_options`, whose `put_map`
+with dozens of pairs leaves one of six registers free — since fixed too.  All
+1074 compilable modules of the corpus now build on every arm target.
+
 ## Idea 5 — caller-saved contracts for call-free loops — DROP
 
 Ablating aarch64's `supports_loop_residency` measures what the mechanism is
