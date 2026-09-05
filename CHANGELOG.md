@@ -116,6 +116,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no C call at all (the x86_64 and aarch64 backends already did both). The ESTONE
   `fcalls` micro is 1.8x faster, with its tail external calls now at parity with the GRiSP
   BEAM arm32 JIT
+- arm32 JIT `return` is now seven instructions instead of eleven, and a cross-module return
+  no longer calls a C primitive at all. On 32-bit targets whose native return points are word
+  aligned, the low word of a `cp` is the absolute native resume address rather than a scaled
+  code offset, so a return loads the caller's module, stores it into `jit_state->module` and
+  branches indirectly -- no module comparison, no offset scaling and no position-independent
+  reconstruction of the module's code base, and an intra-module return costs the same as a
+  cross-module one. Only a return into a module pinned to emulated execution still goes
+  through the return primitive. `cp` stays two words wide on 32-bit;
+  `cp_to_offset_in_module/2` recovers an offset where one is needed (stack traces, the
+  emulator)
 - JIT now inlines `erlang:map_size/1` when the `Type` chunk proves the argument is a map, reading
   the size directly (handling both the flat and tree map representations) instead of calling the
   BIF

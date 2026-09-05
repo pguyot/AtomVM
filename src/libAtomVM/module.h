@@ -442,6 +442,27 @@ static inline const struct ExportedFunction *module_resolve_function(Module *mod
 #endif
 
 /*
+ * The low word of a 32-bit cp locates the resume point within the module: a
+ * bytecode offset << 2 for an emulated module. Where native return points are
+ * word aligned, the absolute native address is stored there instead, which
+ * turns a JIT return into a plain indirect branch -- no offset scaling and no
+ * position-independent reconstruction of the module's code base. Modules whose
+ * native code lives in flash are executed in place and can never be patched, so
+ * this is the only form of "absolute address" available to the backends.
+ *
+ * A module's execution mode is pinned before any frame referencing it exists
+ * (see Module.execution_mode), so mod->native_code tells the two forms apart:
+ * an emulated module never has native code, and a native one is never entered
+ * by the emulator. Backends whose return points carry a Thumb bit (odd
+ * addresses) cannot opt in: the low word shares a GC-scanned stack slot and
+ * must keep the TERM_PRIMARY_CP tag, i.e. its low two bits clear.
+ */
+#if TERM_BITS == 32 && !defined(AVM_NO_JIT) && !defined(JIT_JUMPTABLE_IS_DATA) \
+    && JIT_ARCH_TARGET == JIT_ARCH_ARM32
+#define AVM_CP_LOW_IS_NATIVE_PC 1
+#endif
+
+/*
  * @brief Builds a continuation pointer (return address) from a module and an instruction index.
  *
  * @details The continuation pointer encodes which module to resume and at which
@@ -466,7 +487,14 @@ static inline cp_t make_cp(const Module *mod, unsigned int instruction_index)
 #if TERM_BITS == 64
     return ((cp_t) (unsigned int) mod->module_index << 24) | ((cp_t) instruction_index << 2);
 #else
-    return ((cp_t) (uintptr_t) mod << 32) | ((cp_t) (instruction_index << 2));
+#ifdef AVM_CP_LOW_IS_NATIVE_PC
+    uint32_t low = mod->native_code != NULL
+        ? (uint32_t) ((uintptr_t) mod->native_code + instruction_index)
+        : (uint32_t) (instruction_index << 2);
+#else
+    uint32_t low = (uint32_t) (instruction_index << 2);
+#endif
+    return ((cp_t) (uintptr_t) mod << 32) | (cp_t) low;
 #endif
 }
 
@@ -496,7 +524,7 @@ static inline void store_cp(term *dst, cp_t cp)
 #if TERM_BITS == 64
     dst[0] = (term) cp;
 #else
-    dst[0] = (term) (uint32_t) cp; // offset << 2 (TERM_PRIMARY_CP tag)
+    dst[0] = (term) (uint32_t) cp; // resume point, word aligned (TERM_PRIMARY_CP tag)
     dst[1] = (term) (uintptr_t) (cp >> 32); // Module pointer (aligned, TERM_PRIMARY_CP tag)
 #endif
 }
@@ -536,6 +564,27 @@ static inline unsigned int cp_to_offset(cp_t cp)
 #else
     return (unsigned int) ((uint32_t) cp >> 2);
 #endif
+}
+
+/*
+ * @brief Returns the code offset a continuation pointer resumes at, given the
+ * module that owns it.
+ *
+ * @details Equivalent to cp_to_offset() unless the module stores native
+ * addresses in the low word (AVM_CP_LOW_IS_NATIVE_PC), in which case the
+ * module's code base is what turns the address back into an offset. Callers
+ * that already hold the module should prefer this over cp_to_offset().
+ */
+static inline unsigned int cp_to_offset_in_module(cp_t cp, const Module *mod)
+{
+#ifdef AVM_CP_LOW_IS_NATIVE_PC
+    if (mod->native_code != NULL) {
+        return (unsigned int) ((uintptr_t) (uint32_t) cp - (uintptr_t) mod->native_code);
+    }
+#else
+    (void) mod;
+#endif
+    return cp_to_offset(cp);
 }
 
 /*

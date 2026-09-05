@@ -1082,8 +1082,14 @@ static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
 #else
 static inline ModuleNativeEntryPoint do_return_native(Module *mod, Context *ctx)
 {
+#ifdef AVM_CP_LOW_IS_NATIVE_PC
+    // The low word is already the native return address.
+    (void) mod;
+    return (ModuleNativeEntryPoint) (uintptr_t) (uint32_t) ctx->cp;
+#else
     return (ModuleNativeEntryPoint) ((const uint8_t *) mod->native_code)
         + cp_to_offset(ctx->cp);
+#endif
 }
 #endif
 

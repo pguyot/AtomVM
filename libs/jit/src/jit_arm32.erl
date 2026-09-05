@@ -55,6 +55,7 @@
     move_to_native_register/2,
     move_to_native_register/3,
     move_to_cp/2,
+    return_to_cp_address/1,
     move_array_element/4,
     move_to_array_element/4,
     move_to_array_element/5,
@@ -239,7 +240,9 @@
 -define(HEAP_PTR, {?CTX_REG, 16#C}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 % ctx->cp is a 64-bit cp_t occupying two slots (little-endian targets):
-% ?CP holds the low word (offset << 2), ?CP_MODULE holds the high word (Module*).
+% ?CP holds the low word, ?CP_MODULE holds the high word (Module*). arm32 sets
+% AVM_CP_LOW_IS_NATIVE_PC, so the low word is the absolute native resume
+% address, not a scaled offset -- a return is an indirect branch to it.
 -define(CP, {?CTX_REG, 16#70}).
 -define(CP_MODULE, {?CTX_REG, 16#74}).
 %% fr bank lives in jit_state (jit_state->fr, loaded via the stack slot).
@@ -254,6 +257,9 @@
 -define(JITSTATE_REDUCTIONCOUNT(Reg), {Reg, 16#8}).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
+%% NULL for a module pinned to emulated execution: its cp low word is a
+%% bytecode offset << 2 and the return must go through the C fallback.
+-define(MODULE_NATIVE_CODE(ModuleReg), {ModuleReg, 16#3C}).
 -define(MODULE_LOCAL_ATOMS_TABLE(ModuleReg), {ModuleReg, 16#6C}).
 -define(MODULE_IMPORTED_FUNCS(ModuleReg), {ModuleReg, 16#48}).
 %% struct ModuleFunction: base.type, then the resolved target and its native
@@ -4146,25 +4152,25 @@ call_primitive_with_cp(State0, Primitive, Args) ->
 
 -spec set_cp(state()) -> {state(), non_neg_integer(), arm32_register()}.
 set_cp(State0) ->
-    % cp is two words: store the Module pointer (jit_state->module) at ?CP_MODULE,
-    % and the return offset << 2 at ?CP (patched by rewrite_cp_offset below).
+    % cp is two words: the Module pointer (jit_state->module) at ?CP_MODULE and
+    % the absolute address of the resume point at ?CP. That address is built
+    % pc-relatively by an ADRL pair -- ARM's idiom for a pc-relative address
+    % wider than one rotated immediate -- which rewrite_cp_offset/3 patches once
+    % the resume point is known. The second `add` becomes a nop whenever the
+    % whole displacement fits the first.
     {#state{stream_module = StreamModule, stream = Stream0} = State1, ModReg} =
         get_module(State0),
     IModStore = jit_arm32_asm:str(al, ModReg, ?CP_MODULE),
     Stream1 = StreamModule:append(Stream0, IModStore),
     State2 = free_native_register(State1#state{stream = Stream1}, ModReg),
-    AvailRegs = jit_regs:available_regs(State2#state.regs),
-    % Get a temporary register to hold the offset value
-    TempReg = first_avail(AvailRegs),
-    Offset = StreamModule:offset(Stream1),
-    % Placeholder for the offset load instruction (patched by rewrite_cp_offset)
-    I1 = <<16#FFFFFFFF:32>>,
-    MOVOffset = Offset,
-    I2 = jit_arm32_asm:str(al, TempReg, ?CP),
-    Code = <<I1/binary, I2/binary>>,
-    Stream2 = StreamModule:append(Stream1, Code),
-    State3 = State2#state{stream = Stream2},
-    {State3, MOVOffset, TempReg}.
+    TempReg = first_avail(jit_regs:available_regs(State2#state.regs)),
+    AdrOffset = StreamModule:offset(Stream1),
+    Placeholder = <<16#FFFFFFFF:32>>,
+    IStore = jit_arm32_asm:str(al, TempReg, ?CP),
+    Stream2 = StreamModule:append(
+        Stream1, <<Placeholder/binary, Placeholder/binary, IStore/binary>>
+    ),
+    {State2#state{stream = Stream2}, AdrOffset, TempReg}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Words between hp and e, in a freshly allocated register, so
@@ -4232,7 +4238,7 @@ allocate_frame_fast(
 %%-----------------------------------------------------------------------------
 -spec call_ext_with_cp_direct(state(), non_neg_integer(), non_neg_integer(), [arg()]) -> state().
 call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
-    {State1, LiteralOffset} = set_cp_direct(State0),
+    {State1, AdrOffset, TempReg} = set_cp(State0),
     State1b = emit_call_ext_fast_path(State1, Index, no_frame_pop),
     {State2, ResultReg} = call_primitive_no_reload(State1b, Primitive, Args),
     %% JIT_NATIVE_STAY (a NIF that returned to this very call site) falls
@@ -4240,7 +4246,7 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     %% this site just stored -- is the instruction after it.
     State3 = direct_dispatch(State2, ResultReg, true),
     State4 = free_native_register(State3, ResultReg),
-    State5 = rewrite_cp_literal(State4, LiteralOffset),
+    State5 = rewrite_cp_offset(State4, AdrOffset, TempReg),
     State5#state{regs = jit_regs:invalidate_all(State5#state.regs)}.
 
 %%-----------------------------------------------------------------------------
@@ -4391,79 +4397,75 @@ direct_dispatch(
     State0#state{stream = StreamModule:append(Stream0, Code)}.
 
 %% @private
-%% cp for a call site whose fall-through is reachable (call_ext_with_cp_direct).
-%% set_cp/1 cannot be used there: when the return offset does not fit an ARM
-%% rotated immediate it appends the literal at the resume point, which the
-%% JIT_NATIVE_STAY path would then execute. Reserve the literal here instead,
-%% inside the never-executed shadow of an unconditional branch, so the layout
-%% is the same whatever the offset turns out to be.
--spec set_cp_direct(state()) -> {state(), non_neg_integer()}.
-set_cp_direct(State0) ->
-    {#state{stream_module = StreamModule, stream = Stream0} = State1, ModReg} =
-        get_module(State0),
-    IModStore = jit_arm32_asm:str(al, ModReg, ?CP_MODULE),
-    Stream1 = StreamModule:append(Stream0, IModStore),
-    State2 = free_native_register(State1#state{stream = Stream1}, ModReg),
-    TempReg = first_avail(jit_regs:available_regs(State2#state.regs)),
-    %% ldr reads at pc+8, i.e. the literal two instructions down; the branch
-    %% over it lands on the str.
-    ILoad = jit_arm32_asm:ldr(al, TempReg, {pc, 0}),
-    ISkip = jit_arm32_asm:b(al, 8),
-    LiteralOffset = StreamModule:offset(Stream1) + byte_size(ILoad) + byte_size(ISkip),
-    IStore = jit_arm32_asm:str(al, TempReg, ?CP),
-    Stream2 = StreamModule:append(
-        Stream1, <<ILoad/binary, ISkip/binary, 0:32, IStore/binary>>
-    ),
-    {State2#state{stream = Stream2}, LiteralOffset}.
-
-%% @private
-%% Patch set_cp_direct/1's reserved literal with the resume offset, now that
-%% the whole call sequence has been emitted and the resume point is known.
--spec rewrite_cp_literal(state(), non_neg_integer()) -> state().
-rewrite_cp_literal(
-    #state{stream_module = StreamModule, stream = Stream0, offset = CodeOffset} = State0,
-    LiteralOffset
-) ->
-    OffsetImm = (StreamModule:offset(Stream0) - CodeOffset) bsl 2,
-    Stream1 = StreamModule:replace(Stream0, LiteralOffset, <<OffsetImm:32/little>>),
-    State0#state{stream = Stream1}.
-
+%% Patch set_cp/1's ADRL pair now that the resume point -- the instruction the
+%% callee returns to -- has been emitted. `add Rd, pc, #imm` reads pc as the
+%% instruction's own address + 8, so the pair is position independent and the
+%% displacement it encodes is bounded by the call sequence in between, never by
+%% the size of the module.
 -spec rewrite_cp_offset(state(), non_neg_integer(), arm32_register()) -> state().
 rewrite_cp_offset(
-    #state{stream_module = StreamModule, stream = Stream0, offset = CodeOffset} = State0,
-    RewriteOffset,
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    AdrOffset,
     TempReg
 ) ->
-    CurrentOffset = StreamModule:offset(Stream0),
+    ResumeOffset = StreamModule:offset(Stream0),
+    Displacement = ResumeOffset - (AdrOffset + 8),
+    true = Displacement >= 0 andalso Displacement =< 16#FFFF,
+    {IAdd1, IAdd2} =
+        case jit_arm32_asm:encode_imm(Displacement) of
+            false ->
+                %% Split into two rotated immediates: a byte and a byte shifted
+                %% by 8, both always encodable within the 16-bit bound above.
+                Low = Displacement band 16#FF,
+                High = Displacement - Low,
+                {
+                    jit_arm32_asm:add(al, TempReg, pc, High),
+                    jit_arm32_asm:add(al, TempReg, TempReg, Low)
+                };
+            _ ->
+                {jit_arm32_asm:add(al, TempReg, pc, Displacement), jit_arm32_asm:nop()}
+        end,
+    Stream1 = StreamModule:replace(Stream0, AdrOffset, <<IAdd1/binary, IAdd2/binary>>),
+    %% Execution resumes here when the callee returns: registers are clobbered,
+    %% and there is no prologue -- the pinned registers stay live across native
+    %% tail-jumps and the dispatch loop re-seeds them on re-entry.
+    State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}.
 
-    Delta0 = CurrentOffset - CodeOffset,
-    OffsetImm0 = Delta0 bsl 2,
-
-    % Check if offset fits in ARM32 rotated immediate
-    %% Execution resumes here when the callee returns: registers are
-    %% clobbered and, crucially, code is reachable again.
-    case jit_arm32_asm:encode_imm(OffsetImm0 band 16#FFFFFFFF) of
-        false ->
-            % Need to emit literal pool (4 bytes for the literal)
-            OffsetImm1 = (Delta0 + 4) bsl 2,
-            % Emit the 32-bit literal right after current position
-            StreamWithLiteral = StreamModule:append(
-                Stream0, <<OffsetImm1:32/little>>
-            ),
-            % Compute PC-relative offset for ldr instruction
-            % ARM32: PC = instruction_address + 8
-            PCRelOffset = CurrentOffset - (RewriteOffset + 8),
-            LdrInstr = jit_arm32_asm:ldr(al, TempReg, {pc, PCRelOffset}),
-            Stream1 = StreamModule:replace(StreamWithLiteral, RewriteOffset, LdrInstr),
-            %% No prologue at the CP resume point: the pinned registers stay
-            %% live across native tail-jumps and the dispatch loop re-seeds
-            %% them on re-entry.
-            State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)};
-        _ ->
-            MovInstr = jit_arm32_asm:mov(al, TempReg, OffsetImm0),
-            Stream1 = StreamModule:replace(Stream0, RewriteOffset, MovInstr),
-            State0#state{stream = Stream1, regs = jit_regs:invalidate_all(State0#state.regs)}
-    end.
+%%-----------------------------------------------------------------------------
+%% @doc Emit OP_RETURN: branch to the native address held in the cp's low word,
+%% having restored jit_state->module from its high word.
+%%
+%% There is no module comparison, no offset scaling and no reconstruction of the
+%% module's code base, so an intra-module return and a cross-module one cost the
+%% same four instructions -- the latter no longer goes through a C primitive at
+%% all. Only a return into a module pinned to emulated execution needs help: its
+%% native_code is NULL and its cp low word is a bytecode offset rather than an
+%% address, so that case falls through to the caller's fallback tail.
+%% @end
+%% @param State current backend state
+%% @return Updated backend state
+%%-----------------------------------------------------------------------------
+-spec return_to_cp_address(state()) -> state().
+return_to_cp_address(StateP) ->
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
+        State = pending_clear_all(StateP),
+    Avail0 = jit_regs:available_regs(Regs0),
+    ModReg = first_avail(Avail0),
+    AddrReg = first_avail(Avail0 band (bnot reg_bit(ModReg))),
+    I1 = jit_arm32_asm:ldr(al, ModReg, ?CP_MODULE),
+    I2 = jit_arm32_asm:ldr(al, AddrReg, ?MODULE_NATIVE_CODE(ModReg)),
+    I3 = jit_arm32_asm:cmp(al, AddrReg, 0),
+    %% Emulated target: skip the three instructions below and fall through.
+    I4 = jit_arm32_asm:b(eq, 16),
+    I5 = jit_arm32_asm:str(al, ModReg, ?JITSTATE_MODULE(?JITSTATE_REG)),
+    I6 = jit_arm32_asm:ldr(al, AddrReg, ?CP),
+    %% No frame: the pinned registers stay live across this native jump and
+    %% lr still holds the C dispatcher return address.
+    I7 = jit_arm32_asm:bx(al, AddrReg),
+    Code = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, ModReg), AddrReg),
+    State#state{stream = Stream1, regs = Regs1}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =

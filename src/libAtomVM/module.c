@@ -2643,7 +2643,7 @@ bool module_find_line(Module *mod, size_t offset, uint32_t *line, size_t *filena
 COLD_FUNC void module_cp_to_label_offset(cp_t cp, Module **cp_mod, int *label, size_t *l_off, size_t *out_mod_offset, GlobalContext *global)
 {
     Module *mod = cp_to_module(cp, global);
-    size_t mod_offset = cp_to_offset(cp);
+    size_t mod_offset = cp_to_offset_in_module(cp, mod);
     if (out_mod_offset) {
         *out_mod_offset = mod_offset;
     }
