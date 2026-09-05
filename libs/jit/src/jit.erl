@@ -784,59 +784,14 @@ emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
     % Optimized return: check if returning within the same module, in which case
     % we jump directly to the continuation rather than going through PRIM_RETURN.
     MSt5T =
-        case MMod:word_size() of
-            8 ->
-                % 64-bit: cp packs (module_index << 24) | (offset << 2) in one word.
-                {MSt1, CpReg0} = MMod:move_to_native_register(MSt0, cp),
-                {MSt2, ModuleIndexReg, CpShift} =
-                    case erlang:function_exported(MMod, get_cp_base, 1) of
-                        true ->
-                            % cp_base is module_index << 24: one load, then
-                            % compare against cp >> 24 << 24... shift the base
-                            % down instead so the cp extraction is shared.
-                            {MSt2a, BaseReg} = MMod:get_cp_base(MSt1),
-                            {MSt2b, BaseShifted} = MMod:shift_right(
-                                MSt2a, {free, BaseReg}, 24
-                            ),
-                            {MSt2b, BaseShifted, 24};
-                        false ->
-                            {MSt2a, IdxReg} = MMod:get_module_index(MSt1),
-                            {MSt2a, IdxReg, 24}
-                    end,
-                % Extract module index from cp (upper 8 bits: cp >> 24)
-                {MSt3, CpReg1} = MMod:shift_right(MSt2, CpReg0, CpShift),
-                % Compare extracted module index with current module index
-                MSt4 = MMod:if_block(
-                    MSt3,
-                    {{free, CpReg1}, '==', {free, ModuleIndexReg}},
-                    % Same module: fast intra-module return
-                    fun(BSt0) ->
-                        % Mask to get lower 24 bits and shift right by 2 for offset
-                        {BSt1, CpReg0} = MMod:and_(BSt0, {free, CpReg0}, 16#FFFFFF),
-                        {BSt3, CPReg1} = MMod:shift_right(BSt1, {free, CpReg0}, 2),
-                        % Jump to continuation (this is a tail call)
-                        MMod:jump_to_continuation(BSt3, {free, CPReg1})
-                    end
-                ),
-                {MSt4, CpReg0};
-            4 ->
-                % 32-bit: cp spans two words, the Module pointer (?CP_MODULE) and
-                % the offset << 2 (?CP_OFFSET). Compare the saved Module pointer
-                % with the current module pointer (jit_state->module).
-                {MSt1, CpModReg} = MMod:get_cp_module(MSt0),
-                {MSt2, CurModReg} = MMod:get_module(MSt1),
-                MSt3 = MMod:if_block(
-                    MSt2,
-                    {{free, CpModReg}, '==', {free, CurModReg}},
-                    % Same module: fast intra-module return
-                    fun(BSt0) ->
-                        {BSt1, OffReg} = MMod:get_cp_offset(BSt0),
-                        {BSt2, OffReg2} = MMod:shift_right(BSt1, {free, OffReg}, 2),
-                        % Jump to continuation (this is a tail call)
-                        MMod:jump_to_continuation(BSt2, {free, OffReg2})
-                    end
-                ),
-                {MSt3, undefined}
+        case erlang:function_exported(MMod, return_to_cp_address, 1) of
+            true ->
+                %% The cp's low word is the native resume address: the backend
+                %% emits the whole return inline, falling through to the tail
+                %% below only when the target module is emulated.
+                {MMod:return_to_cp_address(MSt0), undefined};
+            false ->
+                op_return_same_module(MMod, MSt0)
         end,
     {MSt5, CpRegOrUndef} = MSt5T,
     % Different module: resolve through the return primitive; backends with
@@ -6023,6 +5978,66 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
     end;
 op_test_heap(MMod, MSt0, HeapNeed, Live) ->
     op_test_heap_call(MMod, MSt0, HeapNeed, Live).
+
+%% Emit OP_RETURN's intra-module fast path for backends whose cp stores a code
+%% offset: compare the cp's module against the executing one and, when they
+%% match, jump straight to the continuation. Returns the cp register (64-bit,
+%% consumed by the cross-module tail) or undefined.
+op_return_same_module(MMod, MSt0) ->
+    case MMod:word_size() of
+        8 ->
+            % 64-bit: cp packs (module_index << 24) | (offset << 2) in one word.
+            {MSt1, CpReg0} = MMod:move_to_native_register(MSt0, cp),
+            {MSt2, ModuleIndexReg, CpShift} =
+                case erlang:function_exported(MMod, get_cp_base, 1) of
+                    true ->
+                        % cp_base is module_index << 24: one load, then
+                        % compare against cp >> 24 << 24... shift the base
+                        % down instead so the cp extraction is shared.
+                        {MSt2a, BaseReg} = MMod:get_cp_base(MSt1),
+                        {MSt2b, BaseShifted} = MMod:shift_right(
+                            MSt2a, {free, BaseReg}, 24
+                        ),
+                        {MSt2b, BaseShifted, 24};
+                    false ->
+                        {MSt2a, IdxReg} = MMod:get_module_index(MSt1),
+                        {MSt2a, IdxReg, 24}
+                end,
+            % Extract module index from cp (upper 8 bits: cp >> 24)
+            {MSt3, CpReg1} = MMod:shift_right(MSt2, CpReg0, CpShift),
+            % Compare extracted module index with current module index
+            MSt4 = MMod:if_block(
+                MSt3,
+                {{free, CpReg1}, '==', {free, ModuleIndexReg}},
+                % Same module: fast intra-module return
+                fun(BSt0) ->
+                    % Mask to get lower 24 bits and shift right by 2 for offset
+                    {BSt1, CpReg0} = MMod:and_(BSt0, {free, CpReg0}, 16#FFFFFF),
+                    {BSt3, CPReg1} = MMod:shift_right(BSt1, {free, CpReg0}, 2),
+                    % Jump to continuation (this is a tail call)
+                    MMod:jump_to_continuation(BSt3, {free, CPReg1})
+                end
+            ),
+            {MSt4, CpReg0};
+        4 ->
+            % 32-bit: cp spans two words, the Module pointer (?CP_MODULE) and
+            % the offset << 2 (?CP_OFFSET). Compare the saved Module pointer
+            % with the current module pointer (jit_state->module).
+            {MSt1, CpModReg} = MMod:get_cp_module(MSt0),
+            {MSt2, CurModReg} = MMod:get_module(MSt1),
+            MSt3 = MMod:if_block(
+                MSt2,
+                {{free, CpModReg}, '==', {free, CurModReg}},
+                % Same module: fast intra-module return
+                fun(BSt0) ->
+                    {BSt1, OffReg} = MMod:get_cp_offset(BSt0),
+                    {BSt2, OffReg2} = MMod:shift_right(BSt1, {free, OffReg}, 2),
+                    % Jump to continuation (this is a tail call)
+                    MMod:jump_to_continuation(BSt2, {free, OffReg2})
+                end
+            ),
+            {MSt3, undefined}
+    end.
 
 %% External calls: backends with the *_direct dispatch branch straight to
 %% the resolved continuation (BIF/NIF returns and cross-module targets)
