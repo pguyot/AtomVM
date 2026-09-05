@@ -91,6 +91,7 @@
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
     call_primitive_direct/3,
+    heap_bump_alloc/2,
     read_avail_heap_memory/1,
     read_heap_fragments/1,
     allocate_frame_fast/2,
@@ -226,7 +227,8 @@
 %% registers per the AAPCS. r11 is deliberately NOT pinned: it is the ARM
 %% frame pointer, and binding a register variable to it in the jit.c entry
 %% shims is undefined behaviour (GCC drops surrounding memory updates).
-%% There are no inline heap operations on arm32, so hp is not pinned.
+%% hp is not pinned: inline heap allocation bumps ctx->heap.heap_ptr in
+%% place, which needs no register of its own.
 -define(CTX_REG, r7).
 -define(NATIVE_INTERFACE_REG, r9).
 %% ctx->e mutates (allocate/deallocate, GC): written back to ctx before
@@ -1773,8 +1775,8 @@ shift_left(
 -spec call_func_ptr(state(), {free, arm32_register()} | {primitive, non_neg_integer()}, [arg()]) ->
     {state(), arm32_register()}.
 %% Write ctx->e back from its pinned register: the callee — and any GC it
-%% triggers — must see a coherent stack. There are no inline heap operations
-%% on arm32, so hp needs no pinning and no write-back.
+%% triggers — must see a coherent stack. hp is not pinned on arm32 — inline
+%% allocation bumps it in ctx — so it needs no write-back.
 emit_e_writeback(#state{stream_module = StreamModule, stream = Stream0} = State) ->
     Stream1 = StreamModule:append(Stream0, jit_arm32_asm:str(al, ?E_REG, ?Y_REGS)),
     State#state{stream = Stream1}.
@@ -4173,10 +4175,53 @@ set_cp(State0) ->
     {State2#state{stream = Stream2}, AdrOffset, TempReg}.
 
 %%-----------------------------------------------------------------------------
+%% @doc Bump-allocate NWords terms from the context heap, returning a freshly
+%% allocated register holding the pointer to the first allocated word. The
+%% space is already reserved by the preceding test_heap/allocate (BEAM
+%% bytecode guarantees it), so this is memory_heap_alloc inlined: no bounds
+%% check, just a heap_ptr load, add and store.
+%%
+%% hp is not pinned on arm32, so the bump goes through ctx. ip is the ARM
+%% intra-procedure scratch and holds the bumped value across the store, which
+%% keeps the common case at three instructions and needs no second allocatable
+%% register; nothing lives in ip across these three instructions, as no call
+%% intervenes. A block too large for an add immediate bumps the result
+%% register in place and undoes it, so add/3 and sub/3 handle the constant.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec heap_bump_alloc(state(), pos_integer()) -> {state(), arm32_register()}.
+heap_bump_alloc(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, NWords
+) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    Bytes = NWords * 4,
+    Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, Reg), reg_bit(Reg)),
+    Load = jit_arm32_asm:ldr(al, Reg, ?HEAP_PTR),
+    case jit_arm32_asm:encode_imm(Bytes) of
+        false ->
+            State1 = State0#state{
+                stream = StreamModule:append(Stream0, Load), regs = Regs1
+            },
+            State2 = add(State1, Reg, Bytes),
+            State3 = State2#state{
+                stream = StreamModule:append(
+                    State2#state.stream, jit_arm32_asm:str(al, Reg, ?HEAP_PTR)
+                )
+            },
+            {sub(State3, Reg, Bytes), Reg};
+        _ ->
+            Code = <<
+                Load/binary,
+                (jit_arm32_asm:add(al, ?IP_REG, Reg, Bytes))/binary,
+                (jit_arm32_asm:str(al, ?IP_REG, ?HEAP_PTR))/binary
+            >>,
+            {State0#state{stream = StreamModule:append(Stream0, Code), regs = Regs1}, Reg}
+    end.
+
+%%-----------------------------------------------------------------------------
 %% @doc Words between hp and e, in a freshly allocated register, so
 %% OP_ALLOCATE can decide inline whether the frame fits. Unlike aarch64 and
-%% x86_64, arm32 does not pin hp -- there are no inline heap operations here --
-%% so it is loaded from ctx.
+%% x86_64, arm32 does not pin hp, so it is loaded from ctx.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec read_avail_heap_memory(state()) -> {state(), arm32_register()}.

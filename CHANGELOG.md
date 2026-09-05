@@ -173,6 +173,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the tagged word directly drags the tag bits into the low four, where the retagging `or`
   rewrites them, so the intermediate left shift is no longer needed. Shift-dominated loops run
   about 1.2x faster
+- arm32, riscv32 and riscv64 JIT now build conses and tuples with an inline heap bump instead
+  of calling a primitive per allocation, as aarch64 and x86_64 already did. `heap_ptr` is
+  loaded from the context, advanced and stored back, which needs no pinned register. The
+  application benchmark suite gains 1.02x on arm32 and 1.05x on riscv64, and the standard
+  library's native code shrinks by 0.6% to 1.2% depending on the target
 - Fixed `div` and `rem` by a literal calling the BIF instead of dividing inline when the
   compiler typed the dividend as an integer without bounding its range, which made knowing the
   operand's type slower than not knowing it

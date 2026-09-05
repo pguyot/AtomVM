@@ -4073,3 +4073,53 @@ set_vm_record_type(#state{regs = Regs} = State, VmLoc, Type) ->
 %% @doc Look up the type assertion previously recorded for a VM x/y register.
 get_vm_record_type(#state{regs = Regs}, VmLoc) ->
     jit_regs:get_vm_type(Regs, VmLoc).
+
+%%-----------------------------------------------------------------------------
+%% @doc Bump-allocate NWords terms from the context heap, returning a freshly
+%% allocated register holding the pointer to the first allocated word. The
+%% space is already reserved by the preceding test_heap/allocate (BEAM
+%% bytecode guarantees it), so this is memory_heap_alloc inlined: no bounds
+%% check, just a heap_ptr load, add and store.
+%%
+%% hp is not pinned on RISC-V, so the bump goes through ctx. With a second
+%% register free the bumped value goes there and the sequence is three
+%% instructions; otherwise the result register is bumped and undone, which
+%% costs one more instruction but no register. add/3 and sub/3 materialize a
+%% constant too large for addi, so any block size works.
+%% @end
+%%-----------------------------------------------------------------------------
+heap_bump_alloc(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, NWords
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Bytes = NWords * ?WORD_SIZE_BYTES,
+    Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, Reg), reg_bit(Reg)),
+    Load = ?LOAD_WORD(Reg, ?CTX_REG, ?HEAP_PTR_OFFSET),
+    case Avail band (bnot reg_bit(Reg)) of
+        Rest when Rest =/= 0, Bytes =< 16#7FF ->
+            Temp = first_avail(Rest),
+            Code = <<
+                Load/binary,
+                (?ASM:addi(Temp, Reg, Bytes))/binary,
+                (?STORE_WORD(?CTX_REG, Temp, ?HEAP_PTR_OFFSET))/binary
+            >>,
+            {
+                State0#state{
+                    stream = StreamModule:append(Stream0, Code),
+                    regs = jit_regs:invalidate_reg(Regs1, Temp)
+                },
+                Reg
+            };
+        _ ->
+            State1 = State0#state{
+                stream = StreamModule:append(Stream0, Load), regs = Regs1
+            },
+            State2 = add(State1, Reg, Bytes),
+            State3 = State2#state{
+                stream = StreamModule:append(
+                    State2#state.stream, ?STORE_WORD(?CTX_REG, Reg, ?HEAP_PTR_OFFSET)
+                )
+            },
+            {sub(State3, Reg, Bytes), Reg}
+    end.
