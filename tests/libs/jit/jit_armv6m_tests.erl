@@ -3343,23 +3343,24 @@ move_to_native_register_test_() ->
                     ),
                     State2 = ?BACKEND:flush(State1),
                     Stream = ?BACKEND:stream(State2),
-                    {_, LoadAndBranch0} = split_binary(Stream, 16#210),
+                    {_, LoadAndBranch0} = split_binary(Stream, 16#16a),
                     {LoadAndBranch, _} = split_binary(LoadAndBranch0, 10),
                     LoadAndBranchDump = <<
-                        " 210:	4f38      	ldr	r7, [pc, #224]	; (0x2f4)\n"
-                        " 212:	e071      	b.n	0x2f8\n"
-                        " 214:  0401        .dword 0x0401\n\n"
-                        " 216:  0000        .dword 0x0000\n\n"
-                        " 218:  0402        .dword 0x0402\n\n"
+                        " 16a:	4f28      	ldr	r7, [pc, #160]	; (0x20c)\n"
+                        " 16c:	e050      	b.n	0x210\n"
+                        % padding
+                        " 16e:  ffff        .dword 0xffff\n\n"
+                        " 170:  0401        .dword 0x0401\n\n"
+                        " 172:  0000        .dword 0x0000\n\n"
                     >>,
                     ?assertStream(arm, LoadAndBranchDump, LoadAndBranch),
-                    {_, Continuation0} = split_binary(Stream, 16#2f8),
+                    {_, Continuation0} = split_binary(Stream, 16#210),
                     {Continuation, _} = split_binary(Continuation0, 8),
                     ContinuationDump = <<
-                        " 2f8:   19ff       adds    r7, r7, r7\n"
-                        " 2fa:   19ff       adds    r7, r7, r7\n"
-                        " 2fc:   19ff       adds    r7, r7, r7\n"
-                        " 2fe:   4f02       ldr	    r7, [pc, #8]	; (0x308)"
+                        " 210:   19ff       adds    r7, r7, r7\n"
+                        " 212:   19ff       adds    r7, r7, r7\n"
+                        " 214:   19ff       adds    r7, r7, r7\n"
+                        " 216:   4f2b       ldr	    r7, [pc, #172]	; (0x2c4)"
                     >>,
                     ?assertStream(arm, ContinuationDump, Continuation)
                 end),
@@ -3379,24 +3380,23 @@ move_to_native_register_test_() ->
                     ),
                     State3 = ?BACKEND:flush(State2),
                     Stream = ?BACKEND:stream(State3),
-                    {_, LoadAndBranch0} = split_binary(Stream, 16#212),
+                    {_, LoadAndBranch0} = split_binary(Stream, 16#164),
                     {LoadAndBranch, _} = split_binary(LoadAndBranch0, 10),
                     LoadAndBranchDump = <<
-                        " 212:   4e39       ldr	r6, [pc, #228]	; (0x2f8)\n"
-                        " 214:   e072       b.n	0x2fc\n"
-                        % padding
-                        " 216:   ffff       .dword 0xffff\n\n"
-                        " 218:   0401       .dword 0x401\n\n"
-                        " 21a:   0000       .dword 0x000"
+                        " 164:   4e26       ldr	r6, [pc, #152]	; (0x200)\n"
+                        " 166:   e04d       b.n	0x204\n"
+                        " 168:   0401       .dword 0x401\n\n"
+                        " 16a:   0000       .dword 0x000\n\n"
+                        " 16c:   0402       .dword 0x402"
                     >>,
                     ?assertStream(arm, LoadAndBranchDump, LoadAndBranch),
-                    {_, Continuation0} = split_binary(Stream, 16#2fc),
+                    {_, Continuation0} = split_binary(Stream, 16#204),
                     {Continuation, _} = split_binary(Continuation0, 8),
                     ContinuationDump = <<
-                        " 2fc:   19b6       adds    r6, r6, r6\n"
-                        " 2fe:   19b6       adds    r6, r6, r6\n"
-                        " 300:   19b6       adds    r6, r6, r6\n"
-                        " 302:   4e02      	ldr     r6, [pc, #8]	; (0x30c)"
+                        " 204:   19b6       adds    r6, r6, r6\n"
+                        " 206:   19b6       adds    r6, r6, r6\n"
+                        " 208:   19b6       adds    r6, r6, r6\n"
+                        " 20a:   4e2d      	ldr     r6, [pc, #180]	; (0x2c0)"
                     >>,
                     ?assertStream(arm, ContinuationDump, Continuation)
                 end)
@@ -4772,6 +4772,28 @@ all_registers_allocated_state() ->
         {large_operand_state(), []},
         lists:seq(0, 5)
     ).
+
+%% A wide tuple or map stores its elements one after another. Those stores
+%% encode their own offsets, so nothing adds a literal and, before the check
+%% in move_to_array_element, nothing looked at the pending pool either: a
+%% literal loaded before the run ended up further from its own pool than the
+%% 1020 byte range of the Thumb-1 pc-relative ldr that reads it, and laying
+%% the pool out raised function_clause in jit_armv6m_asm:ldr/2.
+literal_pool_across_wide_tuple_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State0a, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    %% Not encodable as a Thumb-1 immediate, so it goes through the pool.
+    State1 = ?BACKEND:add(State0a, Reg, 16#12345678),
+    {State2, Ptr} = ?BACKEND:copy_to_native_register(State1, Reg),
+    State3 = lists:foldl(
+        %% Element stores only, exactly what put_tuple2 emits: no literal is
+        %% added here, so the pool is never fed and never re-examined.
+        fun(N, AccState) -> ?BACKEND:move_to_array_element(AccState, Reg, Ptr, N) end,
+        State2,
+        lists:seq(0, 600)
+    ),
+    Stream = ?BACKEND:stream(?BACKEND:flush(State3)),
+    ?assert(byte_size(Stream) > 1020).
 
 large_operand_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).

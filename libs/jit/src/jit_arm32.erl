@@ -2873,7 +2873,15 @@ get_array_element(
 -spec move_to_array_element(
     state(), integer() | vm_register() | arm32_register(), arm32_register(), non_neg_integer()
 ) -> state().
-move_to_array_element(
+move_to_array_element(State, Value, Reg, Index) ->
+    %% put_tuple2, put_map and update_record store their elements one after
+    %% another, and a run of stores whose offsets all encode directly adds no
+    %% literal, so nothing else would check the pending pool. A wide tuple or
+    %% map then walks the oldest ldr out of its own 4095 byte range. Bound the
+    %% run here: one element emits a handful of instructions at most.
+    move_to_array_element0(maybe_flush_literal_pool(State), Value, Reg, Index).
+
+move_to_array_element0(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     ValueReg,
     Reg,
@@ -2882,7 +2890,7 @@ move_to_array_element(
     I1 = jit_arm32_asm:str(al, ValueReg, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, I1),
     State0#state{stream = Stream1};
-move_to_array_element(
+move_to_array_element0(
     #state{stream_module = StreamModule, regs = Regs0} = State0,
     ValueReg,
     Reg,
@@ -2901,7 +2909,7 @@ move_to_array_element(
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
     State1#state{stream = Stream2, regs = Regs1};
-move_to_array_element(
+move_to_array_element0(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State0,
     ValueReg,
@@ -2916,14 +2924,14 @@ move_to_array_element(
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     State0#state{stream = Stream1, regs = Regs1};
-move_to_array_element(
+move_to_array_element0(
     State0,
     Value,
     Reg,
     Index
 ) when not ?IS_GPR(Value) andalso ?IS_GPR(Reg) ->
     {State1, Temp} = copy_to_native_register(State0, Value),
-    State2 = move_to_array_element(State1, Temp, Reg, Index),
+    State2 = move_to_array_element0(State1, Temp, Reg, Index),
     free_native_register(State2, Temp).
 
 move_to_array_element(

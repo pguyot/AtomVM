@@ -190,14 +190,17 @@ primitive.  armv6m in particular has severe register pressure and a literal
 pool whose reach is already marginal — see the note below — so it needs its
 own measurement rather than a copy of this patch.
 
-### Unrelated defect found while testing
+### Unrelated defect found while testing, since fixed
 
-`jit_armv6m` fails to compile a `put_tuple2` of some wide arities built at run
-time: a 511-element tuple gives `function_clause` in `jit_armv6m_asm:ldr/2`
-with `{pc, 2576}`, past Thumb-1's 1020-byte pc-relative reach.  It reproduces
-on the unmodified backend, is not monotonic in arity (511 fails, 512 and 1024
-do not), and is unrelated to this change; it is the same class as the arm32
-literal-pool bug fixed in `227f07ac2`.
+The allocation stress test above uncovered a literal-pool bug in `jit_armv6m`,
+and the same one in `jit_arm32`: a wide `put_tuple2` or `put_map` emits
+hundreds of element stores whose offsets all encode directly, so the run adds
+no literal and nothing re-examined the pending pool.  A literal loaded before
+the run ended up past the pc-relative `ldr`'s reach — 511 elements gave
+`{pc, 2576}` against Thumb-1's 1020 — and the module failed to compile.  Both
+backends now check the pool in `move_to_array_element`, and the pool's own
+size counts against the range, which it did not before.  Fixed separately from
+the inline-allocation work; both reproduced on the unmodified backends.
 
 ## Idea 5 — caller-saved contracts for call-free loops — DROP
 
@@ -300,6 +303,4 @@ not a performance change.
    `jit_armv6m`, `jit_armv7m`, `jit_xtensa` and `jit_wasm32` remain.
 2. **Idea 7**, sized at 1.10–1.21x on message-passing micros, if the
    generated-code size contract can be kept cheap.
-3. The `jit_armv6m` literal-pool failure on wide `put_tuple2`, which this
-   work uncovered but did not cause.
-4. Nothing else in the handover survived measurement.
+3. Nothing else in the handover survived measurement.

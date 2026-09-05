@@ -1962,6 +1962,27 @@ literal_pool_across_long_branch_chain_test() ->
     Stream = ?BACKEND:stream(?BACKEND:flush(State3)),
     ?assert(byte_size(Stream) > 4095).
 
+% A wide tuple or map stores its elements one after another. Those stores
+% encode their own offsets, so nothing adds a literal and, before the check
+% in move_to_array_element, nothing looked at the pending pool either: a
+% literal loaded before the run ended up further from its own pool than the
+% 4095 byte range of the pc-relative ldr that reads it.
+literal_pool_across_wide_tuple_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State0a, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    % Not encodable as an immediate, so it goes through the literal pool.
+    State1 = ?BACKEND:add(State0a, Reg, 16#12345678),
+    {State2, Ptr} = ?BACKEND:copy_to_native_register(State1, Reg),
+    State3 = lists:foldl(
+        % Element stores only, exactly what put_tuple2 emits: no literal is
+        % added here, so the pool is never fed and never re-examined.
+        fun(N, AccState) -> ?BACKEND:move_to_array_element(AccState, Reg, Ptr, N) end,
+        State2,
+        lists:seq(0, 600)
+    ),
+    Stream = ?BACKEND:stream(?BACKEND:flush(State3)),
+    ?assert(byte_size(Stream) > 4095).
+
 large_operand_state() ->
     ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)).
 
