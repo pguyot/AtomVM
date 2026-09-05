@@ -409,7 +409,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 9
+#define JIT_FORMAT_VERSION 10
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
