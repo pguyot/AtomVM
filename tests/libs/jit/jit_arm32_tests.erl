@@ -461,6 +461,22 @@ move_to_cp_test() ->
         >>,
     ?assertStream(arm32, Dump, Stream).
 
+return_to_cp_address_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:return_to_cp_address(State0),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:	e5976074 	ldr	r6, [r7, #116]	@ 0x74\n"
+            "   4:	e596503c 	ldr	r5, [r6, #60]	@ 0x3c\n"
+            "   8:	e3550000 	cmp	r5, #0\n"
+            "   c:	0a000002 	beq	0x1c\n"
+            "  10:	e58a6000 	str	r6, [sl]\n"
+            "  14:	e5975070 	ldr	r5, [r7, #112]	@ 0x70\n"
+            "  18:	e12fff15 	bx	r5"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
 increment_sp_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:increment_sp(State0, 7),
@@ -923,38 +939,39 @@ call_or_schedule_next_test() ->
     Dump =
         <<
             "   0:	e320f000 	nop	{0}\n"
-            "   4:	ea00001b 	b	0x78\n"
+            "   4:	ea00001c 	b	0x7c\n"
             "   8:	e320f000 	nop	{0}\n"
             "   c:	ea000003 	b	0x20\n"
             "  10:	e320f000 	nop	{0}\n"
-            "  14:	ea000011 	b	0x60\n"
+            "  14:	ea000012 	b	0x64\n"
             "  18:	e320f000 	nop	{0}\n"
-            "  1c:	ea000012 	b	0x6c\n"
+            "  1c:	ea000013 	b	0x70\n"
             "  20:	e59a6000 	ldr	r6, [sl]\n"
             "  24:	e5876074 	str	r6, [r7, #116]	@ 0x74\n"
-            "  28:	e3a06d06 	mov	r6, #384	@ 0x180\n"
-            "  2c:	e5876070 	str	r6, [r7, #112]	@ 0x70\n"
-            "  30:	e59a6008 	ldr	r6, [sl, #8]\n"
-            "  34:	e2566001 	subs	r6, r6, #1\n"
-            "  38:	e58a6008 	str	r6, [sl, #8]\n"
-            "  3c:	1a000007 	bne	0x60\n"
-            "  40:	e1a0600f 	mov	r6, pc\n"
-            "  44:	e3e05037 	mvn	r5, #55	@ 0x37\n"
-            "  48:	e0855006 	add	r5, r5, r6\n"
-            "  4c:	e1a0600a 	mov	r6, sl\n"
-            "  50:	e5865004 	str	r5, [r6, #4]\n"
-            "  54:	e5996008 	ldr	r6, [r9, #8]\n"
-            "  58:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  5c:	e12fff16 	bx	r6\n"
-            "  60:	e5996000 	ldr	r6, [r9]\n"
-            "  64:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  68:	e12fff16 	bx	r6\n"
-            "  6c:	e5996004 	ldr	r6, [r9, #4]\n"
-            "  70:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  74:	e12fff16 	bx	r6\n"
-            "  78:	e5996004 	ldr	r6, [r9, #4]\n"
-            "  7c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  80:	e12fff16 	bx	r6"
+            "  28:	e28f6034 	add	r6, pc, #52	@ 0x34\n"
+            "  2c:	e320f000 	nop	{0}\n"
+            "  30:	e5876070 	str	r6, [r7, #112]	@ 0x70\n"
+            "  34:	e59a6008 	ldr	r6, [sl, #8]\n"
+            "  38:	e2566001 	subs	r6, r6, #1\n"
+            "  3c:	e58a6008 	str	r6, [sl, #8]\n"
+            "  40:	1a000007 	bne	0x64\n"
+            "  44:	e1a0600f 	mov	r6, pc\n"
+            "  48:	e3e0503b 	mvn	r5, #59	@ 0x3b\n"
+            "  4c:	e0855006 	add	r5, r5, r6\n"
+            "  50:	e1a0600a 	mov	r6, sl\n"
+            "  54:	e5865004 	str	r5, [r6, #4]\n"
+            "  58:	e5996008 	ldr	r6, [r9, #8]\n"
+            "  5c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  60:	e12fff16 	bx	r6\n"
+            "  64:	e5996000 	ldr	r6, [r9]\n"
+            "  68:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  6c:	e12fff16 	bx	r6\n"
+            "  70:	e5996004 	ldr	r6, [r9, #4]\n"
+            "  74:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  78:	e12fff16 	bx	r6\n"
+            "  7c:	e5996004 	ldr	r6, [r9, #4]\n"
+            "  80:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  84:	e12fff16 	bx	r6"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
