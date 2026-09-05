@@ -253,6 +253,11 @@ _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->l
 _Static_assert(offsetof(Module, imported_funcs) == 0x48, "module->imported_funcs is 0x48 in jit/src/jit_arm32.erl");
 _Static_assert(offsetof(struct ModuleFunction, target) == 0x4, "module_function->target is 0x4 in jit/src/jit_arm32.erl");
 _Static_assert(offsetof(struct ModuleFunction, entry_point) == 0x8, "module_function->entry_point is 0x8 in jit/src/jit_arm32.erl");
+#ifdef AVM_CP_LOW_IS_NATIVE_PC
+// The return path reads module->native_code to tell a native resume address in
+// the cp's low word from an emulated module's bytecode offset.
+_Static_assert(offsetof(Module, native_code) == 0x3C, "module->native_code is 0x3C in jit/src/jit_arm32.erl");
+#endif
 #if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
 _Static_assert(offsetof(JITState, code_base) == 0x10, "jit_state->code_base is 0x10 in jit/src/jit_xtensa.erl");
 #endif
@@ -345,7 +350,7 @@ static void jit_trim_live_regs(Context *ctx, uint32_t live)
 static Context *jit_return(Context *ctx, JITState *jit_state)
 {
     Module *mod = cp_to_module(ctx->cp, ctx->global);
-    unsigned int offset = cp_to_offset(ctx->cp);
+    unsigned int offset = cp_to_offset_in_module(ctx->cp, mod);
     TRACE("jit_return: ctx->cp = 0x%" CP_X_FMT ", offset = %u\n", ctx->cp, offset);
 
     // Native case
