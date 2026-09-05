@@ -100,7 +100,8 @@
     supports_div/1,
     supports_fp/1,
     set_vm_record_type/3,
-    get_vm_record_type/2
+    get_vm_record_type/2,
+    heap_bump_alloc/2
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -262,14 +263,17 @@
 %% the RISC-V ABI, so generated code never saves, restores or reloads them
 %% around calls; a0/a1/a2 become scratch. ctx takes s1 (x9), the only
 %% RVC-addressable callee-saved base besides the frame pointer, so argument
-%% loads from x registers into a0-a5 keep their compressed encodings. There
-%% are no inline heap operations on RISC-V, so hp is NOT pinned.
+%% loads from x registers into a0-a5 keep their compressed encodings. hp is
+%% NOT pinned: inline heap allocation bumps ctx->heap.heap_ptr in place, which
+%% needs no register of its own.
 -define(CTX_REG, s1).
 -define(NATIVE_INTERFACE_REG, s3).
 %% ctx->e mutates (allocate/deallocate, GC): written back to ctx before
 %% every C call and reloaded after calls that return, except around
 %% primitives listed in jit_prim_pure.hrl.
 -define(E_REG, s4).
+%% ctx->heap.heap_ptr, for inline bump allocation.
+-define(HEAP_PTR_OFFSET, 16#C).
 -define(Y_REGS, {?CTX_REG, 16#28}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 -define(CP, {?CTX_REG, 16#70}).
