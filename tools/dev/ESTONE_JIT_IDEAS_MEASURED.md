@@ -40,7 +40,7 @@ turns "how much would arm32 gain" into a question this machine can answer.
 | 1 | Eliminate list reconstruction | **drop** | OTP's compiler already does it |
 | 2 | Shift tagged small integers directly | **keep — shipped** | 1.20–1.25x on shift loops |
 | 3 | Solve arithmetic guards backwards | **drop** | 0 instances in 2367 beam files |
-| 4 | Inline 32-bit allocation | **keep — highest value** | ablation: 1.09x app, −1.6% code |
+| 4 | Inline 32-bit allocation | **kept — shipped** | arm32 1.021x, riscv64 1.045x |
 | 5 | Caller-saved contracts for call-free loops | **drop** | ablation: 0.0% where it exists |
 | 6 | Restricted native ABI for tiny leaves | **drop** | ≤14.5% ceiling, leaf ineligible |
 | 7 | Avoid message sizing | **keep — real but costly** | sizing is 9.2–17.2% of a round trip |
@@ -152,12 +152,52 @@ ESTONE score 1.100x (CI 1.083–1.126); ESTONE total time is unchanged, which is
 what the score/time divergence noted above predicts.  `atomvmlib-aarch64.avm`
 is also **1.58% smaller** with inlining on.
 
-This is the one idea in the handover whose benefit is both large and already
-demonstrated on shipping code.  The handover's staging is right: load HP from
-`Context`, store the fields, write HP back; a pinned heap register is an
-optimisation, not a prerequisite.  Note that `alloc_tuple` is gated on the same
-export, so implementing it buys `put_tuple2` as well as `put_list` — half the
-measured win above comes from tuples.
+The handover's staging is right: load HP from `Context`, store the fields,
+write HP back; a pinned heap register is an optimisation, not a prerequisite.
+`alloc_tuple` is gated on the same export, so implementing it buys
+`put_tuple2` as well as `put_list`.
+
+### Implemented, and what it actually measured
+
+`heap_bump_alloc/2` now exists on `jit_arm32` and, through
+`jit_riscv_impl.hrl`, on `jit_riscv32` and `jit_riscv64`.  Measured directly
+on the two backends this machine can execute, with `qemu-user` inside a Linux
+container, seven interleaved rounds of the application suite:
+
+| target | aggregate | best test | native code |
+|---|---:|---:|---:|
+| arm32 | **1.021x** | `sudoku_puzzle_test` 1.074x | −1.15% |
+| riscv64 | **1.045x** | `sudoku_puzzle_test` 1.109x | −1.12% |
+| riscv32 | not executable here | — | −0.60% |
+
+**The aarch64 ablation over-predicted this**, and the reason is worth
+recording: on aarch64 hp is pinned, so falling back to the primitive costs a
+write-back and a reload of the pinned register *on top of* the call.  arm32
+and RISC-V keep hp in the context, so their fallback never paid that, and the
+saving is only the call itself.  An ablation of a pinned-register backend is
+an upper bound for an unpinned one, not an estimate.
+
+`qemu-user` timing weights instruction count rather than microarchitecture, so
+it understates what removing an indirect call is worth on real in-order
+hardware; treat 1.02x/1.05x as a floor.  Both backends produce byte-identical
+output to OTP 29 on an allocation stress test (cons and tuple shapes, eight
+live values at the allocation site, arities from 1 to 1024 — past every
+backend's add-immediate range — and repeated GCs), and pass the 528-module
+`test-erlang` suite with exactly the failures the unmodified backends have.
+
+Not done here: `armv6m`, `armv7m`, `xtensa` and `wasm32` still call the
+primitive.  armv6m in particular has severe register pressure and a literal
+pool whose reach is already marginal — see the note below — so it needs its
+own measurement rather than a copy of this patch.
+
+### Unrelated defect found while testing
+
+`jit_armv6m` fails to compile a `put_tuple2` of some wide arities built at run
+time: a 511-element tuple gives `function_clause` in `jit_armv6m_asm:ldr/2`
+with `{pc, 2576}`, past Thumb-1's 1020-byte pc-relative reach.  It reproduces
+on the unmodified backend, is not monotonic in arity (511 fails, 512 and 1024
+do not), and is unrelated to this change; it is the same class as the arm32
+literal-pool bug fixed in `227f07ac2`.
 
 ## Idea 5 — caller-saved contracts for call-free loops — DROP
 
@@ -256,9 +296,10 @@ not a performance change.
 
 ## Recommended sequence
 
-1. **Idea 4** on `jit_arm32` and `jit_riscv32` (then `jit_riscv64`,
-   `jit_armv6m`, `jit_wasm32`): 1.09x measured on the equivalent aarch64
-   ablation, plus 1.6% smaller native code, and the code to copy already exists.
+1. ~~**Idea 4** on `jit_arm32` and `jit_riscv32`~~ — done, measured above.
+   `jit_armv6m`, `jit_armv7m`, `jit_xtensa` and `jit_wasm32` remain.
 2. **Idea 7**, sized at 1.10–1.21x on message-passing micros, if the
    generated-code size contract can be kept cheap.
-3. Nothing else in the handover survived measurement.
+3. The `jit_armv6m` literal-pool failure on wide `put_tuple2`, which this
+   work uncovered but did not cause.
+4. Nothing else in the handover survived measurement.
