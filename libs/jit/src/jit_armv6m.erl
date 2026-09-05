@@ -3330,14 +3330,56 @@ move_to_array_element0(
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     State0#state{stream = Stream1, regs = Regs1};
 move_to_array_element0(
-    State0,
+    #state{regs = Regs0} = State0,
     Value,
     Reg,
     Index
 ) when not ?IS_GPR(Value) andalso ?IS_GPR(Reg) ->
-    {State1, Temp} = copy_to_native_register(State0, Value),
-    State2 = move_to_array_element0(State1, Temp, Reg, Index),
-    free_native_register(State2, Temp).
+    %% An fp register is read through jit_state, which lives on the stack, so
+    %% it cannot be materialized while the borrow below has sp moved. Array
+    %% elements are terms and never fp registers, so this only keeps the case
+    %% failing loudly instead of reading the wrong slot.
+    Borrowable =
+        case Value of
+            {fp_reg, _} -> false;
+            _ -> true
+        end,
+    case jit_regs:available_regs(Regs0) of
+        0 when Borrowable ->
+            %% Every scratch register is taken -- a put_map with dozens of
+            %% pairs holds them all -- and the value still has to pass through
+            %% one. Borrow a pair around a push/pop instead of spilling: the
+            %% caller's values come back bit for bit, so the register cache is
+            %% restored as it was. Two registers, not one, so sp keeps its
+            %% eight byte alignment and the y register path has a temp of its
+            %% own rather than reaching for ip.
+            {Borrowed, Second} = borrow_pair(Reg),
+            BorrowMask = reg_bit(Borrowed) bor reg_bit(Second),
+            State1 = append_code(
+                State0, jit_armv6m_asm:push(mask_to_list(BorrowMask))
+            ),
+            {State2, ValueReg} = copy_to_native_register(
+                State1#state{regs = jit_regs:set_available_regs(Regs0, BorrowMask)}, Value
+            ),
+            State3 = move_to_array_element0(State2, ValueReg, Reg, Index),
+            State4 = append_code(State3, jit_armv6m_asm:pop(mask_to_list(BorrowMask))),
+            %% The pop restores both registers, so the tracking state from
+            %% before the borrow describes them again exactly.
+            State4#state{regs = Regs0};
+        _ ->
+            {State1, Temp} = copy_to_native_register(State0, Value),
+            State2 = move_to_array_element0(State1, Temp, Reg, Index),
+            free_native_register(State2, Temp)
+    end.
+
+%% The two allocatable registers, in allocation order, that are not the array
+%% base. Only used when nothing is free and a pair has to be borrowed.
+borrow_pair(Reg) ->
+    [First, Second | _] = [R || R <- ?FIRST_AVAIL_REGS, R =/= Reg],
+    {First, Second}.
+
+append_code(#state{stream_module = StreamModule, stream = Stream0} = State, Code) ->
+    State#state{stream = StreamModule:append(Stream0, Code)}.
 
 move_to_array_element(
     State,
@@ -3925,36 +3967,68 @@ get_module_atom_index(
     Reg = first_avail(Avail),
     RegBit = reg_bit(Reg),
     Avail1 = Avail band (bnot RegBit),
-    TempJitState = first_avail(Avail1),
-    % Load jit_state pointer from stack, then module, then the
-    % local_atoms_to_global_table pointer (Module byte offset 0x6C = 108,
-    % which fits the 5-bit word-scaled LDR immediate: 108 =< 124, 108/4 = 27).
-    I1a = jit_armv6m_asm:ldr(TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
-    I1b = jit_armv6m_asm:ldr(Reg, ?JITSTATE_MODULE(TempJitState)),
-    I2 = jit_armv6m_asm:ldr(Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
-    Stream1 = StreamModule:append(Stream0, <<I1a/binary, I1b/binary, I2/binary>>),
     % Reg = table[AtomIndex]: each entry is a 4-byte uint32. The Thumb
     % LDR Rt,[Rn,#imm5*4] immediate reaches only 0..124, so for larger
-    % indexes we materialize the byte offset in the (now free) scratch
-    % register and use the register-offset LDR Rt,[Rn,Rm] form.
+    % indexes we materialize the byte offset in a scratch register and use
+    % the register-offset LDR Rt,[Rn,Rm] form.
     Offset = AtomIndex * 4,
-    Regs1 = jit_regs:invalidate_reg(Regs0, TempJitState),
     State1 =
-        case Offset =< 124 of
-            true ->
-                I3 = jit_armv6m_asm:ldr(Reg, {Reg, Offset}),
-                Stream2 = StreamModule:append(Stream1, I3),
-                State#state{stream = Stream2, regs = Regs1};
-            false ->
-                % Materialize AtomIndex*4 into TempJitState (any 32-bit value,
-                % falls back to the literal pool as needed), then use the
-                % register-offset load LDR Reg, [Reg, TempJitState].
-                StateA = mov_immediate(
-                    State#state{stream = Stream1, regs = Regs1}, TempJitState, Offset
-                ),
-                I3 = jit_armv6m_asm:ldr(Reg, {Reg, TempJitState}),
-                Stream2 = StreamModule:append(StateA#state.stream, I3),
-                StateA#state{stream = Stream2}
+        case Avail1 of
+            0 ->
+                % Only one register is free: a put_map with dozens of pairs
+                % can leave the array pointer and one key holding the rest
+                % while the next key is decoded. The three loads that walk
+                % jit_state -> module -> table are a dependent chain, so they
+                % all go through Reg; for a far entry, park the table pointer
+                % in ip, which mov reaches and ldr does not, build the offset
+                % in Reg and add it back, as ldr_y_reg does in this situation.
+                Head = <<
+                    (jit_armv6m_asm:ldr(Reg, {sp, ?STACK_OFFSET_JITSTATE}))/binary,
+                    (jit_armv6m_asm:ldr(Reg, ?JITSTATE_MODULE(Reg)))/binary,
+                    (jit_armv6m_asm:ldr(Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)))/binary
+                >>,
+                Tail =
+                    case Offset =< 124 of
+                        true ->
+                            jit_armv6m_asm:ldr(Reg, {Reg, Offset});
+                        false ->
+                            <<
+                                (jit_armv6m_asm:mov(?IP_REG, Reg))/binary,
+                                (mov_offset_code(Reg, Offset))/binary,
+                                (jit_armv6m_asm:add(Reg, ?IP_REG))/binary,
+                                (jit_armv6m_asm:ldr(Reg, {Reg, 0}))/binary
+                            >>
+                    end,
+                Stream1 = StreamModule:append(Stream0, <<Head/binary, Tail/binary>>),
+                State#state{stream = Stream1, regs = Regs0};
+            _ ->
+                TempJitState = first_avail(Avail1),
+                % Load jit_state pointer from stack, then module, then the
+                % local_atoms_to_global_table pointer (Module byte offset
+                % 0x6C = 108, which fits the 5-bit word-scaled LDR immediate:
+                % 108 =< 124, 108/4 = 27).
+                I1a = jit_armv6m_asm:ldr(TempJitState, {sp, ?STACK_OFFSET_JITSTATE}),
+                I1b = jit_armv6m_asm:ldr(Reg, ?JITSTATE_MODULE(TempJitState)),
+                I2 = jit_armv6m_asm:ldr(Reg, ?MODULE_LOCAL_ATOMS_TABLE(Reg)),
+                Stream1 = StreamModule:append(Stream0, <<I1a/binary, I1b/binary, I2/binary>>),
+                Regs1 = jit_regs:invalidate_reg(Regs0, TempJitState),
+                case Offset =< 124 of
+                    true ->
+                        I3 = jit_armv6m_asm:ldr(Reg, {Reg, Offset}),
+                        Stream2 = StreamModule:append(Stream1, I3),
+                        State#state{stream = Stream2, regs = Regs1};
+                    false ->
+                        % Materialize AtomIndex*4 into TempJitState (any
+                        % 32-bit value, falls back to the literal pool as
+                        % needed), then use the register-offset load
+                        % LDR Reg, [Reg, TempJitState].
+                        StateA = mov_immediate(
+                            State#state{stream = Stream1, regs = Regs1}, TempJitState, Offset
+                        ),
+                        I3 = jit_armv6m_asm:ldr(Reg, {Reg, TempJitState}),
+                        Stream2 = StreamModule:append(StateA#state.stream, I3),
+                        StateA#state{stream = Stream2}
+                end
         end,
     Regs2 = jit_regs:set_contents(State1#state.regs, Reg, {atom_index, AtomIndex}),
     {

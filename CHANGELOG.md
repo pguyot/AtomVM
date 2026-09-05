@@ -206,6 +206,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from its own pool than the pc-relative `ldr` that reads it. A tuple or map of a few hundred
   elements built at run time failed to compile. The pool's own size now counts against that
   range as well
+- Fixed the armv6m JIT running out of scratch registers on a `put_map` with dozens of pairs,
+  where the array pointer and the pair being stored hold all but one of the six allocatable
+  registers: storing a value that is not already in a register now borrows a pair around a
+  push/pop, and reading a module-local atom index makes do with the one register it is given.
+  `ssh_options` of OTP 29 failed to compile, and it was the only module of the OTP corpus that
+  did
 - Fixed the aarch64 JIT crashing when compiled with DWARF support (the default) on any module
   whose register cache holds a VM x register in x25-x28: the DWARF register table stopped at
   x21, so `dwarf_register_number/1` raised `function_clause` and the module failed to compile
