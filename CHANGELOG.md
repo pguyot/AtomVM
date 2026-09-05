@@ -281,6 +281,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
   and 27 out of segments whose total width is neither a whole number of bytes nor under one
   came out too long
+- Fixed the arm32 and armv6m JIT literal pools going out of reach on a wide `put_tuple2` or
+  `put_map`: element stores encode their own offsets, so a run of them added no literal and
+  nothing re-examined the pending pool, and a literal loaded before the run ended up further
+  from its own pool than the pc-relative `ldr` that reads it. A tuple or map of a few hundred
+  elements built at run time failed to compile. The pool's own size now counts against that
+  range as well
 
 ## [0.7.0-beta.0] - 2026-09-28
 

@@ -3264,7 +3264,16 @@ get_array_element(
 -spec move_to_array_element(
     state(), integer() | vm_register() | armv6m_register(), armv6m_register(), non_neg_integer()
 ) -> state().
-move_to_array_element(
+move_to_array_element(State, Value, Reg, Index) ->
+    %% put_tuple2, put_map and update_record store their elements one after
+    %% another, and a run of stores whose offsets all encode directly adds no
+    %% literal, so nothing else would check the pending pool. A wide tuple then
+    %% walks the oldest ldr out of its own 1020 byte range. Bound the run here:
+    %% one element emits under a hundred bytes even when it has to walk the
+    %% base register to the segment it writes and back.
+    move_to_array_element0(maybe_flush_literal_pool(State), Value, Reg, Index).
+
+move_to_array_element0(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     ValueReg,
     Reg,
@@ -3273,7 +3282,7 @@ move_to_array_element(
     I1 = jit_armv6m_asm:str(ValueReg, {Reg, Index * 4}),
     Stream1 = StreamModule:append(Stream0, I1),
     State0#state{stream = Stream1};
-move_to_array_element(
+move_to_array_element0(
     #state{stream_module = StreamModule, regs = Regs0} = State0,
     ValueReg,
     Reg,
@@ -3305,7 +3314,7 @@ move_to_array_element(
             Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
             State1#state{stream = Stream2, regs = Regs1}
     end;
-move_to_array_element(
+move_to_array_element0(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State0,
     ValueReg,
@@ -3320,14 +3329,14 @@ move_to_array_element(
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Temp),
     State0#state{stream = Stream1, regs = Regs1};
-move_to_array_element(
+move_to_array_element0(
     State0,
     Value,
     Reg,
     Index
 ) when not ?IS_GPR(Value) andalso ?IS_GPR(Reg) ->
     {State1, Temp} = copy_to_native_register(State0, Value),
-    State2 = move_to_array_element(State1, Temp, Reg, Index),
+    State2 = move_to_array_element0(State1, Temp, Reg, Index),
     free_native_register(State2, Temp).
 
 move_to_array_element(
@@ -4338,13 +4347,17 @@ maybe_flush_literal_pool(#state{literal_pool = []} = State) ->
 maybe_flush_literal_pool(
     #state{stream_module = StreamModule, stream = Stream0, literal_pool = LP} = State
 ) ->
-    % Determine the offset of the last item.
+    % Determine the offset of the oldest pending item.
     Offset = StreamModule:offset(Stream0),
     {Addr, _, _} = lists:last(LP),
-    % Heuristically set the threshold at 512 (half the range of ldr inst.).
-    % bigint.beam currently requires 663 or lower to compile.
+    % Worst-case reach once the pool is laid out here: the oldest ldr reads
+    % relative to its own address rounded down to a word, and has to reach the
+    % *last* word of the pool, so the pool's own size counts against the 1020
+    % byte range of a Thumb-1 pc-relative ldr. Flush at half of what is left,
+    % leaving room for the code emitted between two checks.
+    Reach = Offset - (Addr band (bnot 3)) + length(LP) * 4,
     if
-        Offset - Addr > 512 ->
+        Reach > 512 ->
             NbLiterals = length(LP),
             Continuation = NbLiterals * 4 + 4 - (Offset rem 4),
             Stream1 = StreamModule:append(Stream0, jit_armv6m_asm:b(Continuation)),
@@ -5059,8 +5072,10 @@ regs_to_mask([Reg | T]) -> reg_bit(Reg) bor regs_to_mask(T).
 add_label(StateP, Label) ->
     %% Unknown predecessors may join here: pending stores not in the label's
     %% live-in mask are dead and get nop'd; those in the mask keep their store.
+    %% Check the pool before taking the offset: a basic block that added no
+    %% literal of its own would otherwise carry a stale one past its range.
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
-        State0 = pending_flush_label(StateP, Label),
+        State0 = maybe_flush_literal_pool(pending_flush_label(StateP, Label)),
     Offset0 = StreamModule:offset(Stream0),
     Regs1 = jit_regs:invalidate_all(Regs0),
     {State1, Offset1} =
