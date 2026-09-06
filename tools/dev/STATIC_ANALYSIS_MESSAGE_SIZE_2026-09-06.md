@@ -230,3 +230,105 @@ per run, so the headline number is partly timer quantisation — total measured
 time is the better instrument. And the noise floor is ±1.3% on the ESTONE
 total, ±3.4% per component, and far worse on the message micros, so nothing
 below a few percent can be demonstrated on this benchmark at all.
+
+## Relocatable tuples, and where GC time actually goes — 2026-09-06
+
+A follow-up proposal: cap tuple arity, spend a bit of the arity field on a
+"relocatable" flag, and let such a tuple carry its whole subtree contiguously
+with a total size, so message copy and GC can `memcpy` it instead of recursing.
+
+### The bit is affordable
+
+| | limit |
+|---|---|
+| BEAM tuple arity | **16,777,215** (2^24-1), confirmed on OTP 29: `make_tuple(16777216)` is `badarg` |
+| AtomVM boxed header | `(size << 6) \| tag`, 6-bit tag |
+| AtomVM arity field | 58 bits (64-bit), **26 bits (32-bit)** |
+
+Spending one bit leaves 25 bits on a 32-bit target — 33,554,431, still twice
+BEAM's own limit. Two caveats: boxed tag `0x1C` is **not** free (`term.h` marks
+it reserved, `libs/jit/src/term.hrl` would misidentify it as a boxed number),
+and `term_get_size_from_boxed_header` is shared by every boxed type, so a mask
+lands on the GC scan and copy paths.
+
+### Maintaining the status is cheap; carrying the size is the open part
+
+A tuple whose elements are all immediates is closed and contiguous by
+construction, so `put_tuple2` can set the flag for free, and a destructive
+tuple update keeps it as long as the written value is an immediate. For that
+case the total size *is* `arity + 1`, already in the header: the flag needs no
+extra storage. `memory_copy_shallow` also lays a message out depth-first, so
+every nested tuple inside a message fragment is already contiguous.
+
+What is not free is a compound tuple: `{Self, {message, X}}` has total size
+`3 + size(X)`, and there is nowhere in the header to put that number. Either
+the tuple grows a word (a 2-tuple goes 3 -> 4 words, +33% on every pingpong
+message), or the arity field splits into arity plus total-size with a
+"doesn't fit, fall back" encoding.
+
+### What it would be worth
+
+**Message copy.** Already measured above: on the estone shapes the single pass
+costs 18-25 ns of a **108 ns** message round trip, of which the sizing pass is
+3-4 ns and the copy 2.5 ns. Replacing both with a header read and a `memcpy`
+saves ~4 ns, about 4% of a message, on components worth 1.9% of the score. The
+deep case is where it would pay -- `msgp_huge` is 996 words at depth 48 -- and
+that is 4% of the weight.
+
+**GC.** Measured by timing `memory_gc` (two `clock_gettime` calls at a
+calibrated 17.4 ns each, subtracted):
+
+| | collections | live words copied | mean live/collection | real GC share |
+|---|---:|---:|---:|---:|
+| estone | 1,442,919 | 44,504,136 | 31 | **~10%** |
+| app suite | 420,797 | 6,865,598 | 16 | **~11%** |
+
+That is ~1.6 ns per live word copied. But the live set per collection is tiny:
+**72% of estone collections and 99.5% of the app suite's leave 8 words or
+fewer**, and not one collection in either run was a full sweep.
+
+### The finding that matters: 95% of collections are forced by a message fragment
+
+`memory_ensure_free_with_roots` contains
+
+```c
+bool should_gc = free_space < size || (alloc_mode == MEMORY_FORCE_SHRINK)
+    || c->heap.root->next != NULL;
+```
+
+and `mailbox_message_dispose` appends every received message as a fragment
+(`memory_heap_append_fragment`). So a process that receives a message collects
+on its next allocation, whatever the memory pressure. Attributing the trigger:
+
+| | out of space | force shrink | **heap fragment present** |
+|---|---:|---:|---:|
+| estone | 45,942 (3.2%) | 0 | **1,369,393 (94.9%)** |
+| app suite | 11,016 (2.6%) | 0 | **400,057 (95.1%)** |
+
+Introduced by `6309b7283`, "Run GC when there is a memory fragment to copy
+message data".
+
+So AtomVM's GC cost is a *collection count* problem, not a scan volume problem:
+1.4M collections copying 31 words each. A relocatable representation makes the
+31-word scan cheaper and cannot reduce the 1.4M. Tolerating fragments -- a
+threshold on fragment count or words before forcing the fold -- attacks the
+term that actually carries the cost. **Not yet attempted; sized here only.**
+
+### Sharing, for the record
+
+`erts_debug:size/1` against `flat_size/1` measures what an "own your contents"
+rule would cost if it were ever applied at construction:
+
+| term | shared | flat | blow-up |
+|---|---:|---:|---:|
+| `{A, A}`, A a 100-list | 203 | 403 | 2.0x |
+| `{A, A, A, A}` | 205 | 805 | 3.9x |
+| 100 references to one tuple | 225 | 2,700 | **12.0x** |
+| `lists.erl` abstract code | 156,994 | 156,994 | 1.0x |
+
+The worse hazard is not the final size but incremental construction: building
+`lists:foldl(fun(X, Acc) -> {X, Acc} end, [], L)` with ownership copies costs
+sum(2i) = 1,001,000 words for a 1,000-deep nest against 3,000 today, 333x.
+This is why the flag can only ever be *maintained* (immediate arguments, or a
+copy that already produces a contiguous layout), never *established* by
+copying at `put_tuple2`.
