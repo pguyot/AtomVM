@@ -518,3 +518,63 @@ milliseconds. AtomVM runs estone in ~1.01 s against BEAM's ~0.51 s. Ranking
 work by recoverable *estones*, as the sections above do, points at BIF dispatch
 and pattern matching; ranking it by *time* points at message passing and
 nothing else.
+
+## Forwarding by handing over the message block — prototyped, measured, not shipped
+
+`p1/1` receives `{From, {message, X}}` and sends `{self(), {message, X}}`: the
+same arity, the same payload, one word different, and that word an immediate.
+Written by hand you would patch the incoming block and re-post it.
+
+### The runtime mechanism works
+
+Built and measured: `Context.forward_pending` (added at the end of the struct,
+where nothing's offset is pinned), a `PRIM_REMOVE_MESSAGE_KEEP` that takes the
+block out of the mailbox without folding it into the heap, and a
+`PRIM_FORWARD_MESSAGE` that checks the outgoing term is the incoming root with
+only immediate differences, patches those words and posts the block, falling
+back to a normal send otherwise.
+
+A chain of four forwarders, so four hops in five are forwards:
+
+| message words | AtomVM before | AtomVM forwarding | BEAM | vs before | vs BEAM |
+|---:|---:|---:|---:|---:|---:|
+| 7 | 127 ns | **68 ns** | 214 ns | 1.87x | 3.1x |
+| 601 | 1,188 ns | **572 ns** | 1,777 ns | 2.08x | 3.1x |
+| 6,001 | 8,601 ns | **2,049 ns** | 13,990 ns | **4.20x** | **6.8x** |
+
+The gain grows with payload because a forwarded hop stops being O(payload); the
+residual scaling is the one hop in five that still builds a fresh message.
+`test-erlang` and the C suites pass with it enabled.
+
+### Why it is not shipped
+
+The recogniser that decides where to emit it reasons about **shape only**: a
+`remove_message`, then immediate-producing opcodes, then `send`, then an
+overwrite of x0 and a tail call. That is not enough. Nothing in it establishes
+that the value reaching the tail call is not *derived from the message*:
+
+```erlang
+p1(To) ->
+    receive
+        {_From, {message, X}} -> To ! {self(), {message, X}}, p1(X)
+    end.
+```
+
+Here `X` points into the block after it has been handed to `To`, and the target
+may collect and free it. OTP 29 happens to compile this to a
+`get_tuple_element` rather than a `move`, which this recogniser rejects — but
+that is an accident of one compiler version, not a property to rely on. A
+shallow root scan at run time does not close it either, since a heap term
+reachable from a live y register can hold the block pointer indirectly.
+
+**What it needs:** provenance tracking — which registers hold values derived
+from the message being received — carried from `loop_rec` to the send, with the
+tail call's live arguments checked against it. That is the per-register
+provenance discussed above, and this is the case that justifies it. It cannot
+be done from the `remove_message` onwards alone, because a store into a y
+register can happen between `loop_rec` and `remove_message`; it wants either a
+pre-pass in the shape of `jit_liveness:analysis/1`, or provenance threaded
+through `emit_pass` with a conservative poison on every unmodelled opcode.
+
+The prototype is kept in `tools/dev/forward-message-prototype.patch` (it also
+carries the live-register fragment-skip experiment).
