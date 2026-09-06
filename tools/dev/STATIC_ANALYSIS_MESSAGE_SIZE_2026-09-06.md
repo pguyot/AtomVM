@@ -376,3 +376,74 @@ by a message fragment, collections are frequent and tiny and the scan is not
 the cost. Fix that first and collections become rarer and larger — at which
 point scan volume does start to dominate and this proposal deserves
 re-measuring rather than dismissing.
+
+## Avoiding the fragment-forced collection — measured
+
+The follow-up suggestion was to use static analysis to skip the collection when
+the received message is dropped. Measuring it turned up something simpler.
+
+**A collection already ignores a dead message.** The collector copies live data
+only, so a dropped message contributes zero copied words; that is why the mean
+live set at a fragment-forced collection is 31 words while the message that
+forced it is 9 to 33. The cost is not copying the message, it is *running a
+collection at all*, 1.44M times.
+
+**Removing the rule outright is worse.** Building with the
+`c->heap.root->next != NULL` clause deleted:
+
+| | estone total | max RSS |
+|---|---:|---:|
+| baseline | 1.038 s | 31.4 MB |
+| never fold on fragments | 1.148 s | 87.9 MB |
+
+**Batching the fold does cut the work, a lot.** Folding only once the chain
+reaches N fragments, counted rather than timed:
+
+| threshold | collections | live words copied | mean |
+|---:|---:|---:|---:|
+| 1 (today) | 1,442,919 | 44,504,136 | 30.8 |
+| 2 | 768,382 | 27,693,718 | 36.0 |
+| 8 | 310,399 | 13,379,656 | 43.1 |
+| 32 | **123,719** | **7,563,517** | 61.1 |
+
+11.7x fewer collections and 5.9x fewer copied words at N=32, with resident
+memory unchanged at 31 MB (unlike the unbounded ablation above).
+
+**And yet it measured 19% slower.** 25 interleaved rounds, N=32 against
+baseline: ESTONES 1.0017x (CI 0.9956-1.0053), total measured time 799.1ms ->
+953.9ms (CI 0.8286-0.8574).
+
+The reason is the point of the original design. Folding on the *first* fragment
+keeps the chain length at one, which is what makes every chain walk O(1) --
+and `memory_heap_memory_size` walks the chain on **every allocation** under
+`FibonacciHeapGrowth`, not on every collection. Batching turns that into O(N)
+per allocation to save O(1) per collection, and allocations vastly outnumber
+collections. The threshold test itself had the same flaw.
+
+**So the batching needs O(1) fragment accounting**: a count and a word total
+maintained in `struct Heap` by `memory_heap_append_fragment` and
+`memory_heap_alloc_new_fragment`, reset by a collection, with
+`memory_heap_memory_size` reading the total instead of walking. Two extra
+fields shift `struct Context`, whose offsets eight JIT backends hardcode --
+`jit.c`'s `_Static_assert`s catch it immediately and name the required values,
+so the update is mechanical but real.
+
+**The prize, if the per-word model holds.** Fitting
+`total = calls x F + words x W` across both benchmarks gives F ~ 0 and
+W ~ 1.78 ns/word, i.e. collection cost tracks copied words. Cutting copied
+words 5.9x would take the collector from ~10% of runtime to ~1.7%, about
+**8% of total runtime** -- larger than anything else measured in this
+document. **Not yet demonstrated:** it depends on the O(1) accounting landing
+first, and on the per-word model holding once collections become rarer and
+larger.
+
+On the static-analysis form specifically: proving the message is dropped does
+not avoid copying it, since the collector already does not copy dead data. It
+could avoid the *collection*, but only with a proof that nothing live points
+into the fragment, and checking the roots alone is unsound -- `put_tuple2` can
+store a fragment-derived pointer into a heap-allocated term. A sound version
+needs a write barrier or an analysis proving no fragment-derived value is
+stored into the heap between `remove_message` and the fold point.
+`jit_liveness` already computes per-label live-in masks, so such an analysis
+has a home. But the counter-based batching gets most of the same benefit with
+no analysis at all, and should be tried first.
