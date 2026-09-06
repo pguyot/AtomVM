@@ -577,3 +577,63 @@ straight-line recovered that. The cost is the wider probe struct itself
 2-tuple probe exactly as it is today and adds a separate wider one only when
 the key needs it would get the 2.4x without the regression; that is the shape
 to try if this is picked up.
+
+## Addendum 7: hashing is not our handicap (so the HAMT post-mortem was wrong)
+
+`tools/dev/bench_hash_vs_lookup.erl` times `erlang:phash2/1` -- a structural
+walk of the key, the same shape of work a HAMT/CHAMP must do before it can
+index anything -- against a map lookup on the same keys, on both VMs.
+
+| operation | AtomVM | BEAM |
+|---|---:|---:|
+| hash `{b, I}` | 12.9 ns | 12.7 ns |
+| hash `{b, I, x}` | **16.0 ns** | 20.6 ns |
+| hash `{b, {v, I, y}, x}` | **25.6 ns** | 34.2 ns |
+| lookup, n=256 | 37.3 ns | 19.9 ns |
+| lookup, n=4096 | 69.8 ns | 27.5 ns |
+
+Our structural hashing is at parity on a 2-tuple and **22-25% faster than
+ERTS** on the deeper keys. So the recorded explanation for why the earlier
+full-HAMT experiment lost -- and the alternative "our hash primitive is slow"
+-- are both wrong, as is the note that BEAM wins by inlining map operations
+(Addendum 2 measured BEAM's map primitives as C functions taking ~42% of its
+time).
+
+The actual reason a blanket HAMT loses is in the same table: hashing costs
+~16 ns *before any indexing*, which is a fixed floor. A flat sorted array
+resolves a small map in less than that, and most maps are small. A hashed
+representation can only pay above a size threshold.
+
+Sizing what a hashed large-map backend could win, from these numbers: hash
+(16) + a 4-level trie descent + one equality is plausibly ~25-27 ns at
+n=4096, against our B-tree's 69.8 ns *with the shipped 2-tuple-only probe*
+but only 37.5 ns with the wider probe measured in Addendum 6. So the probe
+fix is worth about 2x on these keys and a hashed backend perhaps 1.4x beyond
+that -- one is a contained change to an admission test, the other is a
+representation rewrite.
+
+Ranking for the lookup cluster, which is ~40% of unicode_util
+(`node_find` 24.7% + `term_compare0` 15.9%) and therefore the one worth
+chasing (`maps:next` was ~1%, which is why Addendum 6 could not move
+anything):
+
+1. Widen the probe, keeping the 2-tuple path byte-for-byte as it is today so
+   the hot case's struct and code do not change. 2.4x measured on
+   `{Tag, Int, Tag}` keys, blocked only by a 1.2% layout regression.
+2. Re-measure the trio (unicode_util, OTP corpus, ESTONE). A 2x on lookup
+   should be visible where a 30% on maps:next was not.
+3. Only then a CHAMP backend, above the tree threshold, behind the existing
+   flat/tree split so it can be A/B'd without betting the representation.
+   CHAMP over HAMT: contiguous data region per node (which is exactly what
+   iteration wants), canonical form after deletes, better locality. Memory is
+   the risk -- the earlier HAMT cost 1.75x, and on a copying collector live
+   words are collection time.
+4. If hashing lands, cache it with a one-entry memo in the Context keyed on
+   term identity (`t == last_hashed_term`), cleared on GC because a moved
+   term can alias a freed address. In the `maps_is_subset_kv` loop the key
+   comes out of `maps:next` and goes straight into the lookup, so the memo
+   hits on pointer equality. That is two instructions and needs no compiler
+   support, unlike threading a hash from `maps:next` to `get_map_elements`
+   through static analysis -- which also cannot help when the two operations
+   sit in different functions, where the memo still can. For atom keys,
+   cache the hash beside `sort_key` in the atom table instead.
