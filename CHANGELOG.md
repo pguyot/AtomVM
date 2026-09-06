@@ -193,6 +193,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed `maps:next/1` on a large (tree-backed) map materialising the whole key/value list on
+  the first step, so taking a few entries from a big map reserved `4 * size` heap words and
+  walked every entry before returning the first one
 - Fixed `'$$'` in an `ets:select/2,3` match specification body returning the bound variables
   sorted as atoms rather than by number, so a match specification binding ten or more variables
   listed `'$10'` before `'$2'`
