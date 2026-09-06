@@ -220,6 +220,14 @@ struct Context
     term exception_reason;
     term exception_stacktrace;
 
+    // Message taken out of the mailbox by a forwarding receive and not yet
+    // handed on: OP_REMOVE_MESSAGE keeps the block instead of folding it into
+    // the heap so the following send can pass it to the next process as it
+    // stands. Cleared by that send, and disposed if the process dies first.
+    // Last fields on purpose: nothing's offset is pinned against fields after
+    // here (see the _Static_asserts in jit.c).
+    Message *forward_pending;
+
 #ifdef AVM_ENABLE_MSACC
     // Last executable_line/debug_line source line this process crossed (see
     // msacc.h): updated by the interpreter's OP_EXECUTABLE_LINE case
