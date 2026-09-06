@@ -47,6 +47,8 @@ void mailbox_init(Mailbox *mbx)
     mbx->receive_pointer = NULL;
     mbx->receive_pointer_prev = NULL;
     mbx->receive_has_match_clauses = false;
+    mbx->marker_node = NULL;
+    mbx->marker_active = false;
 }
 
 // Convert a mailbox message (struct Message or struct TermSignal) to a heap
@@ -411,6 +413,45 @@ void mailbox_reset(Mailbox *mbox)
     mbox->receive_pointer_prev = NULL;
 }
 
+bool mailbox_marker_reserve(Mailbox *mbox)
+{
+    // One marker is enough for the shape the compiler emits, which brackets a
+    // single receive. A nested one simply scans from the start.
+    if (mbox->marker_active) {
+        return false;
+    }
+    // Messages are only ever appended after this node, so everything that can
+    // match the reference about to be created lands after it.
+    mbox->marker_node = mbox->inner_last;
+    mbox->marker_active = true;
+    return true;
+}
+
+void mailbox_marker_use(Mailbox *mbox)
+{
+    // Removing the marked message invalidates the marker; removing any other
+    // does not, because the marker only claims that what precedes it cannot
+    // match.
+    if (!mbox->marker_active) {
+        mailbox_reset(mbox);
+        return;
+    }
+    if (mbox->marker_node == NULL) {
+        // The inner list was empty at reserve time, so everything in it now
+        // arrived afterwards.
+        mailbox_reset(mbox);
+        return;
+    }
+    mbox->receive_pointer = mbox->marker_node->next;
+    mbox->receive_pointer_prev = mbox->marker_node;
+}
+
+void mailbox_marker_clear(Mailbox *mbox)
+{
+    mbox->marker_active = false;
+    mbox->marker_node = NULL;
+}
+
 // CAS-empty the outer list and return its raw head. The outer list is LIFO, so the head is the
 // newest message and each message is older than its predecessor.
 static inline MailboxMessage *detach_outer_list(Mailbox *mbox)
@@ -644,6 +685,12 @@ MailboxMessage *mailbox_take_message(Mailbox *mbox)
             // If this also the last, update inner_last.
             mbox->inner_last = NULL;
         }
+    }
+
+    // The marker points at a queue node, so it cannot outlive it.
+    if (UNLIKELY(mbox->marker_node == removed)) {
+        mbox->marker_node = NULL;
+        mbox->marker_active = false;
     }
 
     // Reset receive pointers

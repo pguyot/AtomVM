@@ -185,6 +185,24 @@ typedef struct
     // Used by wait_timeout to know if there are match clauses to try
     // when signal processing moved messages to the inner list.
     bool receive_has_match_clauses;
+    // Receive markers. The compiler brackets a reference-matching receive with
+    // recv_marker_reserve/bind/use/clear: the reference is created after the
+    // reserve, so no message already queued then can match, and the scan may
+    // start after them instead of walking the whole mailbox every time.
+    //
+    // The marker is the last inner-list node at reserve time rather than a
+    // node spliced into the list, so nothing that walks the mailbox has to
+    // know about it. Removing that particular message drops the marker and the
+    // receive falls back to a full scan, which is what it did before markers
+    // existed; removing any other message leaves it valid, because the marker
+    // only claims that what precedes it cannot match.
+    //
+    // A single marker is enough for the shape the compiler emits. A receive
+    // that finds one already taken scans from the start, and one that inherits
+    // an outer receive's marker starts earlier than it needed to -- both scan
+    // more than necessary, never less.
+    MailboxMessage *marker_node;
+    bool marker_active;
 } Mailbox;
 
 // TODO: a lot of this code depends on Context * and should be decoupled
@@ -369,6 +387,22 @@ void mailbox_enqueue_message(Context *c, MailboxMessage *m);
  * @param mbox the mailbox to work with
  */
 void mailbox_reset(Mailbox *mbox);
+
+/**
+ * @brief Reserve the receive marker at the current end of the mailbox.
+ * @returns true if the marker was taken; false when one is already live, in
+ * which case the receive scans from the start as it always did.
+ */
+bool mailbox_marker_reserve(Mailbox *mbox);
+
+/**
+ * @brief Start the next receive at the reserved marker, or from the first
+ * message when the marker did not survive.
+ */
+void mailbox_marker_use(Mailbox *mbox);
+
+/** @brief Release the reserved marker. */
+void mailbox_marker_clear(Mailbox *mbox);
 
 /**
  * @brief Advance pointer to next message in a receive loop.

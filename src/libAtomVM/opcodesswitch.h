@@ -5972,6 +5972,7 @@ schedule_in:
                 DEST_REGISTER(reg_a);
                 DECODE_DEST_REGISTER(reg_a, pc);
                 TRACE("recv_marker_clear/1: reg1=%c%i\n", T_DEST_REG(reg_a));
+                mailbox_marker_clear(&ctx->mailbox);
                 break;
             }
 
@@ -5979,6 +5980,7 @@ schedule_in:
                 DEST_REGISTER(reg_a);
                 DECODE_DEST_REGISTER(reg_a, pc);
                 TRACE("recv_marker_reserve/1: reg1=%c%i\n", T_DEST_REG(reg_a));
+                mailbox_marker_reserve(&ctx->mailbox);
                 // Clear register to avoid any issue with GC
                 WRITE_REGISTER(reg_a, term_nil());
                 break;
@@ -5988,6 +5990,7 @@ schedule_in:
                 DEST_REGISTER(reg_a);
                 DECODE_DEST_REGISTER(reg_a, pc);
                 TRACE("recv_marker_use/1: reg1=%c%i\n", T_DEST_REG(reg_a));
+                mailbox_marker_use(&ctx->mailbox);
                 break;
             }
 

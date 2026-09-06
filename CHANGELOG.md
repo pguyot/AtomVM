@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.0-beta.1] - Unreleased
 
 ### Added
+- Added receive markers (`recv_marker_reserve/bind/use/clear`), so a `receive` matching a
+  freshly created reference starts after the messages that were already queued instead of
+  rescanning them; a selective receive behind a 10,000-message backlog was 358x faster
 - Added generational garbage collection: minor collections only copy recently allocated data and
   promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
   `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
