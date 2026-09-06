@@ -332,3 +332,47 @@ sum(2i) = 1,001,000 words for a 1,000-deep nest against 3,000 today, 333x.
 This is why the flag can only ever be *maintained* (immediate arguments, or a
 copy that already produces a contiguous layout), never *established* by
 copying at `put_tuple2`.
+
+### How many live tuples are actually flat?
+
+"A tuple of immediates is relocatable for free, and the collector can create
+relocatable tuples" is the strongest form of the proposal, and it is
+measurable: census every tuple the collector walks, and count the ones whose
+elements are all immediates (relocatable with no stored size, since the extent
+is `arity + 1`).
+
+| | scan words | tuples | tuple words | **flat tuple words** | share of tuple words | share of scan |
+|---|---:|---:|---:|---:|---:|---:|
+| estone | 20,762,309 | 1,108,298 | 6,586,041 | **827** | **0.0%** | 0.0% |
+| app suite | 1,409,941 | 89,440 | 557,719 | **283,089** | **50.8%** | 20.1% |
+
+The two workloads disagree completely, and the reason estone reads zero is
+instructive: its forwarders' live set at collection time is ~3 words, because
+the payload is already garbage by the time the fragment forces the collection.
+What survives to be scanned belongs to the list and dataset micros —
+5,223,979 list pointers (98.4% with an immediate head) against 6,586,041 words
+of tuple, and every one of those tuples is compound.
+
+The *closedness* half of the intuition does hold: boxed terms that are neither
+tuple nor cons (references, binaries, maps, funs) are only 8.5% of estone's
+scanned words and 4.1% of the app suite's, so 91-96% of live data is
+structurally closed. What is not free is the other half — contiguity plus a
+stored total size for a compound tuple.
+
+And a marked subtree cannot be a pure `memcpy` even so: anything pointing at a
+nested tuple inside it still needs a forwarding pointer, or the next collection
+duplicates that subtree. The collector would skip *element* words but still
+visit *headers*, which for a tree of 2-tuples is one word in three.
+
+Ceiling, generously: tuple words are 32% (estone) and 40% (app) of the scan,
+skipping two thirds of them cuts the collector by ~25%, and the collector is
+10-11% of runtime — about **2-3%**, against a mask on every boxed size read (on
+the scan path itself), a word per compound tuple or an arity/size split, a
+depth-first layout in a breadth-first collector, and eight backends'
+`test_arity`/`get_tuple_element`.
+
+**Ordering matters more than the verdict.** While 95% of collections are forced
+by a message fragment, collections are frequent and tiny and the scan is not
+the cost. Fix that first and collections become rarer and larger — at which
+point scan volume does start to dominate and this proposal deserves
+re-measuring rather than dismissing.
