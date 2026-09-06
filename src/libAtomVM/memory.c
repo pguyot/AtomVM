@@ -756,15 +756,43 @@ term memory_copy_term_tree_to_storage(term *storage, term **heap_end, term t)
 // Bounds the recursion below, which runs on the caller's C stack.
 #define SHALLOW_MAX_DEPTH 8
 
+// A boxed term whose words hold no pointer into the sending heap and no
+// off-heap (mso list) linkage. It can be sized from its header alone and
+// copied as a run of words, so it needs neither a traversal nor a depth
+// budget. Everything else -- tuples, maps, funs, sub binaries, refcounted
+// binaries and resource references -- needs the general path.
+static inline bool memory_boxed_is_self_contained(term t)
+{
+    const term *boxed_value = term_to_const_term_ptr(t);
+    switch (boxed_value[0] & TERM_BOXED_TAG_MASK) {
+        case TERM_BOXED_POSITIVE_INTEGER:
+        case TERM_BOXED_NEGATIVE_INTEGER:
+        case TERM_BOXED_FLOAT:
+        case TERM_BOXED_HEAP_BINARY:
+        case TERM_BOXED_EXTERNAL_PID:
+        case TERM_BOXED_EXTERNAL_PORT:
+        case TERM_BOXED_EXTERNAL_REF:
+            return true;
+        case TERM_BOXED_REF:
+            // A resource reference is refcounted and joins the mso list.
+            return boxed_value[0] != TERM_BOXED_REFERENCE_RESOURCE_HEADER;
+        case TERM_BOXED_REFC_BINARY:
+            // A const (literal) refc binary is not refcounted either.
+            return (boxed_value[2] & RefcBinaryIsConst) != 0;
+        default:
+            return false;
+    }
+}
+
 static bool memory_estimate_shallow(term t, unsigned long *acc, unsigned int depth)
 {
     if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
         return true;
     }
-    if (depth == 0) {
-        return false;
-    }
     if (term_is_nonempty_list(t)) {
+        if (depth == 0) {
+            return false;
+        }
         do {
             if (UNLIKELY(*acc > ULONG_MAX - CONS_SIZE)) {
                 return false;
@@ -781,6 +809,18 @@ static bool memory_estimate_shallow(term t, unsigned long *acc, unsigned int dep
         return (t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED;
     }
     if (!term_is_tuple(t)) {
+        if ((t & TERM_PRIMARY_MASK) != TERM_PRIMARY_BOXED
+            || !memory_boxed_is_self_contained(t)) {
+            return false;
+        }
+        unsigned long words = (unsigned long) term_boxed_size(t) + 1;
+        if (UNLIKELY(*acc > ULONG_MAX - words)) {
+            return false;
+        }
+        *acc += words;
+        return true;
+    }
+    if (depth == 0) {
         return false;
     }
     unsigned long arity = (unsigned long) term_get_tuple_arity(t);
@@ -834,6 +874,16 @@ static term memory_copy_shallow(term t, term **heap_ptr)
             cons = next;
         }
     }
+    if (!term_is_tuple(t)) {
+        // A self-contained boxed leaf, already validated by
+        // memory_estimate_shallow: copy its words and keep the tag.
+        const term *src = term_to_const_term_ptr(t);
+        size_t words = term_get_size_from_boxed_header(src[0]) + 1;
+        term *dest = *heap_ptr;
+        *heap_ptr += words;
+        memcpy(dest, src, words * sizeof(term));
+        return ((term) dest) | TERM_PRIMARY_BOXED;
+    }
     term *tuple = *heap_ptr;
     int arity = term_get_tuple_arity(t);
     *heap_ptr += arity + 1;
@@ -850,7 +900,8 @@ static term memory_copy_shallow(term t, term **heap_ptr)
 term memory_copy_shallow_term_to_storage(term *storage, term **heap_end, term t)
 {
     term *heap_ptr = storage + STORAGE_HEAP_START_INDEX;
-    // A shallow term holds no off-heap binary, so the mso list stays empty.
+    // A shallow term holds no refcounted off-heap binary and no resource
+    // reference, so the mso list stays empty.
     storage[STORAGE_MSO_LIST_INDEX] = term_nil();
     term result = memory_copy_shallow(t, &heap_ptr);
     *heap_end = heap_ptr;
