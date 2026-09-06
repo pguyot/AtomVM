@@ -172,3 +172,46 @@ purge.
    less, not comparing faster.
 3. Atom sort keys via a flat array, ~2%. (b), addressing half.
 4. All-immediate-tuple bit, ~1.4% ceiling, high invariant cost. (a).
+
+## Addendum: GC time on unicode_util vs erl_parse
+
+`unicode_util.erl` is the one file in the 280-file corpus where AtomVM is
+slower than BEAM wall-clock (0.83x; 0.64x on CPU). The obvious suspect is the
+collector, and it is wrong.
+
+Measured directly with `-DAVM_TIME_GC` (a `CLOCK_MONOTONIC_RAW` pair around
+the collection itself, not around the `memory_ensure_free_with_roots` check),
+denominators taken from the *uninstrumented* build:
+
+| | unicode_util | erl_parse |
+|---|---:|---:|
+| collections | 616 | 22,677 |
+| all minor / major | 616 / 0 | 22,677 / 0 |
+| forced by a chained fragment | 446 (72%) | 22,292 (98%) |
+| total GC time | 95.7 ms | 196.0 ms |
+| **share of CPU** | **3.9%** | **11.3%** |
+| per collection | 155 us | 8.6 us |
+| `memory_ensure_free_with_roots` calls | 16,580,171 | 11,204,751 |
+
+The two files have opposite collection profiles: unicode_util runs 37x fewer
+collections, each 18x more expensive, because the compiler state for a
+table-driven module is one big long-lived heap that rarely fills. erl_parse
+runs many small collections, 98% of them forced by the fragment rule rather
+than by memory pressure (consistent with the earlier finding that 95% of
+collections are fragment-forced).
+
+Sampled cluster shares agree with the direct measurement (main-thread self
+time only; `???` is JIT-generated code, which carries no symbols):
+
+| cluster | unicode_util | erl_parse |
+|---|---:|---:|
+| JIT native code | 29.5% | 31.9% |
+| map + comparison | **51.9%** | 32.5% |
+| gc / memory | 6.2% | 20.0% |
+| `call_ext` dispatch | 1.9% | 1.7% |
+
+So the file where AtomVM actually loses to BEAM is the one where GC matters
+*least* and the map cluster matters most: `node_find` alone is 24.7% of it,
+`term_compare0` 15.9%, `bt_insert` 7.4%. unicode_util is the cleanest test
+case available for the comparison-volume wall, and the right benchmark for
+any work on ideas (a) or (b) -- the corpus average dilutes it to nothing.
