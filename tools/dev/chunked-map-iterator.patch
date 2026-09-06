@@ -1,0 +1,324 @@
+diff --git a/src/libAtomVM/nifs.c b/src/libAtomVM/nifs.c
+index 40a001d95..d85e02442 100644
+--- a/src/libAtomVM/nifs.c
++++ b/src/libAtomVM/nifs.c
+@@ -8791,6 +8791,29 @@ static term nif_maps_values(Context *ctx, int argc, term argv[])
+     return maps_project(ctx, argv[0], MapsProjectValues);
+ }
+ 
++// Entries one maps:next/1 call materializes as a chain. A fixed chunk is the
++// wrong shape: it amortizes the descent for a full traversal but wastes the
++// whole chunk for a caller that stops after one entry, and early-exit folds
++// (sets:is_disjoint/2, the compiler's subset checks) are common enough that a
++// fixed chunk of 8 measured 1% SLOWER on unicode_util.erl than no chunking.
++//
++// So the chunk doubles: 1, 2, 4, up to MAPS_NEXT_CHUNK_MAX. A caller taking
++// one entry materializes exactly one; a full traversal reaches the maximum
++// after three calls and allocates at most 2x what it uses. The size is
++// carried in the low MAPS_NEXT_HINT_BITS of the cursor integer, above the
++// position (flat) or the encoded tree path, so iterator(Map) -> [0 | Map]
++// still means "start, smallest chunk" with no special case.
++#define MAPS_NEXT_CHUNK_MAX 8
++#define MAPS_NEXT_HINT_BITS 3
++#define MAPS_NEXT_HINT_MASK ((1 << MAPS_NEXT_HINT_BITS) - 1)
++#define MAPS_NEXT_HINT_LAST 3
++
++static inline size_t maps_next_chunk_of(avm_int_t hint)
++{
++    size_t chunk = (size_t) 1 << (size_t) hint;
++    return chunk > MAPS_NEXT_CHUNK_MAX ? MAPS_NEXT_CHUNK_MAX : chunk;
++}
++
+ static term nif_maps_next(Context *ctx, int argc, term argv[])
+ {
+     UNUSED(argc);
+@@ -8800,6 +8823,15 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
+     }
+ 
+     term iterator = argv[0];
++
++    // An already-materialized {K, V, Iterator} triple is itself an iterator,
++    // and next/1 returns it unchanged (OTP's first clause). AtomVM raised
++    // badarg here. Beyond the compatibility fix this is what lets one call
++    // hand back a whole chain of entries: see the chunked tree walk below.
++    if (term_is_tuple(iterator) && term_get_tuple_arity(iterator) == 3) {
++        return iterator;
++    }
++
+     VALIDATE_VALUE(iterator, term_is_nonempty_list);
+ 
+     term post = term_get_list_head(iterator);
+@@ -8818,6 +8850,56 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
+     // maps:iterator/1) starts one. Materialising the whole [K0,V0,..] list on
+     // the first step instead cost 4*size words before the caller saw a single
+     // entry, which callers that take only a few entries never got back.
++    // Chunked tree walk. The cursor is a plain integer path (the shape BEAM's
++    // HAMT iterator uses), so one descent serves a whole chunk and nothing is
++    // allocated to represent the cursor. The chunk is returned pre-linked as
++    // {K0, V0, {K1, V1, ... {Kn, Vn, [NextPath | Map]}}}: every element of
++    // that chain is itself a valid iterator, so the caller's next
++    // MAPS_NEXT_CHUNK-1 maps:next/1 calls are answered by the identity above
++    // instead of a fresh descent each. Trees too deep to encode (only
++    // reachable on 32-bit) keep the heap cursor below.
++    if (term_is_map_tree(map) && term_is_integer(post)
++        && termtree_path_supported(term_get_map_tree_root(map))) {
++        if (term_get_map_size(map) == 0) {
++            return NONE_ATOM;
++        }
++        avm_int_t cursor = term_to_int(post);
++        avm_int_t hint = cursor & MAPS_NEXT_HINT_MASK;
++        size_t chunk = maps_next_chunk_of(hint);
++        size_t reserve = chunk * TUPLE_SIZE(3) + CONS_SIZE;
++        if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 1, &iterator, MEMORY_CAN_SHRINK)
++                != MEMORY_GC_OK)) {
++            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
++        }
++        // Re-read through the rooted iterator: a GC above may have moved both.
++        map = term_get_list_tail(iterator);
++        post = term_get_list_head(iterator);
++        cursor = term_to_int(post);
++        term kv[2 * MAPS_NEXT_CHUNK_MAX];
++        avm_int_t next_path;
++        size_t n = termtree_path_next_chunk(term_get_map_tree_root(map),
++            cursor >> MAPS_NEXT_HINT_BITS, kv, chunk, &next_path);
++        if (n == 0) {
++            return NONE_ATOM;
++        }
++        avm_int_t next_hint = (hint < MAPS_NEXT_HINT_LAST) ? hint + 1 : hint;
++        // Built back to front so each triple can point at the one after it.
++        // No allocation happened since the reservation, so the kv terms and
++        // the map are still where the walk found them.
++        term acc = (next_path < 0)
++            ? NONE_ATOM
++            : term_list_prepend(
++                term_from_int((next_path << MAPS_NEXT_HINT_BITS) | next_hint), map, &ctx->heap);
++        for (size_t i = n; i > 0; i--) {
++            term entry = term_alloc_tuple(3, &ctx->heap);
++            term_put_tuple_element(entry, 0, kv[2 * (i - 1)]);
++            term_put_tuple_element(entry, 1, kv[2 * (i - 1) + 1]);
++            term_put_tuple_element(entry, 2, acc);
++            acc = entry;
++        }
++        return acc;
++    }
++
+     if (term_is_map_tree(map) && (term_is_integer(post) || is_tree_cursor)) {
+         bool first = term_is_integer(post);
+         if (first && term_get_map_size(map) == 0) {
+@@ -8850,6 +8932,45 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
+         return ret;
+     }
+ 
++    // Flat map with a positional cursor: same chunking as the tree walk above.
++    // The entries are already an array, so there is no descent to amortize,
++    // but the chain still answers the next MAPS_NEXT_CHUNK-1 maps:next/1 calls
++    // without re-entering the NIF.
++    if (!term_is_map_tree(map) && term_is_integer(post)) {
++        int size = term_get_map_size(map);
++        avm_int_t cursor = term_to_int(post);
++        avm_int_t hint = cursor & MAPS_NEXT_HINT_MASK;
++        int from = (int) (cursor >> MAPS_NEXT_HINT_BITS);
++        if (from >= size) {
++            return NONE_ATOM;
++        }
++        int n = size - from;
++        if (n > (int) maps_next_chunk_of(hint)) {
++            n = (int) maps_next_chunk_of(hint);
++        }
++        avm_int_t next_hint = (hint < MAPS_NEXT_HINT_LAST) ? hint + 1 : hint;
++        size_t reserve = (size_t) n * TUPLE_SIZE(3) + CONS_SIZE;
++        if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 1, &iterator, MEMORY_CAN_SHRINK)
++                != MEMORY_GC_OK)) {
++            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
++        }
++        // Re-read through the rooted iterator: a GC above may have moved both.
++        map = term_get_list_tail(iterator);
++        term acc = (from + n >= size)
++            ? NONE_ATOM
++            : term_list_prepend(
++                term_from_int((avm_int_t) (from + n) << MAPS_NEXT_HINT_BITS | next_hint), map,
++                &ctx->heap);
++        for (int i = from + n; i > from; i--) {
++            term entry = term_alloc_tuple(3, &ctx->heap);
++            term_put_tuple_element(entry, 0, term_get_map_key(map, i - 1));
++            term_put_tuple_element(entry, 1, term_get_map_value(map, i - 1));
++            term_put_tuple_element(entry, 2, acc);
++            acc = entry;
++        }
++        return acc;
++    }
++
+     int pos;
+     if (term_is_integer(post)) {
+         int size = term_get_map_size(map);
+diff --git a/src/libAtomVM/termmap_tree.c b/src/libAtomVM/termmap_tree.c
+index 608e9c296..6770c21ed 100644
+--- a/src/libAtomVM/termmap_tree.c
++++ b/src/libAtomVM/termmap_tree.c
+@@ -774,6 +774,130 @@ static term push_leftmost(term node, term stack, Heap *heap)
+     return stack;
+ }
+ 
++// Integer-encoded cursor.
++//
++// The frame stack above satisfies one invariant: the node at level i+1 is
++// child[index_i] of the node at level i (push_leftmost descends through
++// child[0] with index 0, and a step that emits key[index] advances to
++// index+1 and descends into child[index+1]). So the nodes are recoverable by
++// descending from the root, and the whole cursor is just the indices --
++// which fit in a small integer, the shape BEAM's HAMT iterator uses.
++//
++// Layout: level count in the low TREE_PATH_DEPTH_BITS, then one
++// TREE_PATH_LEVEL_BITS index per level from the root down. A level count of 0
++// means "before the first entry", which is what maps:iterator/1's [0 | Map]
++// already produces. Indices run 0..BT_MAX_KEYS, so they need 6 bits.
++#define TREE_PATH_DEPTH_BITS 4
++#define TREE_PATH_LEVEL_BITS 6
++#define TREE_PATH_DEPTH_MASK ((1 << TREE_PATH_DEPTH_BITS) - 1)
++#define TREE_PATH_LEVEL_MASK ((1 << TREE_PATH_LEVEL_BITS) - 1)
++
++// A level count must fit TREE_PATH_DEPTH_BITS and the whole path must stay a
++// small integer. 64-bit terms leave room for every height a degree-BT_T tree
++// can reach; 32-bit terms do not, so deep trees there keep the heap cursor.
++#if UINTPTR_MAX > UINT32_MAX
++#define TREE_PATH_MAX_LEVELS 8
++#else
++#define TREE_PATH_MAX_LEVELS 3
++#endif
++
++_Static_assert(BT_MAX_KEYS <= TREE_PATH_LEVEL_MASK,
++    "a B-tree key/child index must fit TREE_PATH_LEVEL_BITS");
++_Static_assert(TREE_PATH_MAX_LEVELS <= TREE_PATH_DEPTH_MASK,
++    "a level count must fit TREE_PATH_DEPTH_BITS");
++
++bool termtree_path_supported(term root)
++{
++    return descent_depth(root) <= TREE_PATH_MAX_LEVELS;
++}
++
++// Descend from `node` through child[0], recording a frame per level, exactly
++// as push_leftmost does but into the caller's arrays. Returns the new depth.
++static size_t path_push_leftmost(term node, term *nodes, size_t *idx, size_t depth)
++{
++    while (!term_is_nil(node) && depth < TREE_PATH_MAX_LEVELS) {
++        nodes[depth] = node;
++        idx[depth] = 0;
++        depth++;
++        if (node_is_leaf(node)) {
++            break;
++        }
++        node = node_child(node, 0);
++    }
++    return depth;
++}
++
++// Rebuild the frame stack an encoded path denotes. A path of 0 starts at the
++// leftmost entry.
++static size_t path_decode(term root, avm_int_t path, term *nodes, size_t *idx)
++{
++    size_t depth = (size_t) (path & TREE_PATH_DEPTH_MASK);
++    if (depth == 0) {
++        return path_push_leftmost(root, nodes, idx, 0);
++    }
++    term node = root;
++    for (size_t i = 0; i < depth; i++) {
++        nodes[i] = node;
++        idx[i] = (size_t) ((path >> (TREE_PATH_DEPTH_BITS + i * TREE_PATH_LEVEL_BITS))
++            & TREE_PATH_LEVEL_MASK);
++        if (i + 1 < depth) {
++            node = node_child(node, idx[i]);
++        }
++    }
++    return depth;
++}
++
++static avm_int_t path_encode(size_t depth, const size_t *idx)
++{
++    avm_int_t encoded = (avm_int_t) depth;
++    for (size_t k = 0; k < depth; k++) {
++        encoded |= ((avm_int_t) idx[k]) << (TREE_PATH_DEPTH_BITS + k * TREE_PATH_LEVEL_BITS);
++    }
++    return encoded;
++}
++
++// Same walk as termtree_cursor_next: drop exhausted frames, emit at the first
++// that still has a key, then descend to the next leaf in order.
++static bool path_step(term *nodes, size_t *idx, size_t *depth, term *key, term *value)
++{
++    while (*depth > 0) {
++        term node = nodes[*depth - 1];
++        size_t i = idx[*depth - 1];
++        if (i < node_nkeys(node)) {
++            *key = node_key(node, i);
++            *value = node_value(node, i);
++            idx[*depth - 1] = i + 1;
++            if (!node_is_leaf(node)) {
++                *depth = path_push_leftmost(node_child(node, i + 1), nodes, idx, *depth);
++            }
++            return true;
++        }
++        (*depth)--;
++    }
++    return false;
++}
++
++size_t termtree_path_next_chunk(term root, avm_int_t path, term *out_kv, size_t max, avm_int_t *next_path)
++{
++    term nodes[TREE_PATH_MAX_LEVELS];
++    size_t idx[TREE_PATH_MAX_LEVELS];
++    size_t depth = path_decode(root, path, nodes, idx);
++    size_t n = 0;
++    while (n < max) {
++        term key;
++        term value;
++        if (!path_step(nodes, idx, &depth, &key, &value)) {
++            *next_path = -1;
++            return n;
++        }
++        out_kv[2 * n] = key;
++        out_kv[2 * n + 1] = value;
++        n++;
++    }
++    *next_path = path_encode(depth, idx);
++    return n;
++}
++
+ size_t termtree_cursor_reserve(term root, bool first)
+ {
+     // A step advances one frame and may then descend to a leaf, so it pushes
+diff --git a/src/libAtomVM/termmap_tree.h b/src/libAtomVM/termmap_tree.h
+index b761bdb16..bd4fcaf7d 100644
+--- a/src/libAtomVM/termmap_tree.h
++++ b/src/libAtomVM/termmap_tree.h
+@@ -147,6 +147,31 @@ void termtree_fill_array(term node, term *out);
+  * words regardless of map size -- unlike the flat [K0,V0,..] cursor, which
+  * needed 4*size words before returning its first entry.
+  */
++/**
++ * @brief Whether a tree is shallow enough for the integer-encoded cursor.
++ *
++ * @param root the tree root
++ * @return true if termtree_path_next_chunk can iterate it (otherwise the
++ *         caller must fall back to the heap cursor)
++ */
++bool termtree_path_supported(term root);
++
++/**
++ * @brief Read up to \c max consecutive entries in key order, allocating nothing.
++ *
++ * The cursor is an integer: the node stack is recomputed by descending from
++ * the root through the encoded indices, so a whole chunk costs one descent.
++ *
++ * @param root the tree root
++ * @param path the encoded cursor (0 to start)
++ * @param out_kv filled with 2*n terms, key then value per entry
++ * @param max maximum number of entries to read
++ * @param next_path set to the cursor following the last entry read, or -1 if
++ *        the tree is exhausted
++ * @return the number of entries written
++ */
++size_t termtree_path_next_chunk(term root, avm_int_t path, term *out_kv, size_t max, avm_int_t *next_path);
++
+ size_t termtree_cursor_reserve(term root, bool first);
+ 
+ /**
