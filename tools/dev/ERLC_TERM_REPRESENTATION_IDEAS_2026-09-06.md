@@ -637,3 +637,76 @@ anything):
    through static analysis -- which also cannot help when the two operations
    sit in different functions, where the memo still can. For atom keys,
    cache the hash beside `sort_key` in the atom table instead.
+
+## Addendum 8: the CHAMP prototype, and what the ordering census found instead
+
+### CHAMP lookup, measured
+
+`termmap_champ.c` (lookup + bulk build only, parked in scratch as
+`champ-prototype.patch`) against the B-tree, both timed inside the VM on the
+same keys so neither pays Erlang or NIF call overhead, with a correctness gate
+asserting both backends return the same value for every probe:
+
+| n | B-tree | CHAMP | ratio |
+|---:|---:|---:|---:|
+| 256 | 16.4 ns | 12.7 ns | 0.78x |
+| 1024 | 20.1 ns | 18.6 ns | 0.93x |
+| 4096 | 25.3 ns | 19.1 ns | 0.75x |
+| 8192 | 27.5 ns | 19.8 ns | 0.72x |
+| 16384 | 30.4 ns | 21.1 ns | 0.69x |
+
+25-30% at the sizes that matter, and flatter in n as it should be. A first run
+said 2x; that was an artifact of probing the *first* 256 keys, a cache-hot
+slice of a large map. Spreading the probes across the structure fixed it.
+
+Also: CHAMP's whole lookup at n=16384 is 21.1 ns, below the 16 ns that
+`phash2` alone costs, so the internal `term_hash` is much cheaper than the
+ERTS-bit-exact `phash2` used as a proxy in Addendum 7. The "hashing is a fixed
+floor" caveat was pessimistic.
+
+### The ordering census
+
+The prototype only measures the favourable half. The earlier full-HAMT attempt
+lost on *ordering*, so the question was how much of the tree work needs keys in
+key order. Counting on unicode_util.erl:
+
+| operation | calls | entries |
+|---|---:|---:|
+| `termtree_get` (order-independent) | 17,806,764 | |
+| `termtree_put` (order-independent) | 3,393,939 | |
+| `termtree_fill_array` (sorted materialization) | 15,308 | 14,310,981 |
+| `termtree_from_sorted` (rebuild) | 21,063 | 15,170,043 |
+| `termtree_cursor_next` (in-order walk) | 2,644,039 | |
+| `termtree_rank` / `select_key` / `select_value` / `to_kv_list` | **0** | |
+
+And `fill_array` by caller:
+
+| caller | entries | share |
+|---|---:|---:|
+| **`nif_maps_remove`** | 13,784,225 | **96.3%** |
+| `maps_project` (keys/values) | 371,848 | 2.6% |
+| `nif_maps_merge` | 154,538 | 1.1% |
+| `term_compare0` (map ordering) | 370 | 0.003% |
+
+**The ordering risk is not there.** Genuinely order-dependent work -- comparing
+two maps, which is what actually needs keys in term order -- is 370 entries out
+of 14.3M. Rank and select are not called at all.
+
+### What the census found instead
+
+96% of that materialization is `maps:remove/2`, and it is not an ordering
+requirement: **the B-tree has no delete.** `termmap_tree.h` exposes get, put,
+from_sorted, rank, select, fill_array and the cursor -- and nothing to remove a
+key. So deleting one key from a tree map materializes the entire map into a
+malloc'd array, drops one entry, and rebuilds the whole tree: 14,820 deletes
+of maps averaging ~930 entries, for ~29M entry-touches and roughly 27M words
+of freshly built tree.
+
+A path-copying B-tree delete is O(log n) and would remove essentially all of
+it -- worth an estimated 3-5% on unicode_util, against CHAMP's estimated 5%,
+for a contained change to one file instead of a representation swap. It also
+shrinks CHAMP's remaining case: with a real delete, the ordered tree's only
+deficit is the 25-30% on lookup above.
+
+Order of work: implement `termtree_remove`, re-measure the trio, then decide on
+CHAMP against a B-tree that no longer rebuilds itself on every delete.
