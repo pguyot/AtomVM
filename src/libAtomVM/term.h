@@ -2641,17 +2641,27 @@ static inline int term_get_tuple_arity(term t)
  * probe ONCE per operation lets each candidate comparison run inline instead
  * of through a term_compare call.
  *
- * The inline comparator covers: candidate is a 2-tuple whose differing element
- * pair is identical, two small integers, or an integer against an atom (type
- * order: number < atom). Everything else — including two distinct atoms, whose
- * order needs the atom table — reports "not covered" and the caller falls back
- * to term_compare for that candidate. The order implemented here is exactly
- * term_compare's: tuple arity first, then leftmost differing element.
+ * The inline comparator covers: candidate is a tuple of the same arity whose
+ * differing element pair is identical, two small integers, or an integer
+ * against an atom (type order: number < atom). Everything else — including two
+ * distinct atoms, whose order needs the atom table — reports "not covered" and
+ * the caller falls back to term_compare for that candidate. The order
+ * implemented here is exactly term_compare's: tuple arity first, then leftmost
+ * differing element.
+ *
+ * Arities 2..TERM_MAP_PROBE_MAX_ARITY are classified. Only the first two
+ * elements are cached: the caller already holds the probe key (it needs it for
+ * the term_compare fallback), so elements past the second are read from it
+ * directly. Keeping the struct at two words matters — widening it to hold
+ * every element cost 1.2% on unicode_util.erl, in the descent's stack frames,
+ * which is more than the wider coverage was worth there.
  */
+#define TERM_MAP_PROBE_MAX_ARITY 4
+
 struct TermMapProbe
 {
-    // Valid (non-invalid e0) only when the probe key is a 2-tuple of
-    // small-integer/atom elements.
+    // Valid (non-invalid e0) only when the probe key is a tuple of a covered
+    // arity whose elements are all immediates.
     term e0;
     term e1;
 };
@@ -2668,17 +2678,33 @@ static inline void term_map_probe_init(struct TermMapProbe *probe, term key)
     // uninitialized -- they do not track that correlation.
     probe->e0 = term_invalid_term();
     probe->e1 = term_invalid_term();
-    if (term_is_tuple(key) && term_get_tuple_arity(key) == 2) {
-        term a = term_get_tuple_element(key, 0);
-        term b = term_get_tuple_element(key, 1);
-        if (term_map_probe_elem_covered(a) && term_map_probe_elem_covered(b)) {
-            probe->e0 = a;
-            probe->e1 = b;
-        }
+    if (!term_is_tuple(key)) {
+        return;
     }
+    int arity = term_get_tuple_arity(key);
+    if (arity < 2 || arity > TERM_MAP_PROBE_MAX_ARITY) {
+        return;
+    }
+    const term *kp = term_to_const_term_ptr(key);
+    // Reject a key holding a compound element without a branch per element: an
+    // immediate has every primary tag bit set, so the AND of the elements'
+    // tags is TERM_PRIMARY_IMMED exactly when all of them are immediates.
+    // Rejection is the common case on compiler workloads (their 3-tuples hold
+    // a tuple in the middle), so it has to stay cheap. An immediate that is
+    // neither integer nor atom is admitted here and rejected later by
+    // term_map_probe_elem_cmp.
+    term all = kp[1];
+    for (int i = 1; i < arity; i++) {
+        all &= kp[i + 1];
+    }
+    if ((all & TERM_PRIMARY_MASK) != TERM_PRIMARY_IMMED) {
+        return;
+    }
+    probe->e0 = kp[1];
+    probe->e1 = kp[2];
 }
 
-static inline bool term_map_probe_is_tup2(const struct TermMapProbe *probe)
+static inline bool term_map_probe_is_tup(const struct TermMapProbe *probe)
 {
     return probe->e0 != term_invalid_term();
 }
@@ -2712,29 +2738,54 @@ static inline bool term_map_probe_elem_cmp(term pe, term ke, TermCompareResult *
     return false;
 }
 
-// Compare the (tup2-classified) probe against candidate key k, probe first:
+// Compare the (tuple-classified) probe against candidate key k, probe first:
 // *res = probe <=> k. Returns false when the comparison needs term_compare.
-static inline bool term_map_probe_tup2_cmp(const struct TermMapProbe *probe, term k, TermCompareResult *res)
+// key/key_arity are the probe key and its arity, hoisted by the caller.
+static inline bool term_map_probe_tup_cmp(const struct TermMapProbe *probe, term key, int key_arity, term k, TermCompareResult *res)
 {
     if (!term_is_tuple(k)) {
         return false;
     }
     int k_arity = term_get_tuple_arity(k);
-    if (k_arity != 2) {
+    if (k_arity != key_arity) {
         // tuples order by arity first
-        *res = (2 > k_arity) ? TermGreaterThan : TermLessThan;
+        *res = (key_arity > k_arity) ? TermGreaterThan : TermLessThan;
         return true;
     }
     const term *kp = term_to_const_term_ptr(k);
-    TermCompareResult r0 = TermEquals;
-    if (!term_map_probe_elem_cmp(probe->e0, kp[1], &r0)) {
+    TermCompareResult r = TermEquals;
+    if (!term_map_probe_elem_cmp(probe->e0, kp[1], &r)) {
         return false;
     }
-    if (r0 != TermEquals) {
-        *res = r0;
+    if (r != TermEquals) {
+        *res = r;
         return true;
     }
-    return term_map_probe_elem_cmp(probe->e1, kp[2], res);
+    if (!term_map_probe_elem_cmp(probe->e1, kp[2], &r)) {
+        return false;
+    }
+    if (r != TermEquals) {
+        *res = r;
+        return true;
+    }
+    if (key_arity == 2) {
+        *res = TermEquals;
+        return true;
+    }
+    // Elements past the second come from the key itself rather than the probe
+    // (see the struct comment).
+    const term *pp = term_to_const_term_ptr(key);
+    for (int i = 2; i < key_arity; i++) {
+        if (!term_map_probe_elem_cmp(pp[i + 1], kp[i + 1], &r)) {
+            return false;
+        }
+        if (r != TermEquals) {
+            *res = r;
+            return true;
+        }
+    }
+    *res = TermEquals;
+    return true;
 }
 
 /*
@@ -3380,7 +3431,8 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
         const term *keysp = term_to_const_term_ptr(keys);
         bool key_is_int = term_is_integer(key);
         avm_int_t key_int = key_is_int ? term_to_int(key) : 0;
-        bool key_is_tup2 = term_map_probe_is_tup2(&probe);
+        bool key_is_tup = term_map_probe_is_tup(&probe);
+        int key_arity = key_is_tup ? term_get_tuple_arity(key) : 0;
         int low = 0;
         int high = arity - 1;
         while (low <= high) {
@@ -3402,10 +3454,10 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
             }
             // 2-tuple-of-immediates probes (#b_var{}-style compiler keys)
             // compare inline; see TermMapProbe.
-            if (key_is_tup2) {
+            if (key_is_tup) {
                 // Initialized for GCC's -Wmaybe-uninitialized (see node_find).
                 TermCompareResult pr = TermEquals;
-                if (term_map_probe_tup2_cmp(&probe, k, &pr)) {
+                if (term_map_probe_tup_cmp(&probe, key, key_arity, k, &pr)) {
                     if (pr == TermGreaterThan) {
                         low = mid + 1;
                     } else if (pr == TermLessThan) {
