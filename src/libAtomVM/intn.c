@@ -505,6 +505,50 @@ static int divmnu32(
 __extension__ typedef unsigned __int128 avm_uint128_t;
 __extension__ typedef __int128 avm_int128_t;
 
+// Knuth D estimates each quotient digit with a 128-by-64 division. The
+// divisor is the same for every digit of a division -- and, for modular
+// exponentiation, the same for every division -- but the compiler must still
+// emit a call to the software routine (__udivmodti4) each time, which profiled
+// as 22% of the bigint benchmark.
+//
+// The divisor is already normalized here (Knuth shifts its top bit into place),
+// which is exactly the precondition for the reciprocal method of Moeller and
+// Granlund, "Improved division by invariant integers". Compute one reciprocal
+// per division and replace each digit's division with two multiplies.
+
+// floor((2^128 - 1) / d) - 2^64, for d with its top bit set. The one division
+// per divmnu64 call that this costs replaces one per quotient digit.
+static inline uint64_t reciprocal_word(uint64_t d)
+{
+    avm_uint128_t all_ones = ~(avm_uint128_t) 0;
+    return (uint64_t) ((all_ones - ((avm_uint128_t) d << 64)) / d);
+}
+
+// Quotient and remainder of (u1:u0) / d, given d normalized, u1 < d, and
+// recip = reciprocal_word(d). The two corrections are the ones the paper
+// proves sufficient: the estimate is never more than two too small.
+static inline uint64_t udiv_qrnnd_preinv(
+    uint64_t *rem, uint64_t u1, uint64_t u0, uint64_t d, uint64_t recip)
+{
+    avm_uint128_t estimate = (avm_uint128_t) recip * u1;
+    estimate += ((avm_uint128_t) u1 << 64) | u0;
+    uint64_t q1 = (uint64_t) (estimate >> 64);
+    uint64_t q0 = (uint64_t) estimate;
+    q1++;
+    uint64_t r = u0 - (q1 * d);
+    // Unsigned wrap: the estimate was one too large.
+    if (r > q0) {
+        q1--;
+        r += d;
+    }
+    if (UNLIKELY(r >= d)) {
+        q1++;
+        r -= d;
+    }
+    *rem = r;
+    return q1;
+}
+
 // 64-bit-digit Knuth D with 128-bit intermediates: half the digit
 // count of divmnu32 halves the qhat divisions and the mul-subtract steps,
 // which dominate bignum div/rem (intn_divu was 2/3 of bigint pow_mod time
@@ -552,10 +596,23 @@ static int divmnu64(
     }
     un[0] = u[0] << s;
 
+    uint64_t recip = reciprocal_word(vn[n - 1]);
+
     for (j = m - n; j >= 0; j--) {
-        avm_uint128_t num = ((avm_uint128_t) un[j + n] << 64) + un[j + n - 1];
-        qhat = num / vn[n - 1];
-        rhat = num - qhat * vn[n - 1];
+        uint64_t u1 = un[j + n];
+        uint64_t u0 = un[j + n - 1];
+        if (UNLIKELY(u1 >= vn[n - 1])) {
+            // Normalization bounds u1 by the divisor's top digit, so this is
+            // u1 == vn[n-1] and the exact quotient is b + u0 / vn[n-1]. The
+            // adjustment below brings it back below b; taking it as b with
+            // remainder u0 is what the division computed here before.
+            qhat = b;
+            rhat = u0;
+        } else {
+            uint64_t r;
+            qhat = udiv_qrnnd_preinv(&r, u1, u0, vn[n - 1], recip);
+            rhat = r;
+        }
     again:
         if (qhat >= b
             || (avm_uint128_t) (uint64_t) qhat * vn[n - 2]

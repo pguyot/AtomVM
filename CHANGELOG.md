@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the same value as `erts_debug:flat_size/1`
 
 ### Changed
+- Bignum division now estimates each quotient digit with a precomputed reciprocal instead of
+  a 128-by-64 software division, so the compiler no longer emits a `__udivmodti4` call per
+  digit
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
   calling it with a port now raises `badarg` (previous versions accepted any id-carrying
   term, so it could be used to read port information; there is no `erlang:port_info/2`
