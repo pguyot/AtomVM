@@ -1,0 +1,984 @@
+--- CHAMP core module (termmap_champ.c / .h), not yet wired ---
+
+=== src/libAtomVM/termmap_champ.h ===
+/*
+ * This file is part of AtomVM.
+ *
+ * Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+ */
+
+#ifndef _TERMMAP_CHAMP_H_
+#define _TERMMAP_CHAMP_H_
+
+#include "term_typedef.h"
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct GlobalContext;
+typedef struct GlobalContext GlobalContext;
+struct Heap;
+typedef struct Heap Heap;
+
+/** @brief Heap words termmap_champ_build will need for these hashes. */
+size_t termmap_champ_build_size(const term *keys, const uint32_t *hashes, int n);
+
+/** @brief Bulk-build a CHAMP from n entries whose hashes are precomputed. */
+term termmap_champ_build(const term *keys, const term *values, const uint32_t *hashes, int n, Heap *heap);
+
+/** @brief Look up key, or term_invalid_term() if absent. */
+term termmap_champ_get(term node, term key, GlobalContext *global);
+
+/**
+ * @brief Insert or update key, sharing every untouched subtree.
+ * @param added set to true when the key was not already present
+ */
+term termmap_champ_put(Heap *heap, term node, term key, term value, GlobalContext *global, bool *added);
+
+/** @brief Heap words to reserve before one termmap_champ_put. */
+size_t termmap_champ_put_heap_size(void);
+
+/**
+ * @brief Remove key, sharing every untouched subtree and restoring the
+ * canonical form (a subtree that collapses to one entry is inlined into its
+ * parent, which is what keeps CHAMP's representation unique).
+ * @param found set to true when the key was present
+ */
+term termmap_champ_remove(Heap *heap, term node, term key, GlobalContext *global, bool *found);
+
+/** @brief Heap words to reserve before one termmap_champ_remove. */
+size_t termmap_champ_remove_heap_size(void);
+
+/** @brief Number of entries in the subtree (walks it; for tests). */
+size_t termmap_champ_count(term node);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+
+=== src/libAtomVM/termmap_champ.c ===
+/*
+ * This file is part of AtomVM.
+ *
+ * Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+ */
+
+// CHAMP (Compressed Hash-Array Mapped Prefix-tree) -- PROTOTYPE, lookup only.
+//
+// Built to answer one question before committing to a full implementation: is
+// a hashed lookup actually faster than the ordered B-tree on the map sizes the
+// Erlang compiler uses?  57% of tree lookups on unicode_util.erl are on maps
+// of more than 1024 entries and 36% on maps of 4k-16k, which is where the
+// estimate says a hash should win; the B-tree does n=4096 in 40.7ns.
+//
+// A node is an ordinary tuple, exactly as the B-tree's nodes are, so the
+// collector, term copier and hasher need no special cases:
+//
+//   {DataMap, NodeMap, K0, V0, .., Kd-1, Vd-1, N0, .., Nn-1}
+//
+// DataMap and NodeMap are 32-bit slot bitmaps; a slot holds either an inline
+// entry or a sub-node, never both. Separating them (rather than interleaving
+// as a HAMT does) is what makes the entries of a node contiguous, which is
+// CHAMP's advantage for iteration and for lookup locality.
+//
+// A collision node (every hash bit consumed, hashes equal) is marked by
+// DataMap = -1 and holds only entries.
+
+#include "termmap_champ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "term.h"
+#include "term_hash.h"
+#include "utils.h"
+
+#define CHAMP_BITS 5
+#define CHAMP_WIDTH (1 << CHAMP_BITS)
+#define CHAMP_MASK (CHAMP_WIDTH - 1)
+#define CHAMP_HASH_BITS 32
+
+#define CHAMP_DATAMAP_IDX 0
+#define CHAMP_NODEMAP_IDX 1
+#define CHAMP_FIRST_ENTRY 2
+
+static inline uint32_t champ_slot(uint32_t hash, int shift)
+{
+    return (hash >> shift) & CHAMP_MASK;
+}
+
+static inline int champ_index(uint32_t bitmap, uint32_t bit)
+{
+    return __builtin_popcount(bitmap & (bit - 1));
+}
+
+term termmap_champ_get(term node, term key, GlobalContext *global)
+{
+    uint32_t hash = term_hash(key, global);
+    int shift = 0;
+    for (;;) {
+        const term *p = term_to_const_term_ptr(node);
+        avm_int_t datamap_raw = term_to_int(p[1 + CHAMP_DATAMAP_IDX]);
+        if (UNLIKELY(datamap_raw < 0)) {
+            // Collision node: linear scan of equal-hash entries.
+            int arity = term_get_size_from_boxed_header(p[0]);
+            int count = (arity - CHAMP_FIRST_ENTRY) / 2;
+            for (int i = 0; i < count; i++) {
+                term k = p[1 + CHAMP_FIRST_ENTRY + 2 * i];
+                if (k == key
+                    || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
+                        == TermEquals) {
+                    return p[1 + CHAMP_FIRST_ENTRY + 2 * i + 1];
+                }
+            }
+            return term_invalid_term();
+        }
+        uint32_t datamap = (uint32_t) datamap_raw;
+        uint32_t nodemap = (uint32_t) term_to_int(p[1 + CHAMP_NODEMAP_IDX]);
+        uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+        if (datamap & bit) {
+            int i = champ_index(datamap, bit);
+            term k = p[1 + CHAMP_FIRST_ENTRY + 2 * i];
+            if (k == key
+                || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
+                    == TermEquals) {
+                return p[1 + CHAMP_FIRST_ENTRY + 2 * i + 1];
+            }
+            return term_invalid_term();
+        }
+        if (!(nodemap & bit)) {
+            return term_invalid_term();
+        }
+        int entries = __builtin_popcount(datamap);
+        int i = champ_index(nodemap, bit);
+        node = p[1 + CHAMP_FIRST_ENTRY + 2 * entries + i];
+        shift += CHAMP_BITS;
+    }
+}
+
+// ---- node construction ------------------------------------------------------
+
+static inline size_t champ_arity(term node)
+{
+    return term_get_size_from_boxed_header(term_to_const_term_ptr(node)[0]);
+}
+
+static inline bool champ_is_collision(term node)
+{
+    return term_to_int(term_get_tuple_element(node, CHAMP_DATAMAP_IDX)) < 0;
+}
+
+static inline size_t champ_entries(term node)
+{
+    return (size_t) __builtin_popcount(
+        (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_DATAMAP_IDX)));
+}
+
+static inline size_t champ_nodes(term node)
+{
+    return (size_t) __builtin_popcount(
+        (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_NODEMAP_IDX)));
+}
+
+static inline term champ_entry_key(term node, size_t i)
+{
+    return term_get_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i);
+}
+
+static inline term champ_entry_value(term node, size_t i)
+{
+    return term_get_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i + 1);
+}
+
+static inline term champ_sub(term node, size_t entries, size_t i)
+{
+    return term_get_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * entries + i);
+}
+
+static inline bool champ_key_eq(term a, term b, GlobalContext *global)
+{
+    return a == b
+        || term_compare(a, b, TermCompareExact | TermCompareEqualOnly, global) == TermEquals;
+}
+
+// Copy `src`, then apply one edit described by the caller. Rather than a
+// general splice, the operations below each build the node they need with a
+// small explicit loop: node widths are tiny (<= 32 entries and 32 sub-nodes)
+// and the shapes differ enough that a general routine would take more
+// parameters than it saves.
+static term champ_node_new(Heap *heap, uint32_t datamap, uint32_t nodemap, size_t entries, size_t nodes)
+{
+    term node = term_alloc_tuple(
+        (uint32_t) (CHAMP_FIRST_ENTRY + 2 * entries + nodes), heap);
+    term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int((avm_int_t) datamap));
+    term_put_tuple_element(node, CHAMP_NODEMAP_IDX, term_from_int((avm_int_t) nodemap));
+    return node;
+}
+
+// ---- insert -----------------------------------------------------------------
+
+// Two entries whose hashes agree down to `shift`: build the subtree that
+// separates them, descending until their slots differ (or the hash runs out,
+// where a collision node holds both).
+static term champ_merge_two(Heap *heap, term k1, term v1, uint32_t h1, term k2, term v2, uint32_t h2, int shift)
+{
+    if (shift >= CHAMP_HASH_BITS) {
+        term node = champ_node_new(heap, 0, 0, 2, 0);
+        term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int(-1));
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY, k1);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 1, v1);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2, k2);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 3, v2);
+        return node;
+    }
+    uint32_t s1 = champ_slot(h1, shift);
+    uint32_t s2 = champ_slot(h2, shift);
+    if (s1 != s2) {
+        uint32_t datamap = (((uint32_t) 1) << s1) | (((uint32_t) 1) << s2);
+        term node = champ_node_new(heap, datamap, 0, 2, 0);
+        bool first_is_1 = s1 < s2;
+        term ka = first_is_1 ? k1 : k2;
+        term va = first_is_1 ? v1 : v2;
+        term kb = first_is_1 ? k2 : k1;
+        term vb = first_is_1 ? v2 : v1;
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY, ka);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 1, va);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2, kb);
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 3, vb);
+        return node;
+    }
+    term child = champ_merge_two(heap, k1, v1, h1, k2, v2, h2, shift + CHAMP_BITS);
+    term node = champ_node_new(heap, 0, ((uint32_t) 1) << s1, 0, 1);
+    term_put_tuple_element(node, CHAMP_FIRST_ENTRY, child);
+    return node;
+}
+
+static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t hash, int shift, GlobalContext *global, bool *added)
+{
+    if (champ_is_collision(node)) {
+        size_t count = (champ_arity(node) - CHAMP_FIRST_ENTRY) / 2;
+        for (size_t i = 0; i < count; i++) {
+            if (champ_key_eq(champ_entry_key(node, i), key, global)) {
+                term out = champ_node_new(heap, 0, 0, count, 0);
+                term_put_tuple_element(out, CHAMP_DATAMAP_IDX, term_from_int(-1));
+                for (size_t j = 0; j < count; j++) {
+                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
+                        (j == i) ? value : champ_entry_value(node, j));
+                }
+                *added = false;
+                return out;
+            }
+        }
+        term out = champ_node_new(heap, 0, 0, count + 1, 0);
+        term_put_tuple_element(out, CHAMP_DATAMAP_IDX, term_from_int(-1));
+        for (size_t j = 0; j < count; j++) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
+        }
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count, key);
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count + 1, value);
+        *added = true;
+        return out;
+    }
+
+    uint32_t datamap = (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_DATAMAP_IDX));
+    uint32_t nodemap = (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_NODEMAP_IDX));
+    size_t entries = (size_t) __builtin_popcount(datamap);
+    size_t nodes = (size_t) __builtin_popcount(nodemap);
+    uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+
+    if (datamap & bit) {
+        size_t i = (size_t) champ_index(datamap, bit);
+        term k = champ_entry_key(node, i);
+        if (champ_key_eq(k, key, global)) {
+            term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+            for (size_t j = 0; j < entries; j++) {
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
+                    (j == i) ? value : champ_entry_value(node, j));
+            }
+            for (size_t j = 0; j < nodes; j++) {
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
+                    champ_sub(node, entries, j));
+            }
+            *added = false;
+            return out;
+        }
+        // Slot collision between distinct keys: the entry moves down into a
+        // new sub-node together with the incoming one.
+        term sub = champ_merge_two(heap, k, champ_entry_value(node, i),
+            term_hash(k, global), key, value, hash, shift + CHAMP_BITS);
+        uint32_t new_datamap = datamap & ~bit;
+        uint32_t new_nodemap = nodemap | bit;
+        size_t ni = (size_t) champ_index(new_nodemap, bit);
+        term out = champ_node_new(heap, new_datamap, new_nodemap, entries - 1, nodes + 1);
+        size_t d = 0;
+        for (size_t j = 0; j < entries; j++) {
+            if (j == i) {
+                continue;
+            }
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d, champ_entry_key(node, j));
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d + 1, champ_entry_value(node, j));
+            d++;
+        }
+        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries - 1);
+        for (size_t j = 0, w = 0; j <= nodes; j++) {
+            if (j == ni) {
+                term_put_tuple_element(out, base + w++, sub);
+            }
+            if (j < nodes) {
+                term_put_tuple_element(out, base + w++, champ_sub(node, entries, j));
+            }
+        }
+        *added = true;
+        return out;
+    }
+
+    if (nodemap & bit) {
+        size_t i = (size_t) champ_index(nodemap, bit);
+        term sub = champ_put_rec(heap, champ_sub(node, entries, i), key, value, hash,
+            shift + CHAMP_BITS, global, added);
+        term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+        for (size_t j = 0; j < entries; j++) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
+        }
+        for (size_t j = 0; j < nodes; j++) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
+                (j == i) ? sub : champ_sub(node, entries, j));
+        }
+        return out;
+    }
+
+    // Free slot: the entry goes inline, keeping slot order.
+    size_t i = (size_t) champ_index(datamap | bit, bit);
+    term out = champ_node_new(heap, datamap | bit, nodemap, entries + 1, nodes);
+    for (size_t j = 0, w = 0; j <= entries; j++) {
+        if (j == i) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, key);
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, value);
+            w++;
+        }
+        if (j < entries) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
+            w++;
+        }
+    }
+    for (size_t j = 0; j < nodes; j++) {
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * (entries + 1) + j,
+            champ_sub(node, entries, j));
+    }
+    *added = true;
+    return out;
+}
+
+term termmap_champ_put(Heap *heap, term node, term key, term value, GlobalContext *global, bool *added)
+{
+    uint32_t hash = term_hash(key, global);
+    if (term_is_nil(node)) {
+        uint32_t bit = ((uint32_t) 1) << champ_slot(hash, 0);
+        term out = champ_node_new(heap, bit, 0, 1, 0);
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY, key);
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 1, value);
+        *added = true;
+        return out;
+    }
+    return champ_put_rec(heap, node, key, value, hash, 0, global, added);
+}
+
+size_t termmap_champ_put_heap_size(void)
+{
+    // One node rebuilt per level, each at most 2 + 2*32 + 32 elements plus its
+    // header, and at most CHAMP_HASH_BITS/CHAMP_BITS levels plus a collision
+    // node.
+    return ((CHAMP_HASH_BITS / CHAMP_BITS) + 2) * (CHAMP_FIRST_ENTRY + 2 * CHAMP_WIDTH + CHAMP_WIDTH + 1);
+}
+
+// ---- remove -----------------------------------------------------------------
+
+// A removal that leaves a sub-node holding exactly one entry must pull that
+// entry back into the parent: without it two equal maps could have different
+// shapes, and CHAMP's canonical form is what makes structural equality cheap.
+// *collapsed_key is set when the returned node is that lone entry.
+static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int shift,
+    GlobalContext *global, bool *found, term *collapsed_key, term *collapsed_value)
+{
+    *collapsed_key = term_invalid_term();
+    if (champ_is_collision(node)) {
+        size_t count = (champ_arity(node) - CHAMP_FIRST_ENTRY) / 2;
+        for (size_t i = 0; i < count; i++) {
+            if (champ_key_eq(champ_entry_key(node, i), key, global)) {
+                *found = true;
+                if (count == 2) {
+                    size_t other = 1 - i;
+                    *collapsed_key = champ_entry_key(node, other);
+                    *collapsed_value = champ_entry_value(node, other);
+                    return term_nil();
+                }
+                term out = champ_node_new(heap, 0, 0, count - 1, 0);
+                term_put_tuple_element(out, CHAMP_DATAMAP_IDX, term_from_int(-1));
+                for (size_t j = 0, w = 0; j < count; j++) {
+                    if (j == i) {
+                        continue;
+                    }
+                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
+                    w++;
+                }
+                return out;
+            }
+        }
+        *found = false;
+        return node;
+    }
+
+    uint32_t datamap = (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_DATAMAP_IDX));
+    uint32_t nodemap = (uint32_t) term_to_int(term_get_tuple_element(node, CHAMP_NODEMAP_IDX));
+    size_t entries = (size_t) __builtin_popcount(datamap);
+    size_t nodes = (size_t) __builtin_popcount(nodemap);
+    uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+
+    if (datamap & bit) {
+        size_t i = (size_t) champ_index(datamap, bit);
+        if (!champ_key_eq(champ_entry_key(node, i), key, global)) {
+            *found = false;
+            return node;
+        }
+        *found = true;
+        if (entries == 2 && nodes == 0 && shift > 0) {
+            // This node becomes a single entry: hand it to the parent.
+            size_t other = 1 - i;
+            *collapsed_key = champ_entry_key(node, other);
+            *collapsed_value = champ_entry_value(node, other);
+            return term_nil();
+        }
+        term out = champ_node_new(heap, datamap & ~bit, nodemap, entries - 1, nodes);
+        for (size_t j = 0, w = 0; j < entries; j++) {
+            if (j == i) {
+                continue;
+            }
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
+            w++;
+        }
+        for (size_t j = 0; j < nodes; j++) {
+            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * (entries - 1) + j,
+                champ_sub(node, entries, j));
+        }
+        return out;
+    }
+
+    if (!(nodemap & bit)) {
+        *found = false;
+        return node;
+    }
+
+    size_t i = (size_t) champ_index(nodemap, bit);
+    term ck;
+    term cv;
+    term sub = champ_remove_rec(heap, champ_sub(node, entries, i), key, hash,
+        shift + CHAMP_BITS, global, found, &ck, &cv);
+    if (!*found) {
+        return node;
+    }
+    if (!term_is_invalid_term(ck)) {
+        // The sub-node collapsed: its lone entry moves inline here, and if
+        // that leaves this node with a single entry it collapses in turn.
+        if (entries == 0 && nodes == 1 && shift > 0) {
+            *collapsed_key = ck;
+            *collapsed_value = cv;
+            return term_nil();
+        }
+        size_t di = (size_t) champ_index(datamap | bit, bit);
+        term out = champ_node_new(heap, datamap | bit, nodemap & ~bit, entries + 1, nodes - 1);
+        for (size_t j = 0, w = 0; j <= entries; j++) {
+            if (j == di) {
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, ck);
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, cv);
+                w++;
+            }
+            if (j < entries) {
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
+                w++;
+            }
+        }
+        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries + 1);
+        for (size_t j = 0, w = 0; j < nodes; j++) {
+            if (j == i) {
+                continue;
+            }
+            term_put_tuple_element(out, base + w++, champ_sub(node, entries, j));
+        }
+        return out;
+    }
+    term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+    for (size_t j = 0; j < entries; j++) {
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
+    }
+    for (size_t j = 0; j < nodes; j++) {
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
+            (j == i) ? sub : champ_sub(node, entries, j));
+    }
+    return out;
+}
+
+term termmap_champ_remove(Heap *heap, term node, term key, GlobalContext *global, bool *found)
+{
+    *found = false;
+    if (term_is_nil(node)) {
+        return node;
+    }
+    uint32_t hash = term_hash(key, global);
+    term ck;
+    term cv;
+    term root = champ_remove_rec(heap, node, key, hash, 0, global, found, &ck, &cv);
+    if (!*found) {
+        return node;
+    }
+    if (!term_is_invalid_term(ck)) {
+        uint32_t bit = ((uint32_t) 1) << champ_slot(term_hash(ck, global), 0);
+        term out = champ_node_new(heap, bit, 0, 1, 0);
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY, ck);
+        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 1, cv);
+        return out;
+    }
+    if (!champ_is_collision(root) && champ_entries(root) == 0 && champ_nodes(root) == 0) {
+        return term_nil();
+    }
+    return root;
+}
+
+size_t termmap_champ_remove_heap_size(void)
+{
+    return termmap_champ_put_heap_size();
+}
+
+size_t termmap_champ_count(term node)
+{
+    if (term_is_nil(node)) {
+        return 0;
+    }
+    if (champ_is_collision(node)) {
+        return (champ_arity(node) - CHAMP_FIRST_ENTRY) / 2;
+    }
+    size_t entries = champ_entries(node);
+    size_t nodes = champ_nodes(node);
+    size_t total = entries;
+    for (size_t i = 0; i < nodes; i++) {
+        total += termmap_champ_count(champ_sub(node, entries, i));
+    }
+    return total;
+}
+
+// ---- bulk build (prototype: sizing pass, then fill) -------------------------
+
+struct ChampBuild
+{
+    const term *keys;
+    const term *values;
+    const uint32_t *hashes;
+    int *scratch;
+};
+
+// Counting-sort idx[0..n) by the slot their hash selects at `shift`, writing
+// into out[0..n) and the bucket boundaries into starts[0..CHAMP_WIDTH].
+static void champ_partition(const struct ChampBuild *b, const int *idx, int n, int shift, int *out, int *starts)
+{
+    int counts[CHAMP_WIDTH + 1];
+    memset(counts, 0, sizeof(counts));
+    for (int i = 0; i < n; i++) {
+        counts[champ_slot(b->hashes[idx[i]], shift) + 1]++;
+    }
+    for (int s = 0; s < CHAMP_WIDTH; s++) {
+        counts[s + 1] += counts[s];
+    }
+    memcpy(starts, counts, sizeof(counts));
+    int off[CHAMP_WIDTH];
+    memcpy(off, counts, sizeof(off));
+    for (int i = 0; i < n; i++) {
+        out[off[champ_slot(b->hashes[idx[i]], shift)]++] = idx[i];
+    }
+}
+
+static size_t champ_size_rec(struct ChampBuild *b, int *idx, int n, int shift)
+{
+    if (shift >= CHAMP_HASH_BITS) {
+        return (size_t) (CHAMP_FIRST_ENTRY + 2 * n) + 1;
+    }
+    int *part = malloc(sizeof(int) * (size_t) n);
+    int starts[CHAMP_WIDTH + 1];
+    champ_partition(b, idx, n, shift, part, starts);
+    size_t words = 0;
+    int entries = 0;
+    int nodes = 0;
+    for (int s = 0; s < CHAMP_WIDTH; s++) {
+        int cnt = starts[s + 1] - starts[s];
+        if (cnt == 1) {
+            entries++;
+        } else if (cnt > 1) {
+            nodes++;
+            words += champ_size_rec(b, part + starts[s], cnt, shift + CHAMP_BITS);
+        }
+    }
+    free(part);
+    return words + (size_t) (CHAMP_FIRST_ENTRY + 2 * entries + nodes) + 1;
+}
+
+static term champ_build_rec(struct ChampBuild *b, int *idx, int n, int shift, Heap *heap)
+{
+    if (shift >= CHAMP_HASH_BITS) {
+        term node = term_alloc_tuple((uint32_t) (CHAMP_FIRST_ENTRY + 2 * n), heap);
+        term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int(-1));
+        term_put_tuple_element(node, CHAMP_NODEMAP_IDX, term_from_int(0));
+        for (int i = 0; i < n; i++) {
+            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i, b->keys[idx[i]]);
+            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i + 1, b->values[idx[i]]);
+        }
+        return node;
+    }
+    int *part = malloc(sizeof(int) * (size_t) n);
+    int starts[CHAMP_WIDTH + 1];
+    champ_partition(b, idx, n, shift, part, starts);
+
+    uint32_t datamap = 0;
+    uint32_t nodemap = 0;
+    int entries = 0;
+    int nodes = 0;
+    for (int s = 0; s < CHAMP_WIDTH; s++) {
+        int cnt = starts[s + 1] - starts[s];
+        if (cnt == 1) {
+            datamap |= ((uint32_t) 1) << s;
+            entries++;
+        } else if (cnt > 1) {
+            nodemap |= ((uint32_t) 1) << s;
+            nodes++;
+        }
+    }
+    // Children first: allocating them cannot move this node if it does not
+    // exist yet, which keeps the prototype free of root bookkeeping.
+    term *children = nodes ? malloc(sizeof(term) * (size_t) nodes) : NULL;
+    int ni = 0;
+    for (int s = 0; s < CHAMP_WIDTH; s++) {
+        int cnt = starts[s + 1] - starts[s];
+        if (cnt > 1) {
+            children[ni++] = champ_build_rec(b, part + starts[s], cnt, shift + CHAMP_BITS, heap);
+        }
+    }
+    term node = term_alloc_tuple(
+        (uint32_t) (CHAMP_FIRST_ENTRY + 2 * entries + nodes), heap);
+    term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int((avm_int_t) datamap));
+    term_put_tuple_element(node, CHAMP_NODEMAP_IDX, term_from_int((avm_int_t) nodemap));
+    int di = 0;
+    for (int s = 0; s < CHAMP_WIDTH; s++) {
+        int cnt = starts[s + 1] - starts[s];
+        if (cnt == 1) {
+            int e = part[starts[s]];
+            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * di, b->keys[e]);
+            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * di + 1, b->values[e]);
+            di++;
+        }
+    }
+    for (int i = 0; i < nodes; i++) {
+        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * entries + i, children[i]);
+    }
+    free(children);
+    free(part);
+    return node;
+}
+
+size_t termmap_champ_build_size(const term *keys, const uint32_t *hashes, int n)
+{
+    if (n == 0) {
+        return CHAMP_FIRST_ENTRY + 1;
+    }
+    int *idx = malloc(sizeof(int) * (size_t) n);
+    for (int i = 0; i < n; i++) {
+        idx[i] = i;
+    }
+    struct ChampBuild b = { .keys = keys, .values = NULL, .hashes = hashes, .scratch = NULL };
+    size_t words = champ_size_rec(&b, idx, n, 0);
+    free(idx);
+    return words;
+}
+
+term termmap_champ_build(const term *keys, const term *values, const uint32_t *hashes, int n, Heap *heap)
+{
+    int *idx = malloc(sizeof(int) * (size_t) n);
+    for (int i = 0; i < n; i++) {
+        idx[i] = i;
+    }
+    struct ChampBuild b = { .keys = keys, .values = values, .hashes = hashes, .scratch = NULL };
+    term root = champ_build_rec(&b, idx, n, 0, heap);
+    free(idx);
+    return root;
+}
+
+=== test + bench hooks (nifs.c, nifs.gperf, CMakeLists.txt) ===
+diff --git a/src/libAtomVM/CMakeLists.txt b/src/libAtomVM/CMakeLists.txt
+index 9e67f460e..bb06dfcb7 100644
+--- a/src/libAtomVM/CMakeLists.txt
++++ b/src/libAtomVM/CMakeLists.txt
+@@ -71,6 +71,7 @@ set(HEADER_FILES
+     term.h
+     term_hash.h
+     termmap_champ.h
++    termmap_champ.h
+     termmap_tree.h
+     timer_list.h
+     trace.h
+@@ -116,6 +117,7 @@ set(SOURCE_FILES
+     term.c
+     term_hash.c
+     termmap_champ.c
++    termmap_champ.c
+     termmap_tree.c
+     timer_list.c
+     unicode.c
+diff --git a/src/libAtomVM/nifs.c b/src/libAtomVM/nifs.c
+index 6f2f646ba..ee46b11c2 100644
+--- a/src/libAtomVM/nifs.c
++++ b/src/libAtomVM/nifs.c
+@@ -68,6 +68,8 @@
+ #include "term_typedef.h"
+ #include "term_hash.h"
+ #include "termmap_champ.h"
++#include "term_hash.h"
++#include "termmap_champ.h"
+ #include "termmap_tree.h"
+ #include "unicode.h"
+ #include "unlocalized.h"
+@@ -427,7 +429,190 @@ static term nif_map_backend_bench(Context *ctx, int argc, term argv[])
+         + (t1.tv_nsec - t0.tv_nsec) / 1000);
+ }
+ 
++// PROTOTYPE TEST HOOK: drive the CHAMP core against a reference map built by
++// the shipped implementation. atomvm:champ_check(Map, DeleteKeys) checks, for
++// a CHAMP built by repeated put from Map's entries: every key resolves to the
++// same value, absent keys are absent, the entry count matches, and after
++// removing DeleteKeys the same holds for the remainder -- plus the canonical
++// invariant that no sub-node holds a single entry.
++static bool champ_canonical(term node, int depth)
++{
++    if (term_is_nil(node)) {
++        return true;
++    }
++    if (term_to_int(term_get_tuple_element(node, 0)) < 0) {
++        return true;
++    }
++    size_t arity = term_get_size_from_boxed_header(term_to_const_term_ptr(node)[0]);
++    uint32_t datamap = (uint32_t) term_to_int(term_get_tuple_element(node, 0));
++    uint32_t nodemap = (uint32_t) term_to_int(term_get_tuple_element(node, 1));
++    size_t entries = (size_t) __builtin_popcount(datamap);
++    size_t nodes = (size_t) __builtin_popcount(nodemap);
++    if (arity != 2 + 2 * entries + nodes) {
++        return false;
++    }
++    if (depth > 0 && entries == 1 && nodes == 0) {
++        return false; // a lone entry must have been inlined into the parent
++    }
++    if (depth > 0 && entries == 0 && nodes == 0) {
++        return false; // empty sub-node
++    }
++    for (size_t i = 0; i < nodes; i++) {
++        if (!champ_canonical(term_get_tuple_element(node, 2 + 2 * entries + i), depth + 1)) {
++            return false;
++        }
++    }
++    return true;
++}
++
++// PROTOTYPE BENCH: build-by-insert and bulk-remove, both backends, timed in C.
++// atomvm:champ_bench(Map, DeleteKeys, Reps, champ|btree) -> {BuildUs, DelUs}.
++static term nif_champ_bench(Context *ctx, int argc, term argv[])
++{
++    UNUSED(argc);
++    GlobalContext *glb = ctx->global;
++    bool use_champ = (argv[3] == globalcontext_make_atom(glb, ATOM_STR("\x5", "champ")));
++    avm_int_t reps = term_to_int(argv[2]);
++    int n = term_get_map_size(argv[0]);
++    int ndel = 0;
++    for (term l = argv[1]; term_is_nonempty_list(l); l = term_get_list_tail(l)) {
++        ndel++;
++    }
++    term *ks = malloc(sizeof(term) * (size_t) n);
++    term *vs = malloc(sizeof(term) * (size_t) n);
++    term *dks = malloc(sizeof(term) * (size_t) (ndel ? ndel : 1));
++    term *arr = malloc(sizeof(term) * 2 * (size_t) n);
++
++    size_t per = use_champ ? termmap_champ_put_heap_size() : termtree_put_heap_size((size_t) n);
++    size_t reserve = ((size_t) reps * ((size_t) n + (size_t) ndel) + 8) * per;
++    if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 2, argv, MEMORY_CAN_SHRINK)
++            != MEMORY_GC_OK)) {
++        free(ks); free(vs); free(dks); free(arr);
++        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
++    }
++    term map = argv[0];
++    if (term_is_map_tree(map)) {
++        termtree_fill_array(term_get_map_tree_root(map), arr);
++        for (int i = 0; i < n; i++) { ks[i] = arr[2 * i]; vs[i] = arr[2 * i + 1]; }
++    } else {
++        for (int i = 0; i < n; i++) { ks[i] = term_get_map_key(map, i); vs[i] = term_get_map_value(map, i); }
++    }
++    { int i = 0; for (term l = argv[1]; term_is_nonempty_list(l); l = term_get_list_tail(l)) { dks[i++] = term_get_list_head(l); } }
++
++    struct timespec t0, t1, t2;
++    term root = term_nil();
++    clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
++    for (avm_int_t r = 0; r < reps; r++) {
++        root = term_nil();
++        for (int i = 0; i < n; i++) {
++            if (use_champ) {
++                bool added;
++                root = termmap_champ_put(&ctx->heap, root, ks[i], vs[i], glb, &added);
++            } else {
++                root = termtree_put(&ctx->heap, root, ks[i], vs[i], glb);
++            }
++        }
++    }
++    clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
++    for (avm_int_t r = 0; r < reps; r++) {
++        term cur = root;
++        for (int i = 0; i < ndel; i++) {
++            bool found;
++            cur = use_champ ? termmap_champ_remove(&ctx->heap, cur, dks[i], glb, &found)
++                            : termtree_remove(&ctx->heap, cur, dks[i], glb, &found);
++        }
++    }
++    clock_gettime(CLOCK_MONOTONIC_RAW, &t2);
++    free(ks); free(vs); free(dks); free(arr);
++
++    term res = term_alloc_tuple(2, &ctx->heap);
++    term_put_tuple_element(res, 0, term_from_int(
++        (t1.tv_sec - t0.tv_sec) * 1000000 + (t1.tv_nsec - t0.tv_nsec) / 1000));
++    term_put_tuple_element(res, 1, term_from_int(
++        (t2.tv_sec - t1.tv_sec) * 1000000 + (t2.tv_nsec - t1.tv_nsec) / 1000));
++    return res;
++}
++
++static term nif_champ_check(Context *ctx, int argc, term argv[])
++{
++    UNUSED(argc);
++    term map = argv[0];
++    term del = argv[1];
++    GlobalContext *glb = ctx->global;
++    int n = term_get_map_size(map);
++
++    term *arr = malloc(sizeof(term) * 2 * (size_t) n);
++    term *ks = malloc(sizeof(term) * (size_t) n);
++    term *vs = malloc(sizeof(term) * (size_t) n);
++    int ndel = 0;
++    for (term l = del; term_is_nonempty_list(l); l = term_get_list_tail(l)) {
++        ndel++;
++    }
++    term *dks = malloc(sizeof(term) * (size_t) (ndel ? ndel : 1));
++
++    // One generous reservation: n puts and ndel removes, each bounded.
++    size_t reserve = ((size_t) n + (size_t) ndel + 1) * termmap_champ_put_heap_size();
++    if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 2, argv, MEMORY_CAN_SHRINK)
++            != MEMORY_GC_OK)) {
++        free(arr); free(ks); free(vs); free(dks);
++        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
++    }
++    map = argv[0];
++    del = argv[1];
++    if (term_is_map_tree(map)) {
++        termtree_fill_array(term_get_map_tree_root(map), arr);
++        for (int i = 0; i < n; i++) { ks[i] = arr[2 * i]; vs[i] = arr[2 * i + 1]; }
++    } else {
++        for (int i = 0; i < n; i++) { ks[i] = term_get_map_key(map, i); vs[i] = term_get_map_value(map, i); }
++    }
++    { int i = 0; for (term l = del; term_is_nonempty_list(l); l = term_get_list_tail(l)) { dks[i++] = term_get_list_head(l); } }
++
++    term root = term_nil();
++    for (int i = 0; i < n; i++) {
++        bool added = false;
++        root = termmap_champ_put(&ctx->heap, root, ks[i], vs[i], glb, &added);
++        if (!added) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-1); }
++    }
++    if ((int) termmap_champ_count(root) != n) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-2); }
++    if (!champ_canonical(root, 0)) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-3); }
++    for (int i = 0; i < n; i++) {
++        if (termmap_champ_get(root, ks[i], glb) != vs[i]) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-4); }
++    }
++    // Update every value in place; the count must not move.
++    for (int i = 0; i < n; i++) {
++        bool added = true;
++        root = termmap_champ_put(&ctx->heap, root, ks[i], ks[i], glb, &added);
++        if (added) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-5); }
++    }
++    if ((int) termmap_champ_count(root) != n) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-6); }
++
++    for (int i = 0; i < ndel; i++) {
++        bool found = false;
++        root = termmap_champ_remove(&ctx->heap, root, dks[i], glb, &found);
++        if (!found) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-7); }
++        if (!champ_canonical(root, 0)) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-8); }
++        bool again = true;
++        root = termmap_champ_remove(&ctx->heap, root, dks[i], glb, &again);
++        if (again) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-9); }
++    }
++    if ((int) termmap_champ_count(root) != n - ndel) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-10); }
++    for (int i = 0; i < n; i++) {
++        bool deleted = false;
++        for (int j = 0; j < ndel; j++) { if (ks[i] == dks[j]) { deleted = true; break; } }
++        term got = termmap_champ_get(root, ks[i], glb);
++        if (deleted) {
++            if (!term_is_invalid_term(got)) { free(arr); free(ks); free(vs); free(dks); return term_from_int(-11); }
++        } else if (got != ks[i]) {
++            free(arr); free(ks); free(vs); free(dks); return term_from_int(-12);
++        }
++    }
++    free(arr); free(ks); free(vs); free(dks);
++    return term_from_int(0);
++}
++
+ static term nif_maps_next(Context *ctx, int argc, term argv[]);
++static term nif_champ_check(Context *ctx, int argc, term argv[]);
++static term nif_champ_bench(Context *ctx, int argc, term argv[]);
+ static term nif_map_backend_bench(Context *ctx, int argc, term argv[]);
+ static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[]);
+ static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]);
+@@ -1196,6 +1381,16 @@ static const struct Nif map_backend_bench_nif = {
+     .nif_ptr = nif_map_backend_bench
+ };
+ 
++static const struct Nif champ_bench_nif = {
++    .base.type = NIFFunctionType,
++    .nif_ptr = nif_champ_bench
++};
++
++static const struct Nif champ_check_nif = {
++    .base.type = NIFFunctionType,
++    .nif_ptr = nif_champ_check
++};
++
+ static const struct Nif maps_next_nif = {
+     .base.type = NIFFunctionType,
+     .nif_ptr = nif_maps_next
+diff --git a/src/libAtomVM/nifs.gperf b/src/libAtomVM/nifs.gperf
+index 89b01a46f..3928d6575 100644
+--- a/src/libAtomVM/nifs.gperf
++++ b/src/libAtomVM/nifs.gperf
+@@ -285,6 +285,8 @@ maps:from_list/1, &maps_from_list_nif
+ maps:merge/2, &maps_merge_nif
+ maps:remove/2, &maps_remove_nif
+ atomvm:map_backend_bench/4, &map_backend_bench_nif
++atomvm:champ_bench/4, &champ_bench_nif
++atomvm:champ_check/2, &champ_check_nif
+ maps:next/1, &maps_next_nif
+ unicode:characters_to_list/1, &unicode_characters_to_list_nif
+ unicode:characters_to_list/2, &unicode_characters_to_list_nif
