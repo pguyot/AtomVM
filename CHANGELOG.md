@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the same value as `erts_debug:flat_size/1`
 
 ### Changed
+- Bignum division now estimates each quotient digit with a precomputed reciprocal instead of
+  a 128-by-64 software division, so the compiler no longer emits a `__udivmodti4` call per
+  digit
 - JIT now fuses `is_tagged_tuple` with the following `get_tuple_element` reads (record field
   access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
   per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
