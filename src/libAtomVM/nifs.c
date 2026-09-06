@@ -8800,6 +8800,14 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
     }
 
     term iterator = argv[0];
+
+    // An already-materialized {K, V, Iterator} triple is itself an iterator
+    // and next/1 returns it unchanged (maps:next/1's first clause in OTP,
+    // and part of the documented iterator() type). AtomVM raised badarg.
+    if (term_is_tuple(iterator) && term_get_tuple_arity(iterator) == 3) {
+        return iterator;
+    }
+
     VALIDATE_VALUE(iterator, term_is_nonempty_list);
 
     term post = term_get_list_head(iterator);
