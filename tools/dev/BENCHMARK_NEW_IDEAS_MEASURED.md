@@ -23,14 +23,15 @@ publication harness.
 | 1 | Receive markers actually skip old messages | assessed, not implemented | premise confirmed; largest gap in the doc |
 | 2 | Lazy B-tree map iterator | **shipped** `15a6a6501` | up to **138x**; take-eight 116x |
 | 3 | Forward floating values between FP instructions | **drop** | whole FP gap is 8%; ceiling too small |
-| 4 | Private binary append bypasses allocation prep | assessed, not implemented | premise confirmed; ~11% of one 0.9% test |
+| 4 | Private binary append bypasses allocation prep | assessed, resized | build phase is **0.150x** of BEAM, not parse/hash |
 | 5 | Effect contracts for small NIFs | **drop** | real-workload boundary is 38/1222 samples |
-| 6 | B-tree node layout instead of a new B-tree | assessed, best next bet | `node_find` is 41% of a real compile |
+| 6 | B-tree node layout instead of a new B-tree | **implemented, then reverted** | gate wanted 3% batch stdlib, got 0.6% |
 | 7 | Reciprocal bigint quotient estimation | **shipped** `f6b2906a6` | **1.090x** bigint; `__udivmodti4` gone |
 | 8 | Signed power-of-two division | **drop** (author screened) | 1.004x, accepted without re-running |
 
-Two shipped, four dropped with data (including the prerequisite repair), two
-assessed and left with a sized recommendation.
+Two shipped, five dropped with data (including the prerequisite repair and one
+written in full before its gate rejected it), one assessed and left with a
+sized recommendation.
 
 ## 0. The prerequisite repair — dropped, and why it matters for the rest
 
@@ -123,21 +124,48 @@ Not worth a block-scoped FP register cache with invalidation at every helper,
 branch and GC, in the part of the JIT that previously shipped a heap-corrupting
 float bug. Revisit only if a float-dominated workload becomes a target.
 
-## 4. Private binary append — assessed, not implemented
+## 4. Private binary append — resized, and the proposal's guess was wrong
 
-Premise confirmed by profile. Running `binary_test` in a loop, the top C
-symbols are `term_reuse_binary` (227 samples) and
-`memory_ensure_free_with_roots` (217) — that second one is exactly the heap
-preparation the idea wants to skip when the append will reuse the accumulator.
+The document suggested splitting the benchmark into build/parse/hash phases
+before acting, and warned that the parse and hash loops might be where the test
+actually loses. Doing that split says the opposite, emphatically:
 
-Sizing stops it for now: eliminating that preparation entirely is worth roughly
-11% of `binary_test`, which is 0.9% of the app aggregate — about 0.1% overall.
-It would move `binary_test` from 0.72x to perhaps 0.80x, still short of the
-0.95x gate, in exchange for reordering `OP_BS_CREATE_BIN` across every backend.
-Worth doing only as part of a broader attack on the binary result, and the
-proposal's own advice to split the test into build/parse/hash phases should
-come first — the profile shows the parse and hash loops dominate the JIT-code
-samples, so the build phase may not be where that test loses.
+| phase | BEAM | AtomVM | ratio |
+|---|---:|---:|---:|
+| build (100 appends) | 7,537 us | 50,308 us | **0.150x** |
+| parse (400 bytes) | 4,410 us | 6,730 us | 0.655x |
+| hash (400 bytes) | 16,294 us | 25,433 us | 0.641x |
+
+Building is 6.7x slower than BEAM and is 61% of AtomVM's time across the three
+phases, against 27% of BEAM's. That is where `binary_test`'s 0.72x comes from,
+and it is exactly the path this idea targets.
+
+Profiling the build loop alone attributes it roughly as:
+
+| symbol | share |
+|---|---:|
+| `memory_ensure_free_with_roots` (+ its pinned wrapper) | 26% |
+| zeroing (`memset` / `bzero`) | 24% |
+| `term_reuse_binary` | 23% |
+| `term_binary_data` | 8% |
+| `jit_bs_create_bin_wrap` | 6% |
+
+The cheap half of the idea was tried and rejected. `term_reuse_binary` clears
+the newly exposed bytes on every append -- four bytes here, so nearly all call
+overhead -- and clearing a short tail with inline stores instead measured
+**1.015x on the build phase**, so the sampled `memset` share does not convert
+into time. Reverted.
+
+The remaining 26% is the idea as written: test the capacity hit before
+preparing the heap, and skip `PRIM_TRIM_LIVE_REGS` and
+`PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS` when the accumulator will be reused. The
+emission is in the shared frontend, so it need not be written per backend, but
+it means branching around the preparation inside `OP_BS_CREATE_BIN` -- an
+opcode that has shipped miscompiles before -- and it was left rather than
+started without room to test it properly.
+
+Worth doing next, and worth more than the earlier estimate in this file's first
+revision, which sized it against the whole test rather than the build phase.
 
 ## 5. NIF effect contracts — drop
 
@@ -153,33 +181,52 @@ The general mechanism was then sized on a real workload: in a profile of four
 diagnostic measured. Halving the call boundary would return ~1%. The +111k
 recoverable ESTONES is not a forecast of that.
 
-## 6. B-tree node layout — assessed, the best next bet
+## 6. B-tree node layout — implemented in full, then reverted
 
-This has the strongest remaining evidence. In the same real-compile profile:
+The evidence pointed here hardest, so it was written: nodes changed from
+`{Size, KV, Children}` with an interleaved `{K0,V0,K1,V1,..}` tuple to
+`{Size, Keys, Values, Children}` with separate arrays, across `make_node`,
+`node_replace_value`, `node_replace_child`, `node_find`, both insert paths and
+the accessors. All of it is contained in `termmap_tree.c`; nothing outside the
+file knows the node shape.
 
-| symbol | samples |
-|---|---:|
-| `node_find` | 499 |
-| `term_compare0` | 309 |
-| `bt_insert` | 128 |
+**Both predicted mechanisms worked.** Profiling the same four `unicode_util.erl`
+compiles before and after:
 
-`node_find` alone is 41% of attributed C samples, and batch `stdlib` (0.978x)
-is the standing gate failure.
+| symbol | interleaved | split |
+|---|---:|---:|
+| `node_find` | 693 | 637 (−8%) |
+| `bt_insert` | 202 | 125 (**−38%**) |
+| `term_compare0` | 436 | 426 (−2%) |
 
-`node_find` is already well optimised — invariants hoisted, a small-integer
-fast path covering ~84% of compiler key comparisons, a 2-tuple probe path — so
-the remaining cost is the access pattern the layout change targets. With
-`BT_T = 24`, a full node's 47 keys are interleaved with their values across
-about 752 bytes, so a binary search touches ~6 cache lines; a separate keys
-tuple would put the same keys in ~376 bytes. That is a real halving of the
-searched footprint, and it is not something a cheaper local change to
-`node_find` can reach.
+The search reads a denser key array, and a value update now shares the keys
+tuple instead of copying every key beside the values -- which is where the
+insert saving comes from.
 
-It is also a rewrite of the node representation across `make_node`, insertion,
-splitting, deletion, update, iteration and rank. It was not attempted here
-rather than attempted hastily against the core map structure. Do it on its own,
-against the gate the proposal set (>=3% batch stdlib), measuring lookup, update
-and insert separately as it advises.
+**The end-to-end gain did not follow.** Controlled build pair, same tree,
+9 interleaved rounds per application:
+
+| batch | interleaved | split | speedup |
+|---|---:|---:|---:|
+| stdlib | 15.193 s | 15.097 s | 1.0064x |
+| compiler | 7.303 s | 7.277 s | 1.0036x |
+| kernel | 6.442 s | 6.402 s | 1.0062x |
+
+0.4-0.6%, consistently and in the right direction, against a gate of **3% on
+batch stdlib**. The extra wrapper slot and tuple header also cost two words per
+node: measured with `erts_debug:flat_size/1`, a 10,000-entry map grows from
+21,299 to 21,729 words (**+2.0%**), and a 1,000-entry map by the same
+proportion.
+
+So: the C-symbol profile overstates what map work is worth end-to-end, because
+much of a compile runs in JIT-generated code that a `sample` profile attributes
+elsewhere. Five times short of its gate and costing 2% of map memory on a VM
+that targets microcontrollers, it was reverted rather than shipped.
+
+That result also retires the hypothesis this idea shared with the two failed
+HAMT attempts -- that `node_find`'s cost is reachable by rearranging the map.
+`node_find` did get 8% faster and it bought almost nothing. Anything further
+here should target the number of comparisons, not their layout.
 
 ## 1. Receive markers — assessed, not implemented
 
@@ -199,13 +246,14 @@ work in the most correctness-critical part of the VM, with a test matrix
 interleaved with messages, nested outstanding requests) that deserves its own
 session.
 
-Recommended next, together with idea 6.
+Recommended next, together with the remaining half of idea 4. Idea 6 is now
+closed: see above.
 
 ## Reproduction
 
 The probes referenced by the original document (`bench_new_ideas.py`,
-`new_ideas_probe.erl`, `census_new_ideas.escript`) were not present in the
-checkout, so the map, float, bigint and binary probes used here were written
-fresh. Correctness harnesses that are worth keeping — the map iterator
+`new_ideas_probe.erl`, `census_new_ideas.escript`) were not in the checkout when
+this work started -- they appeared later, untracked -- so the map, float, bigint
+and binary probes used here were written fresh and are independent of them. Correctness harnesses that are worth keeping — the map iterator
 differential test and the bignum division differential test against OTP — are
 described in the commit messages of `15a6a6501` and `f6b2906a6`.
