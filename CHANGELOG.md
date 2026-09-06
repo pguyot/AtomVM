@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the same value as `erts_debug:flat_size/1`
 
 ### Changed
+- A message carrying a reference, a float, a bignum, a small binary or an external pid, port
+  or reference is now copied in a single pass like any other small message, instead of falling
+  back to the general term-tree walk. Every `gen_server:call` carries a reference, and a call
+  round trip is 6.8% faster
 - Bignum division now estimates each quotient digit with a precomputed reciprocal instead of
   a 128-by-64 software division, so the compiler no longer emits a `__udivmodti4` call per
   digit
