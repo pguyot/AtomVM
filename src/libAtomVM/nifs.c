@@ -66,8 +66,6 @@
 #include "tempstack.h"
 #include "term.h"
 #include "term_typedef.h"
-#include "term_hash.h"
-#include "termmap_champ.h"
 #include "termmap_tree.h"
 #include "unicode.h"
 #include "unlocalized.h"
@@ -327,108 +325,7 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[]);
 static term nif_maps_remove(Context *ctx, int argc, term argv[]);
 static term nif_maps_keys(Context *ctx, int argc, term argv[]);
 static term nif_maps_values(Context *ctx, int argc, term argv[]);
-// PROTOTYPE BENCH: time the two large-map backends head to head in C, same
-// keys, same loop, so the comparison excludes Erlang and NIF call overhead.
-// atomvm:map_backend_bench(Map, Keys, Reps, btree | champ) -> Microseconds.
-static term nif_map_backend_bench(Context *ctx, int argc, term argv[])
-{
-    UNUSED(argc);
-    term map = argv[0];
-    term keys_list = argv[1];
-    avm_int_t reps = term_to_int(argv[2]);
-    bool use_champ = (argv[3] == globalcontext_make_atom(ctx->global, ATOM_STR("\x5", "champ")));
-
-    int nkeys = 0;
-    term l = keys_list;
-    while (term_is_nonempty_list(l)) {
-        nkeys++;
-        l = term_get_list_tail(l);
-    }
-    term *probe = malloc(sizeof(term) * (size_t) nkeys);
-    l = keys_list;
-    for (int i = 0; i < nkeys; i++) {
-        probe[i] = term_get_list_head(l);
-        l = term_get_list_tail(l);
-    }
-
-    term root = term_get_map_tree_root(map);
-    int n = term_get_map_size(map);
-
-    if (use_champ) {
-        // Materialize the map's entries, hash them, size the CHAMP, reserve,
-        // then build. Everything before the timed loop.
-        term *arr = malloc(sizeof(term) * 2 * (size_t) n);
-        termtree_fill_array(root, arr);
-        term *ks = malloc(sizeof(term) * (size_t) n);
-        term *vs = malloc(sizeof(term) * (size_t) n);
-        uint32_t *hs = malloc(sizeof(uint32_t) * (size_t) n);
-        for (int i = 0; i < n; i++) {
-            ks[i] = arr[2 * i];
-            vs[i] = arr[2 * i + 1];
-            hs[i] = term_hash(ks[i], ctx->global);
-        }
-        size_t words = termmap_champ_build_size(ks, hs, n);
-        if (UNLIKELY(memory_ensure_free_with_roots(ctx, words, 2, argv, MEMORY_CAN_SHRINK)
-                != MEMORY_GC_OK)) {
-            free(arr); free(ks); free(vs); free(hs); free(probe);
-            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-        }
-        // The collection above moved everything: redo the materialization.
-        map = argv[0];
-        root = term_get_map_tree_root(map);
-        termtree_fill_array(root, arr);
-        for (int i = 0; i < n; i++) {
-            ks[i] = arr[2 * i];
-            vs[i] = arr[2 * i + 1];
-            hs[i] = term_hash(ks[i], ctx->global);
-        }
-        l = argv[1];
-        for (int i = 0; i < nkeys; i++) {
-            probe[i] = term_get_list_head(l);
-            l = term_get_list_tail(l);
-        }
-        term champ = termmap_champ_build(ks, vs, hs, n, &ctx->heap);
-        // Correctness gate: every key must resolve, and to the same value.
-        for (int i = 0; i < nkeys; i++) {
-            term a = termmap_champ_get(champ, probe[i], ctx->global);
-            term b = termtree_get(root, probe[i], ctx->global);
-            if (a != b) {
-                free(arr); free(ks); free(vs); free(hs); free(probe);
-                RAISE_ERROR(BADARG_ATOM);
-            }
-        }
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-        volatile term sink = term_nil();
-        for (avm_int_t r = 0; r < reps; r++) {
-            for (int i = 0; i < nkeys; i++) {
-                sink = termmap_champ_get(champ, probe[i], ctx->global);
-            }
-        }
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
-        (void) sink;
-        free(arr); free(ks); free(vs); free(hs); free(probe);
-        return term_from_int((t1.tv_sec - t0.tv_sec) * 1000000
-            + (t1.tv_nsec - t0.tv_nsec) / 1000);
-    }
-
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-    volatile term sink = term_nil();
-    for (avm_int_t r = 0; r < reps; r++) {
-        for (int i = 0; i < nkeys; i++) {
-            sink = termtree_get(root, probe[i], ctx->global);
-        }
-    }
-    clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
-    (void) sink;
-    free(probe);
-    return term_from_int((t1.tv_sec - t0.tv_sec) * 1000000
-        + (t1.tv_nsec - t0.tv_nsec) / 1000);
-}
-
 static term nif_maps_next(Context *ctx, int argc, term argv[]);
-static term nif_map_backend_bench(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_list(Context *ctx, int argc, term argv[]);
 static term nif_unicode_characters_to_binary(Context *ctx, int argc, term argv[]);
 static term nif_erlang_lists_subtract(Context *ctx, int argc, term argv[]);
@@ -1191,11 +1088,6 @@ static const struct Nif maps_remove_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_maps_remove
 };
-static const struct Nif map_backend_bench_nif = {
-    .base.type = NIFFunctionType,
-    .nif_ptr = nif_map_backend_bench
-};
-
 static const struct Nif maps_next_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_maps_next
