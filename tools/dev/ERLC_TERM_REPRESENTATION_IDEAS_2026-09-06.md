@@ -518,3 +518,62 @@ the trap/error preamble) for NIFs known not to need it, and -- for
 `maps:next/1` specifically, combined with the integer-path iterator below --
 opens the door to emitting the common iterator step as native code with no C
 call at all.
+
+## Addendum 6: two more negative results, and a correction to Addendum 4
+
+Both ideas from Addendum 5 were built, tested and measured on
+unicode_util.erl. Neither moved it (2.47 s against a 2.46 s base), so
+neither was kept. The patch is worth keeping to hand, but the reasons matter
+more than the code.
+
+**Recognizing system NIFs at compile time.** `tools/dev/gen_jit_nifs.escript`
+generates a `jit_nifs.hrl` from `nifs.gperf` (277 MFAs), `jit.erl` looks the
+callee up with the `import_resolver` it already has, and a `call_ext` to a
+system NIF picks a primitive that skips the import type dispatch (still
+checking the type, so a redefined name takes the generic path -- a guard on a
+field the VM already maintains, needing no invalidation on module reload).
+
+It works and it is worth about 1.2 ns on a cheap NIF call: `maps:next/1` on a
+flat map went 9.8 -> 8.6 ns. But `maps:next/1` is only 4.8M calls in the
+compile, and dispatch self time is ~1.9% of the file, so ~2% was always the
+ceiling and the realized part is inside the noise.
+
+**Encoding the map iterator as an integer.** The frame stack satisfies one
+invariant -- the node at level i+1 is child[index_i] of the node at level i --
+so the nodes are recoverable by descending from the root, and the cursor is
+just the indices, which fit in a small integer (the shape BEAM's HAMT
+iterator uses). It is exercised: 2,644,039 of 4,841,554 `maps:next/1` calls
+took the integer path, with **zero** falls back to the heap cursor.
+
+It is still neutral, because re-descending from the root costs about what the
+frame allocation cost. That is the part BEAM's design hides: its path integer
+indexes a trie directly, while ours has to walk B-tree nodes. The allocation
+it removes (about 15 words per step) is real but only ~12 of 616 collections
+on a heap this size -- it would matter on an MCU heap, not here.
+
+**Correction to Addendum 4.** The AtomVM column of the subset_kv/next/lookup
+table was measured with an experimental probe build that had been reverted in
+source but not rebuilt, so its lookup numbers were better than the shipped
+code's. Re-measured properly (shipped code, same session, same machine):
+
+| n | lookup BEAM | lookup AtomVM (as published) | lookup AtomVM (actual) |
+|---:|---:|---:|---:|
+| 64 | 20.2 | 14.4 | 34.5 |
+| 4096 | 30.8 | 52.9 | 74.9 |
+
+The *shape* of the finding survives -- BEAM's lookup is flat in map size and
+ours grows -- but AtomVM is not faster than BEAM at small n for these keys,
+and the crossover claim in Addendum 4 does not hold as stated.
+
+What produced the difference is itself the finding: `struct TermMapProbe` only
+classifies a key that is a 2-tuple of immediates, so `{Tag, Int, Tag}` keys
+pay a full `term_compare` on every probe of the descent. Widening it to
+arities 2..4 is worth **2.4x** on a map keyed that way (34.5 -> 13.4 ns at
+n=64). It was still not kept: it costs 1.2-1.5% on unicode_util, whose
+3-tuples are `{Atom, Tuple, X}` and fail the admission test anyway, and
+neither a branch-free admission test nor keeping the 2-tuple compare
+straight-line recovered that. The cost is the wider probe struct itself
+(5 words against 2) in the descent's stack frames. A version that keeps the
+2-tuple probe exactly as it is today and adds a separate wider one only when
+the key needs it would get the 2.4x without the regression; that is the shape
+to try if this is picked up.
