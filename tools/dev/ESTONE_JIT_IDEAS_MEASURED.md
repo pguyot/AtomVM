@@ -43,7 +43,7 @@ turns "how much would arm32 gain" into a question this machine can answer.
 | 4 | Inline 32-bit allocation | **kept — shipped** | arm32 1.021x, riscv64 1.045x |
 | 5 | Caller-saved contracts for call-free loops | **drop** | ablation: 0.0% where it exists |
 | 6 | Restricted native ABI for tiny leaves | **drop** | ≤14.5% ceiling, leaf ineligible |
-| 7 | Avoid message sizing | **keep — real but costly** | sizing is 9.2–17.2% of a round trip |
+| 7 | Avoid message sizing | **drop — implemented, then dropped** | below the measurement floor; see below |
 | 8 | Coalesce readiness notifications | **drop** | census: ~0.4% ceiling on ESTONE |
 
 ## Idea 1 — reconstruction of a list just destructured — DROP
@@ -271,12 +271,46 @@ marginal cost of exactly one pass.
 | `{Self, {message, {Self, true}}}` | 69,436 us | 75,822 us | 9.2% | **1.101x** |
 | `{Self, {message, {Self, funky_stuff, baby, {1, [123, true, []], "abcdef"}}}}` | 91,926 us | 107,741 us | 17.2% | **1.208x** |
 
-Real and worth having — `pingpong_speed_test` is 31% of the application
-aggregate — but it is the only surviving idea that needs generated code and the
-runtime to agree on a contract, and the fixed-size ablation above shows the
-allocator will punish an approximate answer.  The aggressive extension
-(constructing a non-escaping envelope directly in message storage) would also
-attack the ~16% spent in malloc, at the cost of much stronger escape reasoning.
+### Implemented, measured, and dropped — 2026-09-06
+
+The ceiling above is real but does not survive contact with a mechanism. Four
+designs were built and measured; every one won a benchmark and lost another,
+and all of the differences sit inside this benchmark's noise.
+
+The first was a per-mailbox hint: remember the size of the last shallow message
+and copy the next one straight into a block that size, checking shape and size
+as it goes. On the round-trip probes above it measured 1.076x and 1.154x. On
+ESTONE's four-process rings it **cost** about 3%, and instrumentation explains
+why it cannot be tuned out: it guessed right **1,755,439 times out of
+1,755,493 — 99.997%**. A predictor that is essentially never wrong and still
+loses is not mispredicting; the work it removes is worth less than the
+machinery removing it.
+
+The work is small by construction, because the hint only applies to *shallow*
+terms, which are the cheapest to measure. `pingpong_speed_test` sends
+`{self(), ping}` — a flat 2-tuple of immediates, four words — for which
+`memory_estimate_shallow` is a tag check, an arity read and two element checks,
+and never recurses. It is already the "trivial estimator" a hint would replace.
+
+**Pricing that pass directly could not measure it.** Running the estimator
+twice, so the delta is one pass, the build doing strictly *more* work came out
+13% faster on ESTONE and 2% faster on ping-pong. Two builds with identical
+message-path semantics measured 768ms and 1008ms in one session: code layout
+moves this benchmark further than the feature does, which also means the 9.2%
+and 17.2% figures above should be read as an upper bound obtained under
+favourable conditions, not a promise.
+
+Also tried and discarded: a global grow-only size estimate; an estimate
+converging on observed sizes; and overallocating then shrinking with `realloc`,
+relocating through `memory_scan_and_rewrite` when the block moved (that last
+one needs those helpers moved out of `#ifdef ENABLE_REALLOC_GC`, which is off
+by default and on esp32). The overallocate variant was the best of them and
+still traded ESTONE against ping-pong depending on how the guess was chosen.
+
+A design worth revisiting would keep the estimate on the **sending** side,
+where the message shape actually lives — both the per-mailbox hint and the
+global put it where the workload does not match. It needs a measurement method
+that resolves effects below ~15% on message benchmarks first.
 
 ## Idea 8 — coalesce readiness notifications — DROP
 
