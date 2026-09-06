@@ -144,7 +144,12 @@
     dead_moves = #{} :: #{non_neg_integer() => true},
     %% Size of the opcode stream, to turn a match context tail size into
     %% the current opcode's byte offset.
-    code_size = 0 :: non_neg_integer()
+    code_size = 0 :: non_neg_integer(),
+    %% Byte offset of an OP_REMOVE_MESSAGE whose clause forwards the message it
+    %% consumed (see forward_analysis/2), and whether the OP_SEND now being
+    %% emitted is that clause's. Both are set from OP_LOOP_REC.
+    forward_remove = none :: none | non_neg_integer(),
+    forwarding = false :: boolean()
 }).
 
 -type tail_cache() :: #{tuple() => non_neg_integer()} | disabled.
@@ -841,19 +846,40 @@ emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = Sta
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
     emit_pass(Rest, MMod, MSt6, State1);
 % 20
-emit_pass(<<?OP_SEND, Rest/binary>>, MMod, MSt0, State0) ->
+emit_pass(<<?OP_SEND, Rest/binary>>, MMod, MSt0, #state{forwarding = Forwarding} = State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    ?TRACE("OP_SEND\n", []),
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_SEND, [
+    Prim =
+        case Forwarding of
+            true ->
+                ?TRACE("OP_SEND (forwarding the block)\n", []),
+                ?PRIM_FORWARD_MESSAGE;
+            false ->
+                ?TRACE("OP_SEND\n", []),
+                ?PRIM_SEND
+        end,
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, Prim, [
         ctx, jit_state
     ]),
     MSt2 = handle_error_if({'(bool)', {free, ResultReg}, '==', false}, MMod, MSt1),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
-    emit_pass(Rest, MMod, MSt2, State0);
+    emit_pass(Rest, MMod, MSt2, State0#state{forwarding = false});
 % 21
-emit_pass(<<?OP_REMOVE_MESSAGE, Rest/binary>>, MMod, MSt0, State0) ->
+emit_pass(
+    <<?OP_REMOVE_MESSAGE, Rest/binary>>,
+    MMod,
+    MSt0,
+    #state{forward_remove = ForwardRemove, code_size = CodeSize} = State0
+) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    ?TRACE("OP_REMOVE_MESSAGE\n", []),
+    Forwarding =
+        ForwardRemove =/= none andalso
+            ForwardRemove =:= CodeSize - byte_size(Rest) - 1,
+    ?TRACE("OP_REMOVE_MESSAGE~s\n", [
+        case Forwarding of
+            true -> " (keeping the block to forward)";
+            false -> ""
+        end
+    ]),
     {MSt1, Reg1} = MMod:call_primitive(MSt0, ?PRIM_CANCEL_TIMEOUT, [
         ctx
     ]),
@@ -862,12 +888,17 @@ emit_pass(<<?OP_REMOVE_MESSAGE, Rest/binary>>, MMod, MSt0, State0) ->
         ctx, jit_state
     ]),
     MSt4 = MMod:return_if_not_equal_to_ctx(MSt3, {free, ResultReg}),
-    {MSt5, Reg2} = MMod:call_primitive(MSt4, ?PRIM_MAILBOX_REMOVE_MESSAGE, [
+    RemovePrim =
+        case Forwarding of
+            true -> ?PRIM_REMOVE_MESSAGE_KEEP;
+            false -> ?PRIM_MAILBOX_REMOVE_MESSAGE
+        end,
+    {MSt5, Reg2} = MMod:call_primitive(MSt4, RemovePrim, [
         ctx
     ]),
     MSt6 = MMod:free_native_registers(MSt5, [Reg2]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    emit_pass(Rest, MMod, MSt6, State0);
+    emit_pass(Rest, MMod, MSt6, State0#state{forwarding = Forwarding});
 % 22
 emit_pass(<<?OP_TIMEOUT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -879,8 +910,13 @@ emit_pass(<<?OP_TIMEOUT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     emit_pass(Rest0, MMod, MSt2, State0);
 % 23
-emit_pass(<<?OP_LOOP_REC, Rest0/binary>>, MMod, MSt0, State0) ->
+emit_pass(<<?OP_LOOP_REC, Rest0/binary>>, MMod, MSt0, #state{code_size = CodeSize} = State00) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    State0 = State00#state{
+        forward_remove = forward_analysis(
+            <<?OP_LOOP_REC, Rest0/binary>>, CodeSize
+        )
+    },
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_PROCESS_SIGNAL_MESSAGES, [
         ctx, jit_state
@@ -8731,6 +8767,198 @@ resolve_field_positions(N, Bin0, AR, FieldPos, Acc) ->
     end.
 
 %% Skip past one DEST register encoding.
+%%-----------------------------------------------------------------------------
+%% Forwarding receives.
+%%
+%% A clause that consumes a message and immediately sends it on can hand the
+%% incoming message block to the next process instead of sizing and copying the
+%% term into a fresh one, provided the outgoing message is the incoming one with
+%% only immediate words changed (checked at run time by ?PRIM_FORWARD_MESSAGE)
+%% and nothing that survives the clause still points into the block (decided
+%% here).
+%%
+%% The walk starts at OP_LOOP_REC, tracks which registers hold a value derived
+%% from the message, and stops at the first label -- so every offset it reports
+%% is reached only along this one straight-line path. A clause qualifies when it
+%% ends in a tail call or a return with no message-derived value among the
+%% registers that leaves live; those are the only places a pointer into the
+%% handed-over block could survive. Any opcode the walk does not model ends it,
+%% so coverage can grow opcode by opcode without ever being wrong.
+%%-----------------------------------------------------------------------------
+
+%% @returns the byte offset of the OP_REMOVE_MESSAGE that may keep its block,
+%% or `none'.
+forward_analysis(<<?OP_LOOP_REC, Rest0/binary>>, CodeSize) ->
+    Rest1 = skip_compact_term(Rest0),
+    case peek_reg(Rest1) of
+        {none, _} -> none;
+        {Dst, Rest2} -> fa_walk(Rest2, CodeSize, #{Dst => true}, none)
+    end.
+
+fa_walk(<<>>, _CodeSize, _Derived, _Remove) ->
+    none;
+fa_walk(<<Op, Rest0/binary>> = Bin, CodeSize, Derived, Remove) ->
+    case Op of
+        ?OP_LINE ->
+            {_Line, Rest1} = decode_literal(Rest0),
+            fa_walk(Rest1, CodeSize, Derived, Remove);
+        ?OP_MOVE ->
+            {Src, Rest1} = peek_reg(Rest0),
+            {Dst, Rest2} = peek_reg(Rest1),
+            fa_walk(Rest2, CodeSize, fa_set(Dst, fa_is(Src, Derived), Derived), Remove);
+        ?OP_GET_TUPLE_ELEMENT ->
+            {Src, Rest1} = peek_reg(Rest0),
+            {_Index, Rest2} = decode_literal(Rest1),
+            {Dst, Rest3} = peek_reg(Rest2),
+            fa_walk(Rest3, CodeSize, fa_set(Dst, fa_is(Src, Derived), Derived), Remove);
+        ?OP_GET_HD ->
+            fa_unary(Rest0, CodeSize, Derived, Remove);
+        ?OP_GET_TL ->
+            fa_unary(Rest0, CodeSize, Derived, Remove);
+        ?OP_GET_LIST ->
+            {Src, Rest1} = peek_reg(Rest0),
+            {Hd, Rest2} = peek_reg(Rest1),
+            {Tl, Rest3} = peek_reg(Rest2),
+            Is = fa_is(Src, Derived),
+            fa_walk(Rest3, CodeSize, fa_set(Tl, Is, fa_set(Hd, Is, Derived)), Remove);
+        ?OP_PUT_LIST ->
+            {Hd, Rest1} = peek_reg(Rest0),
+            {Tl, Rest2} = peek_reg(Rest1),
+            {Dst, Rest3} = peek_reg(Rest2),
+            Is = fa_is(Hd, Derived) orelse fa_is(Tl, Derived),
+            fa_walk(Rest3, CodeSize, fa_set(Dst, Is, Derived), Remove);
+        ?OP_PUT_TUPLE2 ->
+            {Dst, Rest1} = peek_reg(Rest0),
+            {ListSize, Rest2} = decode_extended_list_header(Rest1),
+            {Is, Rest3} = fa_elements(ListSize, Rest2, Derived, false),
+            fa_walk(Rest3, CodeSize, fa_set(Dst, Is, Derived), Remove);
+        ?OP_BIF0 ->
+            {_Bif, Rest1} = decode_literal(Rest0),
+            {Dst, Rest2} = peek_reg(Rest1),
+            fa_walk(Rest2, CodeSize, fa_set(Dst, false, Derived), Remove);
+        ?OP_TEST_HEAP ->
+            case skip_allocator_list(Rest0) of
+                none ->
+                    none;
+                Rest1 ->
+                    {_Live, Rest2} = decode_literal(Rest1),
+                    fa_walk(Rest2, CodeSize, Derived, Remove)
+            end;
+        ?OP_REMOVE_MESSAGE when Remove =:= none ->
+            %% offset of this opcode in the code chunk
+            fa_walk(Rest0, CodeSize, Derived, CodeSize - byte_size(Bin));
+        ?OP_SEND when Remove =/= none ->
+            %% send reads x0 (recipient) and x1 (message) and leaves the
+            %% message in x0
+            Derived1 = fa_set({x, 0}, fa_is({x, 1}, Derived), Derived),
+            fa_tail(Rest0, Derived1, Remove);
+        _ ->
+            case fa_test_args(Op) of
+                false -> none;
+                NArgs -> fa_skip_test(NArgs, Rest0, CodeSize, Derived, Remove)
+            end
+    end.
+
+%% Everything the clause could still be holding once it leaves: a tail call
+%% leaves x0..x[Arity-1] live and drops the frame, a return leaves x0.
+fa_tail(<<?OP_LINE, Rest0/binary>>, Derived, Remove) ->
+    {_Line, Rest1} = decode_literal(Rest0),
+    fa_tail(Rest1, Derived, Remove);
+fa_tail(<<?OP_MOVE, Rest0/binary>>, Derived, Remove) ->
+    {Src, Rest1} = peek_reg(Rest0),
+    {Dst, Rest2} = peek_reg(Rest1),
+    fa_tail(Rest2, fa_set(Dst, fa_is(Src, Derived), Derived), Remove);
+fa_tail(<<?OP_CALL_LAST, Rest0/binary>>, Derived, Remove) ->
+    {Arity, _Rest1} = decode_literal(Rest0),
+    fa_live_clean(Arity, Derived, Remove);
+fa_tail(<<?OP_CALL_ONLY, Rest0/binary>>, Derived, Remove) ->
+    {Arity, _Rest1} = decode_literal(Rest0),
+    fa_live_clean(Arity, Derived, Remove);
+fa_tail(<<?OP_RETURN, _Rest/binary>>, Derived, Remove) ->
+    fa_live_clean(1, Derived, Remove);
+fa_tail(_Bin, _Derived, _Remove) ->
+    none.
+
+fa_live_clean(Arity, Derived, Remove) ->
+    Live = [{x, N} || N <- lists:seq(0, Arity - 1)],
+    case lists:any(fun(Reg) -> maps:is_key(Reg, Derived) end, Live) of
+        true -> none;
+        false -> Remove
+    end.
+
+fa_unary(Rest0, CodeSize, Derived, Remove) ->
+    {Src, Rest1} = peek_reg(Rest0),
+    {Dst, Rest2} = peek_reg(Rest1),
+    fa_walk(Rest2, CodeSize, fa_set(Dst, fa_is(Src, Derived), Derived), Remove).
+
+fa_elements(0, Rest, _Derived, Acc) ->
+    {Acc, Rest};
+fa_elements(N, Rest0, Derived, Acc) ->
+    {Reg, Rest1} = peek_reg(Rest0),
+    fa_elements(N - 1, Rest1, Derived, Acc orelse fa_is(Reg, Derived)).
+
+fa_skip_test(0, Rest, CodeSize, Derived, Remove) ->
+    fa_walk(Rest, CodeSize, Derived, Remove);
+fa_skip_test(N, Rest0, CodeSize, Derived, Remove) ->
+    fa_skip_test(N - 1, skip_compact_term(Rest0), CodeSize, Derived, Remove).
+
+fa_is(none, _Derived) -> false;
+fa_is(Reg, Derived) -> maps:is_key(Reg, Derived).
+
+fa_set(none, _Is, Derived) -> Derived;
+fa_set(Reg, true, Derived) -> Derived#{Reg => true};
+fa_set(Reg, false, Derived) -> maps:remove(Reg, Derived).
+
+%% Tests write no register; the count is the number of compact terms after the
+%% failure label. An unlisted test ends the walk.
+fa_test_args(?OP_IS_TUPLE) -> 2;
+fa_test_args(?OP_IS_INTEGER) -> 2;
+fa_test_args(?OP_IS_ATOM) -> 2;
+fa_test_args(?OP_IS_PID) -> 2;
+fa_test_args(?OP_IS_REFERENCE) -> 2;
+fa_test_args(?OP_IS_NIL) -> 2;
+fa_test_args(?OP_IS_BINARY) -> 2;
+fa_test_args(?OP_IS_LIST) -> 2;
+fa_test_args(?OP_IS_NONEMPTY_LIST) -> 2;
+fa_test_args(?OP_IS_MAP) -> 2;
+fa_test_args(?OP_IS_EQ_EXACT) -> 3;
+fa_test_args(?OP_TEST_ARITY) -> 3;
+fa_test_args(?OP_IS_TAGGED_TUPLE) -> 4;
+fa_test_args(_Op) -> false.
+
+%% Pure counterpart of decode_allocator_list/2: `none' when the shape is one
+%% the walk does not model.
+skip_allocator_list(<<?COMPACT_EXTENDED_ALLOCATION_LIST, Rest0/binary>>) ->
+    {ListSize, Rest1} = decode_literal(Rest0),
+    lists:foldl(
+        fun
+            (_Index, none) ->
+                none;
+            (_Index, Acc) ->
+                {_Type, Acc1} = decode_literal(Acc),
+                {_Count, Acc2} = decode_literal(Acc1),
+                Acc2
+        end,
+        Rest1,
+        lists:seq(1, ListSize)
+    );
+skip_allocator_list(Bin) ->
+    {_HeapNeed, Rest} = decode_literal(Bin),
+    Rest.
+
+%% A compact term that is a register, or `none' for anything else (a literal,
+%% an atom, the empty list): only registers can carry a message-derived value.
+peek_reg(<<RegIndex:4, ?COMPACT_XREG:4, Rest/binary>>) ->
+    {{x, RegIndex}, Rest};
+peek_reg(<<RegIndex:4, ?COMPACT_YREG:4, Rest/binary>>) ->
+    {{y, RegIndex}, Rest};
+peek_reg(<<RegIndexH:3, 0:1, ?COMPACT_LARGE_XREG:4, RegIndexL, Rest/binary>>) ->
+    {{x, (RegIndexH bsl 8) bor RegIndexL}, Rest};
+peek_reg(<<RegIndexH:3, 0:1, ?COMPACT_LARGE_YREG:4, RegIndexL, Rest/binary>>) ->
+    {{y, (RegIndexH bsl 8) bor RegIndexL}, Rest};
+peek_reg(Bin) ->
+    {none, skip_compact_term(Bin)}.
+
 skip_dest(<<_RegIndex:4, ?COMPACT_XREG:4, Rest/binary>>) -> Rest;
 skip_dest(<<_RegIndex:4, ?COMPACT_YREG:4, Rest/binary>>) -> Rest;
 skip_dest(<<_:3, 0:1, ?COMPACT_LARGE_XREG:4, _, Rest/binary>>) -> Rest;

@@ -1255,6 +1255,48 @@ static term jit_term_alloc_fun(Context *ctx, JITState *jit_state, uint32_t fun_i
     return ((term) boxed_func) | TERM_PRIMARY_BOXED;
 }
 
+// A forwarding receive hands the incoming message block to the next process
+// instead of copying the term out of it. OP_REMOVE_MESSAGE takes the block out
+// of the mailbox but keeps it here rather than folding it into the heap, so
+// the send that follows can post it as it stands.
+static void jit_remove_message_keep(Context *ctx)
+{
+    TRACE("jit_remove_message_keep\n");
+    // The emitter has already run PRIM_CANCEL_TIMEOUT and
+    // PRIM_PROCESS_SIGNAL_MESSAGES, exactly as for a plain OP_REMOVE_MESSAGE.
+    MailboxMessage *taken = mailbox_take_message(&ctx->mailbox);
+    ctx->mailbox.receive_has_match_clauses = false;
+    if (UNLIKELY(taken == NULL)) {
+        ctx->forward_pending = NULL;
+        return;
+    }
+    ctx->forward_pending = CONTAINER_OF(taken, Message, base);
+}
+
+// Whether `outgoing' is `received' with only immediate-valued differences, so
+// that patching those few words in the incoming block turns it into the
+// outgoing message. Everything the two share travels without being copied.
+static bool jit_message_is_patchable(term received, term outgoing)
+{
+    if (!term_is_tuple(received) || !term_is_tuple(outgoing)) {
+        return false;
+    }
+    int arity = term_get_tuple_arity(received);
+    if (arity != term_get_tuple_arity(outgoing)) {
+        return false;
+    }
+    for (int i = 0; i < arity; i++) {
+        term o = term_get_tuple_element(outgoing, i);
+        if (o == term_get_tuple_element(received, i)) {
+            continue;
+        }
+        if ((o & TERM_PRIMARY_MASK) != TERM_PRIMARY_IMMED) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool jit_send(Context *ctx, JITState *jit_state)
 {
     TRACE("jit_send: recipient=%p message=%p\n", (void *) ctx->x[0], (void *) ctx->x[1]);
@@ -1308,6 +1350,47 @@ static bool jit_send(Context *ctx, JITState *jit_state)
     }
 
     return true;
+}
+
+// Send the message a forwarding receive is holding. Falls back to a normal
+// send -- folding the held block into the heap first -- whenever the shape is
+// not the one the analysis expected, or the recipient is anything other than a
+// local process.
+static bool jit_forward_message(Context *ctx, JITState *jit_state)
+{
+    Message *pending = ctx->forward_pending;
+    ctx->forward_pending = NULL;
+    term recipient = ctx->x[0];
+    term outgoing = ctx->x[1];
+
+    if (LIKELY(pending != NULL && term_is_local_pid(recipient)
+            && jit_message_is_patchable(pending->message, outgoing))) {
+        int32_t target_id = term_to_local_process_id(recipient);
+        if (LIKELY(target_id != ctx->process_id)) {
+            term received = pending->message;
+            int arity = term_get_tuple_arity(received);
+            for (int i = 0; i < arity; i++) {
+                term o = term_get_tuple_element(outgoing, i);
+                if (o != term_get_tuple_element(received, i)) {
+                    term_put_tuple_element(received, i, o);
+                }
+            }
+            Context *target = globalcontext_get_process_lock(ctx->global, target_id);
+            if (LIKELY(target != NULL)) {
+                mailbox_post_message(target, &pending->base);
+                globalcontext_get_process_unlock(ctx->global, target);
+            } else {
+                mailbox_message_dispose_unsent(pending, ctx->global, false);
+            }
+            ctx->x[0] = outgoing;
+            return true;
+        }
+    }
+
+    if (pending != NULL) {
+        mailbox_message_dispose(&pending->base, &ctx->heap);
+    }
+    return jit_send(ctx, jit_state);
 }
 
 static term *jit_extended_register_ptr(Context *ctx, unsigned int index)
@@ -3390,6 +3473,19 @@ static void jit_recv_marker_clear_pin(void)
     jit_recv_marker_clear(ctx);
 }
 
+static void jit_remove_message_keep_pin(void)
+{
+    CTX_READ();
+    jit_remove_message_keep(ctx);
+}
+
+static bool jit_forward_message_pin(void)
+{
+    CTX_READ();
+    JS_READ();
+    return jit_forward_message(ctx, jit_state);
+}
+
 static term jit_mailbox_peek_pin(void)
 {
     CTX_READ();
@@ -3746,7 +3842,9 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_term_reuse_or_clone_binary),
     JS_ENTRY(jit_recv_marker_reserve),
     JS_ENTRY(jit_recv_marker_use),
-    JS_ENTRY(jit_recv_marker_clear)
+    JS_ENTRY(jit_recv_marker_clear),
+    JS_ENTRY(jit_remove_message_keep),
+    JS_ENTRY(jit_forward_message)
 };
 
 #endif
