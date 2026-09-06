@@ -311,6 +311,7 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(copy_terms17, 11),
     TEST_CASE_EXPECTED(copy_terms18, -19),
     TEST_CASE_EXPECTED(copy_terms19, 11),
+    TEST_CASE_EXPECTED(test_forward_message, 5),
 
     TEST_CASE_EXPECTED(test_apply, 17),
     TEST_CASE_EXPECTED(test_apply_last, 17),

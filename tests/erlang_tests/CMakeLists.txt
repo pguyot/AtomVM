@@ -361,6 +361,7 @@ compile_erlang(copy_terms16)
 compile_erlang(copy_terms17)
 compile_erlang(copy_terms18)
 compile_erlang(copy_terms19)
+compile_erlang(test_forward_message)
 
 compile_erlang(memlimit)
 
@@ -959,6 +960,7 @@ set(erlang_test_beams
     copy_terms17.beam
     copy_terms18.beam
     copy_terms19.beam
+    test_forward_message.beam
 
     memlimit.beam
 

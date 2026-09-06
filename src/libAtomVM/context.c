@@ -163,6 +163,7 @@ Context *context_new(GlobalContext *glb)
 
     ctx->flags = NoFlags;
     ctx->platform_data = NULL;
+    ctx->forward_pending = NULL;
 
     ctx->group_leader = term_from_local_process_id(INVALID_PROCESS_ID);
 
@@ -186,6 +187,12 @@ Context *context_new(GlobalContext *glb)
 
 void context_destroy(Context *ctx)
 {
+    // A message taken out of the mailbox for forwarding but never handed on:
+    // the block is still ours, and nothing else will free it.
+    if (UNLIKELY(ctx->forward_pending != NULL)) {
+        mailbox_message_dispose_unsent(ctx->forward_pending, ctx->global, false);
+        ctx->forward_pending = NULL;
+    }
     free(ctx->gc_remembered_set);
     // Hold and release the spin lock for timers and cancel any timer
     scheduler_cancel_timeout(ctx);
