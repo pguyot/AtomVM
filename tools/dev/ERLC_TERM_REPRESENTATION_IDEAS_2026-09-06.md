@@ -710,3 +710,65 @@ deficit is the 25-30% on lookup above.
 
 Order of work: implement `termtree_remove`, re-measure the trio, then decide on
 CHAMP against a B-tree that no longer rebuilds itself on every delete.
+
+## Addendum 9: where unicode_util stands, and CHAMP on the keys it really uses
+
+After the widened probe and the path-copying delete, against BEAM:
+
+| | AtomVM | BEAM | |
+|---|---:|---:|---|
+| wall | 2.50 s | 2.09 s | 0.84x |
+| CPU | 2.45 s | 1.61 s | 0.66x |
+
+Unchanged from the start of the session, and the profile says why:
+
+| cluster | now | session start |
+|---|---:|---:|
+| map + comparison | **55.5%** | 51.9% |
+| JIT native code | 28.0% | 29.5% |
+| gc / memory | 5.9% | 6.2% |
+| `call_ext` dispatch | 2.1% | 1.9% |
+
+`node_find` 26.7%, `term_compare0` 17.0%, `bt_insert` 7.8%. The widened probe
+does nothing here: this file's keys are `{Atom, Tuple, X}`, the middle element
+is a tuple, so admission rejects them and every descent still falls back to
+`term_compare` -- ~12 ordering comparisons per lookup, each walking into a
+nested tuple.
+
+That is the case a hash should win biggest, and the earlier CHAMP measurement
+understated it by using all-immediate keys. Re-measured with
+`tools/dev/bench_champ_vs_btree.erl`:
+
+| keys | n | B-tree | CHAMP | ratio |
+|---|---:|---:|---:|---:|
+| `{b, I, x}` | 1024 | 52.5 ns | 32.8 ns | 0.62x |
+| | 4096 | 35.2 ns | 23.4 ns | 0.66x |
+| | 8192 | 30.5 ns | 21.5 ns | 0.70x |
+| `{b, {v, I, y}, x}` | 1024 | 89.9 ns | 51.8 ns | 0.58x |
+| | 4096 | 112.9 ns | 58.7 ns | 0.52x |
+| | 8192 | 121.2 ns | 58.0 ns | **0.48x** |
+| `{b, {v, {w, I}, y}, x}` | 1024 | 126.7 ns | 63.4 ns | 0.50x |
+| | 4096 | 156.6 ns | 73.8 ns | 0.47x |
+| | 8192 | 183.4 ns | 74.7 ns | **0.41x** |
+
+CHAMP is 2-2.5x on compound keys, and nearly flat in both key depth and map
+size (58.0 -> 74.7 ns as the key gains a level) where the B-tree climbs
+steeply (121.2 -> 183.4). That is the structural difference stated in
+measurements: one hash and one equality against a dozen ordering comparisons
+that each walk the key.
+
+Sizing it on unicode_util: the lookup cluster is ~44% (`node_find` +
+`term_compare0`) plus 7.8% of insert. Halving the lookup half is ~20% of the
+file, taking 2.45s toward ~2.0s against BEAM's 1.61s -- 0.66x to roughly
+0.8x. Worth doing, and the only thing measured so far that addresses the 55%
+cluster.
+
+On caching the hash: for compound keys the hash is the *dominant* part of
+CHAMP's cost, not a floor to be ignored -- CHAMP's 51.8 ns at n=1024 against
+~5 ns per trie level implies ~40 ns of hashing. So caching is the natural
+follow-on, and worth more here than the earlier addenda suggested. But a
+one-entry memo only pays when a key is hashed more than once, and in the
+`maps_is_subset_kv` loop each key is hashed exactly once (it comes out of
+`maps:next` and is looked up once), so the memo's hit rate has to be measured
+before it is designed. Caching in the atom table helps only atom keys, and
+these are tuples.
