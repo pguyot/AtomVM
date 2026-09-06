@@ -1,0 +1,214 @@
+diff --git a/src/libAtomVM/memory.c b/src/libAtomVM/memory.c
+index 9f3181108..6370669d4 100644
+--- a/src/libAtomVM/memory.c
++++ b/src/libAtomVM/memory.c
+@@ -1098,6 +1098,29 @@ static inline void memory_remember_if_young(Context *remember_ctx, const Heap *h
+     }
+ }
+ 
++
++#ifdef AVM_COUNT_COMPARE
++#include <stdio.h>
++unsigned long long avm_gc_words, avm_gc_immed, avm_gc_listptr, avm_gc_boxptr,
++    avm_gc_hdr, avm_gc_tuples, avm_gc_tuple_elems, avm_gc_tuple_elems_immed,
++    avm_gc_tuples_all_immed, avm_gc_scans;
++__attribute__((destructor)) static void avm_gc_report(void)
++{
++    fprintf(stderr,
++        "GCSCAN scans=%llu words=%llu immed=%llu listptr=%llu boxptr=%llu "
++        "hdr=%llu tuples=%llu tuple_elems=%llu tuple_elems_immed=%llu "
++        "tuples_all_immed=%llu\n",
++        avm_gc_scans, avm_gc_words, avm_gc_immed, avm_gc_listptr,
++        avm_gc_boxptr, avm_gc_hdr, avm_gc_tuples, avm_gc_tuple_elems,
++        avm_gc_tuple_elems_immed, avm_gc_tuples_all_immed);
++}
++#define GCC(x) (avm_gc_##x++)
++#define GCA(x, n) (avm_gc_##x += (n))
++#else
++#define GCC(x) ((void) 0)
++#define GCA(x, n) ((void) 0)
++#endif
++
+ HOT_FUNC static inline void memory_scan_and_copy_impl(
+     HeapFragment *old_fragment, const Heap *heap,
+     term *mem_start, const term *mem_end,
+@@ -1107,20 +1130,40 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
+ {
+     term *ptr = mem_start;
+ 
++    GCC(scans);
+     while (ptr < mem_end) {
+         term t = *ptr;
++        GCC(words);
+         switch (t & TERM_PRIMARY_MASK) {
+             case TERM_PRIMARY_IMMED:
++                GCC(immed);
+                 TRACE("Found immediate (%" TERM_X_FMT ")\n", t);
+                 ptr++;
+                 break;
+             case TERM_PRIMARY_CP: {
++                GCC(hdr);
+                 TRACE("Found boxed header (%" TERM_X_FMT ")\n", t);
+ 
+                 size_t arity = term_get_size_from_boxed_header(t);
+                 switch (t & TERM_BOXED_TAG_MASK) {
+                     case TERM_BOXED_TUPLE: {
+                         TRACE("- Boxed is tuple (%" TERM_X_FMT "), arity: %i\n", t, (int) arity);
++#ifdef AVM_COUNT_COMPARE
++                        {
++                            GCC(tuples);
++                            GCA(tuple_elems, arity);
++                            size_t immed_n = 0;
++                            for (size_t k = 1; k <= arity; k++) {
++                                if ((ptr[k] & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
++                                    immed_n++;
++                                }
++                            }
++                            GCA(tuple_elems_immed, immed_n);
++                            if (immed_n == arity) {
++                                GCC(tuples_all_immed);
++                            }
++                        }
++#endif
+ 
+                         for (size_t i = 1; i <= arity; i++) {
+                             TRACE("-- Elem: %" TERM_X_FMT "\n", ptr[i]);
+@@ -1256,6 +1299,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
+                 break;
+             }
+             case TERM_PRIMARY_LIST:
++                GCC(listptr);
+                 TRACE("Found nonempty list (%p)\n", (void *) t);
+                 *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational, promote_children);
+                 if (generational && remember_ctx != NULL) {
+@@ -1264,6 +1308,7 @@ HOT_FUNC static inline void memory_scan_and_copy_impl(
+                 ptr++;
+                 break;
+             case TERM_PRIMARY_BOXED:
++                GCC(boxptr);
+                 TRACE("Found boxed (%p)\n", (void *) t);
+                 *ptr = memory_shallow_copy_term_impl(old_fragment, heap, t, new_heap_pos, old_heap_ptr, move, generational, promote_children);
+                 if (generational && remember_ctx != NULL) {
+diff --git a/src/libAtomVM/term.c b/src/libAtomVM/term.c
+index 7cb293059..9ee96c9ff 100644
+--- a/src/libAtomVM/term.c
++++ b/src/libAtomVM/term.c
+@@ -833,6 +833,51 @@ done:
+ // temp-stack walker, which recurses on the heap.
+ #define TERM_COMPARE_INLINE_DEPTH 6
+ 
++
++#ifdef AVM_COUNT_COMPARE
++#include <stdio.h>
++unsigned long long avm_cc_total, avm_cc_eq, avm_cc_int, avm_cc_atom,
++    avm_cc_tuple_atom, avm_cc_list_atom, avm_cc_general, avm_cc_tuple_resolved,
++    avm_cc_tuple_unresolved, avm_cc_past_tuple, avm_cc_list_resolved,
++    avm_cc_deep;
++__attribute__((destructor)) static void avm_cc_report(void)
++{
++    fprintf(stderr,
++        "COMPARE total=%llu identical=%llu int=%llu atom=%llu "
++        "tuple_atom_elem=%llu list_atom_elem=%llu exact_equals=%llu "
++        "tuple_resolved=%llu tuple_unresolved=%llu past_tuple=%llu "
++        "list_resolved=%llu deep=%llu\n",
++        avm_cc_total, avm_cc_eq, avm_cc_int, avm_cc_atom,
++        avm_cc_tuple_atom, avm_cc_list_atom, avm_cc_general,
++        avm_cc_tuple_resolved, avm_cc_tuple_unresolved, avm_cc_past_tuple,
++        avm_cc_list_resolved, avm_cc_deep);
++}
++#define CC(x) (avm_cc_##x++)
++#define AVM_RA_SLOTS 512
++static void *avm_ra_key[AVM_RA_SLOTS];
++static unsigned long long avm_ra_cnt[AVM_RA_SLOTS];
++static void avm_ra_hit(void *ra)
++{
++    unsigned h = (unsigned) (((uintptr_t) ra) >> 4) % AVM_RA_SLOTS;
++    for (unsigned i = 0; i < AVM_RA_SLOTS; i++) {
++        unsigned j = (h + i) % AVM_RA_SLOTS;
++        if (avm_ra_key[j] == ra) { avm_ra_cnt[j]++; return; }
++        if (avm_ra_key[j] == NULL) { avm_ra_key[j] = ra; avm_ra_cnt[j] = 1; return; }
++    }
++}
++__attribute__((destructor)) static void avm_ra_report(void)
++{
++    fprintf(stderr, "SLIDEREF term_compare=%p\n", (void *) (uintptr_t) term_compare);
++    for (unsigned i = 0; i < AVM_RA_SLOTS; i++) {
++        if (avm_ra_cnt[i] > 100000) {
++            fprintf(stderr, "EXACTCALLER %p %llu\n", avm_ra_key[i], avm_ra_cnt[i]);
++        }
++    }
++}
++#else
++#define CC(x) ((void) 0)
++#endif
++
+ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts, GlobalContext *global, int depth);
+ 
+ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
+@@ -847,10 +892,13 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+     // pointer), and two small integers compare numerically. These dominate hot
+     // comparison loops (e.g. comparing cells/keys), so handling them inline is a
+     // measurable win and is backend-agnostic.
++    CC(total);
+     if (t == other) {
++        CC(eq);
+         return TermEquals;
+     }
+     if (term_is_integer(t) && term_is_integer(other)) {
++        CC(int);
+         avm_int_t t_int = term_to_int(t);
+         avm_int_t other_int = term_to_int(other);
+         return (t_int > other_int) ? TermGreaterThan : TermLessThan;
+@@ -859,12 +907,15 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+     // skips the tuple/type-index dispatch below. Atom keys are a large share
+     // of map/set probes in compiler-style workloads.
+     if (term_is_atom(t) && term_is_atom(other)) {
++        CC(atom);
+         int c = atom_table_cmp_using_atom_index(
+             global->atom_table, term_to_atom_index(t), term_to_atom_index(other));
+         return (c > 0) ? TermGreaterThan : TermLessThan;
+     }
+     if ((opts & (TermCompareExact | TermCompareEqualOnly))
+         == (TermCompareExact | TermCompareEqualOnly)) {
++        CC(general);
++        avm_ra_hit(__builtin_return_address(0));
+         return term_exact_equals(t, other, global);
+     }
+ 
+@@ -893,6 +944,7 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+                 break;
+             }
+             if (term_is_atom(a) && term_is_atom(b)) {
++                CC(tuple_atom);
+                 int c = atom_table_cmp_using_atom_index(
+                     global->atom_table, term_to_atom_index(a), term_to_atom_index(b));
+                 tuple_result = (c > 0) ? TermGreaterThan : TermLessThan;
+@@ -917,9 +969,12 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+             break;
+         }
+         if (resolved) {
++            CC(tuple_resolved);
+             return tuple_result;
+         }
++        CC(tuple_unresolved);
+     }
++    CC(past_tuple);
+ 
+     // Ordering fast path for lists whose deciding element pair is a scalar,
+     // walking conses inline without the temp-stack machinery. The compiler
+@@ -939,6 +994,7 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+                 return (term_to_int(a) > term_to_int(b)) ? TermGreaterThan : TermLessThan;
+             }
+             if (term_is_atom(a) && term_is_atom(b)) {
++                CC(list_atom);
+                 int c = atom_table_cmp_using_atom_index(
+                     global->atom_table, term_to_atom_index(a), term_to_atom_index(b));
+                 return (c > 0) ? TermGreaterThan : TermLessThan;
+@@ -962,6 +1018,7 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+         }
+     }
+ 
++    CC(deep);
+     // Cross-type pairs order by type index alone — no structural walk — with
+     // the one exception of mixed integer/float arithmetic comparison (non-
+     // exact, outside map keys), mirroring the general loop below. Maps with
