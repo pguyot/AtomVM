@@ -8662,59 +8662,75 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         return result;
     }
 
-    // Materialize a tree-backed map once (O(n)) so the walk is O(1) per entry.
-    bool oom = false;
-    term *arr = map_tree_array(map, n, &oom);
-    if (UNLIKELY(oom)) {
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-
-    // The materialized entries are in key order, so binary-search the target
-    // the way the flat path above does: the entries a tree map holds
-    // (TERM_MAP_TREE_THRESHOLD and up) made the former compare-every-entry
-    // scan the single largest source of term comparisons in compiler-style
-    // workloads, for a lookup the ordering already answers in log(n).
-    int lo = 0;
-    int hi = n - 1;
-    int found = -1;
-    while (lo <= hi) {
-        int mid = lo + (hi - lo) / 2;
-        term k = merge_key_at(map, arr, mid);
-        if (k == key) {
-            found = mid;
-            break;
-        }
-        TermCompareResult c = map_key_compare(k, key, glb);
-        if (c == TermLessThan) {
-            lo = mid + 1;
-        } else if (c == TermGreaterThan) {
-            hi = mid - 1;
-        } else if (LIKELY(c == TermEquals)) {
-            found = mid;
-            break;
-        } else {
-            free(arr);
+    // A tree map that would drop to the flat threshold converts back, which
+    // is what the rebuild path did implicitly. Bounded work (the result holds
+    // at most TERM_MAP_TREE_THRESHOLD entries), and it keeps the flat/tree
+    // choice exactly where it was.
+    if (n - 1 <= TERM_MAP_TREE_THRESHOLD) {
+        bool oom = false;
+        term *arr = map_tree_array(map, n, &oom);
+        if (UNLIKELY(oom)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
-    }
-    if (found < 0) {
-        // Key absent: the map is returned unchanged (no allocation).
+        int lo = 0;
+        int hi = n - 1;
+        int found_at = -1;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            term k = merge_key_at(map, arr, mid);
+            if (k == key) {
+                found_at = mid;
+                break;
+            }
+            TermCompareResult c = map_key_compare(k, key, glb);
+            if (c == TermLessThan) {
+                lo = mid + 1;
+            } else if (c == TermGreaterThan) {
+                hi = mid - 1;
+            } else if (LIKELY(c == TermEquals)) {
+                found_at = mid;
+                break;
+            } else {
+                free(arr);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
+        }
+        if (found_at < 0) {
+            free(arr);
+            return map;
+        }
+        memmove(&arr[2 * found_at], &arr[2 * (found_at + 1)],
+            sizeof(term) * 2 * (size_t) (n - 1 - found_at));
+        term result = map_build_from_sorted_kv(ctx, arr, (size_t) (n - 1));
         free(arr);
-        return map;
+        if (UNLIKELY(term_is_invalid_term(result))) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return result;
     }
 
-    // arr is already the interleaved sorted (key, value) array the builder
-    // wants: closing the hole in place spares a second 2n-term buffer and the
-    // copy that filled it. term_compare never moves the context heap, so the
-    // entries stay valid until the build below.
-    memmove(&arr[2 * found], &arr[2 * (found + 1)],
-        sizeof(term) * 2 * (size_t) (n - 1 - found));
-    term result = map_build_from_sorted_kv(ctx, arr, (size_t) (n - 1));
-    free(arr);
-    if (UNLIKELY(term_is_invalid_term(result))) {
+    // Tree-backed map: path-copy the delete. This used to materialize the
+    // whole map into a malloc'd array, drop one entry and rebuild the tree --
+    // O(n) allocation and copying to remove one key, and on OTP's
+    // unicode_util.erl 96% of every sorted materialization the compile did.
+    size_t reserve = termtree_remove_heap_size((size_t) n) + TERM_MAP_TREE_BOXED_ARITY + 1;
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 2, argv, MEMORY_CAN_SHRINK)
+            != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    return result;
+    // argv may have moved during the collection above.
+    map = argv[1];
+    key = argv[0];
+    bool found = false;
+    term new_root = termtree_remove(&ctx->heap, term_get_map_tree_root(map), key, glb, &found);
+    if (!found) {
+        // Key absent: the map is returned unchanged (no allocation).
+        return map;
+    }
+    if (term_is_nil(new_root)) {
+        return term_alloc_map_maybe_shared(0, term_invalid_term(), &ctx->heap);
+    }
+    return term_alloc_map_tree(&ctx->heap, new_root, (size_t) (n - 1));
 }
 
 // maps:keys/1 and maps:values/1. The estdlib versions walked the map through

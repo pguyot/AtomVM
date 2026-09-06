@@ -528,6 +528,264 @@ term termtree_put(Heap *heap, term node, term key, term value, GlobalContext *gl
     return root;
 }
 
+// ---- delete ---------------------------------------------------------------
+//
+// Removing one key used to mean materializing the whole map into a malloc'd
+// array, dropping an entry and rebuilding the tree from scratch: on OTP's
+// unicode_util.erl that was 14,820 deletes of maps averaging ~930 entries,
+// 96% of all the sorted materialization the workload does. This is the
+// ordinary persistent B-tree delete instead -- path-copy the root-to-leaf
+// path, share everything else.
+//
+// Underflow is repaired on the way back up rather than prevented on the way
+// down (the usual CLRS shape): the recursive call may return a child holding
+// BT_T-2 keys, and its parent then borrows from a sibling or merges with one.
+// Rebuilding bottom-up is what a persistent tree does anyway, so this needs no
+// second pass.
+//
+// The scratch arrays a rebuild needs are sized by the node width and would be
+// ~1 KB per frame; they live in helpers called AFTER the recursive call
+// returns, so they never stack up across the descent (MCU stacks are small).
+
+// Copy a node's keys, values and children into caller arrays. children may be
+// NULL for a leaf. Returns the key count.
+static size_t node_extract(term node, term *keys, term *values, term *children)
+{
+    size_t n = node_nkeys(node);
+    const term *kvp = node_kv_ptr(node);
+    for (size_t i = 0; i < n; i++) {
+        keys[i] = kvp[2 * i + 1];
+        values[i] = kvp[2 * i + 2];
+    }
+    if (!node_is_leaf(node)) {
+        for (size_t i = 0; i <= n; i++) {
+            children[i] = node_child(node, i);
+        }
+    }
+    return n;
+}
+
+#define BT_SCRATCH_KEYS (2 * BT_T)
+#define BT_SCRATCH_CHILDREN (2 * BT_T + 1)
+
+// Restore the minimum occupancy of child i of a parent held in the caller's
+// arrays: borrow one entry from a sibling that can spare it, else merge with
+// one. Returns the parent's key count afterwards (one less after a merge).
+static size_t NOINLINE fix_underflow(
+    Heap *heap, term *pkeys, term *pvalues, term *pchildren, size_t pn, size_t i)
+{
+    term child = pchildren[i];
+    if (node_nkeys(child) >= BT_T - 1) {
+        return pn;
+    }
+    term ck[BT_SCRATCH_KEYS];
+    term cv[BT_SCRATCH_KEYS];
+    term cc[BT_SCRATCH_CHILDREN];
+    term sk[BT_SCRATCH_KEYS];
+    term sv[BT_SCRATCH_KEYS];
+    term sc[BT_SCRATCH_CHILDREN];
+    bool leaf = node_is_leaf(child);
+    size_t cn = node_extract(child, ck, cv, cc);
+
+    // Borrow from the left sibling: the parent's separator drops into the
+    // child's front and the sibling's last entry becomes the new separator.
+    if (i > 0) {
+        term left = pchildren[i - 1];
+        size_t ln = node_nkeys(left);
+        if (ln > BT_T - 1) {
+            node_extract(left, sk, sv, sc);
+            for (size_t j = cn; j > 0; j--) {
+                ck[j] = ck[j - 1];
+                cv[j] = cv[j - 1];
+            }
+            ck[0] = pkeys[i - 1];
+            cv[0] = pvalues[i - 1];
+            if (!leaf) {
+                for (size_t j = cn + 1; j > 0; j--) {
+                    cc[j] = cc[j - 1];
+                }
+                cc[0] = sc[ln];
+            }
+            pkeys[i - 1] = sk[ln - 1];
+            pvalues[i - 1] = sv[ln - 1];
+            pchildren[i - 1] = make_node(heap, sk, sv, ln - 1, leaf ? NULL : sc);
+            pchildren[i] = make_node(heap, ck, cv, cn + 1, leaf ? NULL : cc);
+            return pn;
+        }
+    }
+    // Symmetric borrow from the right sibling.
+    if (i < pn) {
+        term right = pchildren[i + 1];
+        size_t rn = node_nkeys(right);
+        if (rn > BT_T - 1) {
+            node_extract(right, sk, sv, sc);
+            ck[cn] = pkeys[i];
+            cv[cn] = pvalues[i];
+            if (!leaf) {
+                cc[cn + 1] = sc[0];
+            }
+            pkeys[i] = sk[0];
+            pvalues[i] = sv[0];
+            for (size_t j = 0; j + 1 < rn; j++) {
+                sk[j] = sk[j + 1];
+                sv[j] = sv[j + 1];
+            }
+            if (!leaf) {
+                for (size_t j = 0; j < rn; j++) {
+                    sc[j] = sc[j + 1];
+                }
+            }
+            pchildren[i] = make_node(heap, ck, cv, cn + 1, leaf ? NULL : cc);
+            pchildren[i + 1] = make_node(heap, sk, sv, rn - 1, leaf ? NULL : sc);
+            return pn;
+        }
+    }
+    // Neither sibling can spare an entry: merge, pulling the separator down.
+    // The merged node holds (BT_T-2) + 1 + (BT_T-1) = 2*BT_T-2 keys, within
+    // BT_MAX_KEYS, and the parent loses one key.
+    size_t li = (i > 0) ? i - 1 : i;
+    term left = pchildren[li];
+    term right = pchildren[li + 1];
+    size_t ln = node_extract(left, ck, cv, cc);
+    size_t rn = node_extract(right, sk, sv, sc);
+    ck[ln] = pkeys[li];
+    cv[ln] = pvalues[li];
+    for (size_t j = 0; j < rn; j++) {
+        ck[ln + 1 + j] = sk[j];
+        cv[ln + 1 + j] = sv[j];
+    }
+    if (!leaf) {
+        for (size_t j = 0; j <= rn; j++) {
+            cc[ln + 1 + j] = sc[j];
+        }
+    }
+    pchildren[li] = make_node(heap, ck, cv, ln + rn + 1, leaf ? NULL : cc);
+    for (size_t j = li; j + 1 < pn; j++) {
+        pkeys[j] = pkeys[j + 1];
+        pvalues[j] = pvalues[j + 1];
+    }
+    for (size_t j = li + 1; j < pn; j++) {
+        pchildren[j] = pchildren[j + 1];
+    }
+    return pn - 1;
+}
+
+// Rebuild `node` with child i replaced by new_child, repairing underflow.
+static term NOINLINE rebuild_with_child(Heap *heap, term node, size_t i, term new_child)
+{
+    term pk[BT_SCRATCH_KEYS];
+    term pv[BT_SCRATCH_KEYS];
+    term pc[BT_SCRATCH_CHILDREN];
+    size_t pn = node_extract(node, pk, pv, pc);
+    pc[i] = new_child;
+    pn = fix_underflow(heap, pk, pv, pc, pn, i);
+    return make_node(heap, pk, pv, pn, pc);
+}
+
+// Rebuild a leaf without the entry at pos.
+static term NOINLINE leaf_without(Heap *heap, term node, size_t pos)
+{
+    term k[BT_SCRATCH_KEYS];
+    term v[BT_SCRATCH_KEYS];
+    size_t n = node_extract(node, k, v, NULL);
+    for (size_t j = pos; j + 1 < n; j++) {
+        k[j] = k[j + 1];
+        v[j] = v[j + 1];
+    }
+    return make_node(heap, k, v, n - 1, NULL);
+}
+
+// Rebuild `node` with its own entry at pos replaced, child i rebuilt.
+static term NOINLINE rebuild_with_entry_and_child(
+    Heap *heap, term node, size_t pos, term key, term value, size_t i, term new_child)
+{
+    term pk[BT_SCRATCH_KEYS];
+    term pv[BT_SCRATCH_KEYS];
+    term pc[BT_SCRATCH_CHILDREN];
+    size_t pn = node_extract(node, pk, pv, pc);
+    pk[pos] = key;
+    pv[pos] = value;
+    pc[i] = new_child;
+    pn = fix_underflow(heap, pk, pv, pc, pn, i);
+    return make_node(heap, pk, pv, pn, pc);
+}
+
+// Remove and return the largest entry of a subtree (its in-order predecessor
+// slot), leaving a possibly-underfull subtree behind.
+static term bt_remove_max(Heap *heap, term node, term *out_key, term *out_value)
+{
+    size_t n = node_nkeys(node);
+    if (node_is_leaf(node)) {
+        *out_key = node_key(node, n - 1);
+        *out_value = node_value(node, n - 1);
+        return leaf_without(heap, node, n - 1);
+    }
+    term new_child = bt_remove_max(heap, node_child(node, n), out_key, out_value);
+    return rebuild_with_child(heap, node, n, new_child);
+}
+
+static term bt_remove(Heap *heap, term node, term key, const struct TermMapProbe *probe,
+    GlobalContext *global, bool *found)
+{
+    size_t pos;
+    bool here = node_find(node, key, probe, global, &pos);
+    if (node_is_leaf(node)) {
+        if (!here) {
+            *found = false;
+            return node;
+        }
+        *found = true;
+        return leaf_without(heap, node, pos);
+    }
+    if (here) {
+        // Internal: swap in the in-order predecessor, then delete that from
+        // the left subtree, where it is by construction in a leaf.
+        term pred_key;
+        term pred_value;
+        term new_child = bt_remove_max(heap, node_child(node, pos), &pred_key, &pred_value);
+        *found = true;
+        return rebuild_with_entry_and_child(
+            heap, node, pos, pred_key, pred_value, pos, new_child);
+    }
+    term new_child = bt_remove(heap, node_child(node, pos), key, probe, global, found);
+    if (!*found) {
+        return node;
+    }
+    return rebuild_with_child(heap, node, pos, new_child);
+}
+
+term termtree_remove(Heap *heap, term node, term key, GlobalContext *global, bool *found)
+{
+    *found = false;
+    if (term_is_nil(node)) {
+        return node;
+    }
+    struct TermMapProbe probe;
+    term_map_probe_init(&probe, key);
+    term root = bt_remove(heap, node, key, &probe, global, found);
+    if (!*found) {
+        return node;
+    }
+    if (node_nkeys(root) == 0) {
+        // The root emptied: either the tree loses a level or it is now empty.
+        return node_is_leaf(root) ? term_nil() : node_child(root, 0);
+    }
+    return root;
+}
+
+size_t termtree_remove_heap_size(size_t size)
+{
+    // A delete path-copies the root-to-leaf path and may rebuild a sibling and
+    // a merged node per level. Same generous height bound as the insert.
+    size_t height = 2;
+    size_t n = size + 1;
+    while (n > 1) {
+        n /= BT_T;
+        height++;
+    }
+    return (height + 1) * 4 * BT_MAX_NODE_WORDS;
+}
+
 size_t termtree_put_heap_size(size_t size)
 {
     // An insert path-copies the root-to-leaf path, and a split may duplicate a
