@@ -23,7 +23,7 @@ publication harness.
 | 1 | Receive markers actually skip old messages | assessed, not implemented | premise confirmed; largest gap in the doc |
 | 2 | Lazy B-tree map iterator | **shipped** `15a6a6501` | up to **138x**; take-eight 116x |
 | 3 | Forward floating values between FP instructions | **drop** | whole FP gap is 8%; ceiling too small |
-| 4 | Private binary append bypasses allocation prep | assessed, resized | build phase is **0.150x** of BEAM, not parse/hash |
+| 4 | Private binary append bypasses allocation prep | **drop** | ceiling 4%; the build gap is per-append protocol |
 | 5 | Effect contracts for small NIFs | **drop** | real-workload boundary is 38/1222 samples |
 | 6 | B-tree node layout instead of a new B-tree | **implemented, then reverted** | gate wanted 3% batch stdlib, got 0.6% |
 | 7 | Reciprocal bigint quotient estimation | **shipped** `f6b2906a6` | **1.090x** bigint; `__udivmodti4` gone |
@@ -156,13 +156,32 @@ overhead -- and clearing a short tail with inline stores instead measured
 **1.015x on the build phase**, so the sampled `memset` share does not convert
 into time. Reverted.
 
-The remaining 26% is the idea as written: test the capacity hit before
-preparing the heap, and skip `PRIM_TRIM_LIVE_REGS` and
-`PRIM_MEMORY_ENSURE_FREE_WITH_ROOTS` when the accumulator will be reused. The
-emission is in the shared frontend, so it need not be written per backend, but
-it means branching around the preparation inside `OP_BS_CREATE_BIN` -- an
-opcode that has shipped miscompiles before -- and it was left rather than
-started without room to test it properly.
+The other half was then bounded rather than built. Removing the shrink-GC
+decision entirely -- an upper bound on what skipping the heap preparation can
+recover from inside `memory_ensure_free_with_roots` -- is worth **1.039x on the
+build phase**. So the sampled 26% does not convert into time either; it is the
+third time in this document that a C-symbol share has over-promised.
+
+And the gap is not shaped like something this idea can close. Per-append cost
+is flat in the accumulator length on both VMs -- no quadratic copying -- but
+AtomVM pays roughly 5-10x more per append at every length:
+
+| appends | BEAM | AtomVM |
+|---|---:|---:|
+| 50 | 3 | 35 |
+| 100 | 3 | 23 |
+| 400 | 3 | 16 |
+| 800 | 2 | 14 |
+
+(relative units per append). Building is 6.7x behind, so even removing the
+whole preparation leaves it about 5x behind: the cost is the out-of-line C
+protocol run per append -- trim, ensure-free, `term_reuse_binary`'s checks, the
+segment write -- against a few inline instructions on BEAM. Closing it means
+inlining that fast path in generated code, which is a much larger project than
+this idea, and `binary_test` is 0.9% of the app aggregate either way.
+
+Dropped. The durable finding is the phase split and the per-append scaling: if
+binary building is ever targeted, it is the protocol, not the heap check.
 
 Worth doing next, and worth more than the earlier estimate in this file's first
 revision, which sized it against the whole test rather than the build phase.
