@@ -8669,40 +8669,48 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
-    // Gather every (key, value) except the target. term_compare never moves the
-    // context heap, so the collected terms stay valid until the build below.
-    term *kv = malloc(sizeof(term) * 2 * (size_t) n);
-    if (IS_NULL_PTR(kv)) {
-        free(arr);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-    size_t u = 0;
-    bool found = false;
-    for (int i = 0; i < n; i++) {
-        term k = merge_key_at(map, arr, i);
-        TermCompareResult c = term_compare(k, key, TermCompareExact | TermCompareEqualOnly, glb);
-        if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
+    // The materialized entries are in key order, so binary-search the target
+    // the way the flat path above does: the entries a tree map holds
+    // (TERM_MAP_TREE_THRESHOLD and up) made the former compare-every-entry
+    // scan the single largest source of term comparisons in compiler-style
+    // workloads, for a lookup the ordering already answers in log(n).
+    int lo = 0;
+    int hi = n - 1;
+    int found = -1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        term k = merge_key_at(map, arr, mid);
+        if (k == key) {
+            found = mid;
+            break;
+        }
+        TermCompareResult c = map_key_compare(k, key, glb);
+        if (c == TermLessThan) {
+            lo = mid + 1;
+        } else if (c == TermGreaterThan) {
+            hi = mid - 1;
+        } else if (LIKELY(c == TermEquals)) {
+            found = mid;
+            break;
+        } else {
             free(arr);
-            free(kv);
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
-        if (c == TermEquals) {
-            found = true;
-            continue;
-        }
-        kv[2 * u] = k;
-        kv[2 * u + 1] = merge_value_at(map, arr, i);
-        u++;
     }
-    free(arr);
-    if (!found) {
+    if (found < 0) {
         // Key absent: the map is returned unchanged (no allocation).
-        free(kv);
+        free(arr);
         return map;
     }
 
-    term result = map_build_from_sorted_kv(ctx, kv, u);
-    free(kv);
+    // arr is already the interleaved sorted (key, value) array the builder
+    // wants: closing the hole in place spares a second 2n-term buffer and the
+    // copy that filled it. term_compare never moves the context heap, so the
+    // entries stay valid until the build below.
+    memmove(&arr[2 * found], &arr[2 * (found + 1)],
+        sizeof(term) * 2 * (size_t) (n - 1 - found));
+    term result = map_build_from_sorted_kv(ctx, arr, (size_t) (n - 1));
+    free(arr);
     if (UNLIKELY(term_is_invalid_term(result))) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
