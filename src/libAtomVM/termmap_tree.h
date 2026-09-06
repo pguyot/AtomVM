@@ -104,6 +104,23 @@ term termtree_put(Heap *heap, term node, term key, term value, struct GlobalCont
 size_t termtree_put_heap_size(size_t size);
 
 /**
+ * @brief Remove \p key from the tree, sharing every untouched subtree.
+ *
+ * @param heap heap to build the path copy in; reserve
+ *        termtree_remove_heap_size(size) words first
+ * @param node the tree root
+ * @param key the key to remove
+ * @param global the global context
+ * @param found set to true if the key was present (when false the original
+ *        tree is returned unchanged and nothing is allocated)
+ * @return the new tree root, or NIL if the tree is now empty
+ */
+term termtree_remove(Heap *heap, term node, term key, struct GlobalContext *global, bool *found);
+
+/** @brief Heap words to reserve before termtree_remove on a tree of \p size. */
+size_t termtree_remove_heap_size(size_t size);
+
+/**
  * @brief Build a balanced tree from \p n key/value pairs whose keys are already
  * sorted ascending (term_compare order). O(n); allocates n * TERMTREE_NODE_SIZE
  * words, which the caller must have reserved.

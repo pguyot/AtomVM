@@ -193,6 +193,12 @@ extern "C" {
 #endif
 
 #ifdef __GNUC__
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
+
+#ifdef __GNUC__
 #define MUST_CHECK __attribute__((warn_unused_result))
 #else
 #define MUST_CHECK
