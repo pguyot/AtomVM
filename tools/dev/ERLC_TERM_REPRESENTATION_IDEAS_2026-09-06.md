@@ -318,3 +318,57 @@ comparison **volume**, and nothing that makes an individual comparison
 cheaper moves it. The only lever left on this cluster is doing fewer
 comparisons per lookup, which is a statement about the map's shape, not about
 its comparator.
+
+## Addendum 3: BEAM at the function level, and why eprof gets it wrong
+
+The compiler's Erlang functions average 1.6 s / 188.0M calls = **8.5 ns per
+call**. Both per-call instrumenting profilers add roughly 50 ns of bookkeeping
+on top of that, so their time column collapses to a call count:
+
+| profiler | wall on unicode_util | distortion |
+|---|---:|---|
+| untraced | 1.60 s | -- |
+| `eprof` | 10.95 s | 6.8x |
+| `call_time` tracing (all modules) | 10.85 s | 6.8x |
+| **statistical sampler** | **1.69 s** | **1.05x** |
+
+`+JPperf` (which would let a native sampler symbolicate BeamAsm frames) is
+not supported on macOS. The alternative that works anywhere is
+`tools/dev/beam_erlang_sampler.erl`: a high-priority process that polls
+`process_info(P, [status, current_stacktrace])`, keeps the innermost frame of
+whichever process is `running`, and never touches the target's code.
+
+Ranked by sampled time, with eprof's own ranking beside it:
+
+| function | true % | eprof % | eprof rank | calls |
+|---|---:|---:|---:|---:|
+| `beam_ssa_dead:maps_is_subset_kv/2` | **5.16** | 1.64 | 8 | 1,874,375 |
+| `maps:next/1` | **3.62** | 1.74 | 5 | 4,326,794 |
+| `beam_ssa_dead:eval_is/4` | 2.68 | 3.51 | 1 | 3,873,490 |
+| `beam_ssa:successors/1` | 1.93 | 0.52 | **50** | 1,363,863 |
+| `beam_ssa_ss:meet_in_args_elems1/3` | 1.93 | 2.11 | 4 | 2,675,145 |
+| `beam_ssa_dead:'-sub/2-lc$^0/1-0-'/2` | 1.93 | 2.50 | 2 | 4,224,050 |
+| `beam_ssa:normalize/1` | 1.89 | 0.65 | **42** | 2,142,755 |
+| `beam_ssa_dead:get_value/2` | 1.85 | 1.72 | 7 | 4,565,760 |
+| `beam_ssa_dead:sub/2` | 1.69 | 1.07 | 17 | 1,895,436 |
+| `beam_ssa_dead:map_intersect_kv_2/3` | 1.65 | 0.73 | **35** | 783,255 |
+| `beam_ssa:rpo_1/4` | 1.46 | 1.17 | 13 | 1,397,094 |
+| `beam_ssa_dead:will_succeed/2` | 1.42 | 0.62 | **43** | 1,895,719 |
+| `beam_ssa:linearize_1/4` | 1.22 | 0.57 | **46** | 662,257 |
+| `beam_ssa_dead:shortcut_3/5` | 1.02 | 2.44 | **3** | 1,970,257 |
+
+eprof puts `shortcut_3/5` third and `successors/1` fiftieth; sampling
+reverses them. Anything ranked by eprof on this codebase is ranked by call
+count.
+
+The real head of the profile is map *bulk* work, not map lookup:
+`maps_is_subset_kv/2` + `maps:next/1` + `map_intersect_kv_2/3` + `maps:iterator/2`
+is about 11% of BEAM's Erlang-level time, and all of it is iteration and
+whole-map set algebra rather than single-key probes.
+
+That is a different target from everything above. Our `nif_maps_next` walks a
+tree map with a lazy in-order cursor and allocates on *every* step -- cursor
+frames, a 1-tuple wrapper, a cons and a 3-tuple -- against BEAM's HAMT array
+walk. 4.3M `maps:next/1` calls per file is a lot of allocation to hand the
+collector, and it is a plausible part of why our GC costs 6x BEAM's here.
+Worth measuring on our side before anything else on this cluster.
