@@ -447,3 +447,74 @@ stored into the heap between `remove_message` and the fold point.
 `jit_liveness` already computes per-label live-in masks, so such an analysis
 has a home. But the counter-based batching gets most of the same benefit with
 no analysis at all, and should be tried first.
+
+## Confirmed: the fragment at `test_heap` is the *previous* message, and nothing live points at it
+
+`p1/1` reserves its heap **before** it removes the message:
+
+```
+{loop_rec,{f,6},{x,0}}.          %% x0 points into the incoming Message block,
+                                 %% still mailbox-owned, not yet a fragment
+{get_tuple_element,{x,0},1,{x,0}}.
+{test_heap,3,1}.                 %% <-- the collection happens here
+remove_message.                  %% <-- the block becomes a fragment only now
+{put_tuple2,{x,1},{list,[{x,1},{x,0}]}}.   %% payload stored BY POINTER
+send.                            %% malloc + size + copy into a new block
+{call_last,1,{f,2},1}.           %% live from here: To, an immediate
+```
+
+So the fragment chained at the collection is always the message from the
+*previous* iteration, dead since that tail call. Instrumenting every collection
+whose only trigger is `c->heap.root->next != NULL`, and testing whether any
+live x register or stack slot points into a fragment:
+
+| workload | fragment-only collections | live x reg in a fragment | stack slot in a fragment | **either** | live x reg in an un-adopted Message |
+|---|---:|---:|---:|---:|---:|
+| `p1` forwarding, 100k | 100,015 | 15 | 0 | **15 (0.01%)** | 99,996 |
+| estone | 1,369,394 | 15,973 | 175,571 | **191,527 (14.0%)** | 1,002,952 |
+| app suite | 400,057 | 2 | 0 | **2 (0.0005%)** | 0 |
+
+**86% of estone's forced collections and essentially all of the application
+suite's have nothing live pointing into a fragment at all.** In the forwarding
+loop the live register points into the *un-adopted mailbox Message* (99,996 of
+100,015) — the message being matched, which is not a fragment yet.
+
+### Why the direct-root test is necessary but not sufficient
+
+A live root can reach a fragment *through* a heap term, and in `p1` it
+literally does: `put_tuple2` stores the fragment pointer into the outgoing
+tuple. At the `test_heap` above that has not happened yet, but at any later
+allocation site it would, and a roots-only test would wrongly conclude the
+fragment is dead.
+
+Postponing is always safe — the fragment stays chained, nothing is freed — but
+that is the batching already measured above, and it regrows the chain.
+*Freeing* needs a transitive argument, which is either the collection itself,
+or one of:
+
+- the JIT's liveness at the tail call, which already knows the live-in mask at
+  label 2 is x0 alone holding `To`, never fragment-derived; or
+- **not creating the fragment at all** — reusing the incoming block for the
+  outgoing message, since the two differ in exactly one immediate word.
+
+The second subsumes the first for every forwarding shape.
+
+## The metric to optimise is time, not estones
+
+One estone run, per component:
+
+| component | time | estones | share of time | share of score |
+|---|---:|---:|---:|---:|
+| small messages | 412 ms | 7,510 | 41% | 0.3% |
+| medium messages | 394 ms | 15,407 | 39% | 0.7% |
+| huge messages | 44 ms | 11,271 | 4% | 0.5% |
+| Generic server | 73 ms | 33,950 | 7% | 1.4% |
+| **pattern matching** | **0 ms** | **1,124,818** | **0%** | **48%** |
+| all the rest | 78 ms | 1,153,467 | 8% | 49% |
+
+Message passing is **84% of the wall time and 1.5% of the score**, and the
+score is half-decided by a component that finishes in zero measurable
+milliseconds. AtomVM runs estone in ~1.01 s against BEAM's ~0.51 s. Ranking
+work by recoverable *estones*, as the sections above do, points at BIF dispatch
+and pattern matching; ranking it by *time* points at message passing and
+nothing else.
