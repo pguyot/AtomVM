@@ -1503,6 +1503,24 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
     return ctx;
 }
 
+static void jit_recv_marker_reserve(Context *ctx)
+{
+    TRACE("jit_recv_marker_reserve\n");
+    mailbox_marker_reserve(&ctx->mailbox);
+}
+
+static void jit_recv_marker_use(Context *ctx)
+{
+    TRACE("jit_recv_marker_use\n");
+    mailbox_marker_use(&ctx->mailbox);
+}
+
+static void jit_recv_marker_clear(Context *ctx)
+{
+    TRACE("jit_recv_marker_clear\n");
+    mailbox_marker_clear(&ctx->mailbox);
+}
+
 static term jit_mailbox_peek(Context *ctx)
 {
     TRACE("jit_mailbox_peek: ctx->process_id=%" PRId32 "\n", ctx->process_id);
@@ -3354,6 +3372,24 @@ static term *jit_extended_register_ptr_pin(unsigned int a1)
     return jit_extended_register_ptr(ctx, a1);
 }
 
+static void jit_recv_marker_reserve_pin(void)
+{
+    CTX_READ();
+    jit_recv_marker_reserve(ctx);
+}
+
+static void jit_recv_marker_use_pin(void)
+{
+    CTX_READ();
+    jit_recv_marker_use(ctx);
+}
+
+static void jit_recv_marker_clear_pin(void)
+{
+    CTX_READ();
+    jit_recv_marker_clear(ctx);
+}
+
 static term jit_mailbox_peek_pin(void)
 {
     CTX_READ();
@@ -3707,7 +3743,10 @@ const ModuleNativeInterface module_native_interface = {
     JS_ENTRY(jit_put_map_assoc_one),
     JS_ENTRY(jit_put_map_exact_one_heap_need),
     JS_ENTRY(jit_put_map_exact_one),
-    JS_ENTRY(jit_term_reuse_or_clone_binary)
+    JS_ENTRY(jit_term_reuse_or_clone_binary),
+    JS_ENTRY(jit_recv_marker_reserve),
+    JS_ENTRY(jit_recv_marker_use),
+    JS_ENTRY(jit_recv_marker_clear)
 };
 
 #endif

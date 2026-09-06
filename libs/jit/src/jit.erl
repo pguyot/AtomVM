@@ -3103,7 +3103,9 @@ emit_pass(<<?OP_RECV_MARKER_CLEAR, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {MSt1, RegA, Rest1} = decode_dest(Rest0, MMod, MSt0),
     ?TRACE("OP_RECV_MARKER_CLEAR ~p\n", [RegA]),
-    MSt2 = MMod:free_native_registers(MSt1, [RegA]),
+    {MSt1a, ClearReg} = MMod:call_primitive(MSt1, ?PRIM_RECV_MARKER_CLEAR, [ctx]),
+    MSt1b = MMod:free_native_registers(MSt1a, [ClearReg]),
+    MSt2 = MMod:free_native_registers(MSt1b, [RegA]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     emit_pass(Rest1, MMod, MSt2, State0);
 % 175
@@ -3112,7 +3114,11 @@ emit_pass(<<?OP_RECV_MARKER_RESERVE, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Dest, Rest1} = decode_dest(Rest0, MMod, MSt0),
     ?TRACE("OP_RECV_MARKER_RESERVE ~p\n", [Dest]),
     % Clear register to avoid any issue with GC
-    MSt2 = MMod:move_to_vm_register(MSt1, ?TERM_NIL, Dest),
+    MSt1a = MMod:move_to_vm_register(MSt1, ?TERM_NIL, Dest),
+    %% Remember where the mailbox ends: the reference this receive will match
+    %% does not exist yet, so nothing queued now can match it.
+    {MSt1b, MarkerReg} = MMod:call_primitive(MSt1a, ?PRIM_RECV_MARKER_RESERVE, [ctx]),
+    MSt2 = MMod:free_native_registers(MSt1b, [MarkerReg]),
     MSt3 = MMod:free_native_registers(MSt2, [Dest]),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
     emit_pass(Rest1, MMod, MSt3, State0);
@@ -3121,7 +3127,11 @@ emit_pass(<<?OP_RECV_MARKER_USE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {MSt1, RegA, Rest1} = decode_dest(Rest0, MMod, MSt0),
     ?TRACE("OP_RECV_MARKER_USE ~p\n", [RegA]),
-    MSt2 = MMod:free_native_registers(MSt1, [RegA]),
+    %% Start this receive after the messages that were already queued when the
+    %% marker was reserved, instead of walking them again.
+    {MSt1a, UseReg} = MMod:call_primitive(MSt1, ?PRIM_RECV_MARKER_USE, [ctx]),
+    MSt1b = MMod:free_native_registers(MSt1a, [UseReg]),
+    MSt2 = MMod:free_native_registers(MSt1b, [RegA]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     emit_pass(Rest1, MMod, MSt2, State0);
 % 177
