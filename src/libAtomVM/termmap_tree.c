@@ -156,7 +156,7 @@ static bool node_find(term node, term key, const struct TermMapProbe *probe, Glo
 {
     // Hoist the loop-invariants out of the binary search: the KV tuple
     // pointer (node_key otherwise re-decodes node_kv every probe) and the
-    // probe key's classification (integer-ness / value, tup2-ness). node_find
+    // probe key's classification (integer-ness / value, tuple-ness). node_find
     // is the single hottest function on large-map compiler workloads and runs
     // ~log2(2*BT_T) probes per call. Keys live at odd slots of the KV tuple
     // (kvp[0] is the boxed header, element i is kvp[i+1], so key i is
@@ -166,7 +166,8 @@ static bool node_find(term node, term key, const struct TermMapProbe *probe, Glo
     size_t lo = 0;
     bool key_is_int = term_is_integer(key);
     avm_int_t key_int = key_is_int ? term_to_int(key) : 0;
-    bool key_is_tup2 = term_map_probe_is_tup2(probe);
+    bool key_is_tup = term_map_probe_is_tup(probe);
+    int key_arity = key_is_tup ? term_get_tuple_arity(key) : 0;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         term k = kvp[2 * mid + 1];
@@ -187,13 +188,13 @@ static bool node_find(term node, term key, const struct TermMapProbe *probe, Glo
             }
             continue;
         }
-        // 2-tuple-of-immediates probes (#b_var{}-style compiler keys) compare
+        // Tuple-of-immediates probes (#b_var{}-style compiler keys) compare
         // inline against each candidate; see TermMapProbe in term.h.
-        if (key_is_tup2) {
+        if (key_is_tup) {
             // Initialized: GCC's -Wmaybe-uninitialized cannot see that every
-            // true return of term_map_probe_tup2_cmp assigns it.
+            // true return of term_map_probe_tup_cmp assigns it.
             TermCompareResult pr = TermEquals;
-            if (term_map_probe_tup2_cmp(probe, k, &pr)) {
+            if (term_map_probe_tup_cmp(probe, key, key_arity, k, &pr)) {
                 if (pr == TermLessThan) {
                     hi = mid;
                 } else if (pr == TermGreaterThan) {
