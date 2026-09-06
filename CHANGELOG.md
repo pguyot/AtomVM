@@ -154,6 +154,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved performance of `erlang:monitor/2` and `demonitor/1,2` for a process holding many
   monitors: installing a monitor no longer scans the existing ones when its reference is newer
   than all of them, and `demonitor/1,2` finds and removes in a single pass instead of two
+- Bignum division now estimates each quotient digit with a precomputed reciprocal instead of
+  a 128-by-64 software division, so the compiler no longer emits a `__udivmodti4` call per
+  digit
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
