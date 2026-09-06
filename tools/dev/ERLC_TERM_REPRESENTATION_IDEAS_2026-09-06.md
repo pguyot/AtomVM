@@ -372,3 +372,82 @@ frames, a 1-tuple wrapper, a cons and a 3-tuple -- against BEAM's HAMT array
 walk. 4.3M `maps:next/1` calls per file is a lot of allocation to hand the
 collector, and it is a plausible part of why our GC costs 6x BEAM's here.
 Worth measuring on our side before anything else on this cluster.
+
+## Addendum 4: the hot loop in BEAM assembly, and where the curves cross
+
+`beam_ssa_dead:maps_is_subset_kv/2` is 5.16% of BEAM's whole compile of
+unicode_util, and it is nine lines:
+
+```erlang
+maps_is_subset_kv({K, V, Iterator}, BigMap) ->
+    Next = maps:next(Iterator),
+    case BigMap of
+        #{K := V} -> maps_is_subset_kv(Next, BigMap);
+        #{} -> false
+    end;
+maps_is_subset_kv(none, _BigMap) -> true.
+```
+
+`erlc -S` gives the whole loop body:
+
+```
+{test,is_tuple,{f,445},[{x,0}]}.
+{test,test_arity,{f,442},[{x,0},3]}.
+{allocate,2,2}.
+{move,{x,1},{y,0}}.
+{move,{x,0},{y,1}}.
+{get_tuple_element,{x,0},2,{x,0}}.
+{call_ext,1,{extfunc,maps,next,1}}.            % <- one iterator step
+{test,is_map,{f,446},[{y,0}]}.
+{get_tuple_element,{y,1},0,{x,1}}.
+{get_map_elements,{f,444},{tr,{y,0},{t_map,any,any}},{list,[{x,1},{x,1}]}}.
+{get_tuple_element,{y,1},1,{x,2}}.
+{test,is_eq_exact,{f,444},[{x,1},{x,2}]}.
+{move,{y,0},{x,1}}.
+{call_last,2,{f,443},2}.
+```
+
+Per iteration: **one `maps:next/1` and one single-key `get_map_elements`**,
+around ten cheap register ops. Everything else is noise. So the whole 5.16% is
+two map primitives, and the same is true of `map_intersect_kv_2/3` and of
+`maps:next/1` in its own right -- together about 11% of BEAM's Erlang time.
+
+`tools/dev/bench_map_subset_kv.erl` runs exactly that loop, plus its two
+components separately, on both VMs (AOT-precompiled for AtomVM):
+
+| n | subset_kv BEAM | subset_kv AtomVM | `maps:next` BEAM | `maps:next` AtomVM | lookup BEAM | lookup AtomVM |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 47.4 | **26.6** | 3.8 | 11.5 | 43.4 | **15.2** |
+| 64 | 29.7 | **24.8** | 7.4 | 9.8 | 24.6 | **14.4** |
+| 256 | 33.6 | 33.6 | 7.0 | 13.1 | 26.9 | **20.8** |
+| 1024 | **29.7** | 45.5 | 7.6 | 13.1 | 29.3 | **26.0** |
+| 4096 | **32.7** | 60.0 | 6.0 | 13.0 | 31.2 | 52.9 |
+
+(ns per entry / per key.)
+
+Two clean facts:
+
+1. **BEAM's lookup is flat and ours is not.** 24.6 -> 31.2 ns from n=64 to
+   n=4096 for BEAM; 14.4 -> 52.9 ns for us. We are 1.7x *faster* at n=64,
+   still faster at n=1024, and 1.7x slower at n=4096. The curves cross around
+   n = 1500-2000. Hashing has a high fixed cost (it walks the whole key) and
+   no size term; ordered comparison has a low fixed cost and a log(n) term.
+   For the small maps that dominate ordinary Erlang -- and every MCU workload
+   -- the ordered map is the better structure, and the measurement says so.
+
+2. **`maps:next/1` is flat on both and we are 2x slower on it** (13.0 vs
+   6.0 ns), independent of map size. That is not the data structure; it is
+   `nif_maps_next` allocating on every step -- cursor frames, a 1-tuple
+   wrapper, a cons and a 3-tuple -- where BEAM walks a HAMT array. 4.3M
+   `maps:next/1` calls per compile is a lot of garbage, and it is consistent
+   with our GC costing 6x BEAM's on this file.
+
+The second one is a bug-shaped cost with no structural excuse, and it is the
+next thing to fix on this cluster. The first is a genuine design trade with a
+measurable crossover, which argues for a size-triggered hash index over the
+existing ordered tree rather than replacing it: keep the structure that wins
+below ~1500 entries, and stop paying log(n) above it. Note also that the
+per-probe cost at n=4096 (4.4 ns over ~12 probes) is memory latency, not
+comparison logic -- 89.4% of probes already resolve in two or three inline
+instructions -- so the lever there is locality (a dense array of order
+surrogates) rather than a cheaper comparator.
