@@ -20,7 +20,7 @@ publication harness.
 | # | Idea | Verdict | Measured |
 |---|---|---|---|
 | 0 | Message-regression repair (prerequisite) | **dropped** | the "regression" was mostly build layout; repair measures 0 |
-| 1 | Receive markers actually skip old messages | assessed, not implemented | premise confirmed; largest gap in the doc |
+| 1 | Receive markers actually skip old messages | **shipped** `8b7ee5e93` | **358x** at 10k backlog; now 1.9x over BEAM |
 | 2 | Lazy B-tree map iterator | **shipped** `15a6a6501` | up to **138x**; take-eight 116x |
 | 3 | Forward floating values between FP instructions | **drop** | whole FP gap is 8%; ceiling too small |
 | 4 | Private binary append bypasses allocation prep | **drop** | ceiling 4%; the build gap is per-append protocol |
@@ -29,9 +29,8 @@ publication harness.
 | 7 | Reciprocal bigint quotient estimation | **shipped** `f6b2906a6` | **1.090x** bigint; `__udivmodti4` gone |
 | 8 | Signed power-of-two division | **drop** (author screened) | 1.004x, accepted without re-running |
 
-Two shipped, five dropped with data (including the prerequisite repair and one
-written in full before its gate rejected it), one assessed and left with a
-sized recommendation.
+Three shipped, five dropped with data (including the prerequisite repair and
+one written in full before its gate rejected it). All eight are resolved.
 
 ## 0. The prerequisite repair — dropped, and why it matters for the rest
 
@@ -247,26 +246,46 @@ HAMT attempts -- that `node_find`'s cost is reachable by rearranging the map.
 `node_find` did get 8% faster and it bought almost nothing. Anything further
 here should target the number of comparisons, not their layout.
 
-## 1. Receive markers — assessed, not implemented
+## 1. Receive markers — shipped
 
-Premise verified: `OP_RECV_MARKER_BIND`, `CLEAR` and `USE` decode their
-operands and do nothing, and `RESERVE` writes `nil`, in both
-`opcodesswitch.h` and `jit.erl`. The proposal's measured backlog gap (up to
-~63x at 10,000 queued messages) is a genuine workload hole rather than a score
-artifact, and this is the most valuable item in the document.
+The premise held and the gap is larger than the proposal measured. Independently:
+2,000 request/reply round trips against an echo server, by mailbox backlog.
 
-It is also the one that cannot be done carelessly. A marker is a saved position
-in a mailbox whose nodes are removed by `remove_message`, moved from the outer
-list to the inner list by signal processing, and traversed by GC; the proposal
-is right that "a saved pointer to a removed queue node is unsafe" and that
-marker lifetime has to become part of mailbox logic. That is a focused piece of
-work in the most correctness-critical part of the VM, with a test matrix
-(timeouts, marker reuse and clearing, references surviving GC, signals
-interleaved with messages, nested outstanding requests) that deserves its own
-session.
+| backlog | BEAM | before | after | speedup | vs BEAM |
+|---|---:|---:|---:|---:|---:|
+| 0 | 905 us | 594 us | 605 us | 1.0x | 1.50x |
+| 100 | 957 us | 2,785 us | 599 us | 4.6x | 1.60x |
+| 1,000 | 981 us | 22,110 us | 608 us | 36.4x | 1.61x |
+| 10,000 | 1,130 us | 214,367 us | **598 us** | **358x** | **1.89x** |
 
-Recommended next, together with the remaining half of idea 4. Idea 6 is now
-closed: see above.
+Linear in the backlog before, flat after, and faster than BEAM at every point
+including the empty mailbox that was already a win. This was the one idea in
+the document that was a missing mechanism rather than a constant factor, which
+is why it is also the only one whose measured gain matched its profile.
+
+**What it took.** `recv_marker_reserve`/`bind`/`use`/`clear` decoded their
+operands and did nothing, in both engines. The compiler reserves *before*
+creating the reference, so nothing queued at that moment can match it: record
+the last inner-list node then, and start the receive at its successor.
+
+The marker is that existing node, not a sentinel spliced into the queue, so
+none of the nine functions that walk a mailbox changed. Removing the marked
+message drops the marker; removing any other leaves it valid, since the marker
+only claims that what precedes it cannot match. A single slot suffices -- a
+receive that finds it taken scans from the start, and one that inherits an
+outer receive's marker starts earlier than needed. Both scan *more*, never
+less, which is the direction that stays correct, and it is why `bind` can
+ignore the reference entirely.
+
+Three `ctx`-only primitives (105-107) carry it in the JIT, so no backend
+needed changes; 3,170 JIT tests pass unchanged.
+
+**Correctness.** Differentially against OTP 29: old messages surviving a marked
+receive, receives interleaved with untouched messages, nested marked receives,
+the timeout path, a reply arriving before the receive runs, and 300 round trips
+behind a 200-message backlog verifying every reply and every leftover.
+Identical on all. Plus test-erlang, the C suites, and estdlib at its known
+two-flake floor.
 
 ## Reproduction
 
