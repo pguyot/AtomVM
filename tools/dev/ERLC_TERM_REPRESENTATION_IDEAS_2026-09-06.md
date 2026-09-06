@@ -215,3 +215,106 @@ So the file where AtomVM actually loses to BEAM is the one where GC matters
 `term_compare0` 15.9%, `bt_insert` 7.4%. unicode_util is the cleanest test
 case available for the comparison-volume wall, and the right benchmark for
 any work on ideas (a) or (b) -- the corpus average dilutes it to nothing.
+
+## Addendum 2: what BEAM does with the same file
+
+Same method applied to `/opt/local/bin/erlc` (OTP 29, BeamAsm) compiling
+`unicode_util.erl`, sampling the `erts_sched_1` thread; plus `eprof` at the
+Erlang level. Both VMs run the *same* compiler source, so the Erlang-level
+call counts are identical on both and any time difference is the VM.
+
+### BEAM's C-level profile (scheduler thread, self time)
+
+| symbol | share |
+|---|---:|
+| `???` (BeamAsm generated code) | 44.9% |
+| `erts_hashmap_get` | 9.7% |
+| `kevent` (idle) | 7.7% |
+| `erts_hashmap_insert_up` | 7.7% |
+| `eq` | 7.0% |
+| `make_internal_hash` | 6.1% |
+| `erts_hashmap_insert_down` | 3.3% |
+| `erts_internal_map_next_3` | 2.2% |
+| `get_map_element` / `erts_maps_put` | 1.7% each |
+| `erts_cmp_compound` | 1.7% |
+
+Normalizing each VM to its own non-idle samples and multiplying by its CPU
+time (BEAM 1.58 s, AtomVM 2.46 s):
+
+| | BEAM | AtomVM | |
+|---|---:|---:|---|
+| generated native code | ~0.77 s | ~0.73 s | **parity** |
+| map primitives | ~0.62 s | ~1.23 s | **2x** |
+| garbage collection | ~0.02 s | 0.10 s | 6x |
+| total CPU | 1.58 s | 2.46 s | |
+
+The gap is not in the code the JIT emits. Our generated code is level with
+BeamAsm on this workload; essentially all of the 0.88 s is the C map
+primitives, and `erts_cmp_compound` -- BEAM's ordering comparison -- is 1.7%,
+because a hash map almost never needs one.
+
+The mechanism, measured on our side by instrumenting `node_find`:
+
+* 51,997,888 `node_find` calls, **207,680,103 key probes** (~4 per lookup)
+* resolved inline: 62.5% small-int, 20.0% 2-tuple probe, 6.9% identity
+* fell back to `term_compare`: 22,033,780 (10.6%)
+
+BEAM pays, per lookup, one `make_internal_hash` plus about one `eq`. We pay
+about four *ordering* comparisons. An equality test may early-exit on any
+differing word; an ordering test must find the *leftmost* difference. That is
+the structural difference, and it is not a statement about which data
+structure is faster in the abstract -- our per-probe code is already good
+(~2.9 ns, 89.4% resolved by two or three inline instructions).
+
+### Erlang level (eprof)
+
+187,987,960 Erlang calls for the one file. eprof inflates the run 1.6 s ->
+11.0 s, so only call counts and relative shares mean anything, and BEAM's
+`map_get`/`is_map_key` are instructions rather than calls so they are
+invisible here (they show up only in the C profile above).
+
+| module | share | calls |
+|---|---:|---:|
+| `beam_ssa_dead` | 30.0% | 48,584,259 |
+| `beam_types` | 13.7% | 27,613,069 |
+| `maps` | 6.4% | 14,568,348 |
+| `beam_ssa` | 5.6% | 10,886,758 |
+| `lists` | 5.4% | 14,499,886 |
+| `beam_ssa_ss` | 4.3% | 8,064,409 |
+| `sets` | 4.3% | 8,794,121 |
+
+`maps:remove/2` is called 2,111,312 times, which is why the binary-search fix
+paid on erl_parse; on unicode_util most of those maps are flat (under
+TERM_MAP_TREE_THRESHOLD) and already binary-searched, which is why it did not
+pay here. `erlang:garbage_collect/0` is called 58 times explicitly by the
+compiler -- against AtomVM's 616 collections for the same work.
+
+### A negative result: extending the inline probe does not help
+
+`struct TermMapProbe` only classifies a key when it is a 2-tuple whose
+elements are *all* immediates. The census said that looked badly wrong: of
+the 22.0M fallbacks, 18.6M are keys shaped `{Atom, Tuple, X}`, rejected on
+the middle element, and in 90.6% of those the first two elements are
+pointer-identical and element 2 decides.
+
+Two versions were built and measured on unicode_util:
+
+1. widen the arity to 2..4, still requiring every element immediate --
+   covered 728 additional descents (element 1 is a tuple in 18,651,984 of
+   18,653,652 cases), no change;
+2. drop the element-type requirement entirely and classify on arity alone,
+   skipping identical element pairs by identity and only requiring the
+   leftmost *differing* pair to be covered -- **still no gain, ~2% slower.**
+
+The reason is that `term_compare0`'s inline tuple path already does exactly
+this work: skip identical elements, small-integer fast path, atom fast path,
+recurse on a compound differing pair. Routing more keys through the probe
+saves a call, not the comparison, and the wider probe costs more to
+initialize on every map operation. Both versions were reverted.
+
+This is the third experiment (after the full HAMT and the inlined map-lookup
+descent) to confirm the same thing from a different angle: the cost is
+comparison **volume**, and nothing that makes an individual comparison
+cheaper moves it. The only lever left on this cluster is doing fewer
+comparisons per lookup, which is a statement about the map's shape, not about
+its comparator.
