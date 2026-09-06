@@ -293,6 +293,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   push/pop, and reading a module-local atom index makes do with the one register it is given.
   `ssh_options` of OTP 29 failed to compile, and it was the only module of the OTP corpus that
   did
+- Fixed `maps:next/1` on a large (tree-backed) map materialising the whole key/value list on
+  the first step, so taking a few entries from a big map reserved `4 * size` heap words and
+  walked every entry before returning the first one
 
 ## [0.7.0-beta.0] - 2026-09-28
 
