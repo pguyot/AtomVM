@@ -140,6 +140,29 @@ term termtree_to_kv_list(term node, term acc, Heap *heap);
  */
 void termtree_fill_array(term node, term *out);
 
+/**
+ * @brief Heap words to reserve before one \c termtree_cursor_next step, and,
+ * when \p first is true, before building the initial cursor as well. A cursor
+ * step allocates at most one frame per tree level, so this is a few dozen
+ * words regardless of map size -- unlike the flat [K0,V0,..] cursor, which
+ * needed 4*size words before returning its first entry.
+ */
+size_t termtree_cursor_reserve(term root, bool first);
+
+/**
+ * @brief Build a cursor positioned at the first (smallest) entry. The cursor
+ * is an ordinary term -- a list of {Node, Index} frames -- so the garbage
+ * collector, term copier and hasher need no special case for it, and it can be
+ * kept or forked like any other immutable value.
+ */
+term termtree_cursor_first(term root, Heap *heap);
+
+/**
+ * @brief Produce the entry at \p cursor and the cursor following it.
+ * @returns false when the traversal is exhausted, leaving the outputs untouched.
+ */
+bool termtree_cursor_next(term cursor, term *key, term *value, term *next_cursor, Heap *heap);
+
 /** @brief Key at in-order position \p index (0-based). */
 term termtree_select_key(term node, size_t index);
 

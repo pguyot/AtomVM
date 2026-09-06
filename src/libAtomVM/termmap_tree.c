@@ -729,6 +729,94 @@ term termtree_to_kv_list(term node, term acc, Heap *heap)
     return acc;
 }
 
+// --- Lazy in-order cursor -------------------------------------------------
+//
+// A cursor is a GC-visible term: a list of {Node, Index} frames, deepest
+// first. A frame means "children 0..Index and keys 0..Index-1 of Node have
+// been produced". Stepping copies only the spine it changes, so a cursor can
+// be kept, forked or dropped like any other immutable term.
+//
+// The alternative -- flattening the whole tree to [K0,V0,..] on the first step
+// -- costs 4*size words before the caller has seen one entry, which is what
+// callers that take only a few entries (sets:is_disjoint/2, early-exit folds)
+// were paying.
+
+// Heap words one frame occupies: the {Node, Index} tuple and its list cell.
+#define TREE_CURSOR_FRAME_WORDS (TUPLE_SIZE(2) + CONS_SIZE)
+
+// Number of frames a leftmost descent from `node` pushes, i.e. its height.
+static size_t descent_depth(term node)
+{
+    size_t depth = 0;
+    while (!term_is_nil(node)) {
+        depth++;
+        if (node_is_leaf(node)) {
+            break;
+        }
+        node = node_child(node, 0);
+    }
+    return depth;
+}
+
+// Push `node` and then its leftmost descendants, so the deepest is at the head.
+static term push_leftmost(term node, term stack, Heap *heap)
+{
+    while (!term_is_nil(node)) {
+        term frame = term_alloc_tuple(2, heap);
+        term_put_tuple_element(frame, 0, node);
+        term_put_tuple_element(frame, 1, term_from_int(0));
+        stack = term_list_prepend(frame, stack, heap);
+        if (node_is_leaf(node)) {
+            break;
+        }
+        node = node_child(node, 0);
+    }
+    return stack;
+}
+
+size_t termtree_cursor_reserve(term root, bool first)
+{
+    // A step advances one frame and may then descend to a leaf, so it pushes
+    // at most one frame per level. Building the initial cursor costs the same
+    // again. The height of a degree-BT_T tree is small, so this bound is a few
+    // dozen words rather than the 4*size the flattening cursor reserved.
+    size_t height = descent_depth(root);
+    size_t frames = (first ? height : 0) + height + 1;
+    return frames * TREE_CURSOR_FRAME_WORDS;
+}
+
+term termtree_cursor_first(term root, Heap *heap)
+{
+    return push_leftmost(root, term_nil(), heap);
+}
+
+bool termtree_cursor_next(term cursor, term *key, term *value, term *next_cursor, Heap *heap)
+{
+    // Frames whose keys are exhausted are done: drop them and continue with
+    // the parent, which is what makes a step amortised O(1).
+    while (!term_is_nil(cursor)) {
+        term frame = term_get_list_head(cursor);
+        term node = term_get_tuple_element(frame, 0);
+        size_t index = (size_t) term_to_int(term_get_tuple_element(frame, 1));
+        if (index < node_nkeys(node)) {
+            *key = node_key(node, index);
+            *value = node_value(node, index);
+            term advanced = term_alloc_tuple(2, heap);
+            term_put_tuple_element(advanced, 0, node);
+            term_put_tuple_element(advanced, 1, term_from_int((avm_int_t) index + 1));
+            term stack = term_list_prepend(advanced, term_get_list_tail(cursor), heap);
+            if (!node_is_leaf(node)) {
+                // In-order: the child between this key and the next comes first.
+                stack = push_leftmost(node_child(node, index + 1), stack, heap);
+            }
+            *next_cursor = stack;
+            return true;
+        }
+        cursor = term_get_list_tail(cursor);
+    }
+    return false;
+}
+
 static size_t fill_array(term node, term *out, size_t pos)
 {
     if (term_is_nil(node)) {

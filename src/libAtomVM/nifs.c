@@ -8798,53 +8798,43 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
     term map = term_get_list_tail(iterator);
     VALIDATE_VALUE(map, term_is_map);
 
-    // A tree-map cursor's post is a 1-tuple {RemainingKVList}; accept it before
-    // the generic integer/list validation below rejects it.
+    // A tree-map cursor's post is a 1-tuple {Stack}; accept it before the
+    // generic integer/list validation below rejects it.
     bool is_tree_cursor = term_is_tuple(post) && term_get_tuple_arity(post) == 1;
     if (UNLIKELY(!term_is_integer(post) && !term_is_list(post) && !is_tree_cursor)) {
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    // Tree-backed maps: iterate via an in-order cursor instead of selecting by
-    // position (which is O(height) per element). The cursor is a 1-tuple
-    // {RemainingKVList}; the first step (integer post from maps:iterator)
-    // materialises the ordered [K0,V0,K1,V1,...] list in one O(n) walk. A
-    // plain-list post (the ordered-iterator key list) falls through to the
-    // generic path below.
-    if (term_is_map_tree(map)
-        && (term_is_integer(post) || (term_is_tuple(post) && term_get_tuple_arity(post) == 1))) {
-        term kvlist;
-        if (term_is_integer(post)) {
-            int size = term_get_map_size(map);
-            if (size == 0) {
-                return NONE_ATOM;
-            }
-            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 4 * (size_t) size + 8, 1, &iterator,
-                             MEMORY_CAN_SHRINK)
-                    != MEMORY_GC_OK)) {
-                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-            }
-            map = term_get_list_tail(iterator);
-            kvlist = termtree_to_kv_list(term_get_map_tree_root(map), term_nil(), &ctx->heap);
-        } else {
-            kvlist = term_get_tuple_element(post, 0);
-            if (term_is_nil(kvlist)) {
-                return NONE_ATOM;
-            }
-            if (UNLIKELY(memory_ensure_free_with_roots(ctx, 8, 1, &iterator, MEMORY_CAN_SHRINK)
-                    != MEMORY_GC_OK)) {
-                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-            }
-            map = term_get_list_tail(iterator);
-            kvlist = term_get_tuple_element(term_get_list_head(iterator), 0);
+    // Tree-backed maps: iterate with a lazy in-order cursor. The cursor is a
+    // 1-tuple {Stack} of {Node, Index} frames; an integer post (from
+    // maps:iterator/1) starts one. Materialising the whole [K0,V0,..] list on
+    // the first step instead cost 4*size words before the caller saw a single
+    // entry, which callers that take only a few entries never got back.
+    if (term_is_map_tree(map) && (term_is_integer(post) || is_tree_cursor)) {
+        bool first = term_is_integer(post);
+        if (first && term_get_map_size(map) == 0) {
+            return NONE_ATOM;
         }
-        term key = term_get_list_head(kvlist);
-        term rest1 = term_get_list_tail(kvlist);
-        term value = term_get_list_head(rest1);
-        term rest2 = term_get_list_tail(rest1);
-        term cursor = term_alloc_tuple(1, &ctx->heap);
-        term_put_tuple_element(cursor, 0, rest2);
-        term next_iterator = term_list_prepend(cursor, map, &ctx->heap);
+        size_t reserve = termtree_cursor_reserve(term_get_map_tree_root(map), first)
+            + TUPLE_SIZE(3) + CONS_SIZE;
+        if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 1, &iterator, MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        // Re-read through the rooted iterator: a GC above may have moved both.
+        map = term_get_list_tail(iterator);
+        post = term_get_list_head(iterator);
+        term cursor = first ? termtree_cursor_first(term_get_map_tree_root(map), &ctx->heap)
+                            : term_get_tuple_element(post, 0);
+        term key;
+        term value;
+        term next_cursor;
+        if (!termtree_cursor_next(cursor, &key, &value, &next_cursor, &ctx->heap)) {
+            return NONE_ATOM;
+        }
+        term wrapper = term_alloc_tuple(1, &ctx->heap);
+        term_put_tuple_element(wrapper, 0, next_cursor);
+        term next_iterator = term_list_prepend(wrapper, map, &ctx->heap);
         term ret = term_alloc_tuple(3, &ctx->heap);
         term_put_tuple_element(ret, 0, key);
         term_put_tuple_element(ret, 1, value);
