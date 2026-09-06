@@ -397,6 +397,8 @@ struct ModuleNativeInterface
     void (*recv_marker_reserve)(CTXP_ONLY);
     void (*recv_marker_use)(CTXP_ONLY);
     void (*recv_marker_clear)(CTXP_ONLY);
+    void (*remove_message_keep)(CTXP_ONLY);
+    bool (*forward_message)(CTX_JS_PARAMS);
 };
 
 extern const ModuleNativeInterface module_native_interface;
