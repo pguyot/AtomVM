@@ -163,8 +163,10 @@ purge.
 
 ## Ranking of what is left
 
-1. Cross-module call inline cache -- ~11% of the workload is dispatch, and
-   most of it is the C round trip, not the resolution. (c), call side.
+1. ~~Cross-module call inline cache -- ~11% of the workload is dispatch.~~
+   **WRONG, corrected below in Addendum 5: 11-13% is the INCLUSIVE cost of
+   `jit_call_ext*` (the NIFs and BIFs reached through it doing real work).
+   Dispatch self time is ~1.9%.**
 2. The comparison cluster at ~41%. The HAMT experiment and the inline
    map-lookup experiment both refuted "the data structure" and "call
    overhead" as the cause; the census above says the remaining volume is
@@ -451,3 +453,68 @@ per-probe cost at n=4096 (4.4 ns over ~12 probes) is memory latency, not
 comparison logic -- 89.4% of probes already resolve in two or three inline
 instructions -- so the lever there is locality (a dense array of order
 surrogates) rather than a cheaper comparator.
+
+## Addendum 5: correcting the call_ext number, and recognizing system NIFs
+
+The "~11% of the workload is cross-module dispatch" claim above was wrong: it
+came from a call-graph parse that failed to subtract children, so parents kept
+their callees' samples. Recomputed with self and inclusive time separated:
+
+| | unicode_util self | incl | erl_parse self | incl |
+|---|---:|---:|---:|---:|
+| `jit_call_ext0` | 1.48% | 11.90% | 1.21% | 13.29% |
+| `jit_call_ext_direct_pin` | 0.45% | 12.68% | 0.54% | 13.56% |
+
+**Dispatch overhead is ~1.9%**, not 11%. The other ~11% is the NIFs and BIFs
+called through it doing actual work. Removing the C round trip entirely caps
+at about 2%.
+
+### The mechanism is already in the tree
+
+`jit.erl` carries an `import_resolver` (`#state.import_resolver`, built in
+`jit_precompile:import_resolver/2` from the `ImpT` and `AtU8` chunks) that
+maps an import index to `{Module, Function, Arity}` at compile time. It is
+already used to specialize `OP_BIF2`, `OP_GC_BIF1` and `OP_GC_BIF2` on the
+actual BIF.
+
+`OP_BIF0/1/2` also already skip the generic path entirely:
+`resolve_bif_func_ptr/3` asks the backend for
+`move_imported_bif_to_native_register/2`, and x86_64 implements it as four
+inline loads (`jit_state->module -> imported_funcs -> [bif] -> bif0_ptr`),
+then calls the pointer directly. Other backends fall back to
+`?PRIM_GET_IMPORTED_BIF`, one cheap C call.
+
+`OP_CALL_EXT{,_LAST,_ONLY}` does none of this: it always goes through
+`jit_call_ext0`, which re-resolves, does an acquire load of `func->type`,
+switches on it, and returns a continuation address.
+
+### What "recognize every system NIF" needs
+
+`src/libAtomVM/nifs.gperf` is 282 entries of exactly the right shape, one per
+line after the `%%`:
+
+```
+maps:next/1, &maps_next_nif
+binary:at/2, &binary_at_nif
+```
+
+Nothing on the Erlang side reads it today. Generating a `jit_nifs` module
+from it at build time keeps one source of truth and gives
+`jit.erl` an `is_system_nif({M, F, A})` test to use with the resolver it
+already has.
+
+The call site then emits an inline guard rather than a cache: load
+`imported_funcs[Index]`, load `type`, compare against `NIFFunctionType`,
+and fall back to `?PRIM_CALL_EXT` if it does not match. That is strictly
+better than the inline cache proposed earlier in this document, because it
+keys on a field the VM already maintains -- so module reload and code purge
+need no invalidation at all, they just change the type and the guard takes
+the fallback.
+
+Worth ~2% by itself. The larger prize is that knowing the callee statically
+also allows dropping per-call work the generic path must do
+conservatively (`ctx->nif_call_arity`, the `heap.root->next` fragment check,
+the trap/error preamble) for NIFs known not to need it, and -- for
+`maps:next/1` specifically, combined with the integer-path iterator below --
+opens the door to emitting the common iterator step as native code with no C
+call at all.
