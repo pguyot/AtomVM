@@ -28,7 +28,7 @@
 #include "intn.h"
 #include "module.h"
 #include "tempstack.h"
-#include "termmap_tree.h"
+#include "termmap_champ.h"
 #include "utils.h"
 
 #include <assert.h>
@@ -359,32 +359,50 @@ int term_funprint(PrinterFun *fun, term t, const GlobalContext *global)
         }
 
         int map_size = term_get_map_size(t);
+        // A hash-backed map's positional accessors each cost a walk and yield
+        // hash order, so print from one sorted materialisation instead.
+        term *entries = NULL;
+        if (map_size > 0 && term_is_map_hash(t)) {
+            // Sorting compares keys, and term_compare may fill the atom
+            // table's comparison cache, hence the cast off a printer's const.
+            entries = term_map_sorted_array(t, (GlobalContext *) global);
+            if (IS_NULL_PTR(entries)) {
+                return -1;
+            }
+        }
         for (int i = 0; i < map_size; i++) {
             if (i != 0) {
                 int printed = fun->print(fun, ",");
                 if (UNLIKELY(printed < 0)) {
+                    free(entries);
                     return printed;
                 }
                 ret += printed;
             }
-            int printed = term_funprint(fun, term_get_map_key(t, i), global);
+            int printed = term_funprint(
+                fun, entries ? entries[2 * i] : term_get_map_key(t, i), global);
             if (UNLIKELY(printed < 0)) {
+                free(entries);
                 return printed;
             }
             ret += printed;
 
             printed = fun->print(fun, "=>");
             if (UNLIKELY(printed < 0)) {
+                free(entries);
                 return printed;
             }
             ret += printed;
 
-            printed = term_funprint(fun, term_get_map_value(t, i), global);
+            printed = term_funprint(
+                fun, entries ? entries[2 * i + 1] : term_get_map_value(t, i), global);
             if (UNLIKELY(printed < 0)) {
+                free(entries);
                 return printed;
             }
             ret += printed;
         }
+        free(entries);
 
         int printed = fun->print(fun, "}");
         if (UNLIKELY(printed < 0)) {
@@ -606,10 +624,11 @@ static enum TermTypeIndex term_type_to_index(term t)
     }                                        \
     t = temp_stack_pop(&temp_stack);
 
-// Equality-only comparison of two maps of the same size. Entries are kept in
-// term_compare(TermCompareExact) key order in both representations, so flat
-// operands are walked by index and tree operands in parallel by termtree_equal,
-// stopping at the first differing pair -- unlike the ordering path,
+// Equality-only comparison of two maps of the same size. Flat operands keep
+// their keys in term_compare(TermCompareExact) order, so they are walked by
+// index; two hash operands are walked in parallel by termmap_champ_equal, and a
+// mixed pair looks each of the flat map's keys up in the trie. All three stop
+// at the first differing pair -- unlike the ordering path,
 // which materialises every key and value on the temp stack before comparing
 // anything. Element pairs go to the generic comparator with plain
 // TermCompareExact, exactly like the delegation below, so a nested map cannot
@@ -619,13 +638,11 @@ static enum TermTypeIndex term_type_to_index(term t)
 // so the caller falls back to the generic comparator.
 static TermCompareResult map_exact_equals(term t, term other, int size, GlobalContext *global)
 {
-    bool t_tree = term_is_map_tree(t);
-    if (t_tree != term_is_map_tree(other)) {
-        return TermCompareMemoryAllocFail;
-    }
-    if (t_tree) {
-        switch (
-            termtree_equal(term_get_map_tree_root(t), term_get_map_tree_root(other), global)) {
+    bool t_hash = term_is_map_hash(t);
+    bool other_hash = term_is_map_hash(other);
+    if (t_hash && other_hash) {
+        switch (termmap_champ_equal(
+            term_get_map_hash_root(t), term_get_map_hash_root(other), global, true)) {
             case 1:
                 return TermEquals;
             case 0:
@@ -633,6 +650,25 @@ static TermCompareResult map_exact_equals(term t, term other, int size, GlobalCo
             default:
                 return TermCompareMemoryAllocFail;
         }
+    }
+    if (t_hash || other_hash) {
+        // One of each: the two representations order their entries differently,
+        // so walk the flat one and look each key up in the trie.
+        term flat = t_hash ? other : t;
+        term root = term_get_map_hash_root(t_hash ? t : other);
+        const term *keys = term_to_const_term_ptr(term_get_map_keys(flat)) + 1;
+        const term *values = term_to_const_term_ptr(flat) + term_get_map_value_offset();
+        for (int i = 0; i < size; i++) {
+            term v = termmap_champ_get(root, keys[i], global);
+            if (term_is_invalid_term(v)) {
+                return TermLessThan;
+            }
+            if (v != values[i]
+                && term_compare(v, values[i], TermCompareExact, global) != TermEquals) {
+                return TermLessThan;
+            }
+        }
+        return TermEquals;
     }
     for (int i = 0; i < size; i++) {
         term tk = term_get_map_key(t, i);
@@ -798,7 +834,7 @@ deep:;
                     pair = map_exact_equals(t, other, t_size, global);
                     if (pair == TermCompareMemoryAllocFail) {
                         // Not answerable by the direct walk (operands in
-                        // different representations, or a tree deeper than the
+                        // different representations, or a trie deeper than the
                         // cursor bound): let the generic comparator handle it.
                         pair = term_compare(t, other, TermCompareExact, global);
                     }
@@ -1545,15 +1581,17 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                             result = (t_size > other_size) ? TermGreaterThan : TermLessThan;
                             goto unequal;
                         }
-                        if (t_size > 0 && term_is_map_tree(t) && term_is_map_tree(other)) {
-                            // Structural equality fast path: a parallel walk that
-                            // short-circuits pointer-identical (shared) subtrees,
-                            // so comparing a map to a path-copied update of itself
-                            // costs O(height) instead of materialising all n
-                            // entries. 1 = equal, 0 = key/value differs, -1 =
-                            // shapes diverge (fall back to the sorted compare).
-                            int se = termtree_struct_equal(
-                                term_get_map_tree_root(t), term_get_map_tree_root(other), global);
+                        if (t_size > 0 && term_is_map_hash(t) && term_is_map_hash(other)) {
+                            // Structural equality fast path: two maps with the
+                            // same entries have the same trie shape, so a
+                            // parallel walk that skips pointer-identical
+                            // (shared) sub-nodes answers a map versus a
+                            // path-copied update of itself in O(height)
+                            // instead of materialising all n entries.
+                            // 1 = equal, 0 = key/value differs, -1 = not
+                            // answerable here (fall back to the sorted compare).
+                            int se = termmap_champ_equal(
+                                term_get_map_hash_root(t), term_get_map_hash_root(other), global, true);
                             if (se == 1) {
                                 CMP_POP_AND_CONTINUE();
                                 break;
@@ -1574,26 +1612,30 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
                             }
                         }
                         if (t_size > 0) {
-                            // Read tree-backed maps sequentially (one O(n) walk
-                            // into a scratch array) instead of selecting each
-                            // entry by position, which would be O(height) each
-                            // -- comparing maps is hot in the Erlang compiler.
+                            // Erlang orders maps by their keys, so a hash-backed
+                            // operand is materialised into a sorted scratch
+                            // array first; a flat one is already in key order
+                            // and is read in place.
                             term *t_buf = NULL;
                             term *o_buf = NULL;
-                            if (term_is_map_tree(t)) {
+                            if (term_is_map_hash(t)) {
                                 t_buf = malloc(2 * (size_t) t_size * sizeof(term));
-                                if (IS_NULL_PTR(t_buf)) {
-                                    return TermCompareMemoryAllocFail;
-                                }
-                                termtree_fill_array(term_get_map_tree_root(t), t_buf);
-                            }
-                            if (term_is_map_tree(other)) {
-                                o_buf = malloc(2 * (size_t) other_size * sizeof(term));
-                                if (IS_NULL_PTR(o_buf)) {
+                                if (IS_NULL_PTR(t_buf)
+                                    || !termmap_champ_fill_array_sorted(
+                                        term_get_map_hash_root(t), t_buf, (size_t) t_size, global)) {
                                     free(t_buf);
                                     return TermCompareMemoryAllocFail;
                                 }
-                                termtree_fill_array(term_get_map_tree_root(other), o_buf);
+                            }
+                            if (term_is_map_hash(other)) {
+                                o_buf = malloc(2 * (size_t) other_size * sizeof(term));
+                                if (IS_NULL_PTR(o_buf)
+                                    || !termmap_champ_fill_array_sorted(term_get_map_hash_root(other),
+                                        o_buf, (size_t) other_size, global)) {
+                                    free(t_buf);
+                                    free(o_buf);
+                                    return TermCompareMemoryAllocFail;
+                                }
                             }
 #define TC_TKEY(i) (t_buf ? t_buf[2 * (i)] : term_get_map_key(t, (i)))
 #define TC_TVAL(i) (t_buf ? t_buf[2 * (i) + 1] : term_get_map_value(t, (i)))
@@ -1979,9 +2021,9 @@ term term_alloc_sub_binary_bits(term binary_or_state, size_t offset, size_t len,
 term term_get_map_assoc(term map, term key, GlobalContext *glb)
 {
     // Tree-backed maps: a single walk to the key, versus find_pos (rank) +
-    // value-at (select) which walks the tree twice.
-    if (term_is_map_tree(map)) {
-        return term_map_tree_get(map, key, glb);
+    // value-at (select), which would walk the whole trie.
+    if (term_is_map_hash(map)) {
+        return term_map_hash_get(map, key, glb);
     }
     int pos = term_find_map_pos(map, key, glb);
     if (pos == TERM_MAP_NOT_FOUND) {
@@ -2077,28 +2119,55 @@ term term_from_resource_binary(void *obj, const void *data, size_t size, Heap *h
     return ret;
 }
 
-// --- Large (tree-backed) map accessor bridges ----------------------------
-// term.h dispatches the position-based map accessors here for tree maps,
-// keeping termmap_tree.h out of that widely-included header. A tree map's
-// boxed payload is [ NIL marker | root | size ]; positions are in-order ranks.
+// --- Large (hash-backed) map accessor bridges ----------------------------
+// term.h dispatches the position-based map accessors here for hash maps,
+// keeping termmap_champ.h out of that widely-included header. A hash map's
+// boxed payload is [ marker | root | size ]. Positions index the trie's walk
+// order, which is stable but is not the key order: only the legacy positional
+// iterators use them, and each costs a walk, so new callers should look the
+// key up (term_map_hash_get) or iterate with a cursor instead.
 
-term term_map_tree_value_at(term map, avm_uint_t pos)
+term term_map_hash_value_at(term map, avm_uint_t pos)
 {
-    return termtree_select_value(term_get_map_tree_root(map), (size_t) pos);
+    return termmap_champ_select_value(term_get_map_hash_root(map), (size_t) pos);
 }
 
-term term_map_tree_key_at(term map, avm_uint_t pos)
+term term_map_hash_key_at(term map, avm_uint_t pos)
 {
-    return termtree_select_key(term_get_map_tree_root(map), (size_t) pos);
+    return termmap_champ_select_key(term_get_map_hash_root(map), (size_t) pos);
 }
 
-int term_map_tree_find_pos(term map, term key, GlobalContext *global)
+int term_map_hash_find_pos(term map, term key, GlobalContext *global)
 {
-    int rank = termtree_rank(term_get_map_tree_root(map), key, global);
+    int rank = termmap_champ_rank(term_get_map_hash_root(map), key, global);
     return rank < 0 ? TERM_MAP_NOT_FOUND : rank;
 }
 
-term term_map_tree_get(term map, term key, GlobalContext *global)
+term term_map_hash_get(term map, term key, GlobalContext *global)
 {
-    return termtree_get(term_get_map_tree_root(map), key, global);
+    return termmap_champ_get(term_get_map_hash_root(map), key, global);
+}
+
+term *term_map_sorted_array(term map, GlobalContext *global)
+{
+    int size = term_get_map_size(map);
+    term *arr = malloc(2 * (size_t) size * sizeof(term));
+    if (IS_NULL_PTR(arr)) {
+        return NULL;
+    }
+    if (term_is_map_hash(map)) {
+        if (UNLIKELY(!termmap_champ_fill_array_sorted(
+                term_get_map_hash_root(map), arr, (size_t) size, global))) {
+            free(arr);
+            return NULL;
+        }
+        return arr;
+    }
+    const term *keys = term_to_const_term_ptr(term_get_map_keys(map)) + 1;
+    const term *values = term_to_const_term_ptr(map) + term_get_map_value_offset();
+    for (int i = 0; i < size; i++) {
+        arr[2 * i] = keys[i];
+        arr[2 * i + 1] = values[i];
+    }
+    return arr;
 }

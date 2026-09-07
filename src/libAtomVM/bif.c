@@ -664,11 +664,11 @@ term bif_erlang_is_map_key_2(Context *ctx, uint32_t fail_label, term arg1, term 
         RAISE_ERROR(err);
     }
 
-    // Tree-backed maps: a single direct walk to the key (term_map_tree_get)
+    // Tree-backed maps: a single direct walk to the key (term_map_hash_get)
     // instead of term_find_map_pos, which also sums subtree sizes to build an
     // in-order rank we would immediately discard.
-    if (term_is_map_tree(arg2)) {
-        return term_is_invalid_term(term_map_tree_get(arg2, arg1, ctx->global))
+    if (term_is_map_hash(arg2)) {
+        return term_is_invalid_term(term_map_hash_get(arg2, arg1, ctx->global))
             ? FALSE_ATOM
             : TRUE_ATOM;
     }
@@ -774,11 +774,11 @@ term bif_erlang_map_get_2(Context *ctx, uint32_t fail_label, term arg1, term arg
         RAISE_ERROR(err);
     }
 
-    // Tree-backed maps look the value up in a single walk (term_map_tree_get);
+    // Tree-backed maps look the value up in a single walk (term_map_hash_get);
     // flat maps keep term_find_map_pos so the compare-OOM signal is preserved.
     term value;
-    if (term_is_map_tree(arg2)) {
-        value = term_map_tree_get(arg2, arg1, ctx->global);
+    if (term_is_map_hash(arg2)) {
+        value = term_map_hash_get(arg2, arg1, ctx->global);
     } else {
         int pos = term_find_map_pos(arg2, arg1, ctx->global);
         if (UNLIKELY(pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {

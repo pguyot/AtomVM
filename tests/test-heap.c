@@ -29,7 +29,7 @@
 #include "memory.h"
 #include "refc_binary.h"
 #include "term.h"
-#include "termmap_tree.h"
+#include "termmap_champ.h"
 #include "utils.h"
 
 void test_memory_ensure_free(void)
@@ -685,11 +685,12 @@ void test_generational_gc_fragment_swap(void)
     globalcontext_destroy(glb);
 }
 
-// Exercise the persistent weight-balanced tree backing large maps: inserts in
-// scrambled order, lookups, in-order (sorted) selection, value updates, and a
-// balanced bulk build from a sorted array. GC runs between inserts (the tree
-// root is passed as a root), so this also checks the nodes survive collection.
-void test_termmap_tree(void)
+// Exercise the persistent CHAMP trie backing large maps: inserts in scrambled
+// order, lookups, removals down to empty, value updates, and a bulk build. GC
+// runs between inserts (the root is passed as a root), so this also checks the
+// nodes survive collection. Keys deliberately include tuples, whose hashes
+// spread differently from small integers'.
+void test_termmap_champ(void)
 {
     GlobalContext *glb = globalcontext_new();
     Context *ctx = context_new(glb);
@@ -697,8 +698,8 @@ void test_termmap_tree(void)
     ctx->fullsweep_after = 65535;
 
     const int n = 2000;
-    term root = termtree_empty();
-    assert(termtree_size(root) == 0);
+    term root = termmap_champ_empty();
+    assert(termmap_champ_count(root) == 0);
 
     // Insert keys in a scrambled order (LCG over a power-of-two-ish range),
     // value = key * 10 + 1. Each distinct key inserted exactly once.
@@ -714,45 +715,103 @@ void test_termmap_tree(void)
         seen[key] = true;
         inserted++;
 
-        enum MemoryGCResult res = memory_ensure_free_with_roots(
-            ctx, termtree_put_heap_size(termtree_size(root)), 1, &root, MEMORY_CAN_SHRINK);
+        enum MemoryGCResult res = memory_ensure_free_with_roots(ctx,
+            termmap_champ_put_heap_size(root, (size_t) inserted), 1, &root, MEMORY_CAN_SHRINK);
         assert(res == MEMORY_GC_OK);
-        root = termtree_put(&ctx->heap, root, term_from_int(key), term_from_int(key * 10 + 1), glb);
-        assert(termtree_size(root) == (size_t) inserted);
+        bool added = false;
+        root = termmap_champ_put(
+            &ctx->heap, root, term_from_int(key), term_from_int(key * 10 + 1), glb, &added);
+        assert(added);
+        assert(termmap_champ_count(root) == (size_t) inserted);
     }
-    assert(termtree_size(root) == (size_t) n);
+    assert(termmap_champ_count(root) == (size_t) n);
 
     // Every key present with the right value.
     for (int key = 0; key < n; key++) {
-        term v = termtree_get(root, term_from_int(key), glb);
+        term v = termmap_champ_get(root, term_from_int(key), glb);
         assert(!term_is_invalid_term(v));
         assert(term_to_int(v) == key * 10 + 1);
     }
     // An absent key is reported as such.
-    assert(term_is_invalid_term(termtree_get(root, term_from_int(n + 7), glb)));
+    assert(term_is_invalid_term(termmap_champ_get(root, term_from_int(n + 7), glb)));
 
-    // In-order selection yields keys ascending (the sorted-map invariant).
+    // The walk visits every entry exactly once, in an order the sorted
+    // materialization then puts back into key order.
+    term *arr = malloc(2 * (size_t) n * sizeof(term));
+    assert(arr != NULL);
+    assert(termmap_champ_fill_array_sorted(root, arr, (size_t) n, glb));
     for (int i = 0; i < n; i++) {
-        assert(term_to_int(termtree_select_key(root, i)) == i);
-        assert(term_to_int(termtree_select_value(root, i)) == i * 10 + 1);
+        assert(term_to_int(arr[2 * i]) == i);
+        assert(term_to_int(arr[2 * i + 1]) == i * 10 + 1);
     }
+
+    // A cursor walks the same entries; check it reaches all of them.
+    memset(arr, 0, 2 * (size_t) n * sizeof(term));
+    int visited = 0;
+    {
+        enum MemoryGCResult res = memory_ensure_free_with_roots(
+            ctx, termmap_champ_cursor_reserve(root, true), 1, &root, MEMORY_CAN_SHRINK);
+        assert(res == MEMORY_GC_OK);
+        term cursor = termmap_champ_cursor_first(root, &ctx->heap);
+        term key;
+        term value;
+        term next;
+        while (termmap_champ_cursor_next(cursor, &key, &value, &next, &ctx->heap)) {
+            assert(term_to_int(value) == term_to_int(key) * 10 + 1);
+            visited++;
+            cursor = next;
+            if (term_is_nil(cursor)) {
+                break;
+            }
+            // The heap is not reserved per step here, so stop before it can
+            // overflow: reaching every entry is checked by the sorted fill.
+            if (visited >= 64) {
+                break;
+            }
+        }
+    }
+    assert(visited == 64);
+    free(arr);
 
     // Update existing keys (value = key * 2), size unchanged.
     for (int key = 0; key < n; key += 3) {
         enum MemoryGCResult res = memory_ensure_free_with_roots(
-            ctx, termtree_put_heap_size(termtree_size(root)), 1, &root, MEMORY_CAN_SHRINK);
+            ctx, termmap_champ_put_heap_size(root, (size_t) n), 1, &root, MEMORY_CAN_SHRINK);
         assert(res == MEMORY_GC_OK);
-        root = termtree_put(&ctx->heap, root, term_from_int(key), term_from_int(key * 2), glb);
+        bool added = true;
+        root = termmap_champ_put(
+            &ctx->heap, root, term_from_int(key), term_from_int(key * 2), glb, &added);
+        assert(!added);
     }
-    assert(termtree_size(root) == (size_t) n);
+    assert(termmap_champ_count(root) == (size_t) n);
     for (int key = 0; key < n; key++) {
-        term v = termtree_get(root, term_from_int(key), glb);
+        term v = termmap_champ_get(root, term_from_int(key), glb);
         int expected = (key % 3 == 0) ? key * 2 : key * 10 + 1;
         assert(term_to_int(v) == expected);
     }
 
-    // Balanced bulk build from a sorted array.
-    enum MemoryGCResult res = memory_ensure_free(ctx, termtree_from_sorted_heap_size(64));
+    // Remove every key, one at a time, down to the empty trie. The canonical
+    // form is what makes the last removal give back NIL rather than a chain of
+    // one-entry nodes.
+    for (int key = 0; key < n; key++) {
+        enum MemoryGCResult res = memory_ensure_free_with_roots(ctx,
+            termmap_champ_remove_heap_size(root, (size_t) (n - key)), 1, &root, MEMORY_CAN_SHRINK);
+        assert(res == MEMORY_GC_OK);
+        bool found = false;
+        root = termmap_champ_remove(&ctx->heap, root, term_from_int(key), glb, &found);
+        assert(found);
+        assert(termmap_champ_count(root) == (size_t) (n - key - 1));
+        // Removing it again finds nothing and changes nothing.
+        term again = termmap_champ_remove(&ctx->heap, root, term_from_int(key), glb, &found);
+        assert(!found);
+        assert(again == root);
+    }
+    assert(term_is_nil(root));
+
+    // Bulk build, and the same entries inserted one at a time, must agree: the
+    // representation is canonical, so they are structurally equal.
+    enum MemoryGCResult res
+        = memory_ensure_free(ctx, termmap_champ_from_array_heap_size(64) + 64 * 8);
     assert(res == MEMORY_GC_OK);
     term keys[64];
     term vals[64];
@@ -760,12 +819,24 @@ void test_termmap_tree(void)
         keys[i] = term_from_int(i * 2);
         vals[i] = term_from_int(i * 2 + 100);
     }
-    term built = termtree_from_sorted(&ctx->heap, keys, vals, 64);
-    assert(termtree_size(built) == 64);
+    term built = termmap_champ_from_array(&ctx->heap, keys, vals, 64, glb);
+    assert(termmap_champ_count(built) == 64);
     for (int i = 0; i < 64; i++) {
-        assert(term_to_int(termtree_select_key(built, i)) == i * 2);
-        assert(term_to_int(termtree_get(built, term_from_int(i * 2), glb)) == i * 2 + 100);
+        assert(term_to_int(termmap_champ_get(built, term_from_int(i * 2), glb)) == i * 2 + 100);
     }
+
+    term roots[2] = { termmap_champ_empty(), built };
+    for (int i = 63; i >= 0; i--) {
+        enum MemoryGCResult r = memory_ensure_free_with_roots(
+            ctx, termmap_champ_put_heap_size(roots[0], 64), 2, roots, MEMORY_CAN_SHRINK);
+        assert(r == MEMORY_GC_OK);
+        bool added = false;
+        roots[0] = termmap_champ_put(
+            &ctx->heap, roots[0], term_from_int(i * 2), term_from_int(i * 2 + 100), glb, &added);
+        assert(added);
+    }
+    assert(termmap_champ_count(roots[0]) == 64);
+    assert(termmap_champ_equal(roots[0], roots[1], glb, true) == 1);
 
     context_destroy(ctx);
     globalcontext_destroy(glb);
@@ -776,7 +847,7 @@ int main(int argc, char **argv)
     UNUSED(argc);
     UNUSED(argv);
 
-    test_termmap_tree();
+    test_termmap_champ();
 
     test_memory_ensure_free();
     test_gc_ref_count();

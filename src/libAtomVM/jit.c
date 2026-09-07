@@ -36,7 +36,7 @@
 #include "scheduler.h"
 #include "stacktrace.h"
 #include "term.h"
-#include "termmap_tree.h"
+#include "termmap_champ.h"
 #include "utils.h"
 
 #include <math.h>
@@ -2302,14 +2302,14 @@ static int jit_term_find_map_pos(Context *ctx, term map, term key)
     // Callers (OP_GET_MAP_ELEMENTS miss disambiguation, OP_HAS_MAP_FIELDS,
     // OP_PUT_MAP_ASSOC entry counting) only test the result against
     // TERM_MAP_NOT_FOUND / TERM_MAP_MEMORY_ALLOC_FAIL / found -- none uses the
-    // actual position. For a tree-backed map a direct walk (term_map_tree_get)
-    // answers presence in O(log n), avoiding term_find_map_pos -> termtree_rank,
-    // which additionally sums subtree sizes at every level to build an in-order
-    // rank we would discard. node_find does not surface the compare-OOM for
-    // trees, so a tree absence is simply not-found (matching is_map_key). 0 is
-    // returned for "found" as an arbitrary non-negative, non-sentinel position.
-    if (term_is_map_tree(map)) {
-        return term_is_invalid_term(term_map_tree_get(map, key, ctx->global))
+    // actual position. For a hash-backed map a direct walk (term_map_hash_get)
+    // answers presence with one hash, avoiding term_find_map_pos ->
+    // termmap_champ_rank, which walks the whole trie to build the walk-order
+    // position we would discard. The trie does not surface the compare-OOM, so
+    // an absence there is simply not-found (matching is_map_key). 0 is returned
+    // for "found" as an arbitrary non-negative, non-sentinel position.
+    if (term_is_map_hash(map)) {
+        return term_is_invalid_term(term_map_hash_get(map, key, ctx->global))
             ? TERM_MAP_NOT_FOUND
             : 0;
     }
@@ -2319,13 +2319,13 @@ static int jit_term_find_map_pos(Context *ctx, term map, term key)
 // OP_GET_MAP_ELEMENTS miss-path disambiguation. It is reached only after
 // term_get_map_assoc already walked the map and returned invalid_term, so the
 // key is absent (or, for a flat map, the rare compare-OOM rather than a true
-// miss). A tree was thus already walked once and node_find never surfaces the
+// miss). A trie was thus already walked once and its lookup never surfaces the
 // compare-OOM, so it is definitively not-found -- skip the second walk entirely;
 // only a flat map still needs term_find_map_pos to tell a miss from an alloc
 // failure.
 static int jit_term_get_map_assoc_miss(Context *ctx, term map, term key)
 {
-    if (term_is_map_tree(map)) {
+    if (term_is_map_hash(map)) {
         return TERM_MAP_NOT_FOUND;
     }
     return term_find_map_pos(map, key, ctx->global);
@@ -2612,15 +2612,15 @@ static bool sort_kv_pairs(term *kv, int size, GlobalContext *global)
 }
 
 // Number of free heap words jit_put_map_assoc may need. The codegen reserves
-// this (via PRIM_PUT_MAP_HEAP_NEED) before the call, since a tree-backed result
+// this (via PRIM_PUT_MAP_HEAP_NEED) before the call, since a hash-backed result
 // has a very different footprint than a flat one. Kept in lock-step with the
-// allocation done by jit_put_map_assoc / jit_map_build_tree below.
+// allocation done by jit_put_map_assoc / jit_map_build_hash below.
 size_t jit_put_map_heap_need(Context *ctx, term src, size_t new_entries, size_t num_elements)
 {
     UNUSED(ctx);
     size_t src_size = term_get_map_size(src);
     size_t new_size = src_size + new_entries;
-    if (new_size <= TERM_MAP_TREE_THRESHOLD && !term_is_map_tree(src)
+    if (new_size <= TERM_MAP_HASH_THRESHOLD && !term_is_map_hash(src)
         && (new_entries == 0 || new_size <= TERM_MAP_FLAT_GROW_MAX)) {
         // Flat result: a new values array (shared keys) for a pure update, or a
         // whole new flat map when the key set grows (up to the growth cutoff).
@@ -2629,11 +2629,17 @@ size_t jit_put_map_heap_need(Context *ctx, term src, size_t new_entries, size_t 
         }
         return TERM_MAP_SIZE(new_size);
     }
-    // Tree result: convert a flat src in one O(src_size) build (skipped when src
-    // is already a tree), then path-copy each inserted/updated key.
-    size_t base = term_is_map_tree(src) ? 0 : termtree_from_sorted_heap_size(src_size);
-    return base + num_elements * termtree_put_heap_size(new_size)
-        + (TERM_MAP_TREE_BOXED_ARITY + 1);
+    // Hash result: convert a flat src in one O(src_size) build (skipped when
+    // src is already hash-backed), then path-copy each inserted/updated key.
+    // A freshly converted trie has no root to ask about collision nodes, so its
+    // puts take the bound that allows for one.
+    if (term_is_map_hash(src)) {
+        return num_elements * termmap_champ_put_heap_size(term_get_map_hash_root(src), new_size)
+            + (TERM_MAP_HASH_BOXED_ARITY + 1);
+    }
+    return termmap_champ_from_array_heap_size(src_size)
+        + num_elements * termmap_champ_put_heap_size_max(new_size)
+        + (TERM_MAP_HASH_BOXED_ARITY + 1);
 }
 
 // Worst-case free heap words for a single-key maps:put, assuming the key is
@@ -2646,39 +2652,47 @@ size_t jit_put_map_one_heap_need(Context *ctx, term src)
     UNUSED(ctx);
     size_t src_size = term_get_map_size(src);
     size_t new_size = src_size + 1;
-    if (new_size <= TERM_MAP_FLAT_GROW_MAX && !term_is_map_tree(src)) {
+    if (new_size <= TERM_MAP_FLAT_GROW_MAX && !term_is_map_hash(src)) {
         return TERM_MAP_SIZE(new_size);
     }
     // Past the growth cutoff the outcome is either a flat-shared update
-    // (found key) or a tree conversion (new key); the tree sizing dominates
-    // the shared-values copy, so it covers both.
-    size_t base = term_is_map_tree(src) ? 0 : termtree_from_sorted_heap_size(src_size);
-    return base + termtree_put_heap_size(new_size) + (TERM_MAP_TREE_BOXED_ARITY + 1);
+    // (found key) or a conversion to the hash form (new key); the hash sizing
+    // dominates the shared-values copy, so it covers both.
+    if (term_is_map_hash(src)) {
+        return termmap_champ_put_heap_size(term_get_map_hash_root(src), new_size)
+            + (TERM_MAP_HASH_BOXED_ARITY + 1);
+    }
+    return termmap_champ_from_array_heap_size(src_size)
+        + termmap_champ_put_heap_size_max(new_size) + (TERM_MAP_HASH_BOXED_ARITY + 1);
 }
 
-// Build/extend the persistent tree backing a large map and wrap it. The caller
+// Build/extend the persistent trie backing a large map and wrap it. The caller
 // has reserved jit_put_map_heap_need(...) words.
-static term jit_map_build_tree(Context *ctx, term src, size_t src_size, size_t num_elements, term *kv)
+static term jit_map_build_hash(Context *ctx, term src, size_t src_size, size_t num_elements, term *kv)
 {
     Heap *heap = &ctx->heap;
     GlobalContext *global = ctx->global;
     term root;
-    if (term_is_map_tree(src)) {
-        root = term_get_map_tree_root(src);
+    if (term_is_map_hash(src)) {
+        root = term_get_map_hash_root(src);
     } else {
-        // Flat src keys are already sorted, so build a balanced tree directly.
         const term *src_keys = term_to_const_term_ptr(term_get_map_keys(src)) + 1;
         const term *src_vals = term_to_const_term_ptr(src) + term_get_map_value_offset();
-        root = termtree_from_sorted(heap, src_keys, src_vals, src_size);
+        root = termmap_champ_from_array(heap, src_keys, src_vals, src_size, global);
     }
+    // Counting the inserts as they happen is what keeps the wrapper's size
+    // correct without a walk: the trie stores no subtree counts.
+    size_t size = src_size;
     for (size_t i = 0; i < num_elements; i++) {
-        root = termtree_put(heap, root, kv[2 * i], kv[(2 * i) + 1], global);
+        bool added = false;
+        root = termmap_champ_put(heap, root, kv[2 * i], kv[(2 * i) + 1], global, &added);
+        size += added ? 1 : 0;
     }
-    return term_alloc_map_tree(heap, root, termtree_size(root));
+    return term_alloc_map_hash(heap, root, size);
 }
 
 // Read a map value by the position returned by term_find_map_pos. Dispatches
-// flat vs tree (a tree position is an in-order rank, not a flat array index), so
+// flat vs hash (a hash-backed position is a walk-order index, not an array offset), so
 // the get_map_elements opcode cannot read the value with a raw array offset.
 static term jit_map_get_value(Context *ctx, term map, int pos)
 {
@@ -2687,14 +2701,14 @@ static term jit_map_get_value(Context *ctx, term map, int pos)
 }
 
 // Look a key up in a map, returning its value or term_invalid_term() if absent.
-// Tree-backed maps take a single direct walk (term_map_tree_get) instead of the
+// Tree-backed maps take a single direct walk (term_map_hash_get) instead of the
 // find_pos (rank) + map_get_value (select) pair. A flat map that hits the rare
 // compare-OOM also returns invalid here; OP_GET_MAP_ELEMENTS disambiguates
 // not-found from OOM with a term_find_map_pos call only on the (cold) miss path.
 static term jit_term_get_map_assoc(Context *ctx, term map, term key)
 {
-    if (term_is_map_tree(map)) {
-        return term_map_tree_get(map, key, ctx->global);
+    if (term_is_map_hash(map)) {
+        return term_map_hash_get(map, key, ctx->global);
     }
     int pos = term_find_map_pos(map, key, ctx->global);
     if (pos < 0) {
@@ -2710,12 +2724,13 @@ static term jit_put_map_assoc(Context *ctx, JITState *jit_state, term src, size_
     size_t new_map_size = src_size + new_entries;
     bool is_shared = new_entries == 0;
 
-    // Large maps are backed by a persistent weight-balanced tree (O(log n) put)
-    // rather than a flat sorted array (O(n) put); see termmap_tree.h. Growing
+    // Large maps are backed by a persistent CHAMP trie (one hash and one key
+    // comparison per put) rather than a flat sorted array (O(n) put); see
+    // termmap_champ.h. Growing
     // inserts convert earlier (TERM_MAP_FLAT_GROW_MAX) than pure updates.
-    if (term_is_map_tree(src) || new_map_size > TERM_MAP_TREE_THRESHOLD
+    if (term_is_map_hash(src) || new_map_size > TERM_MAP_HASH_THRESHOLD
         || (new_entries > 0 && new_map_size > TERM_MAP_FLAT_GROW_MAX)) {
-        return jit_map_build_tree(ctx, src, src_size, num_elements, kv);
+        return jit_map_build_hash(ctx, src, src_size, num_elements, kv);
     }
 
     // Fast path for a single key (the common Map#{K => V}). Map keys are sorted
@@ -2869,26 +2884,27 @@ size_t jit_put_map_exact_one_heap_need(Context *ctx, term src)
 {
     UNUSED(ctx);
     size_t src_size = term_get_map_size(src);
-    if (!term_is_map_tree(src)) {
+    if (!term_is_map_hash(src)) {
         return TERM_MAP_SHARED_SIZE(src_size);
     }
-    return termtree_put_heap_size(src_size) + (TERM_MAP_TREE_BOXED_ARITY + 1);
+    return termmap_champ_put_heap_size(term_get_map_hash_root(src), src_size)
+        + (TERM_MAP_HASH_BOXED_ARITY + 1);
 }
 
 // Single-key exact (`:=`) map update at an already-known position. The
 // OP_PUT_MAP_EXACT codegen must locate the key anyway to raise on a missing
 // one, so it hands that position here instead of letting the update search
 // the map a second time. `pos` is only meaningful for a flat map (for a
-// tree, term_find_map_pos reports presence, not a usable rank), so tree maps
+// trie, term_find_map_pos reports presence, not a usable rank), so hash maps
 // take the ordinary keyed path. The caller reserved
 // jit_put_map_exact_one_heap_need(...) words.
 static term jit_put_map_exact_one(Context *ctx, JITState *jit_state, term src, int pos, term key, term value)
 {
     UNUSED(jit_state);
     TRACE("jit_put_map_exact_one: src=%p pos=%d\n", (void *) src, pos);
-    if (UNLIKELY(term_is_map_tree(src))) {
+    if (UNLIKELY(term_is_map_hash(src))) {
         term kv[2] = { key, value };
-        return jit_map_build_tree(ctx, src, term_get_map_size(src), 1, kv);
+        return jit_map_build_hash(ctx, src, term_get_map_size(src), 1, kv);
     }
     size_t src_size = term_get_map_size(src);
     // Share the keys tuple (the key set is unchanged) and bulk-copy the
@@ -2903,16 +2919,16 @@ static term jit_put_map_exact_one(Context *ctx, JITState *jit_state, term src, i
 
 // Single-key maps:put with no pre-counted new_entries: the caller reserved
 // jit_put_map_one_heap_need(...) words (the worst case), and update-vs-insert
-// is decided here from the one binary search / tree walk — the sizing
+// is decided here from the one binary search / trie walk — the sizing
 // find_map_pos pass and the per-call kv scratch array both disappear.
 static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, term key, term value)
 {
     TRACE("jit_put_map_assoc_one: src=%p\n", (void *) src);
     size_t src_size = term_get_map_size(src);
 
-    if (term_is_map_tree(src)) {
+    if (term_is_map_hash(src)) {
         term kv[2] = { key, value };
-        return jit_map_build_tree(ctx, src, src_size, 1, kv);
+        return jit_map_build_hash(ctx, src, src_size, 1, kv);
     }
 
     // Flat map: binary-search the position, then block-copy (same layout
@@ -2957,11 +2973,11 @@ static term jit_put_map_assoc_one(Context *ctx, JITState *jit_state, term src, t
         dst_vals[found] = value;
         return map;
     }
-    // New key: a growing insert past the cutoff converts to the tree form
+    // New key: a growing insert past the cutoff converts to the hash form
     // instead of paying the O(n) flat copy (updates above stayed flat).
     if (src_size + 1 > TERM_MAP_FLAT_GROW_MAX) {
         term kv[2] = { key, value };
-        return jit_map_build_tree(ctx, src, src_size, 1, kv);
+        return jit_map_build_hash(ctx, src, src_size, 1, kv);
     }
     // Insert at the binary-search insertion point `low`.
     size_t at = (size_t) low;

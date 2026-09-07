@@ -25,6 +25,7 @@
 #include "atom_table.h"
 #include "globalcontext.h"
 #include "module.h"
+#include "termmap_champ.h"
 
 //
 // hash function
@@ -55,6 +56,22 @@
 #define LARGE_PRIME_FUNCTION 16780621
 
 static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global);
+
+// Accumulates the entries of a map into an order-independent sum; see the map
+// case of hash_term_incr.
+struct MapHashAccumulator
+{
+    uint32_t sum;
+    GlobalContext *global;
+};
+
+static void hash_map_entry(term key, term value, void *arg)
+{
+    struct MapHashAccumulator *acc = (struct MapHashAccumulator *) arg;
+    uint32_t entry = hash_term_incr(key, LARGE_PRIME_INITIAL, acc->global) * LARGE_PRIME_MAP
+        + hash_term_incr(value, LARGE_PRIME_INITIAL, acc->global);
+    acc->sum += entry;
+}
 
 static uint32_t hash_uint32(uint32_t n, uint32_t h, uint32_t prime)
 {
@@ -245,14 +262,23 @@ static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global)
         }
         return h * LARGE_PRIME_LIST;
     } else if (term_is_map(t)) {
+        // Order-independent: the two map representations enumerate their
+        // entries differently -- a flat map by key, a hash-backed one by hash
+        // -- and the same entries must hash the same whichever holds them,
+        // because a map can itself be a map key. Summing each entry's own hash
+        // rather than folding them in sequence makes the result depend on the
+        // entry set alone.
+        struct MapHashAccumulator acc = { .sum = 0, .global = global };
         size_t size = term_get_map_size(t);
-        for (size_t i = 0; i < size; ++i) {
-            term key = term_get_map_key(t, (avm_uint_t) i);
-            h = h * LARGE_PRIME_MAP + hash_term_incr(key, h, global);
-            term value = term_get_map_value(t, (avm_uint_t) i);
-            h = h * LARGE_PRIME_MAP + hash_term_incr(value, h, global);
+        if (term_is_map_hash(t)) {
+            termmap_champ_foreach(term_get_map_hash_root(t), hash_map_entry, &acc);
+        } else {
+            for (size_t i = 0; i < size; ++i) {
+                hash_map_entry(term_get_map_key(t, (avm_uint_t) i),
+                    term_get_map_value(t, (avm_uint_t) i), &acc);
+            }
         }
-        return h * LARGE_PRIME_MAP;
+        return ((h * LARGE_PRIME_MAP) + acc.sum + (uint32_t) size) * LARGE_PRIME_MAP;
     } else {
         fprintf(stderr, "term_hash: unsupported term type\n");
         return h;

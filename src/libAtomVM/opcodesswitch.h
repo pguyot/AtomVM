@@ -39,6 +39,7 @@
 #include "nifs.h"
 #include "scheduler.h"
 #include "stacktrace.h"
+#include "termmap_champ.h"
 #include "utils.h"
 
 //#define ENABLE_TRACE
@@ -5291,7 +5292,7 @@ schedule_in:
                     DECODE_COMPACT_TERM(key, pc);
                     DECODE_COMPACT_TERM(value, pc);
 
-                    int map_pos = term_find_map_pos(src, key, ctx->global);
+                    int map_pos = term_map_key_pos(src, key, ctx->global);
                     if (map_pos == TERM_MAP_NOT_FOUND) {
                         new_entries++;
                     } else if (UNLIKELY(map_pos == TERM_MAP_MEMORY_ALLOC_FAIL)) {
@@ -5304,11 +5305,31 @@ schedule_in:
                 //
                 size_t src_size = term_get_map_size(src);
                 size_t new_map_size = src_size + new_entries;
-                // A tree-backed src has no flat keys tuple to share (its keys
-                // offset holds the NIL marker), so build fresh keys for it; the
-                // term_get_map_key/value accessors below dispatch on tree vs flat.
-                bool is_shared = new_entries == 0 && !term_is_map_tree(src);
-                size_t heap_needed = term_map_size_in_terms_maybe_shared(new_map_size, is_shared);
+                // Large maps are backed by a CHAMP trie (see termmap_champ.h),
+                // which a growing insert converts to earlier than a pure
+                // update; the trie's entries are in hash order, so it cannot
+                // feed the ordered merge the flat path below does.
+                bool as_hash = term_is_map_hash(src)
+                    || new_map_size > TERM_MAP_HASH_THRESHOLD
+                    || (new_entries > 0 && new_map_size > TERM_MAP_FLAT_GROW_MAX);
+                bool is_shared = !as_hash && new_entries == 0;
+                size_t heap_needed;
+                if (as_hash) {
+                    heap_needed = TERM_MAP_HASH_BOXED_ARITY + 1;
+                    if (term_is_map_hash(src)) {
+                        heap_needed += num_elements
+                            * termmap_champ_put_heap_size(
+                                term_get_map_hash_root(src), new_map_size);
+                    } else {
+                        // A trie converted from the flat src has no root to ask
+                        // about collision nodes yet, so its puts take the bound
+                        // that allows for one.
+                        heap_needed += termmap_champ_from_array_heap_size(src_size)
+                            + num_elements * termmap_champ_put_heap_size_max(new_map_size);
+                    }
+                } else {
+                    heap_needed = term_map_size_in_terms_maybe_shared(new_map_size, is_shared);
+                }
                 TRIM_LIVE_REGS(live);
                 // MEMORY_CAN_SHRINK because put_map is classified as gc in beam_ssa_codegen.erl
                 x_regs[live] = src;
@@ -5329,6 +5350,31 @@ schedule_in:
                     DECODE_COMPACT_TERM(value, list_pc);
                     kv[j].key = key;
                     kv[j].value = value;
+                }
+                if (as_hash) {
+                    term root;
+                    if (term_is_map_hash(src)) {
+                        root = term_get_map_hash_root(src);
+                    } else {
+                        const term *src_keys
+                            = term_to_const_term_ptr(term_get_map_keys(src)) + 1;
+                        const term *src_vals
+                            = term_to_const_term_ptr(src) + term_get_map_value_offset();
+                        root = termmap_champ_from_array(
+                            &ctx->heap, src_keys, src_vals, src_size, ctx->global);
+                    }
+                    // The trie stores no subtree counts, so the wrapper's size
+                    // comes from counting the inserts as they happen.
+                    size_t hash_size = src_size;
+                    for (uint32_t j = 0; j < num_elements; j++) {
+                        bool added = false;
+                        root = termmap_champ_put(
+                            &ctx->heap, root, kv[j].key, kv[j].value, ctx->global, &added);
+                        hash_size += added ? 1 : 0;
+                    }
+                    free(kv);
+                    WRITE_REGISTER_GC_SAFE(dreg, term_alloc_map_hash(&ctx->heap, root, hash_size));
+                    break;
                 }
                 if (UNLIKELY(!sort_kv_pairs(kv, num_elements, ctx->global))) {
                     free(kv);
@@ -5416,7 +5462,7 @@ schedule_in:
                     DECODE_COMPACT_TERM(key, pc);
                     DECODE_COMPACT_TERM(value, pc);
 
-                    int map_pos = term_find_map_pos(src, key, ctx->global);
+                    int map_pos = term_map_key_pos(src, key, ctx->global);
                     if (map_pos == TERM_MAP_NOT_FOUND) {
                         // A missing required key (:=) fails the guard when a
                         // fail label is set; only raise in body context.
@@ -5434,23 +5480,42 @@ schedule_in:
                 // Maybe GC
                 //
                 size_t src_size = term_get_map_size(src);
-                // A tree-backed src has no flat keys tuple to share (its keys
-                // offset holds the NIL marker), so build fresh keys for it.
-                bool is_shared = !term_is_map_tree(src);
+                bool src_is_hash = term_is_map_hash(src);
                 TRIM_LIVE_REGS(live);
                 // MEMORY_CAN_SHRINK because put_map is classified as gc in beam_ssa_codegen.erl
                 x_regs[live] = src;
-                if (memory_ensure_free_with_roots(ctx, term_map_size_in_terms_maybe_shared(src_size, is_shared), live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
+                size_t exact_needed = src_is_hash
+                    ? num_elements
+                            * termmap_champ_put_heap_size(term_get_map_hash_root(src), src_size)
+                        + (TERM_MAP_HASH_BOXED_ARITY + 1)
+                    : term_map_size_in_terms_maybe_shared(src_size, true);
+                if (memory_ensure_free_with_roots(ctx, exact_needed, live + 1, x_regs, MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
                     RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                 }
                 src = x_regs[live];
+                if (src_is_hash) {
+                    // Every key is known to be present, so the size is unchanged
+                    // and each update just path-copies its root-to-entry path.
+                    term root = term_get_map_hash_root(src);
+                    for (uint32_t j = 0; j < num_elements; ++j) {
+                        term key, value;
+                        DECODE_COMPACT_TERM(key, list_pc);
+                        DECODE_COMPACT_TERM(value, list_pc);
+                        bool added = false;
+                        root = termmap_champ_put(
+                            &ctx->heap, root, key, value, ctx->global, &added);
+                    }
+                    WRITE_REGISTER_GC_SAFE(dreg, term_alloc_map_hash(&ctx->heap, root, src_size));
+                    break;
+                }
                 //
                 // Create a new map of the same size as src and populate with entries from src
                 //
-                term map = term_alloc_map_maybe_shared(src_size, is_shared ? term_get_map_keys(src) : term_invalid_term(), &ctx->heap);
-                for (size_t j = 0; j < src_size; ++j) {
-                    term_set_map_assoc(map, j, term_get_map_key(src, j), term_get_map_value(src, j));
-                }
+                term map = term_alloc_map_maybe_shared(src_size, term_get_map_keys(src), &ctx->heap);
+                term *exact_vals = term_to_term_ptr(map) + term_get_map_value_offset();
+                const term *exact_src_vals
+                    = term_to_const_term_ptr(src) + term_get_map_value_offset();
+                memcpy(exact_vals, exact_src_vals, src_size * sizeof(term));
                 //
                 // Copy the new terms into the new map, in situ only
                 //
@@ -5501,7 +5566,7 @@ schedule_in:
                     term key;
                     DECODE_COMPACT_TERM(key, pc);
 
-                    int pos = term_find_map_pos(src, key, ctx->global);
+                    int pos = term_map_key_pos(src, key, ctx->global);
                     if (pos == TERM_MAP_NOT_FOUND) {
                         pc = mod->labels[label];
                         break;
@@ -5523,19 +5588,19 @@ schedule_in:
                 uint32_t list_len;
                 DECODE_LITERAL(list_len, pc);
                 uint32_t num_elements = list_len / 2;
-                // Tree-backed maps look the value up in one walk (term_map_tree_get)
-                // instead of find_pos (rank) + value-at (select), which walks the
-                // tree twice. Tree lookups never hit the compare-OOM path that
+                // Hash-backed maps look the value up with one hashed descent
+                // instead of find_pos + value-at, which would walk the whole
+                // trie. A trie lookup never hits the compare-OOM path that
                 // find_pos signals for flat maps, so the flat branch keeps it.
-                bool src_is_tree = term_is_map_tree(src);
+                bool src_is_hash = term_is_map_hash(src);
                 for (uint32_t j = 0; j < num_elements; ++j) {
                     term key;
                     DECODE_COMPACT_TERM(key, pc);
                     DEST_REGISTER(dreg);
                     DECODE_DEST_REGISTER(dreg, pc);
 
-                    if (src_is_tree) {
-                        term value = term_map_tree_get(src, key, ctx->global);
+                    if (src_is_hash) {
+                        term value = term_map_hash_get(src, key, ctx->global);
                         if (term_is_invalid_term(value)) {
                             pc = mod->labels[label];
                             break;

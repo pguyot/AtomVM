@@ -4971,7 +4971,7 @@ is_known_binary(_MMod, _MSt, _) ->
 %% Inline erlang:map_size/1 on a value the type proves is a map. Mirrors
 %% term_get_map_size: the two map representations are distinguished by the word
 %% at boxed_value[TERM_MAP_KEYS_OFFSET]. For a tree map that word is the nil
-%% marker (an immediate), and the size lives at boxed_value[TERM_MAP_TREE_SIZE_INDEX]
+%% marker (an immediate), and the size lives at boxed_value[TERM_MAP_HASH_SIZE_INDEX]
 %% already encoded as a tagged small integer, so it is the result verbatim. For
 %% a flat map that word is a boxed keys tuple, and the size is its arity
 %% (header >> 6) re-tagged as a small integer. Each representation-specific read
@@ -4989,7 +4989,7 @@ op_gc_bif1_map_size(MMod, MSt0, Arg, Dest) ->
         {KeysReg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
         fun(BSt0) ->
             %% Tree map: the size slot already holds the tagged integer.
-            MMod:move_array_element(BSt0, MapReg, ?TERM_MAP_TREE_SIZE_INDEX, ResultReg)
+            MMod:move_array_element(BSt0, MapReg, ?TERM_MAP_HASH_SIZE_INDEX, ResultReg)
         end,
         fun(BSt0) ->
             %% Flat map: ResultReg := keys tuple header, arity = header >> 6.

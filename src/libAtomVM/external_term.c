@@ -744,10 +744,25 @@ static int serialize_term(uint8_t *buf, term t, GlobalContext *glb)
                 WRITE_32_UNALIGNED(buf + k + 1, size);
             }
             k += 5;
-            // Encoding order: key 0, value 0, key 1, value 1, ... Push reversed.
-            for (size_t i = size; i >= 1; i--) {
-                serialize_push(&temp_stack, term_get_map_value(cur, i - 1));
-                serialize_push(&temp_stack, term_get_map_key(cur, i - 1));
+            // Encoding order: key 0, value 0, key 1, value 1, ... ascending by
+            // key, so that a map's encoding depends on its entries and not on
+            // which representation happens to hold them. Push reversed.
+            if (term_is_map_hash(cur) && size > 0) {
+                term *entries = term_map_sorted_array(cur, glb);
+                if (IS_NULL_PTR(entries)) {
+                    temp_stack_destroy(&temp_stack);
+                    return INVALID_TERM_SIZE;
+                }
+                for (size_t i = size; i >= 1; i--) {
+                    serialize_push(&temp_stack, entries[2 * (i - 1) + 1]);
+                    serialize_push(&temp_stack, entries[2 * (i - 1)]);
+                }
+                free(entries);
+            } else {
+                for (size_t i = size; i >= 1; i--) {
+                    serialize_push(&temp_stack, term_get_map_value(cur, i - 1));
+                    serialize_push(&temp_stack, term_get_map_key(cur, i - 1));
+                }
             }
         } else if (term_is_nonempty_list(cur) && !term_is_string(cur)) {
             // Count elements and write the LIST_EXT header, then resume the cells
