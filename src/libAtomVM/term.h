@@ -3453,8 +3453,8 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
         struct TermMapProbe probe;
         term_map_probe_init(&probe, key);
         // Hoist the loop-invariants (raw key-tuple pointer, probe key
-        // classification) out of the binary search, as in termmap_tree.c's
-        // node_find. keys element i is keysp[i + 1].
+        // classification) out of the binary search, as termmap_champ.c's
+        // lookup does. keys element i is keysp[i + 1].
         const term *keysp = term_to_const_term_ptr(keys);
         bool key_is_int = term_is_integer(key);
         avm_int_t key_int = key_is_int ? term_to_int(key) : 0;
@@ -3482,7 +3482,7 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
             // 2-tuple-of-immediates probes (#b_var{}-style compiler keys)
             // compare inline; see TermMapProbe.
             if (key_is_tup) {
-                // Initialized for GCC's -Wmaybe-uninitialized (see node_find).
+                // Initialized for GCC's -Wmaybe-uninitialized.
                 TermCompareResult pr = TermEquals;
                 if (term_map_probe_tup_cmp(&probe, key, key_arity, k, &pr)) {
                     if (pr == TermGreaterThan) {

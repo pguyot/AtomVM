@@ -1,0 +1,1010 @@
+From 9d224e8bcae1b9578689241088ce53acacfc2e32 Mon Sep 17 00:00:00 2001
+From: Paul Guyot <pguyot@kallisys.net>
+Date: Mon, 7 Sep 2026 08:01:39 +0200
+Subject: [PATCH] Store each map entry's hash beside it, and carry it from walk
+ to lookup
+
+A CHAMP node held [Key, Value] per entry and recomputed term_hash whenever it
+needed one. Two places wanted it back: pushing a resident entry down a level on
+a slot collision rehashed the key it was moving, and a walk that had just
+produced a key knew nothing about it that a following lookup could use.
+
+Entries are now [Hash, Key, Value]. The stored hash costs a word each and pays
+for itself three ways: a slot collision moves an entry without rehashing it, a
+lookup that lands on the wrong key rejects it by comparing hashes instead of
+comparing terms, and iteration hands the hash out for free.
+
+That last one is what the memo is for. Walking one map and looking each of its
+keys up in another is the shape the compiler spends its map time in, and the
+key's hash is already known from the first map; a one-entry, scheduler-thread
+memo carries it to the second, where it would otherwise be recomputed over a
+compound key. It is keyed on the key's term, so on a heap address for a boxed
+key, and cannot outlive it: only the cursor writes it, so a memoized key always
+belongs to the process this thread is running, and the collector drops it
+whenever terms move while the scheduler drops it when this thread takes on a
+different process.
+
+The hash narrows from 32 bits to 28 so that it fits a small integer on a 32-bit
+build, costing one level of depth. That makes fully-equal hashes likelier than
+before, so the root now records the size of the largest collision node rather
+than merely that one exists, and a put reserves for the node the map actually
+holds instead of for the map.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Av53FQad7HMc1DgLQkKSVk
+Signed-off-by: Paul Guyot <pguyot@kallisys.net>
+---
+ src/libAtomVM/memory.c           |   4 +
+ src/libAtomVM/scheduler.c        |   4 +
+ src/libAtomVM/termmap_champ.c    | 424 ++++++++++++++++++++-----------
+ src/libAtomVM/termmap_champ.h    |  10 +-
+ tests/libs/estdlib/test_maps.erl |  31 +++
+ 5 files changed, 324 insertions(+), 149 deletions(-)
+
+diff --git a/src/libAtomVM/memory.c b/src/libAtomVM/memory.c
+index 69cc2b9cc..56327b306 100644
+--- a/src/libAtomVM/memory.c
++++ b/src/libAtomVM/memory.c
+@@ -35,6 +35,7 @@
+ #include "refc_binary.h"
+ #include "tempstack.h"
+ #include "term.h"
++#include "termmap_champ.h"
+ 
+ // #define ENABLE_TRACE
+ 
+@@ -460,6 +461,9 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
+     // meaningless; it clears high_water_mark and the minor GC below runs with
+     // an empty mature region (chain fragments are still promoted when reached
+     // from the old generation, and the remembered set covers the rest).
++    // Every collection moves terms, and the map-lookup hash memo is keyed on a
++    // key's address, so it cannot outlive one.
++    termmap_champ_memo_invalidate();
+     bool force_full = ctx->fullsweep_after == 0 || ctx->gc_count >= ctx->fullsweep_after
+         || ctx->gc_remembered_overflow;
+     if (force_full) {
+diff --git a/src/libAtomVM/scheduler.c b/src/libAtomVM/scheduler.c
+index 522635946..4005465c7 100644
+--- a/src/libAtomVM/scheduler.c
++++ b/src/libAtomVM/scheduler.c
+@@ -28,6 +28,7 @@
+ #include "msacc.h"
+ #include "smp.h"
+ #include "sys.h"
++#include "termmap_champ.h"
+ #include "utils.h"
+ 
+ static void scheduler_timeout_callback(struct TimerListItem *it);
+@@ -335,6 +336,9 @@ static Context *scheduler_run0(GlobalContext *global)
+ 
+ Context *scheduler_run(GlobalContext *global)
+ {
++    // The map-lookup hash memo is keyed on a key's address, so it belongs to
++    // the process this thread was running and must not follow it to the next.
++    termmap_champ_memo_invalidate();
+     // Outer loop to process native contexts.
+     Context *result = NULL;
+     do {
+diff --git a/src/libAtomVM/termmap_champ.c b/src/libAtomVM/termmap_champ.c
+index 5de56ff6c..b2c0d8c01 100644
+--- a/src/libAtomVM/termmap_champ.c
++++ b/src/libAtomVM/termmap_champ.c
+@@ -35,22 +35,36 @@
+ #define CHAMP_BITS 4
+ #define CHAMP_WIDTH (1 << CHAMP_BITS)
+ #define CHAMP_MASK (CHAMP_WIDTH - 1)
+-#define CHAMP_HASH_BITS 32
++// Each entry keeps its own hash, and a hash has to be a valid term because a
++// node is an ordinary tuple, so it is capped at what a 32-bit build's
++// small-integer range holds: 28 bits, seven levels of four.
++#define CHAMP_HASH_BITS 28
++#define CHAMP_HASH_MASK ((uint32_t) 0x0FFFFFFFu)
++#define CHAMP_HASH_SIGN_BIT ((uint32_t) 0x08000000u)
+ #define CHAMP_MAX_LEVELS (CHAMP_HASH_BITS / CHAMP_BITS)
++// An entry is [Hash, Key, Value]; sub-nodes follow the last of them.
++#define CHAMP_ENTRY_WORDS 3
+ 
+ #define CHAMP_BITMAP_MASK ((uint32_t) ((((uint32_t) 1) << CHAMP_WIDTH) - 1))
+-// Set on the root's DataMap when the map holds a collision node anywhere, so
+-// that a put on any other map -- every map in practice -- reserves a constant.
+-#define CHAMP_ROOT_COLLISION_BIT (((uint32_t) 1) << CHAMP_WIDTH)
++// Above its bitmap, the root's DataMap carries the size of the largest
++// collision node in the map. Growing one is the only allocation a put cannot
++// bound by a constant, and this is what lets every map that has none -- almost
++// every map -- reserve that constant anyway, and a map that has one reserve for
++// the node it actually holds rather than for its whole size. Eleven bits keep
++// the word inside a 32-bit build's small-integer range; a collision node beyond
++// that saturates the field and falls back to the size-based bound.
++#define CHAMP_ROOT_COLLISION_SHIFT CHAMP_WIDTH
++#define CHAMP_ROOT_COLLISION_MAX ((uint32_t) 0x7FFu)
+ 
+ #define CHAMP_DATAMAP_IDX 0
+ #define CHAMP_NODEMAP_IDX 1
+ #define CHAMP_FIRST_ENTRY 2
+ 
+ // Header word, two bitmaps, every slot inline, every slot a child.
+-#define CHAMP_MAX_NODE_WORDS (1 + 2 + 2 * CHAMP_WIDTH + CHAMP_WIDTH)
++#define CHAMP_MAX_NODE_WORDS (1 + 2 + CHAMP_ENTRY_WORDS * CHAMP_WIDTH + CHAMP_WIDTH)
+ // A slot collision pushes both entries down a chain of single-child nodes.
+-#define CHAMP_MERGE_CHAIN_WORDS (CHAMP_MAX_LEVELS * (1 + 2 + 1) + (1 + 2 + 4))
++#define CHAMP_MERGE_CHAIN_WORDS \
++    (CHAMP_MAX_LEVELS * (1 + 2 + 1) + (1 + 2 + 2 * CHAMP_ENTRY_WORDS))
+ // Path copy plus that chain: what a put allocates when no collision node grows.
+ #define CHAMP_PUT_PATH_WORDS (CHAMP_MAX_LEVELS * CHAMP_MAX_NODE_WORDS + CHAMP_MERGE_CHAIN_WORDS)
+ 
+@@ -67,6 +81,59 @@
+ // two index arrays the counting sort alternates between.
+ #define CHAMP_HEAP_SCRATCH_WORDS(n) (3 * (n))
+ 
++// A CHAMP_HASH_BITS-wide hash sign-extended into a small integer: the width is
++// chosen so that the result fits one on every build, 32-bit included.
++static inline term champ_hash_term(uint32_t hash)
++{
++    uint32_t h = hash & CHAMP_HASH_MASK;
++    avm_int_t value = (h & CHAMP_HASH_SIGN_BIT)
++        ? (avm_int_t) h - (avm_int_t) (CHAMP_HASH_MASK + 1)
++        : (avm_int_t) h;
++    return term_from_int(value);
++}
++
++static inline uint32_t champ_hash_of_term(term t)
++{
++    return ((uint32_t) (avm_uint_t) term_to_int(t)) & CHAMP_HASH_MASK;
++}
++
++// A one-entry memo of the last key a map iteration handed out, together with
++// the hash the trie had stored beside it. It pays for the iterate-then-look-up
++// shape -- walk one map, look each key up in another -- where the key's hash is
++// already known from the first map and would otherwise be computed again for
++// the second, which for the compound keys the Erlang compiler uses means
++// walking the whole key.
++//
++// It is keyed on the key's term, so for a boxed key on a heap address, and must
++// not outlive that address, or a later term allocated there would be handed
++// another key's hash. Only the cursor writes it, and only from maps:next, so a
++// memoized key always belongs to the process this thread is running: the
++// collector drops the memo whenever terms move, and the scheduler drops it when
++// it hands this thread a different process, which together cover every way that
++// process's heap can be reused. Being thread-local, it needs no lock and no
++// atomics.
++static __thread term champ_memo_key = 0; // term_invalid_term(): no entry
++static __thread uint32_t champ_memo_hash;
++
++void termmap_champ_memo_invalidate(void)
++{
++    champ_memo_key = term_invalid_term();
++}
++
++static inline void champ_memo_note(term key, uint32_t hash)
++{
++    champ_memo_key = key;
++    champ_memo_hash = hash;
++}
++
++static inline uint32_t champ_key_hash(term key, GlobalContext *global)
++{
++    if (key == champ_memo_key) {
++        return champ_memo_hash;
++    }
++    return term_hash(key, global) & CHAMP_HASH_MASK;
++}
++
+ static inline uint32_t champ_slot(uint32_t hash, int shift)
+ {
+     return (hash >> shift) & CHAMP_MASK;
+@@ -101,7 +168,7 @@ static inline uint32_t champ_nodemap(term node)
+ static inline size_t champ_entries(term node)
+ {
+     if (UNLIKELY(champ_is_collision(node))) {
+-        return (size_t) ((term_get_tuple_arity(node) - CHAMP_FIRST_ENTRY) / 2);
++        return (size_t) ((term_get_tuple_arity(node) - CHAMP_FIRST_ENTRY) / CHAMP_ENTRY_WORDS);
+     }
+     return (size_t) __builtin_popcount(champ_datamap(node));
+ }
+@@ -114,19 +181,57 @@ static inline size_t champ_nodes(term node)
+     return (size_t) __builtin_popcount(champ_nodemap(node));
+ }
+ 
++static inline size_t champ_entry_at(size_t i)
++{
++    return CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * i;
++}
++
++static inline uint32_t champ_entry_hash(term node, size_t i)
++{
++    return champ_hash_of_term(champ_body(node)[champ_entry_at(i)]);
++}
++
+ static inline term champ_entry_key(term node, size_t i)
+ {
+-    return champ_body(node)[CHAMP_FIRST_ENTRY + 2 * i];
++    return champ_body(node)[champ_entry_at(i) + 1];
+ }
+ 
+ static inline term champ_entry_value(term node, size_t i)
+ {
+-    return champ_body(node)[CHAMP_FIRST_ENTRY + 2 * i + 1];
++    return champ_body(node)[champ_entry_at(i) + 2];
+ }
+ 
+ static inline term champ_sub(term node, size_t entries, size_t i)
+ {
+-    return champ_body(node)[CHAMP_FIRST_ENTRY + 2 * entries + i];
++    return champ_body(node)[CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + i];
++}
++
++// Write entry \p i of a node under construction.
++static inline void champ_set_entry(term node, size_t i, uint32_t hash, term key, term value)
++{
++    size_t at = champ_entry_at(i);
++    term_put_tuple_element(node, at, champ_hash_term(hash));
++    term_put_tuple_element(node, at + 1, key);
++    term_put_tuple_element(node, at + 2, value);
++}
++
++// Copy entry \p si of \p src into entry \p di of a node under construction,
++// carrying the stored hash across so it never has to be recomputed.
++static inline void champ_copy_entry(term dst, size_t di, term src, size_t si)
++{
++    size_t to = champ_entry_at(di);
++    size_t from = champ_entry_at(si);
++    const term *body = champ_body(src);
++    term_put_tuple_element(dst, to, body[from]);
++    term_put_tuple_element(dst, to + 1, body[from + 1]);
++    term_put_tuple_element(dst, to + 2, body[from + 2]);
++}
++
++// As champ_copy_entry, but with a new value under the same key.
++static inline void champ_copy_entry_value(term dst, size_t di, term src, size_t si, term value)
++{
++    champ_copy_entry(dst, di, src, si);
++    term_put_tuple_element(dst, champ_entry_at(di) + 2, value);
+ }
+ 
+ static inline bool champ_key_eq(term a, term b, GlobalContext *global)
+@@ -137,7 +242,8 @@ static inline bool champ_key_eq(term a, term b, GlobalContext *global)
+ 
+ static term champ_node_new(Heap *heap, uint32_t datamap, uint32_t nodemap, size_t entries, size_t nodes)
+ {
+-    term node = term_alloc_tuple((uint32_t) (CHAMP_FIRST_ENTRY + 2 * entries + nodes), heap);
++    term node = term_alloc_tuple(
++        (uint32_t) (CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + nodes), heap);
+     term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int((avm_int_t) datamap));
+     term_put_tuple_element(node, CHAMP_NODEMAP_IDX, term_from_int((avm_int_t) nodemap));
+     return node;
+@@ -145,30 +251,54 @@ static term champ_node_new(Heap *heap, uint32_t datamap, uint32_t nodemap, size_
+ 
+ static term champ_collision_new(Heap *heap, size_t entries)
+ {
+-    term node = term_alloc_tuple((uint32_t) (CHAMP_FIRST_ENTRY + 2 * entries), heap);
++    term node = term_alloc_tuple(
++        (uint32_t) (CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries), heap);
+     term_put_tuple_element(node, CHAMP_DATAMAP_IDX, term_from_int(-1));
+     term_put_tuple_element(node, CHAMP_NODEMAP_IDX, term_from_int(0));
+     return node;
+ }
+ 
+-/** @brief Whether the map rooted here holds a collision node anywhere. */
+-static inline bool champ_root_has_collision(term root)
++/** @brief Entries in the largest collision node of the map rooted here, 0 if none. */
++static inline uint32_t champ_root_collision_entries(term root)
+ {
+     if (term_is_nil(root)) {
+-        return false;
++        return 0;
+     }
+     avm_int_t raw = term_to_int(champ_body(root)[CHAMP_DATAMAP_IDX]);
+-    return raw < 0 || (((uint32_t) raw) & CHAMP_ROOT_COLLISION_BIT) != 0;
++    if (raw < 0) {
++        // The root is itself a collision node, leaving nowhere to record this.
++        return (uint32_t) champ_entries(root);
++    }
++    return (((uint32_t) raw) >> CHAMP_ROOT_COLLISION_SHIFT) & CHAMP_ROOT_COLLISION_MAX;
+ }
+ 
+-static inline void champ_root_set_collision(term root)
++/** @brief Record a collision node of \p entries, keeping the largest seen. */
++static inline void champ_root_set_collision(term root, uint32_t entries)
+ {
+-    if (term_is_nil(root) || champ_is_collision(root)) {
++    if (term_is_nil(root) || champ_is_collision(root) || entries == 0) {
+         return;
+     }
++    if (entries > CHAMP_ROOT_COLLISION_MAX) {
++        entries = CHAMP_ROOT_COLLISION_MAX;
++    }
+     term *body = term_to_term_ptr(root) + 1;
+     uint32_t raw = (uint32_t) term_to_int(body[CHAMP_DATAMAP_IDX]);
+-    body[CHAMP_DATAMAP_IDX] = term_from_int((avm_int_t) (raw | CHAMP_ROOT_COLLISION_BIT));
++    uint32_t current = (raw >> CHAMP_ROOT_COLLISION_SHIFT) & CHAMP_ROOT_COLLISION_MAX;
++    if (current > entries) {
++        entries = current;
++    }
++    body[CHAMP_DATAMAP_IDX] = term_from_int((avm_int_t) ((raw & CHAMP_BITMAP_MASK)
++        | (entries << CHAMP_ROOT_COLLISION_SHIFT)));
++}
++
++// Heap words a put may add to the largest collision node a map holds.
++static inline size_t champ_collision_reserve(uint32_t entries, size_t size)
++{
++    if (entries == 0) {
++        return 0;
++    }
++    size_t held = entries >= CHAMP_ROOT_COLLISION_MAX ? size : (size_t) entries;
++    return 1 + CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * (held + 1);
+ }
+ 
+ // ---- lookup -----------------------------------------------------------------
+@@ -178,7 +308,7 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
+     if (UNLIKELY(term_is_nil(node))) {
+         return term_invalid_term();
+     }
+-    uint32_t hash = term_hash(key, global);
++    uint32_t hash = champ_key_hash(key, global);
+     int shift = 0;
+     for (;;) {
+         const term *body = champ_body(node);
+@@ -186,13 +316,14 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
+         if (UNLIKELY(raw < 0)) {
+             // Collision node: linear scan of the fully-equal-hash entries.
+             int arity = term_get_tuple_arity(node);
+-            int count = (arity - CHAMP_FIRST_ENTRY) / 2;
++            int count = (arity - CHAMP_FIRST_ENTRY) / CHAMP_ENTRY_WORDS;
+             for (int i = 0; i < count; i++) {
+-                term k = body[CHAMP_FIRST_ENTRY + 2 * i];
++                size_t at = champ_entry_at((size_t) i);
++                term k = body[at + 1];
+                 if (k == key
+                     || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
+                         == TermEquals) {
+-                    return body[CHAMP_FIRST_ENTRY + 2 * i + 1];
++                    return body[at + 2];
+                 }
+             }
+             return term_invalid_term();
+@@ -200,12 +331,16 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
+         uint32_t datamap = ((uint32_t) raw) & CHAMP_BITMAP_MASK;
+         uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+         if (datamap & bit) {
+-            int i = champ_index(datamap, bit);
+-            term k = body[CHAMP_FIRST_ENTRY + 2 * i];
++            size_t at = champ_entry_at((size_t) champ_index(datamap, bit));
++            term k = body[at + 1];
++            // The stored hash settles the great majority of misses without a
++            // comparison: only the slot bits consumed so far are known to
++            // agree, so the rest of it still discriminates.
+             if (k == key
+-                || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
+-                    == TermEquals) {
+-                return body[CHAMP_FIRST_ENTRY + 2 * i + 1];
++                || (champ_hash_of_term(body[at]) == hash
++                    && term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
++                        == TermEquals)) {
++                return body[at + 2];
+             }
+             return term_invalid_term();
+         }
+@@ -215,7 +350,7 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
+         }
+         int entries = __builtin_popcount(datamap);
+         int i = champ_index(nodemap, bit);
+-        node = body[CHAMP_FIRST_ENTRY + 2 * entries + i];
++        node = body[CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + i];
+         shift += CHAMP_BITS;
+     }
+ }
+@@ -226,15 +361,15 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
+ // separates them, descending until their slots differ, or, once the hash runs
+ // out, a collision node holding both.
+ static term champ_merge_two(Heap *heap, term k1, term v1, uint32_t h1, term k2, term v2,
+-    uint32_t h2, int shift, bool *collided)
++    uint32_t h2, int shift, size_t *collided)
+ {
+     if (shift >= CHAMP_HASH_BITS) {
+-        *collided = true;
++        if (*collided < 2) {
++            *collided = 2;
++        }
+         term node = champ_collision_new(heap, 2);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY, k1);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 1, v1);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2, k2);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 3, v2);
++        champ_set_entry(node, 0, h1, k1, v1);
++        champ_set_entry(node, 1, h2, k2, v2);
+         return node;
+     }
+     uint32_t s1 = champ_slot(h1, shift);
+@@ -243,10 +378,8 @@ static term champ_merge_two(Heap *heap, term k1, term v1, uint32_t h1, term k2,
+         uint32_t datamap = (((uint32_t) 1) << s1) | (((uint32_t) 1) << s2);
+         term node = champ_node_new(heap, datamap, 0, 2, 0);
+         bool first_is_1 = s1 < s2;
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY, first_is_1 ? k1 : k2);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 1, first_is_1 ? v1 : v2);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2, first_is_1 ? k2 : k1);
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 3, first_is_1 ? v2 : v1);
++        champ_set_entry(node, 0, first_is_1 ? h1 : h2, first_is_1 ? k1 : k2, first_is_1 ? v1 : v2);
++        champ_set_entry(node, 1, first_is_1 ? h2 : h1, first_is_1 ? k2 : k1, first_is_1 ? v2 : v1);
+         return node;
+     }
+     term child = champ_merge_two(heap, k1, v1, h1, k2, v2, h2, shift + CHAMP_BITS, collided);
+@@ -256,18 +389,22 @@ static term champ_merge_two(Heap *heap, term k1, term v1, uint32_t h1, term k2,
+ }
+ 
+ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t hash, int shift,
+-    GlobalContext *global, bool *added, bool *collided)
++    GlobalContext *global, bool *added, size_t *collided)
+ {
+     if (UNLIKELY(champ_is_collision(node))) {
+         size_t count = champ_entries(node);
+-        *collided = true;
++        if (*collided < count + 1) {
++            *collided = count + 1;
++        }
+         for (size_t i = 0; i < count; i++) {
+             if (champ_key_eq(champ_entry_key(node, i), key, global)) {
+                 term out = champ_collision_new(heap, count);
+                 for (size_t j = 0; j < count; j++) {
+-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
+-                        (j == i) ? value : champ_entry_value(node, j));
++                    if (j == i) {
++                        champ_copy_entry_value(out, j, node, j, value);
++                    } else {
++                        champ_copy_entry(out, j, node, j);
++                    }
+                 }
+                 *added = false;
+                 return out;
+@@ -275,11 +412,9 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+         }
+         term out = champ_collision_new(heap, count + 1);
+         for (size_t j = 0; j < count; j++) {
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
++            champ_copy_entry(out, j, node, j);
+         }
+-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count, key);
+-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count + 1, value);
++        champ_set_entry(out, count, hash, key, value);
+         *added = true;
+         return out;
+     }
+@@ -292,25 +427,29 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+ 
+     if (datamap & bit) {
+         size_t i = (size_t) champ_index(datamap, bit);
++        uint32_t resident_hash = champ_entry_hash(node, i);
+         term k = champ_entry_key(node, i);
+-        if (champ_key_eq(k, key, global)) {
++        if (resident_hash == hash && champ_key_eq(k, key, global)) {
+             term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+             for (size_t j = 0; j < entries; j++) {
+-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
+-                    (j == i) ? value : champ_entry_value(node, j));
++                if (j == i) {
++                    champ_copy_entry_value(out, j, node, j, value);
++                } else {
++                    champ_copy_entry(out, j, node, j);
++                }
+             }
+             for (size_t j = 0; j < nodes; j++) {
+-                term_put_tuple_element(
+-                    out, CHAMP_FIRST_ENTRY + 2 * entries + j, champ_sub(node, entries, j));
++                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + j,
++                    champ_sub(node, entries, j));
+             }
+             *added = false;
+             return out;
+         }
+         // Slot collision between distinct keys: the resident entry moves down
+-        // into a new sub-node together with the incoming one.
+-        term sub = champ_merge_two(heap, k, champ_entry_value(node, i), term_hash(k, global), key,
+-            value, hash, shift + CHAMP_BITS, collided);
++        // into a new sub-node together with the incoming one. Its hash is
++        // stored beside it, so pushing it down costs no rehashing.
++        term sub = champ_merge_two(heap, k, champ_entry_value(node, i), resident_hash, key, value,
++            hash, shift + CHAMP_BITS, collided);
+         uint32_t new_nodemap = nodemap | bit;
+         size_t ni = (size_t) champ_index(new_nodemap, bit);
+         term out = champ_node_new(heap, datamap & ~bit, new_nodemap, entries - 1, nodes + 1);
+@@ -318,11 +457,10 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+             if (j == i) {
+                 continue;
+             }
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d, champ_entry_key(node, j));
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d + 1, champ_entry_value(node, j));
++            champ_copy_entry(out, d, node, j);
+             d++;
+         }
+-        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries - 1);
++        size_t base = CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * (entries - 1);
+         for (size_t j = 0, w = 0; j <= nodes; j++) {
+             if (j == ni) {
+                 term_put_tuple_element(out, base + w++, sub);
+@@ -341,11 +479,10 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+             shift + CHAMP_BITS, global, added, collided);
+         term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+         for (size_t j = 0; j < entries; j++) {
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
++            champ_copy_entry(out, j, node, j);
+         }
+         for (size_t j = 0; j < nodes; j++) {
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
++            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + j,
+                 (j == i) ? sub : champ_sub(node, entries, j));
+         }
+         return out;
+@@ -356,19 +493,17 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+     term out = champ_node_new(heap, datamap | bit, nodemap, entries + 1, nodes);
+     for (size_t j = 0, w = 0; j <= entries; j++) {
+         if (j == i) {
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, key);
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, value);
++            champ_set_entry(out, w, hash, key, value);
+             w++;
+         }
+         if (j < entries) {
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
++            champ_copy_entry(out, w, node, j);
+             w++;
+         }
+     }
+     for (size_t j = 0; j < nodes; j++) {
+-        term_put_tuple_element(
+-            out, CHAMP_FIRST_ENTRY + 2 * (entries + 1) + j, champ_sub(node, entries, j));
++        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * (entries + 1) + j,
++            champ_sub(node, entries, j));
+     }
+     *added = true;
+     return out;
+@@ -376,38 +511,33 @@ static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t
+ 
+ term termmap_champ_put(Heap *heap, term node, term key, term value, GlobalContext *global, bool *added)
+ {
+-    uint32_t hash = term_hash(key, global);
+-    bool collided = false;
++    uint32_t hash = champ_key_hash(key, global);
++    size_t collided = 0;
+     term root;
+     if (term_is_nil(node)) {
+         uint32_t bit = ((uint32_t) 1) << champ_slot(hash, 0);
+         root = champ_node_new(heap, bit, 0, 1, 0);
+-        term_put_tuple_element(root, CHAMP_FIRST_ENTRY, key);
+-        term_put_tuple_element(root, CHAMP_FIRST_ENTRY + 1, value);
++        champ_set_entry(root, 0, hash, key, value);
+         *added = true;
+         return root;
+     }
+-    bool had_collision = champ_root_has_collision(node);
++    uint32_t held = champ_root_collision_entries(node);
+     root = champ_put_rec(heap, node, key, value, hash, 0, global, added, &collided);
+-    if (had_collision || collided) {
+-        champ_root_set_collision(root);
+-    }
++    champ_root_set_collision(root, collided > held ? (uint32_t) collided : held);
+     return root;
+ }
+ 
+ size_t termmap_champ_put_heap_size(term node, size_t size)
+ {
+-    if (UNLIKELY(champ_root_has_collision(node))) {
+-        // Growing a collision node rewrites all its entries, and only equal
+-        // 32-bit hashes put entries in one, so the map's size bounds it.
+-        return CHAMP_PUT_PATH_WORDS + CHAMP_FIRST_ENTRY + 1 + 2 * (size + 1);
+-    }
+-    return CHAMP_PUT_PATH_WORDS;
++    // Growing a collision node rewrites all its entries, so a map that holds
++    // one reserves for it as well as for the path copy.
++    return CHAMP_PUT_PATH_WORDS
++        + champ_collision_reserve(champ_root_collision_entries(node), size);
+ }
+ 
+ size_t termmap_champ_put_heap_size_max(size_t size)
+ {
+-    return CHAMP_PUT_PATH_WORDS + CHAMP_FIRST_ENTRY + 1 + 2 * (size + 1);
++    return CHAMP_PUT_PATH_WORDS + champ_collision_reserve(CHAMP_ROOT_COLLISION_MAX, size);
+ }
+ 
+ // ---- remove -----------------------------------------------------------------
+@@ -415,11 +545,13 @@ size_t termmap_champ_put_heap_size_max(size_t size)
+ // A removal that leaves a sub-node holding exactly one entry must pull that
+ // entry back into the parent: without it two equal maps could have different
+ // shapes, and the canonical form is what keeps structural equality cheap.
+-// *collapsed_key is set when the returned node is that lone entry.
++// *collapsed carries that entry's stored hash, and is term_invalid_term()
++// when nothing collapsed (a hash term is never zero, so it cannot be mistaken
++// for one).
+ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int shift,
+-    GlobalContext *global, bool *found, term *collapsed_key, term *collapsed_value)
++    GlobalContext *global, bool *found, term *collapsed, term *collapsed_key, term *collapsed_value)
+ {
+-    *collapsed_key = term_invalid_term();
++    *collapsed = term_invalid_term();
+     if (UNLIKELY(champ_is_collision(node))) {
+         size_t count = champ_entries(node);
+         for (size_t i = 0; i < count; i++) {
+@@ -427,6 +559,7 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+                 *found = true;
+                 if (count == 2) {
+                     size_t other = 1 - i;
++                    *collapsed = champ_hash_term(champ_entry_hash(node, other));
+                     *collapsed_key = champ_entry_key(node, other);
+                     *collapsed_value = champ_entry_value(node, other);
+                     return term_nil();
+@@ -436,9 +569,7 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+                     if (j == i) {
+                         continue;
+                     }
+-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+-                    term_put_tuple_element(
+-                        out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
++                    champ_copy_entry(out, w, node, j);
+                     w++;
+                 }
+                 return out;
+@@ -456,7 +587,7 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+ 
+     if (datamap & bit) {
+         size_t i = (size_t) champ_index(datamap, bit);
+-        if (!champ_key_eq(champ_entry_key(node, i), key, global)) {
++        if (champ_entry_hash(node, i) != hash || !champ_key_eq(champ_entry_key(node, i), key, global)) {
+             *found = false;
+             return node;
+         }
+@@ -464,6 +595,7 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+         if (entries == 2 && nodes == 0 && shift > 0) {
+             // This node becomes a single entry: hand it to the parent.
+             size_t other = 1 - i;
++            *collapsed = champ_hash_term(champ_entry_hash(node, other));
+             *collapsed_key = champ_entry_key(node, other);
+             *collapsed_value = champ_entry_value(node, other);
+             return term_nil();
+@@ -473,13 +605,12 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+             if (j == i) {
+                 continue;
+             }
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
++            champ_copy_entry(out, w, node, j);
+             w++;
+         }
+         for (size_t j = 0; j < nodes; j++) {
+-            term_put_tuple_element(
+-                out, CHAMP_FIRST_ENTRY + 2 * (entries - 1) + j, champ_sub(node, entries, j));
++            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * (entries - 1) + j,
++                champ_sub(node, entries, j));
+         }
+         return out;
+     }
+@@ -490,17 +621,19 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+     }
+ 
+     size_t i = (size_t) champ_index(nodemap, bit);
++    term ch;
+     term ck;
+     term cv;
+-    term sub = champ_remove_rec(
+-        heap, champ_sub(node, entries, i), key, hash, shift + CHAMP_BITS, global, found, &ck, &cv);
++    term sub = champ_remove_rec(heap, champ_sub(node, entries, i), key, hash, shift + CHAMP_BITS,
++        global, found, &ch, &ck, &cv);
+     if (!*found) {
+         return node;
+     }
+-    if (!term_is_invalid_term(ck)) {
++    if (!term_is_invalid_term(ch)) {
+         // The sub-node collapsed: its lone entry moves inline here, and if that
+         // leaves this node holding a single entry it collapses in turn.
+         if (entries == 0 && nodes == 1 && shift > 0) {
++            *collapsed = ch;
+             *collapsed_key = ck;
+             *collapsed_value = cv;
+             return term_nil();
+@@ -509,18 +642,15 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+         term out = champ_node_new(heap, datamap | bit, nodemap & ~bit, entries + 1, nodes - 1);
+         for (size_t j = 0, w = 0; j <= entries; j++) {
+             if (j == di) {
+-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, ck);
+-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, cv);
++                champ_set_entry(out, w, champ_hash_of_term(ch), ck, cv);
+                 w++;
+             }
+             if (j < entries) {
+-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
+-                term_put_tuple_element(
+-                    out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
++                champ_copy_entry(out, w, node, j);
+                 w++;
+             }
+         }
+-        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries + 1);
++        size_t base = CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * (entries + 1);
+         for (size_t j = 0, w = 0; j < nodes; j++) {
+             if (j == i) {
+                 continue;
+@@ -531,11 +661,10 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
+     }
+     term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
+     for (size_t j = 0; j < entries; j++) {
+-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
+-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
++        champ_copy_entry(out, j, node, j);
+     }
+     for (size_t j = 0; j < nodes; j++) {
+-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
++        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + j,
+             (j == i) ? sub : champ_sub(node, entries, j));
+     }
+     return out;
+@@ -547,20 +676,21 @@ term termmap_champ_remove(Heap *heap, term node, term key, GlobalContext *global
+     if (term_is_nil(node)) {
+         return node;
+     }
+-    bool had_collision = champ_root_has_collision(node);
+-    uint32_t hash = term_hash(key, global);
++    uint32_t held = champ_root_collision_entries(node);
++    uint32_t hash = champ_key_hash(key, global);
++    term ch;
+     term ck;
+     term cv;
+-    term root = champ_remove_rec(heap, node, key, hash, 0, global, found, &ck, &cv);
++    term root = champ_remove_rec(heap, node, key, hash, 0, global, found, &ch, &ck, &cv);
+     if (!*found) {
+         return node;
+     }
+-    if (!term_is_invalid_term(ck)) {
++    if (!term_is_invalid_term(ch)) {
+         // The whole trie collapsed to one entry.
+-        uint32_t bit = ((uint32_t) 1) << champ_slot(term_hash(ck, global), 0);
++        uint32_t entry_hash = champ_hash_of_term(ch);
++        uint32_t bit = ((uint32_t) 1) << champ_slot(entry_hash, 0);
+         root = champ_node_new(heap, bit, 0, 1, 0);
+-        term_put_tuple_element(root, CHAMP_FIRST_ENTRY, ck);
+-        term_put_tuple_element(root, CHAMP_FIRST_ENTRY + 1, cv);
++        champ_set_entry(root, 0, entry_hash, ck, cv);
+         return root;
+     }
+     if (term_is_nil(root)) {
+@@ -569,19 +699,15 @@ term termmap_champ_remove(Heap *heap, term node, term key, GlobalContext *global
+     if (!champ_is_collision(root) && champ_entries(root) == 0 && champ_nodes(root) == 0) {
+         return term_nil();
+     }
+-    // The flag is sticky: a delete never proves the last collision node gone.
+-    if (had_collision) {
+-        champ_root_set_collision(root);
+-    }
++    // Sticky: a delete never proves the last collision node smaller.
++    champ_root_set_collision(root, held);
+     return root;
+ }
+ 
+ size_t termmap_champ_remove_heap_size(term node, size_t size)
+ {
+-    if (UNLIKELY(champ_root_has_collision(node))) {
+-        return CHAMP_PUT_PATH_WORDS + CHAMP_FIRST_ENTRY + 1 + 2 * (size + 1);
+-    }
+-    return CHAMP_PUT_PATH_WORDS;
++    return CHAMP_PUT_PATH_WORDS
++        + champ_collision_reserve(champ_root_collision_entries(node), size);
+ }
+ 
+ // ---- walks ------------------------------------------------------------------
+@@ -959,6 +1085,9 @@ bool termmap_champ_cursor_next(term cursor, term *key, term *value, term *next_c
+     size_t index = (size_t) term_to_int(term_get_tuple_element(frame, 1));
+     *key = champ_entry_key(node, index);
+     *value = champ_entry_value(node, index);
++    // The hash is right here beside the entry, so hand it to the memo: an
++    // iterate-then-look-up loop gets the second map's lookup hash for nothing.
++    champ_memo_note(*key, champ_entry_hash(node, index));
+ 
+     term rest = term_get_list_tail(cursor);
+     size_t entries = champ_entries(node);
+@@ -1024,11 +1153,13 @@ static void champ_partition(
+ }
+ 
+ static size_t champ_size_rec(
+-    const struct ChampCtx *c, int *src, int *dst, int n, int shift, bool *collided)
++    const struct ChampCtx *c, int *src, int *dst, int n, int shift, size_t *collided)
+ {
+     if (shift >= CHAMP_HASH_BITS) {
+-        *collided = true;
+-        return (size_t) (1 + CHAMP_FIRST_ENTRY + 2 * n);
++        if (*collided < (size_t) n) {
++            *collided = (size_t) n;
++        }
++        return (size_t) (1 + CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * n);
+     }
+     int starts[CHAMP_WIDTH + 1];
+     champ_partition(c, src, n, shift, dst, starts);
+@@ -1045,18 +1176,19 @@ static size_t champ_size_rec(
+                 c, dst + starts[s], src + starts[s], cnt, shift + CHAMP_BITS, collided);
+         }
+     }
+-    return words + (size_t) (1 + CHAMP_FIRST_ENTRY + 2 * entries + nodes);
++    return words + (size_t) (1 + CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + nodes);
+ }
+ 
+ static term champ_build_rec(
+-    const struct ChampCtx *c, int *src, int *dst, int n, int shift, Heap *heap, bool *collided)
++    const struct ChampCtx *c, int *src, int *dst, int n, int shift, Heap *heap, size_t *collided)
+ {
+     if (shift >= CHAMP_HASH_BITS) {
+-        *collided = true;
++        if (*collided < (size_t) n) {
++            *collided = (size_t) n;
++        }
+         term node = champ_collision_new(heap, (size_t) n);
+         for (int i = 0; i < n; i++) {
+-            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i, c->keys[src[i]]);
+-            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * i + 1, c->values[src[i]]);
++            champ_set_entry(node, (size_t) i, c->hashes[src[i]], c->keys[src[i]], c->values[src[i]]);
+         }
+         return node;
+     }
+@@ -1092,13 +1224,13 @@ static term champ_build_rec(
+     for (int s = 0; s < CHAMP_WIDTH; s++) {
+         if (starts[s + 1] - starts[s] == 1) {
+             int e = dst[starts[s]];
+-            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * di, c->keys[e]);
+-            term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * di + 1, c->values[e]);
++            champ_set_entry(node, (size_t) di, c->hashes[e], c->keys[e], c->values[e]);
+             di++;
+         }
+     }
+     for (int i = 0; i < nodes; i++) {
+-        term_put_tuple_element(node, CHAMP_FIRST_ENTRY + 2 * entries + i, children[i]);
++        term_put_tuple_element(
++            node, CHAMP_FIRST_ENTRY + CHAMP_ENTRY_WORDS * entries + i, children[i]);
+     }
+     return node;
+ }
+@@ -1108,13 +1240,14 @@ size_t termmap_champ_from_array_heap_size(size_t n)
+     if (n == 0) {
+         return 0;
+     }
+-    // Every entry costs two words. A node exists only where two entries share a
++    // Every entry costs CHAMP_ENTRY_WORDS words. A node exists only where two
++    // entries share a
+     // hash prefix, so each of the CHAMP_MAX_LEVELS levels holds at most n/2 of
+     // them (and one more level's worth covers the collision nodes), each
+     // costing its header, its two bitmaps and its slot in its parent.
+     size_t nodes = 1 + (CHAMP_MAX_LEVELS + 1) * (n / 2);
+     size_t scratch = n > CHAMP_STACK_SCRATCH_MAX ? CHAMP_HEAP_SCRATCH_WORDS(n) : 0;
+-    return 2 * n + 4 * nodes + scratch;
++    return CHAMP_ENTRY_WORDS * n + 4 * nodes + scratch;
+ }
+ 
+ term termmap_champ_from_array(
+@@ -1141,15 +1274,13 @@ term termmap_champ_from_array(
+         b = (int *) (void *) (borrowed + 2 * n);
+     }
+     for (size_t i = 0; i < n; i++) {
+-        hashes[i] = term_hash(keys[i], global);
++        hashes[i] = term_hash(keys[i], global) & CHAMP_HASH_MASK;
+         a[i] = (int) i;
+     }
+     struct ChampCtx c = { .keys = keys, .values = values, .hashes = hashes };
+-    bool collided = false;
++    size_t collided = 0;
+     term root = champ_build_rec(&c, a, b, (int) n, 0, heap, &collided);
+-    if (collided) {
+-        champ_root_set_collision(root);
+-    }
++    champ_root_set_collision(root, (uint32_t) collided);
+     if (borrowed != NULL) {
+         // Leave valid terms behind: the words stay part of the heap until the
+         // next collection, and nothing should ever read an index as a term.
+@@ -1180,13 +1311,12 @@ bool termmap_champ_measure(
+         return false;
+     }
+     for (size_t i = 0; i < n; i++) {
+-        builder->hashes[i] = term_hash(keys[i], global);
++        builder->hashes[i] = term_hash(keys[i], global) & CHAMP_HASH_MASK;
+         builder->idx[i] = (int) i;
+     }
+     struct ChampCtx c = { .keys = keys, .values = NULL, .hashes = builder->hashes };
+-    builder->collided = false;
+-    builder->words
+-        = champ_size_rec(&c, builder->idx, builder->scratch, (int) n, 0, &builder->collided);
++    size_t collided = 0;
++    builder->words = champ_size_rec(&c, builder->idx, builder->scratch, (int) n, 0, &collided);
+     // champ_size_rec consumed idx into scratch; restore it for the build pass.
+     for (size_t i = 0; i < n; i++) {
+         builder->idx[i] = (int) i;
+@@ -1201,11 +1331,9 @@ term termmap_champ_build(
+         return term_nil();
+     }
+     struct ChampCtx c = { .keys = keys, .values = values, .hashes = builder->hashes };
+-    bool collided = false;
++    size_t collided = 0;
+     term root = champ_build_rec(&c, builder->idx, builder->scratch, builder->n, 0, heap, &collided);
+-    if (collided) {
+-        champ_root_set_collision(root);
+-    }
++    champ_root_set_collision(root, (uint32_t) collided);
+     return root;
+ }
+ 
+diff --git a/src/libAtomVM/termmap_champ.h b/src/libAtomVM/termmap_champ.h
+index f71286497..cbed6d6a5 100644
+--- a/src/libAtomVM/termmap_champ.h
++++ b/src/libAtomVM/termmap_champ.h
+@@ -79,6 +79,15 @@ static inline term termmap_champ_empty(void)
+     return term_nil();
+ }
+ 
++/**
++ * @brief Drop the scheduler-thread-local memo of the last iterated key's hash.
++ *
++ * The memo is keyed on a key's term, so on a heap address for a boxed key, and
++ * must not outlive it: call this whenever terms may have moved (a collection)
++ * or whenever this thread starts running a different process.
++ */
++void termmap_champ_memo_invalidate(void);
++
+ /** @brief Number of key/value pairs below \p node (walks it; for tests). */
+ size_t termmap_champ_count(term node);
+ 
+@@ -157,7 +166,6 @@ struct ChampBuilder
+     int *scratch;
+     size_t words;
+     int n;
+-    bool collided;
+ };
+ 
+ /**
+diff --git a/tests/libs/estdlib/test_maps.erl b/tests/libs/estdlib/test_maps.erl
+index 0757b5760..f0ba87a21 100644
+--- a/tests/libs/estdlib/test_maps.erl
++++ b/tests/libs/estdlib/test_maps.erl
+@@ -39,6 +39,7 @@ test() ->
+     ok = test_large_map_lookup(),
+     ok = test_large_flat_map_conversion(),
+     ok = test_large_map_as_key(),
++    ok = test_iterate_then_lookup(),
+     ok = test_iterator(),
+     HasIterator2 =
+         case erlang:system_info(machine) of
+@@ -174,6 +175,36 @@ test_large_map_as_key() ->
+     found2 = maps:get(Grown, Outer2),
+     ok.
+ 
++%% Walk one large map and look each of its keys up in another -- the shape a
++%% key's hash can be carried across, since iterating the first map already knows
++%% it. Every lookup must agree with the second map's contents whether or not the
++%% hash arrived that way, so this checks present keys, absent keys, and lookups
++%% made after a collection has invalidated anything cached about the key.
++test_iterate_then_lookup() ->
++    N = 400,
++    A = maps:from_list([{{k, I}, I} || I <- lists:seq(1, N)]),
++    B = maps:from_list([{{k, I}, I * 2} || I <- lists:seq(1, N, 2)]),
++    {Found, Missing} = iterate_lookup(maps:next(maps:iterator(A)), B, 0, 0),
++    Expected = length(lists:seq(1, N, 2)),
++    true = Found =:= Expected,
++    true = Missing =:= (N - Expected),
++    ok.
++
++iterate_lookup(none, _B, Found, Missing) ->
++    {Found, Missing};
++iterate_lookup({K, V, Iter}, B, Found, Missing) ->
++    case maps:find(K, B) of
++        {ok, Doubled} ->
++            true = Doubled =:= V * 2,
++            iterate_lookup(maps:next(Iter), B, Found + 1, Missing);
++        error ->
++            %% A collection between the walk and the lookup must not change the
++            %% answer: anything remembered about the key is dropped, not stale.
++            erlang:garbage_collect(),
++            error = maps:find(K, B),
++            iterate_lookup(maps:next(Iter), B, Found, Missing + 1)
++    end.
++
+ check_large_map(Keys, AbsentKeys) ->
+     Pairs = [{K, {val, K}} || K <- Keys],
+     %% from_list with shuffled input, then the same via incremental puts. The
+-- 
+2.50.1 (Apple Git-155)
+
