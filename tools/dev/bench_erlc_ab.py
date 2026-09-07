@@ -96,6 +96,10 @@ def main():
     parser.add_argument("--apps", nargs="+",
                         default=["compiler", "stdlib", "kernel", "sasl", "crypto"])
     parser.add_argument("--runs-per-file", type=int, default=5)
+    parser.add_argument("--runs-batch", type=int, default=0,
+                        help="compile each application in one process this many times; "
+                             "immune to the per-process startup quantization the per-file "
+                             "mode shows, so it is the better aggregate")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -123,6 +127,30 @@ def main():
             if source.stem in common:
                 corpus.append((app, source, includes))
 
+    batch = {}
+    if args.runs_batch:
+        by_app = {}
+        for app, source, includes in corpus:
+            by_app.setdefault(app, (includes, []))[1].append(source)
+        for app_number, (app, (includes, sources)) in enumerate(by_app.items()):
+            values = {label: [] for label in labels}
+            expected = {s.stem for s in sources}
+            for r in range(args.runs_batch):
+                rotation = (r + app_number) % len(labels)
+                for label in labels[rotation:] + labels[:rotation]:
+                    elapsed, produced, status = compile_once(
+                        executables[label], sources, includes, args.timeout)
+                    if produced != expected:
+                        raise RuntimeError(
+                            f"batch failed: {app} {label} status={status} "
+                            f"{len(produced)}/{len(expected)}")
+                    values[label].append(elapsed)
+                print(f"batch {app} round {r + 1}/{args.runs_batch}", file=sys.stderr, flush=True)
+            batch[app] = {label: statistics.median(values[label]) for label in labels}
+            batch[app]["samples"] = values
+            print(f"  {app}: " + " ".join(
+                f"{label}={batch[app][label]:.3f}s" for label in labels), file=sys.stderr, flush=True)
+
     per_file = []
     file_number = 0
     for app, source, includes in corpus:
@@ -148,6 +176,10 @@ def main():
     beam_times = [entry["median"]["BEAM"] for entry in per_file]
     summary = {
         "files": len(per_file),
+        "batch": {app: {label: v[label] for label in labels} for app, v in batch.items()},
+        "batch_b_over_a": (
+            sum(v[args.a_label] for v in batch.values()) / sum(v[args.b_label] for v in batch.values())
+            if batch else None),
         "sum_seconds": {label: sum(entry["median"][label] for entry in per_file)
                         for label in labels},
         # Greater than 1 means B is faster than A.
@@ -157,7 +189,8 @@ def main():
         "b_vs_beam": sum(beam_times) / sum(b_times),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"summary": summary, "per_file": per_file}, indent=1))
+    args.output.write_text(
+        json.dumps({"summary": summary, "per_file": per_file, "batch": batch}, indent=1))
     print(json.dumps(summary, indent=1))
 
 
