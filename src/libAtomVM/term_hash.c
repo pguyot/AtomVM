@@ -93,12 +93,24 @@ static uint32_t hash_uint64(uint64_t n, uint32_t h, uint32_t prime)
 
 static uint32_t hash_atom(term t, uint32_t h, GlobalContext *global)
 {
-    size_t len;
-    const uint8_t *data = atom_table_get_atom_string(global->atom_table, term_to_atom_index(t), &len);
-    for (size_t i = 0; i < len; ++i) {
-        h = h * LARGE_PRIME_ATOM + data[i];
-    }
-    return h * LARGE_PRIME_ATOM;
+    UNUSED(global);
+    // An atom's identity is its table index: interned, unique, and never
+    // renumbered for the life of the VM. Hashing that instead of reading the
+    // characters matters because term_hash is now on the map lookup path, and
+    // the Erlang compiler's maps are largely atom-keyed -- walking the text of
+    // every candidate key cost more than the lookup it was serving. Nothing
+    // needs the value to be stable across runs: term_hash backs internal hash
+    // tables only (maps, ETS buckets, persistent_term), and a map crossing a
+    // VM boundary is re-encoded entry by entry.
+    uint32_t index = (uint32_t) term_to_atom_index(t);
+    // Indices are handed out consecutively, so mix before folding: a trie
+    // slices the low bits four at a time and needs them spread.
+    index ^= index >> 16;
+    index *= 0x7feb352du;
+    index ^= index >> 15;
+    index *= 0x846ca68bu;
+    index ^= index >> 16;
+    return (h * LARGE_PRIME_ATOM + index) * LARGE_PRIME_ATOM;
 }
 
 static uint32_t hash_integer(term t, uint32_t h, GlobalContext *global)
