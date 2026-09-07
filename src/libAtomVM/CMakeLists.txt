@@ -71,7 +71,6 @@ set(HEADER_FILES
     term.h
     term_hash.h
     termmap_champ.h
-    termmap_tree.h
     timer_list.h
     trace.h
     unicode.h
@@ -116,7 +115,6 @@ set(SOURCE_FILES
     term.c
     term_hash.c
     termmap_champ.c
-    termmap_tree.c
     timer_list.c
     unicode.c
     unlocalized.c
