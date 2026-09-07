@@ -66,7 +66,7 @@
 #include "tempstack.h"
 #include "term.h"
 #include "term_typedef.h"
-#include "termmap_tree.h"
+#include "termmap_champ.h"
 #include "unicode.h"
 #include "unlocalized.h"
 #include "utils.h"
@@ -8175,12 +8175,11 @@ static term nif_maps_from_keys(Context *ctx, int argc, term argv[])
     return map;
 }
 
-// Sorted-index access to a map entry, dispatching flat vs tree representation.
-// Sorted-index access to a map entry. Tree maps are materialized once into the
-// interleaved array arr = [k0,v0,k1,v1,...] (via termtree_fill_array, one O(n)
-// in-order walk), so each access is O(1); selecting each entry by position would
-// be O(log n), making a full walk O(n log n). For flat maps arr is NULL and the
-// entry is read straight from the map.
+// Sorted-index access to a map entry. Hash-backed maps are materialized once
+// into the interleaved array arr = [k0,v0,k1,v1,...] (see map_hash_array), so
+// each access is O(1); selecting each entry by position would cost a walk,
+// making a full pass quadratic. For flat maps arr is NULL and the entry is read
+// straight from the map.
 // Scalar-inline exact comparator for map-key loops (merge, from_list,
 // remove): identical terms and two small integers — the dominant compiler
 // key shapes — resolve without the out-of-line term_compare dispatch. Small
@@ -8230,12 +8229,14 @@ static inline term merge_value_at(term map, const term *arr, int i)
     return arr ? arr[2 * i + 1] : term_get_map_value(map, i);
 }
 
-// If map is tree-backed, materialize its entries into a freshly malloc'd
-// interleaved array of 2*n terms and return it (caller frees); flat maps return
-// NULL (the entry is read directly). Sets *oom on allocation failure.
-static term *map_tree_array(term map, int n, bool *oom)
+// If map is hash-backed, materialize its entries into a freshly malloc'd
+// interleaved array of 2*n terms, sorted by key so that the callers below can
+// keep reading both representations as one ascending sequence, and return it
+// (caller frees); flat maps are already in key order and return NULL (the entry
+// is read directly). Sets *oom on allocation failure.
+static term *map_hash_array(term map, int n, bool *oom, GlobalContext *glb)
 {
-    if (!term_is_map_tree(map)) {
+    if (!term_is_map_hash(map)) {
         return NULL;
     }
     term *arr = malloc(sizeof(term) * 2 * (size_t) n);
@@ -8243,26 +8244,28 @@ static term *map_tree_array(term map, int n, bool *oom)
         *oom = true;
         return NULL;
     }
-    termtree_fill_array(term_get_map_tree_root(map), arr);
+    if (UNLIKELY(!termmap_champ_fill_array_sorted(
+            term_get_map_hash_root(map), arr, (size_t) n, glb))) {
+        free(arr);
+        *oom = true;
+        return NULL;
+    }
     return arr;
 }
 
-// Build a flat (<= TERM_MAP_TREE_THRESHOLD) or tree map from u entries given as
+// Build a flat (<= TERM_MAP_HASH_THRESHOLD) or hash map from u entries given as
 // 2*u interleaved sorted (key, value) terms in kv. Reserves heap with kv as GC
 // roots so the pairs survive any collection while reserving, then fills the
 // result. Returns the map, or term_invalid_term() on allocation failure (the
 // caller frees kv and raises). Shared by maps:merge/2 and maps:remove/2.
 static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
 {
-    bool as_tree = u > TERM_MAP_TREE_THRESHOLD;
-    size_t need = as_tree
-        ? termtree_from_sorted_heap_size(u) + TERM_MAP_TREE_BOXED_ARITY + 1
-        : TERM_MAP_SIZE(u);
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 2 * u, kv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-        return term_invalid_term();
-    }
-
-    if (!as_tree) {
+    if (u <= TERM_MAP_HASH_THRESHOLD) {
+        if (UNLIKELY(memory_ensure_free_with_roots(
+                         ctx, TERM_MAP_SIZE(u), 2 * u, kv, MEMORY_CAN_SHRINK)
+                != MEMORY_GC_OK)) {
+            return term_invalid_term();
+        }
         term map = term_alloc_map(u, &ctx->heap);
         for (size_t x = 0; x < u; x++) {
             term_set_map_assoc(map, x, kv[2 * x], kv[2 * x + 1]);
@@ -8270,11 +8273,31 @@ static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
         return map;
     }
 
-    // termtree_from_sorted needs separate key and value arrays; no GC can run
-    // between here and the build, so the kv terms stay valid.
+    // The trie's size depends on how the keys' hashes fall, so measure it
+    // before reserving rather than reserving the (six times larger) bound. A
+    // hash does not depend on where its term sits, so the collection the
+    // reservation may trigger invalidates the key and value arrays -- refilled
+    // from the rooted kv below -- but not the measurement.
     term *keys = malloc(sizeof(term) * u);
     term *values = malloc(sizeof(term) * u);
+    struct ChampBuilder builder;
     if (UNLIKELY(IS_NULL_PTR(keys) || IS_NULL_PTR(values))) {
+        free(keys);
+        free(values);
+        return term_invalid_term();
+    }
+    for (size_t x = 0; x < u; x++) {
+        keys[x] = kv[2 * x];
+    }
+    if (UNLIKELY(!termmap_champ_measure(&builder, keys, u, ctx->global))) {
+        free(keys);
+        free(values);
+        return term_invalid_term();
+    }
+    size_t need = builder.words + TERM_MAP_HASH_BOXED_ARITY + 1;
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 2 * u, kv, MEMORY_CAN_SHRINK)
+            != MEMORY_GC_OK)) {
+        termmap_champ_builder_free(&builder);
         free(keys);
         free(values);
         return term_invalid_term();
@@ -8283,8 +8306,9 @@ static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
         keys[x] = kv[2 * x];
         values[x] = kv[2 * x + 1];
     }
-    term root = termtree_from_sorted(&ctx->heap, keys, values, u);
-    term map = term_alloc_map_tree(&ctx->heap, root, u);
+    term root = termmap_champ_build(&builder, keys, values, &ctx->heap);
+    term map = term_alloc_map_hash(&ctx->heap, root, u);
+    termmap_champ_builder_free(&builder);
     free(keys);
     free(values);
     return map;
@@ -8329,17 +8353,17 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
         return m2;
     }
 
-    // When one operand is tiny and the other is tree-backed, insert the small
-    // side's entries into the big tree instead of materialising both operands
+    // When one operand is tiny and the other is hash-backed, insert the small
+    // side's entries into the big trie instead of materialising both operands
     // and rebuilding the whole result: O(k log n) path copies, no scratch
     // buffers. Sets built by repeated union hit this constantly.
     int small = (n1 <= n2) ? n1 : n2;
     term big = (n1 <= n2) ? m2 : m1;
-    if (small <= MAPS_MERGE_SMALL_MAX && term_is_map_tree(big)) {
+    if (small <= MAPS_MERGE_SMALL_MAX && term_is_map_hash(big)) {
         size_t big_size = (size_t) term_get_map_size(big);
-        size_t need = TERM_MAP_TREE_BOXED_ARITY + 1;
+        size_t need = TERM_MAP_HASH_BOXED_ARITY + 1;
         for (int k = 0; k < small; k++) {
-            need += termtree_put_heap_size(big_size + (size_t) k);
+            need += termmap_champ_put_heap_size(term_get_map_hash_root(big), big_size + (size_t) k);
         }
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 2, argv, MEMORY_CAN_SHRINK)
                 != MEMORY_GC_OK)) {
@@ -8350,26 +8374,28 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
         m2 = argv[1];
         bool small_is_m2 = (n1 > n2);
         term src = small_is_m2 ? m2 : m1;
-        term root = term_get_map_tree_root(small_is_m2 ? m1 : m2);
+        term root = term_get_map_hash_root(small_is_m2 ? m1 : m2);
+        size_t merged = big_size;
         for (int k = 0; k < small; k++) {
             term key = term_get_map_key(src, (avm_uint_t) k);
             // Map2 wins on shared keys, so entries taken from Map1 must not
             // overwrite what Map2 already holds.
-            if (!small_is_m2
-                && !term_is_invalid_term(termtree_get(root, key, glb))) {
+            if (!small_is_m2 && !term_is_invalid_term(termmap_champ_get(root, key, glb))) {
                 continue;
             }
-            root = termtree_put(
-                &ctx->heap, root, key, term_get_map_value(src, (avm_uint_t) k), glb);
+            bool added = false;
+            root = termmap_champ_put(
+                &ctx->heap, root, key, term_get_map_value(src, (avm_uint_t) k), glb, &added);
+            merged += added ? 1 : 0;
         }
-        return term_alloc_map_tree(&ctx->heap, root, termtree_size(root));
+        return term_alloc_map_hash(&ctx->heap, root, merged);
     }
 
-    // Materialize tree-backed operands once (O(n)) so the walk below is O(1)
-    // per entry; flat operands (a1/a2 == NULL) are read directly.
+    // Materialize hash-backed operands once (O(n log n), sorted) so the walk
+    // below is O(1) per entry; flat operands (a1/a2 == NULL) are read directly.
     bool oom = false;
-    term *a1 = map_tree_array(m1, n1, &oom);
-    term *a2 = map_tree_array(m2, n2, &oom);
+    term *a1 = map_hash_array(m1, n1, &oom, glb);
+    term *a2 = map_hash_array(m2, n2, &oom, glb);
     if (UNLIKELY(oom)) {
         free(a1);
         free(a2);
@@ -8605,7 +8631,7 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     // (the mirror of the insert path in jit_put_map_assoc_one). The generic
     // path below instead compares the key against EVERY entry and rebuilds
     // through map_build_from_sorted_kv.
-    if (!term_is_map_tree(map)) {
+    if (!term_is_map_hash(map)) {
         int lo = 0;
         int hi = n - 1;
         int found = -1;
@@ -8662,13 +8688,13 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         return result;
     }
 
-    // A tree map that would drop to the flat threshold converts back, which
+    // A hash map that would drop to the flat threshold converts back, which
     // is what the rebuild path did implicitly. Bounded work (the result holds
-    // at most TERM_MAP_TREE_THRESHOLD entries), and it keeps the flat/tree
+    // at most TERM_MAP_HASH_THRESHOLD entries), and it keeps the flat/hash
     // choice exactly where it was.
-    if (n - 1 <= TERM_MAP_TREE_THRESHOLD) {
+    if (n - 1 <= TERM_MAP_HASH_THRESHOLD) {
         bool oom = false;
-        term *arr = map_tree_array(map, n, &oom);
+        term *arr = map_hash_array(map, n, &oom, ctx->global);
         if (UNLIKELY(oom)) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
@@ -8710,10 +8736,11 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     }
 
     // Tree-backed map: path-copy the delete. This used to materialize the
-    // whole map into a malloc'd array, drop one entry and rebuild the tree --
+    // whole map into a malloc'd array, drop one entry and rebuild the trie --
     // O(n) allocation and copying to remove one key, and on OTP's
     // unicode_util.erl 96% of every sorted materialization the compile did.
-    size_t reserve = termtree_remove_heap_size((size_t) n) + TERM_MAP_TREE_BOXED_ARITY + 1;
+    size_t reserve = termmap_champ_remove_heap_size(term_get_map_hash_root(map), (size_t) n)
+        + TERM_MAP_HASH_BOXED_ARITY + 1;
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 2, argv, MEMORY_CAN_SHRINK)
             != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -8722,7 +8749,7 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     map = argv[1];
     key = argv[0];
     bool found = false;
-    term new_root = termtree_remove(&ctx->heap, term_get_map_tree_root(map), key, glb, &found);
+    term new_root = termmap_champ_remove(&ctx->heap, term_get_map_hash_root(map), key, glb, &found);
     if (!found) {
         // Key absent: the map is returned unchanged (no allocation).
         return map;
@@ -8730,11 +8757,11 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     if (term_is_nil(new_root)) {
         return term_alloc_map_maybe_shared(0, term_invalid_term(), &ctx->heap);
     }
-    return term_alloc_map_tree(&ctx->heap, new_root, (size_t) (n - 1));
+    return term_alloc_map_hash(&ctx->heap, new_root, (size_t) (n - 1));
 }
 
 // maps:keys/1 and maps:values/1. The estdlib versions walked the map through
-// the Erlang iterator protocol, paying a maps:next/1 call (and for tree maps a
+// the Erlang iterator protocol, paying a maps:next/1 call (and for hash maps a
 // materialized kv list) per entry; these build the result in one C pass with a
 // single heap reservation. maps:to_list/1 stays in Erlang (it also accepts an
 // iterator) and is built from these two.
@@ -8762,10 +8789,10 @@ static term maps_project(Context *ctx, term map, enum MapsProjection what)
         return term_nil();
     }
 
-    // A tree-backed map is materialized once (O(n)); a flat map is read in
+    // A hash-backed map is materialized once (O(n log n)); a flat map is read in
     // place.
     bool oom = false;
-    term *arr = map_tree_array(map, n, &oom);
+    term *arr = map_hash_array(map, n, &oom, ctx->global);
     if (UNLIKELY(oom)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
@@ -8781,7 +8808,11 @@ static term maps_project(Context *ctx, term map, enum MapsProjection what)
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         if (arr != NULL) {
-            termtree_fill_array(term_get_map_tree_root(map), arr);
+            if (UNLIKELY(!termmap_champ_fill_array_sorted(
+                    term_get_map_hash_root(map), arr, (size_t) n, ctx->global))) {
+                free(arr);
+                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+            }
         }
     }
 
@@ -8830,10 +8861,10 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
     term map = term_get_list_tail(iterator);
     VALIDATE_VALUE(map, term_is_map);
 
-    // A tree-map cursor's post is a 1-tuple {Stack}; accept it before the
+    // A hash-map cursor's post is a 1-tuple {Stack}; accept it before the
     // generic integer/list validation below rejects it.
-    bool is_tree_cursor = term_is_tuple(post) && term_get_tuple_arity(post) == 1;
-    if (UNLIKELY(!term_is_integer(post) && !term_is_list(post) && !is_tree_cursor)) {
+    bool is_walk_cursor = term_is_tuple(post) && term_get_tuple_arity(post) == 1;
+    if (UNLIKELY(!term_is_integer(post) && !term_is_list(post) && !is_walk_cursor)) {
         RAISE_ERROR(BADARG_ATOM);
     }
 
@@ -8842,12 +8873,12 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
     // maps:iterator/1) starts one. Materialising the whole [K0,V0,..] list on
     // the first step instead cost 4*size words before the caller saw a single
     // entry, which callers that take only a few entries never got back.
-    if (term_is_map_tree(map) && (term_is_integer(post) || is_tree_cursor)) {
+    if (term_is_map_hash(map) && (term_is_integer(post) || is_walk_cursor)) {
         bool first = term_is_integer(post);
         if (first && term_get_map_size(map) == 0) {
             return NONE_ATOM;
         }
-        size_t reserve = termtree_cursor_reserve(term_get_map_tree_root(map), first)
+        size_t reserve = termmap_champ_cursor_reserve(term_get_map_hash_root(map), first)
             + TUPLE_SIZE(3) + CONS_SIZE;
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, reserve, 1, &iterator, MEMORY_CAN_SHRINK)
                 != MEMORY_GC_OK)) {
@@ -8856,12 +8887,12 @@ static term nif_maps_next(Context *ctx, int argc, term argv[])
         // Re-read through the rooted iterator: a GC above may have moved both.
         map = term_get_list_tail(iterator);
         post = term_get_list_head(iterator);
-        term cursor = first ? termtree_cursor_first(term_get_map_tree_root(map), &ctx->heap)
+        term cursor = first ? termmap_champ_cursor_first(term_get_map_hash_root(map), &ctx->heap)
                             : term_get_tuple_element(post, 0);
         term key;
         term value;
         term next_cursor;
-        if (!termtree_cursor_next(cursor, &key, &value, &next_cursor, &ctx->heap)) {
+        if (!termmap_champ_cursor_next(cursor, &key, &value, &next_cursor, &ctx->heap)) {
             return NONE_ATOM;
         }
         term wrapper = term_alloc_tuple(1, &ctx->heap);
