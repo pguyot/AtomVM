@@ -153,7 +153,7 @@ def main():
 
     per_file = []
     file_number = 0
-    for app, source, includes in corpus:
+    for app, source, includes in corpus if args.runs_per_file else []:
         values = {label: [] for label in labels}
         for r in range(args.runs_per_file):
             rotation = (r + file_number) % len(labels)
@@ -174,6 +174,7 @@ def main():
     a_times = [entry["median"][args.a_label] for entry in per_file]
     b_times = [entry["median"][args.b_label] for entry in per_file]
     beam_times = [entry["median"]["BEAM"] for entry in per_file]
+    have_per_file = bool(per_file)
     summary = {
         "files": len(per_file),
         "batch": {app: {label: v[label] for label in labels} for app, v in batch.items()},
@@ -183,10 +184,10 @@ def main():
         "sum_seconds": {label: sum(entry["median"][label] for entry in per_file)
                         for label in labels},
         # Greater than 1 means B is faster than A.
-        "b_over_a_speedup": sum(a_times) / sum(b_times),
-        "b_over_a_ci": boot_ci(a_times, b_times),
-        "a_vs_beam": sum(beam_times) / sum(a_times),
-        "b_vs_beam": sum(beam_times) / sum(b_times),
+        "b_over_a_speedup": sum(a_times) / sum(b_times) if have_per_file else None,
+        "b_over_a_ci": boot_ci(a_times, b_times) if have_per_file else None,
+        "a_vs_beam": sum(beam_times) / sum(a_times) if have_per_file else None,
+        "b_vs_beam": sum(beam_times) / sum(b_times) if have_per_file else None,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
