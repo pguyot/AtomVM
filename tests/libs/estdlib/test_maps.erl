@@ -37,6 +37,8 @@ test() ->
     ok = test_is_key(),
     ok = test_put(),
     ok = test_large_map_lookup(),
+    ok = test_large_flat_map_conversion(),
+    ok = test_large_map_as_key(),
     ok = test_iterator(),
     HasIterator2 =
         case erlang:system_info(machine) of
@@ -120,6 +122,56 @@ test_large_map_lookup() ->
     ok = check_large_map(AtomKeys, [not_a_key, key_0, zzz]),
     ok = check_large_map(IntKeys, [-1, 2, 1000000]),
     ok = check_large_map(AtomKeys ++ IntKeys, [other, 7]),
+    ok.
+
+%% A map built entirely by maps:from_keys/2 stays in the flat representation
+%% however large it grows, so its first insert has to convert a flat map far
+%% bigger than the flat/hash threshold. That conversion reads the whole key
+%% array at once, and sizing its scratch for the threshold rather than for the
+%% map crashed the VM here (sets:from_list/1 + sets:add_element/2 is the shape
+%% that found it).
+test_large_flat_map_conversion() ->
+    lists:foreach(
+        fun(N) ->
+            Flat = maps:from_keys(lists:seq(1, N), v),
+            N = map_size(Flat),
+            Grown = maps:put(extra, other, id(Flat)),
+            true = (N + 1) =:= map_size(Grown),
+            other = maps:get(extra, Grown),
+            lists:foreach(fun(K) -> v = maps:get(K, Grown) end, lists:seq(1, N)),
+            %% The original is untouched: the conversion must not alias it.
+            N = map_size(Flat),
+            error = maps:find(extra, Flat),
+            %% And the converted map still behaves under further churn.
+            Removed = maps:remove(1, Grown),
+            true = N =:= map_size(Removed),
+            error = maps:find(1, Removed)
+        end,
+        [129, 200, 1000]
+    ),
+    ok.
+
+%% The same entries can sit in either map representation depending on how the
+%% map was built, and the two enumerate them in different orders. A map is
+%% itself a valid map key, so equal maps have to hash equally whichever
+%% representation holds them -- otherwise a lookup finds the key or not
+%% depending on the history of the term.
+test_large_map_as_key() ->
+    N = 200,
+    %% maps:from_keys/2 stays flat at any size; folding puts converts.
+    Flat = maps:from_keys(lists:seq(1, N), v),
+    Grown = lists:foldl(fun(K, A) -> A#{K => v} end, id(#{}), lists:seq(1, N)),
+    true = Flat =:= Grown,
+    %% An outer map large enough that its lookups hash the key rather than
+    %% scanning or comparing it.
+    Outer0 = lists:foldl(fun(I, A) -> A#{{filler, I} => I} end, id(#{}), lists:seq(1, 300)),
+    Outer = Outer0#{Flat => found},
+    found = maps:get(Flat, Outer),
+    found = maps:get(Grown, Outer),
+    true = maps:is_key(Grown, Outer),
+    Outer2 = Outer0#{Grown => found2},
+    found2 = maps:get(Flat, Outer2),
+    found2 = maps:get(Grown, Outer2),
     ok.
 
 check_large_map(Keys, AbsentKeys) ->
@@ -268,7 +320,7 @@ test_from_list() ->
     check_from_list([{a, 1}, {b, 2}, {a, 3}, {c, 4}, {b, 5}]),
     %% Unsorted input.
     check_from_list([{3, c}, {1, a}, {2, b}, {0, z}]),
-    %% Large lists that cross the flat->tree threshold (TERM_MAP_TREE_THRESHOLD=32).
+    %% Large lists that cross the flat->tree threshold (TERM_MAP_HASH_THRESHOLD=32).
     check_from_list([{I, I * 2} || I <- lists:seq(1, 40)]),
     check_from_list([{I, I} || I <- lists:seq(40, 1, -1)]),
     check_from_list([{{b_var, I}, I} || I <- lists:seq(1, 100)]),

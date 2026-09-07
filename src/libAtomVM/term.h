@@ -3291,73 +3291,87 @@ static inline term term_alloc_map(avm_uint_t size, Heap *heap)
     return term_alloc_map_maybe_shared(size, term_invalid_term(), heap);
 }
 
-// --- Large (tree-backed) maps --------------------------------------------
-// Maps with more than TERM_MAP_TREE_THRESHOLD entries are stored as a
-// persistent weight-balanced tree (termmap_tree.h), giving O(log n) single-key
-// insert/update instead of the flat array's O(n) (matching BEAM switching to a
-// HAMT above 32 entries). The boxed map is then a fixed 4 words:
+// --- Large (hash-backed) maps --------------------------------------------
+// Maps with more than TERM_MAP_HASH_THRESHOLD entries are stored as a
+// persistent CHAMP trie (termmap_champ.h), so that a single-key insert or
+// lookup costs one hash and one key comparison instead of the flat array's
+// O(n) copy and log2(n) comparisons (matching BEAM switching to a HAMT above
+// 32 entries). The boxed map is then a fixed 4 words:
 //
-//   [ header(arity=3) | NIL marker | tree root | size ]
+//   [ header(arity=3) | NIL marker | trie root | size ]
 //
 // A flat map's first payload word is its always-boxed keys tuple, so a
-// non-boxed first payload word unambiguously marks the tree form. Every payload
+// non-boxed first payload word unambiguously marks the hash form. Every payload
 // word is a valid term, so the garbage collector copies the wrapper with the
-// flat-map code and recurses into the tree nodes (ordinary tuples) on its own.
-// An in-order walk of the tree yields keys ascending, preserving the sorted-map
-// invariant flat maps rely on. These helpers (defined in term.c) bridge to
-// termmap_tree.h without pulling it into this header.
-#define TERM_MAP_TREE_THRESHOLD 128
+// flat-map code and recurses into the trie nodes (ordinary tuples) on its own.
+// Unlike a flat map, a trie enumerates its entries in hash order rather than
+// key order; callers whose output is ordered sort it (term_map_sorted_array).
+// These helpers (defined in term.c) bridge to termmap_champ.h without pulling
+// it into this header.
+#define TERM_MAP_HASH_THRESHOLD 128
 // Asymmetric growth cutoff: a flat map that a single-key insert would GROW
-// past this size converts to the tree form instead of paying the O(n) flat
+// past this size converts to the hash form instead of paying the O(n) flat
 // copy. Reads and pure updates keep the flat layout up to
-// TERM_MAP_TREE_THRESHOLD (block copy + shared keys beat tree path copies),
+// TERM_MAP_HASH_THRESHOLD (block copy + shared keys beat trie path copies),
 // but insert-heavy workloads (sets:add_element churn in the Erlang compiler)
 // go quadratic on large flat maps.
 #define TERM_MAP_FLAT_GROW_MAX 48
-#define TERM_MAP_TREE_BOXED_ARITY 3
-#define TERM_MAP_TREE_ROOT_INDEX 2
-#define TERM_MAP_TREE_SIZE_INDEX 3
+#define TERM_MAP_HASH_BOXED_ARITY 3
+#define TERM_MAP_HASH_ROOT_INDEX 2
+#define TERM_MAP_HASH_SIZE_INDEX 3
 
-term term_map_tree_value_at(term map, avm_uint_t pos);
-term term_map_tree_key_at(term map, avm_uint_t pos);
-int term_map_tree_find_pos(term map, term key, GlobalContext *global);
+term term_map_hash_value_at(term map, avm_uint_t pos);
+term term_map_hash_key_at(term map, avm_uint_t pos);
+int term_map_hash_find_pos(term map, term key, GlobalContext *global);
 
 /**
- * @brief Look up \p key directly in a tree-backed map, returning its value or
- * `term_invalid_term()` if absent. Single O(log n) walk, versus the
- * find_pos (rank) + value-at (select) pair that walks the tree twice. Only
- * valid on a map for which term_is_map_tree/1 is true.
+ * @brief Look up \p key directly in a hash-backed map, returning its value or
+ * `term_invalid_term()` if absent. One hashed descent, versus the find_pos
+ * (rank) + value-at (select) pair, which would walk the whole trie. Only
+ * valid on a map for which term_is_map_hash/1 is true.
  */
-term term_map_tree_get(term map, term key, GlobalContext *global);
+term term_map_hash_get(term map, term key, GlobalContext *global);
 
 /**
- * @brief Whether \p t is a large, tree-backed map (vs a flat map). Only valid
+ * @brief Materialize a map's entries as a malloc'd [K0,V0,K1,V1,...] array of
+ * 2 * term_get_map_size(map) terms, sorted ascending by key in
+ * term_compare(TermCompareExact) order.
+ *
+ * A flat map is already in key order; a hash-backed one is walked and sorted.
+ * For the callers whose output is ordered -- printing and the external term
+ * format -- and which would otherwise select each entry by position.
+ * @return NULL if out of memory. The caller frees the array.
+ */
+term *term_map_sorted_array(term map, GlobalContext *global);
+
+/**
+ * @brief Whether \p t is a large, hash-backed map (vs a flat map). Only valid
  * to call on a term already known to be a map.
  */
-static inline bool term_is_map_tree(term t)
+static inline bool term_is_map_hash(term t)
 {
     const term *boxed_value = term_to_const_term_ptr(t);
     return !term_is_boxed(boxed_value[1]);
 }
 
-static inline term term_get_map_tree_root(term t)
+static inline term term_get_map_hash_root(term t)
 {
-    return term_to_const_term_ptr(t)[TERM_MAP_TREE_ROOT_INDEX];
+    return term_to_const_term_ptr(t)[TERM_MAP_HASH_ROOT_INDEX];
 }
 
 /**
- * @brief Allocate the 4-word wrapper of a tree-backed map around \p root (a
- * termmap_tree node or NIL) holding \p size entries. The caller must have
- * reserved TERM_MAP_TREE_BOXED_ARITY + 1 free words.
+ * @brief Allocate the 4-word wrapper of a hash-backed map around \p root (a
+ * termmap_champ node or NIL) holding \p size entries. The caller must have
+ * reserved TERM_MAP_HASH_BOXED_ARITY + 1 free words.
  */
-static inline term term_alloc_map_tree(Heap *heap, term root, size_t size)
+static inline term term_alloc_map_hash(Heap *heap, term root, size_t size)
 {
-    term *boxed_value = memory_heap_alloc(heap, TERM_MAP_TREE_BOXED_ARITY + 1);
-    boxed_value[0] = (TERM_MAP_TREE_BOXED_ARITY << 6) | TERM_BOXED_MAP;
-    boxed_value[1] = term_nil(); // marker: distinguishes the tree form (a flat
+    term *boxed_value = memory_heap_alloc(heap, TERM_MAP_HASH_BOXED_ARITY + 1);
+    boxed_value[0] = (TERM_MAP_HASH_BOXED_ARITY << 6) | TERM_BOXED_MAP;
+    boxed_value[1] = term_nil(); // marker: distinguishes the hash form (a flat
                                  // map's first payload word is its keys tuple)
-    boxed_value[TERM_MAP_TREE_ROOT_INDEX] = root;
-    boxed_value[TERM_MAP_TREE_SIZE_INDEX] = term_from_int((avm_int_t) size);
+    boxed_value[TERM_MAP_HASH_ROOT_INDEX] = root;
+    boxed_value[TERM_MAP_HASH_SIZE_INDEX] = term_from_int((avm_int_t) size);
     return ((term) boxed_value) | TERM_PRIMARY_BOXED;
 }
 
@@ -3371,15 +3385,15 @@ static inline term term_get_map_keys(term t)
 static inline int term_get_map_size(term t)
 {
     TERM_DEBUG_ASSERT(term_is_map(t));
-    if (UNLIKELY(term_is_map_tree(t))) {
-        return term_to_int(term_to_const_term_ptr(t)[TERM_MAP_TREE_SIZE_INDEX]);
+    if (UNLIKELY(term_is_map_hash(t))) {
+        return term_to_int(term_to_const_term_ptr(t)[TERM_MAP_HASH_SIZE_INDEX]);
     }
     return term_get_tuple_arity(term_get_map_keys(t));
 }
 
 static inline void term_set_map_assoc(term map, avm_uint_t pos, term key, term value)
 {
-    TERM_DEBUG_ASSERT(!term_is_map_tree(map));
+    TERM_DEBUG_ASSERT(!term_is_map_hash(map));
     term_put_tuple_element(term_get_map_keys(map), pos, key);
     term *boxed_value = term_to_term_ptr(map);
     boxed_value[term_get_map_value_offset() + pos] = value;
@@ -3387,16 +3401,16 @@ static inline void term_set_map_assoc(term map, avm_uint_t pos, term key, term v
 
 static inline term term_get_map_key(term map, avm_uint_t pos)
 {
-    if (UNLIKELY(term_is_map_tree(map))) {
-        return term_map_tree_key_at(map, pos);
+    if (UNLIKELY(term_is_map_hash(map))) {
+        return term_map_hash_key_at(map, pos);
     }
     return term_get_tuple_element(term_get_map_keys(map), pos);
 }
 
 static inline term term_get_map_value(term map, avm_uint_t pos)
 {
-    if (UNLIKELY(term_is_map_tree(map))) {
-        return term_map_tree_value_at(map, pos);
+    if (UNLIKELY(term_is_map_hash(map))) {
+        return term_map_hash_value_at(map, pos);
     }
     term *boxed_value = term_to_term_ptr(map);
     return boxed_value[term_get_map_value_offset() + pos];
@@ -3404,15 +3418,28 @@ static inline term term_get_map_value(term map, avm_uint_t pos)
 
 static inline void term_set_map_value(term map, avm_uint_t pos, term value)
 {
-    TERM_DEBUG_ASSERT(!term_is_map_tree(map));
+    TERM_DEBUG_ASSERT(!term_is_map_hash(map));
     term *boxed_value = term_to_term_ptr(map);
     boxed_value[term_get_map_value_offset() + pos] = value;
 }
 
+/**
+ * @brief Position of \p key for callers that only test the result against
+ * TERM_MAP_NOT_FOUND / TERM_MAP_MEMORY_ALLOC_FAIL and never use the position
+ * itself.
+ *
+ * A hash-backed map answers with a single hashed descent and reports an
+ * arbitrary 0 for "found", where term_find_map_pos would walk the whole trie
+ * to build a walk-order position the caller discards. A hash lookup does not
+ * surface the comparison-OOM that flat maps signal, so an absence there is
+ * simply not-found (matching is_map_key).
+ */
+static inline int term_map_key_pos(term map, term key, GlobalContext *global);
+
 static inline int term_find_map_pos(term map, term key, GlobalContext *global)
 {
-    if (UNLIKELY(term_is_map_tree(map))) {
-        return term_map_tree_find_pos(map, key, global);
+    if (UNLIKELY(term_is_map_hash(map))) {
+        return term_map_hash_find_pos(map, key, global);
     }
     term keys = term_get_map_keys(map);
     int arity = term_get_tuple_arity(keys);
@@ -3545,6 +3572,14 @@ static inline int term_find_map_pos(term map, term key, GlobalContext *global)
     }
 
     return TERM_MAP_NOT_FOUND;
+}
+
+static inline int term_map_key_pos(term map, term key, GlobalContext *global)
+{
+    if (UNLIKELY(term_is_map_hash(map))) {
+        return term_is_invalid_term(term_map_hash_get(map, key, global)) ? TERM_MAP_NOT_FOUND : 0;
+    }
+    return term_find_map_pos(map, key, global);
 }
 
 term term_get_map_assoc(term map, term key, GlobalContext *glb);
