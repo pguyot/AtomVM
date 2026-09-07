@@ -300,17 +300,95 @@ in at JIT-precompile time, the hash leaves the hot path and the trie's single
 key comparison beats the tree's log2(n). The tree can never benefit from that
 work, because it never hashes.
 
+## Addendum: three things that looked worth doing and are not
+
+Each was measured rather than argued, and none is kept.
+
+### Precomputing literal-key hashes, as BEAM's loader does
+
+Retracted. Censusing what is actually hashed while compiling settles it:
+
+| hashed key shape | `unicode_util` (24.7M) | `erl_parse` (4.2M) |
+|---|---:|---:|
+| small integer | 59.8% | 55.6% |
+| tuple | 39.9% | 43.1% |
+| **atom** | **0.1%** | **1.2%** |
+
+| hashed by operation | | |
+|---|---:|---:|
+| get / put / bulk build / collision rehash | 73.2 / 13.7 / 7.7 / 5.4% | 54.1 / 21.4 / 20.3 / 3.9% |
+
+Almost nothing hashed here is a literal. The keys are SSA variable identities --
+small integers and `{b_var, N}` tuples -- computed at runtime, which a loader
+transform cannot reach. Literal atom keys are what record-style access uses, and
+those maps stay under the flat threshold and never hash at all: AtomVM already
+gets for free what BEAM's transform exists to recover. BEAM needs it because it
+switches to hashmaps at 32 entries where AtomVM switches at 128.
+
+### Replacing the byte-at-a-time integer hash
+
+`hash_integer` folds a value one byte at a time, which looks obviously wrong,
+and a murmur3 finalizer measured **2.15x** faster on small integers and **1.56x**
+on `{b_var, N}` tuples standalone -- with far better distribution, the
+chi-square of a 4-bit trie slice over 200k sequential keys falling from 2,464
+(bits 16-19) and 150,349 (bits 20-23) to about 24, against an ideal of 15.
+
+On the corpus it measured **0.9971x**: slightly slower. The magnitude census
+says why:
+
+| hashed integer | share |
+|---|---:|
+| zero | 16.6% |
+| < 256 | 4.4% |
+| 2 bytes | 76.5% |
+| 3 bytes | 2.5% |
+
+The loop's trip count is nearly constant in this workload, so its branch
+predicts and costs almost nothing, and at two iterations the two versions run a
+comparable number of ALU operations -- while for the 16.6% of keys that hash
+zero the loop does no iterations at all against the finalizer's seven
+operations. The standalone benchmark had mixed 1- and 2-byte values and was
+measuring branch misprediction that does not occur here.
+
+The distribution skew is real but does not bite at these sizes: 16^4 slots
+already exceed the largest maps, so the levels that consume bits 16 and above
+are never reached. It would bite on maps beyond 65k entries.
+
+### Storing a precomputed hash per atom instead of the 8-byte sort key
+
+No: they serve different operations. `sort_key` answers *ordering*, which a hash
+cannot, and ordering (`term_compare0`, 11.4% of self time) is the single largest
+cost in the profile, against atom hashing at 0.1% of hashes. A stored hash would
+also be slower than what is there now -- hashing the atom index is a few ALU
+operations on a value already in the term register, where a stored hash means a
+pointer chase into the atom table. The footprint concern behind the question is
+already handled: `ATOM_TABLE_SORT_KEY_CACHE` is compiled out on 32-bit targets
+because the `uint64_t` doubled `sizeof(struct HNode)` and pushed esp32c3 out of
+memory.
+
+### Where the time actually goes
+
+Self time sampling an `erlc` run over `unicode_util`:
+
+| symbol | self |
+|---|---:|
+| `term_compare0` | 11.4% |
+| `champ_put_rec` | 10.3% |
+| `termmap_champ_get` | 8.5% |
+| `hash_term_incr` | 8.3% |
+| bulk build (`champ_size_rec` + `champ_build_rec` + `champ_partition`) | 5.1% |
+
+Comparison, not hashing, is still the largest single cost, and map *insertion*
+costs as much as lookup -- which is where the remaining headroom is.
+
 ## Follow-ups, in the order they look worth doing
 
-1. **Precompute literal-key hashes in the JIT**, as BEAM's loader does, for
-   `get_map_elements` and `has_map_fields`. This is the big one and it is what
-   the CHAMP work unlocks.
-2. **Stop sorting in `maps:keys/1` and `maps:values/1`.** Step 1 made
+1. **Stop sorting in `maps:keys/1` and `maps:values/1`.** Step 1 made
    `map_hash_array` sort so that `maps:merge/2`'s two-pointer merge kept working,
    but Erlang does not specify the order and BEAM returns hash order for
    hashmaps; the tests already `lists:sort` the result. Splitting the sorted and
    unsorted uses drops an O(n log n) `term_compare` pass from both.
-3. **Raise `MAPS_MERGE_SMALL_MAX`.** Merging a small map into a large trie is
+2. **Raise `MAPS_MERGE_SMALL_MAX`.** Merging a small map into a large trie is
    O(m) puts with no scratch and no sort; the cutoff of 8 was tuned for the tree.
-4. **Revisit `TERM_MAP_HASH_THRESHOLD` (128).** A hashed lookup should overtake
+3. **Revisit `TERM_MAP_HASH_THRESHOLD` (128).** A hashed lookup should overtake
    a binary search well before 128 entries; BEAM switches at 32.
