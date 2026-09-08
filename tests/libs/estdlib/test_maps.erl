@@ -39,6 +39,7 @@ test() ->
     ok = test_large_map_lookup(),
     ok = test_large_flat_map_conversion(),
     ok = test_large_map_as_key(),
+    ok = test_large_map_exact_update(),
     ok = test_iterator(),
     HasIterator2 =
         case erlang:system_info(machine) of
@@ -150,6 +151,47 @@ test_large_flat_map_conversion() ->
         [129, 200, 1000]
     ),
     ok.
+
+%% `Map#{K := V}' on a hash-backed map. The trie's put reports whether the key
+%% was already there, so the update no longer navigates every key a second time
+%% to check it first -- which means a missing key is now detected part-way
+%% through the updates rather than before any of them. All of it still has to
+%% raise, leave the source untouched, and apply every update when the keys are
+%% present.
+test_large_map_exact_update() ->
+    N = 300,
+    Big = lists:foldl(fun(K, A) -> A#{K => K} end, id(#{}), lists:seq(1, N)),
+    N = map_size(Big),
+    %% single key, present
+    One = (id(Big))#{7 := seven},
+    seven = maps:get(7, One),
+    7 = maps:get(7, Big),
+    N = map_size(One),
+    %% several keys at once, all present
+    Many = (id(Big))#{1 := a, 150 := b, 300 := c},
+    [a, b, c] = [maps:get(K, Many) || K <- [1, 150, 300]],
+    N = map_size(Many),
+    %% a missing key raises, whether it is the only one or the last of several
+    ok = expect_badarg(fun() -> (id(Big))#{absent := 1} end),
+    ok = expect_badarg(fun() -> (id(Big))#{1 := a, absent := 1} end),
+    %% and the source survives the attempt intact
+    N = map_size(Big),
+    1 = maps:get(1, Big),
+    %% `=>' on the same map: several keys, a mix of updates and inserts
+    Assoc = (id(Big))#{1 => x, {new, 1} => y, {new, 2} => z},
+    x = maps:get(1, Assoc),
+    y = maps:get({new, 1}, Assoc),
+    true = (N + 2) =:= map_size(Assoc),
+    N = map_size(Big),
+    ok.
+
+expect_badarg(Fun) ->
+    try Fun() of
+        Other -> {unexpected, Other}
+    catch
+        error:{badkey, _} -> ok;
+        error:badarg -> ok
+    end.
 
 %% The same entries can sit in either map representation depending on how the
 %% map was built, and the two enumerate them in different orders. A map is
