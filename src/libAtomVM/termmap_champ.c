@@ -142,10 +142,12 @@ static inline term champ_sub(term node, size_t entries, size_t i)
     return champ_body(node)[CHAMP_FIRST_ENTRY + 2 * entries + i];
 }
 
+// The descent asks "same key?" at every level, so the shallow cases -- an
+// identical term, two distinct immediates, a same-header tuple of immediates --
+// are decided here rather than through a call into term.c.
 static inline bool champ_key_eq(term a, term b, GlobalContext *global)
 {
-    return a == b
-        || term_compare(a, b, TermCompareExact | TermCompareEqualOnly, global) == TermEquals;
+    return term_exact_eq(a, b, global);
 }
 
 static term champ_node_new(Heap *heap, uint32_t datamap, uint32_t nodemap, size_t entries, size_t nodes)
@@ -201,10 +203,7 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
             int arity = term_get_tuple_arity(node);
             int count = (arity - CHAMP_FIRST_ENTRY) / 2;
             for (int i = 0; i < count; i++) {
-                term k = body[CHAMP_FIRST_ENTRY + 2 * i];
-                if (k == key
-                    || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
-                        == TermEquals) {
+                if (champ_key_eq(body[CHAMP_FIRST_ENTRY + 2 * i], key, global)) {
                     return body[CHAMP_FIRST_ENTRY + 2 * i + 1];
                 }
             }
@@ -214,10 +213,7 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
         uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
         if (datamap & bit) {
             int i = champ_index(datamap, bit);
-            term k = body[CHAMP_FIRST_ENTRY + 2 * i];
-            if (k == key
-                || term_compare(k, key, TermCompareExact | TermCompareEqualOnly, global)
-                    == TermEquals) {
+            if (champ_key_eq(body[CHAMP_FIRST_ENTRY + 2 * i], key, global)) {
                 return body[CHAMP_FIRST_ENTRY + 2 * i + 1];
             }
             return term_invalid_term();
