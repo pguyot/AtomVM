@@ -73,6 +73,20 @@
 #define ATOM_TABLE_SORT_KEY_CACHE 0
 #endif
 
+// Cache each atom's term_hash contribution for the same reason, and under the
+// same condition: on 64-bit the uint32_t lands in the padding the bitfields
+// already leave, so struct HNode does not grow at all (the assertion below
+// holds it to that), while on 32-bit it would take the node from 12 to 16
+// bytes -- the growth the sort key is compiled out to avoid. Hashing an index
+// is only a handful of arithmetic operations, but they form a dependent chain
+// of multiplies, and reading the answer instead measured faster on every
+// application of the erlc corpus.
+#if UINTPTR_MAX > UINT32_MAX
+#define ATOM_TABLE_HASH_CACHE 1
+#else
+#define ATOM_TABLE_HASH_CACHE 0
+#endif
+
 struct HNode
 {
     struct HNode *next;
@@ -87,7 +101,16 @@ struct HNode
 #endif
     uint32_t index : 20;
     uint32_t bytes_len : 10;
+#if ATOM_TABLE_HASH_CACHE
+    // atom_table_index_hash(index), stored when the atom is interned.
+    uint32_t hash;
+#endif
 };
+
+#if ATOM_TABLE_HASH_CACHE
+_Static_assert(sizeof(struct HNode) == 32,
+    "the atom hash cache must fit the padding struct HNode already had");
+#endif
 
 #if ATOM_TABLE_SORT_KEY_CACHE
 // The JIT aarch64 compare stub resolves atom-vs-atom ordering in generated
@@ -175,6 +198,20 @@ static inline struct HNode *get_published_node(struct AtomTable *table, atom_ind
     return array[index];
 }
 #endif
+
+uint32_t atom_table_get_atom_hash(struct AtomTable *table, atom_index_t index)
+{
+#if ATOM_TABLE_HASH_CACHE
+#ifdef ATOM_TABLE_LOCKFREE_READS
+    return get_published_node(table, index)->hash;
+#else
+    return get_node_using_index(table, index)->hash;
+#endif
+#else
+    UNUSED(table);
+    return atom_table_index_hash((uint32_t) index);
+#endif
+}
 
 static struct HNodeGroup *new_node_group(struct AtomTable *table, int len);
 
@@ -475,6 +512,9 @@ static inline void init_node(struct HNode *node, const uint8_t *atom_data, size_
     node->key = atom_data;
     node->bytes_len = atom_len;
     node->index = index;
+#if ATOM_TABLE_HASH_CACHE
+    node->hash = atom_table_index_hash((uint32_t) index);
+#endif
 #if ATOM_TABLE_SORT_KEY_CACHE
     node->sort_key = atom_sort_key(atom_data, atom_len);
 #endif
