@@ -1,0 +1,84 @@
+diff --git a/src/libAtomVM/memory.c b/src/libAtomVM/memory.c
+index 69cc2b9cc..bfad1daba 100644
+--- a/src/libAtomVM/memory.c
++++ b/src/libAtomVM/memory.c
+@@ -57,6 +57,8 @@ static inline bool memory_is_in_old_heap(const Heap *heap, const term *ptr);
+ static term memory_shallow_copy_term_generational(HeapFragment *old_fragment, const Heap *heap, term t, term **new_young_heap, term **old_heap_ptr);
+ static inline term memory_shallow_copy_term_impl(HeapFragment *old_fragment, const Heap *heap, term t, term **new_heap, term **old_heap_ptr, bool move, bool generational, bool promote_children);
+ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
++
++_Thread_local uint32_t term_hash_memo_epoch = 0;
+ static enum MemoryGCResult memory_full_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
+ static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
+ #ifdef ENABLE_REALLOC_GC
+@@ -138,6 +140,7 @@ void *memory_heap_block_alloc(size_t size_bytes)
+ 
+ void memory_heap_block_free(void *ptr)
+ {
++    term_hash_memo_epoch++;
+     size_t usable = HEAP_BLOCK_USABLE_SIZE(ptr);
+     if (usable >= HEAP_BLOCK_CACHE_MIN_BYTES && usable <= HEAP_BLOCK_CACHE_MAX_BYTES
+         && heap_block_cache_bytes + usable <= HEAP_BLOCK_CACHE_TOTAL_BYTES) {
+@@ -181,6 +184,7 @@ void *memory_heap_block_alloc(size_t size_bytes)
+ 
+ void memory_heap_block_free(void *ptr)
+ {
++    term_hash_memo_epoch++;
+     free(ptr);
+ }
+ 
+@@ -451,6 +455,9 @@ static inline void push_to_stack(term **stack, term value)
+ 
+ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots)
+ {
++    // Every collection invalidates the hash memo: it is keyed by term address,
++    // and this is what moves terms.
++    term_hash_memo_epoch++;
+     // Minor GC promotes the mature region [heap_start, high_water_mark) out of
+     // the root fragment, which requires high_water_mark to still lie inside it.
+     // Message delivery (memory_heap_append_fragment) preserves this: it links
+diff --git a/src/libAtomVM/term_hash.c b/src/libAtomVM/term_hash.c
+index 5735b02dc..8e1dcf1de 100644
+--- a/src/libAtomVM/term_hash.c
++++ b/src/libAtomVM/term_hash.c
+@@ -291,7 +291,39 @@ static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global)
+     }
+ }
+ 
++// Hash memo: a term's hash depends only on its contents, and a boxed term is
++// immutable, so the only thing that can invalidate an entry keyed by the term's
++// address is a collection moving or reclaiming what lives there -- which the
++// epoch catches. The table is thread-local because the addresses in it come
++// from the heap of whichever process this scheduler is running, and that is the
++// only heap this scheduler's collections move.
++#define TERM_HASH_MEMO_SLOTS 2048
++
++struct TermHashMemoEntry
++{
++    term key;
++    uint32_t hash;
++    uint32_t epoch;
++};
++
++extern _Thread_local uint32_t term_hash_memo_epoch;
++static _Thread_local struct TermHashMemoEntry term_hash_memo[TERM_HASH_MEMO_SLOTS];
++
+ uint32_t term_hash(term t, GlobalContext *global)
+ {
+-    return hash_term_incr(t, LARGE_PRIME_INITIAL, global);
++    // Immediates are most of the calls but almost none of the work, and there
++    // is nothing to remember about them: skip straight past the table.
++    if ((t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
++        return hash_term_incr(t, LARGE_PRIME_INITIAL, global);
++    }
++    struct TermHashMemoEntry *entry = &term_hash_memo[(t >> 3) % TERM_HASH_MEMO_SLOTS];
++    uint32_t epoch = term_hash_memo_epoch;
++    if (entry->key == t && entry->epoch == epoch) {
++        return entry->hash;
++    }
++    uint32_t computed = hash_term_incr(t, LARGE_PRIME_INITIAL, global);
++    entry->key = t;
++    entry->hash = computed;
++    entry->epoch = epoch;
++    return computed;
+ }
