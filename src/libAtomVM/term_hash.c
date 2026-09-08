@@ -93,7 +93,6 @@ static uint32_t hash_uint64(uint64_t n, uint32_t h, uint32_t prime)
 
 static uint32_t hash_atom(term t, uint32_t h, GlobalContext *global)
 {
-    UNUSED(global);
     // An atom's identity is its table index: interned, unique, and never
     // renumbered for the life of the VM. Hashing that instead of reading the
     // characters matters because term_hash is now on the map lookup path, and
@@ -102,14 +101,9 @@ static uint32_t hash_atom(term t, uint32_t h, GlobalContext *global)
     // needs the value to be stable across runs: term_hash backs internal hash
     // tables only (maps, ETS buckets, persistent_term), and a map crossing a
     // VM boundary is re-encoded entry by entry.
-    uint32_t index = (uint32_t) term_to_atom_index(t);
-    // Indices are handed out consecutively, so mix before folding: a trie
-    // slices the low bits four at a time and needs them spread.
-    index ^= index >> 16;
-    index *= 0x7feb352du;
-    index ^= index >> 15;
-    index *= 0x846ca68bu;
-    index ^= index >> 16;
+    // atom_table_get_atom_hash reads the value the atom table stored at intern
+    // time where that is free, and mixes the index here where it is not.
+    uint32_t index = atom_table_get_atom_hash(global->atom_table, term_to_atom_index(t));
     return (h * LARGE_PRIME_ATOM + index) * LARGE_PRIME_ATOM;
 }
 
