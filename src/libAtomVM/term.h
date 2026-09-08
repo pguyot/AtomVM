@@ -2656,6 +2656,84 @@ static inline int term_get_tuple_arity(term t)
  * every element cost 1.2% on unicode_util.erl, in the descent's stack frames,
  * which is more than the wider coverage was worth there.
  */
+/**
+ * @brief Inline prefix of the exact-equality walk.
+ *
+ * @details Decides the shallow cases without a call: identical terms, pairs
+ * whose primary tags differ, two distinct immediates, and tuples of the same
+ * header whose element pairs each resolve the same way -- the {Atom, Int}
+ * shape a compiler's SSA identities take. Anything deeper reports "undecided"
+ * and the caller falls back to term_compare. term_compare's own exact-equality
+ * path starts with the same test, so this only moves the decision to the call
+ * site; it exists because the hash-map descent asks "same key?" far more often
+ * than anything else and term_compare is a cross-translation-unit call.
+ *
+ * @param t the first term.
+ * @param other the second term.
+ * @param equal set to the answer when the pair is decided here.
+ * @return true when *equal was set, false when the pair needs term_compare.
+ */
+static inline bool term_exact_equals_shallow(term t, term other, bool *equal)
+{
+    if (t == other) {
+        *equal = true;
+        return true;
+    }
+    if (((t ^ other) & TERM_PRIMARY_MASK) != 0 || (t & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+        // Distinct primary tags or two distinct immediates: never exactly
+        // equal (boxed integers are normalized).
+        *equal = false;
+        return true;
+    }
+    if ((t & TERM_PRIMARY_MASK) != TERM_PRIMARY_BOXED) {
+        return false;
+    }
+    const term *t_ptr = term_to_const_term_ptr(t);
+    const term *other_ptr = term_to_const_term_ptr(other);
+    term header = t_ptr[0];
+    if ((header & TERM_BOXED_TAG_MASK) != TERM_BOXED_TUPLE) {
+        return false;
+    }
+    if (header != other_ptr[0]) {
+        // The header carries the arity, and no tuple of another arity is equal.
+        *equal = false;
+        return true;
+    }
+    size_t arity = term_get_size_from_boxed_header(header);
+    if (arity > 8) {
+        return false;
+    }
+    for (size_t i = 1; i <= arity; i++) {
+        term a = t_ptr[i];
+        term b = other_ptr[i];
+        if (a == b) {
+            continue;
+        }
+        if (((a ^ b) & TERM_PRIMARY_MASK) != 0 || (a & TERM_PRIMARY_MASK) == TERM_PRIMARY_IMMED) {
+            *equal = false;
+            return true;
+        }
+        // A compound element pair needs the deep walk.
+        return false;
+    }
+    *equal = true;
+    return true;
+}
+
+/**
+ * @brief Whether two terms are exactly equal (=:=).
+ */
+static inline bool term_exact_eq(term t, term other, GlobalContext *global)
+{
+    bool equal;
+    if (term_exact_equals_shallow(t, other, &equal)) {
+        return equal;
+    }
+    return term_compare(t, other, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly),
+               global)
+        == TermEquals;
+}
+
 #define TERM_MAP_PROBE_MAX_ARITY 4
 
 struct TermMapProbe
