@@ -392,3 +392,161 @@ costs as much as lookup -- which is where the remaining headroom is.
    O(m) puts with no scratch and no sort; the cutoff of 8 was tuned for the tree.
 3. **Revisit `TERM_MAP_HASH_THRESHOLD` (128).** A hashed lookup should overtake
    a binary search well before 128 entries; BEAM switches at 32.
+
+# Part two, 2026-09-08: insertion, and where a hash should be kept
+
+Follow-up session. Three questions: revisit insertion, try caching atom hashes,
+and work out how many bits are available for a hash and whether it makes sense
+to keep one in a map or a tuple. Method is unchanged from Part one -- interleaved
+A/B, every round running each engine on the same work and rotating who goes
+first -- with one refinement: for a change aimed at map-heavy code, the same VM
+binary is spliced into the *same* erlc payload for both engines, so the only
+difference between A and B is the change itself, and a new driver
+([`bench_erlc_file_ab.py`](bench_erlc_file_ab.py)) concentrates runs on
+`unicode_util` and `erl_parse` where the corpus average buries the effect.
+
+Ratios are A/B throughout, so greater than one means B is faster.
+
+## What shipped
+
+| commit | erlc corpus (batch) | `unicode_util` | `erl_parse` | ESTONE |
+|---|---:|---:|---:|---:|
+| Move a node's payload as words | 1.0044x | -- | -- | -- |
+| + decide shallow equality at the call site | **1.0098x** | 1.0162x | 1.0087x | 0.9990x |
+| Cache an atom's hash | **1.0036x** | 1.0037x | 1.0023x | -- |
+
+Every application of the corpus moved the same way in all three. All 279 sources
+still compile byte-identically at each step.
+
+### Insertion: the copy, not the algorithm
+
+`champ_put_rec` and `champ_remove_rec` rebuilt each node on the path a term at a
+time through `term_put_tuple_element`, which re-derives the destination pointer
+and -- since source and destination are both `term *` -- leaves the compiler
+unable to widen the copy. The destination is a tuple allocated moments earlier
+by a bump allocator and cannot overlap its source, so the runs move with
+`memcpy`. A node near the root holds up to sixteen entries, so a put on a large
+map was moving something like fifty words one at a time.
+
+On its own this is 1.0044x on the batch and 1.0024x over the files, paired
+bootstrap CI 0.9953-1.0097 -- consistent in direction across all five
+applications but not resolvable against the noise floor.
+
+### Comparison: the largest block in the profile
+
+`term_compare` already resolves the shapes a map descent meets without its
+general machinery, but reaching that code costs a cross-translation-unit call
+plus an ordering prologue. Lifting the shallow test into `term.h` as
+`term_exact_equals_shallow` -- shared, so `term.c` and the trie cannot drift --
+lets the descent decide inline. Paired with the word move this reaches 1.0098x
+on the batch and 1.0088x over the files, **CI 1.0021-1.0154**, faster on 168 of
+279. That is the pair clearing the noise floor the word move alone did not.
+
+### The emulator's put_map walked every key twice
+
+Both `put_map` opcodes navigated every key before touching the map -- assoc to
+count new keys, exact to check none were missing -- and then hashed and
+descended again to do the work. On a hash-backed source neither walk is needed:
+the result is hash-backed whatever the count says and the reservation does not
+depend on it, and the trie's put already reports whether the key was there. This
+is the emulator's path, so it does not show in the AOT benchmarks; it is what an
+MCU build without the JIT runs.
+
+## Caching an atom's hash: the recorded reasoning was wrong
+
+Part one argued a stored atom hash would lose, because hashing the index is a few
+operations on a value already in a register where a cache means a chase into the
+atom table. Measured, it wins: **1.0036x** on the corpus batch, 1.0037x on
+`unicode_util` (CI 1.0018-1.0057). The operations are few but form a dependent
+chain of four multiplies, and the atom table is small and stays hot. Atoms are
+0.1% of the keys a large map hashes but most of what its tuple keys are made of,
+which is where it shows up.
+
+It is free where it is taken: on 64-bit the `uint32_t` lands in padding
+`struct HNode` already had, so the node stays 32 bytes (now asserted). On 32-bit
+it would take the node from 12 to 16 bytes, which is the growth that compiles the
+sort key out on small MCUs, so it is gated the same way and the mix runs inline
+at the call site there instead.
+
+**A cheaper mix is not a substitute.** Replacing the murmur finalizer with a
+single multiply measured 1.0060x on `unicode_util` and **0.9853x** on
+`erl_parse`: what it saves in arithmetic it gives back in collisions. The mix is
+earning its keep, so the only way to make it cheaper is to stop repeating it.
+
+## How many bits, and where a hash should live
+
+Censusing what `term_hash` is asked to hash while compiling:
+
+| | `unicode_util` | `erl_parse` |
+|---|---:|---:|
+| calls | 24.7M | 4.2M |
+| small integer | 59.8% of calls, 22.5% of work | 55.4% / 22.0% |
+| **tuple** | **39.9% of calls, 75.4% of work** | **43.2% / 76.3%** |
+| atom | 0.1% | 1.3% |
+
+Tuples are where the work is. And the *same tuple object* is hashed again and
+again: a direct-mapped table keyed by the term's address hits **87.1%** of boxed
+hashes on `unicode_util` and **71.3%** on `erl_parse`.
+
+That reframes the question. The value worth caching is not in the map -- it is
+the hash of the *probe* key, the term you arrive with. This is why Part one's
+stored-per-entry hash lost: it caches keys already in the map and never the one
+being looked up.
+
+### The bits
+
+A boxed header is `size << 6 | tag`. On 64-bit the size field has 58 bits and
+real arities need at most 24, so **34 bits are spare** -- room for a whole hash.
+On 32-bit the field is 26 bits and there is no room worth taking. But
+`term_get_size_from_boxed_header` is the GC's hottest accessor, and the JIT
+emits `shift_right(..., 6)` at four sites shared by eight backends; masking a
+hash out of the arity touches all of it. Header bits are also the *only* place
+immune to staleness by construction, since the value is copied with the object
+and dies with it -- which matters, as the next section shows.
+
+### A memo outside the term measures better, and is the open question
+
+Keyed by address, thread-local, invalidated by an epoch:
+
+| | `unicode_util` | `erl_parse` | corpus batch | ESTONE |
+|---|---:|---:|---:|---:|
+| hash memo, 2048 slots | **1.0304x** | **1.0119x** | **1.0091x** | 0.9937x |
+
+CIs 1.0275-1.0336 and 1.0105-1.0134. That is the largest effect measured in
+either part of this work, and it is **not committed**, for two reasons.
+
+**It regresses ESTONE** (0.9937x, CI 0.9886-1.0015), with the message-heavy
+components down 4-5%. The epoch has to be bumped wherever a term's address can
+be reclaimed, and `memory_heap_block_free` is on the message-passing hot path
+while ESTONE's maps are flat and never hashed -- all cost, no benefit.
+
+**Soundness is not finished.** Bumping the epoch only in `memory_gc` looked
+sufficient: the census put address reuse at 0.00% and 0.05% of hits. It is not
+sufficient, and reading a non-zero stale rate as "essentially nonexistent" was
+the mistake -- one mis-hashed key lands in the wrong trie slot and is never
+found again. That build compiled **37 of 279 sources wrong**. Bumping on every
+`memory_heap_block_free` as well restores 279/279 and, notably, is also *faster*
+than the unsound version, which was paying for its own collisions.
+
+What remains open is SMP. A thread-local epoch covers a thread's own frees;
+another scheduler freeing memory whose addresses this one has memoed does not.
+Two ways to close it, and the choice is a design decision:
+
+- a global epoch, release-stored before any free and acquire-loaded per hash --
+  simple, but every scheduler's memo is then invalidated by every other
+  scheduler's collections;
+- confine the memo to terms the running process owns: bump the epoch when a
+  scheduler dispatches a different process (`scheduler_run` is the chokepoint),
+  and keep `ets_multimap` and `persistent_term` -- which hash terms living in
+  shared storage another thread can free -- on an uncached entry point.
+
+The prototype is parked in [`hash-memo-prototype.patch`](hash-memo-prototype.patch).
+Table sizing, should it be picked up (entries are 16 bytes, and this is
+per-scheduler memory that an MCU build would have to gate):
+
+| slots | size | `unicode_util` | `erl_parse` |
+|---:|---:|---:|---:|
+| 512 | 8K | 43.1% | 61.2% |
+| 2048 | 32K | 70.9% | 66.6% |
+| 8192 | 128K | 86.6% | 69.8% |
+| 32768 | 512K | 92.4% | 71.7% |
