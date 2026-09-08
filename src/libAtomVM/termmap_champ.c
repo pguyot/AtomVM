@@ -83,6 +83,19 @@ static inline const term *champ_body(term node)
     return term_to_const_term_ptr(node) + 1;
 }
 
+// A node under construction is written through this: the payload of a freshly
+// allocated node never overlaps the node it is copied from, so whole runs move
+// as words instead of one term_put_tuple_element at a time.
+static inline term *champ_body_mut(term node)
+{
+    return term_to_term_ptr(node) + 1;
+}
+
+static inline void champ_move(term *dst, const term *src, size_t words)
+{
+    memcpy(dst, src, words * sizeof(term));
+}
+
 static inline bool champ_is_collision(term node)
 {
     return term_to_int(champ_body(node)[CHAMP_DATAMAP_IDX]) < 0;
@@ -258,118 +271,88 @@ static term champ_merge_two(Heap *heap, term k1, term v1, uint32_t h1, term k2, 
 static term champ_put_rec(Heap *heap, term node, term key, term value, uint32_t hash, int shift,
     GlobalContext *global, bool *added, bool *collided)
 {
-    if (UNLIKELY(champ_is_collision(node))) {
-        size_t count = champ_entries(node);
+    const term *src = champ_body(node);
+    avm_int_t raw = term_to_int(src[CHAMP_DATAMAP_IDX]);
+
+    if (UNLIKELY(raw < 0)) {
+        size_t count = (size_t) ((term_get_tuple_arity(node) - CHAMP_FIRST_ENTRY) / 2);
         *collided = true;
         for (size_t i = 0; i < count; i++) {
-            if (champ_key_eq(champ_entry_key(node, i), key, global)) {
+            if (champ_key_eq(src[CHAMP_FIRST_ENTRY + 2 * i], key, global)) {
                 term out = champ_collision_new(heap, count);
-                for (size_t j = 0; j < count; j++) {
-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
-                        (j == i) ? value : champ_entry_value(node, j));
-                }
+                term *dst = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+                champ_move(dst, src + CHAMP_FIRST_ENTRY, 2 * count);
+                dst[2 * i + 1] = value;
                 *added = false;
                 return out;
             }
         }
         term out = champ_collision_new(heap, count + 1);
-        for (size_t j = 0; j < count; j++) {
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
-        }
-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count, key);
-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * count + 1, value);
+        term *dst = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+        champ_move(dst, src + CHAMP_FIRST_ENTRY, 2 * count);
+        dst[2 * count] = key;
+        dst[2 * count + 1] = value;
         *added = true;
         return out;
     }
 
-    uint32_t datamap = champ_datamap(node);
-    uint32_t nodemap = champ_nodemap(node);
+    uint32_t datamap = ((uint32_t) raw) & CHAMP_BITMAP_MASK;
+    uint32_t nodemap = (uint32_t) term_to_int(src[CHAMP_NODEMAP_IDX]);
     size_t entries = (size_t) __builtin_popcount(datamap);
     size_t nodes = (size_t) __builtin_popcount(nodemap);
     uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+    const term *se = src + CHAMP_FIRST_ENTRY;
+    const term *sn = se + 2 * entries;
 
     if (datamap & bit) {
         size_t i = (size_t) champ_index(datamap, bit);
-        term k = champ_entry_key(node, i);
+        term k = se[2 * i];
         if (champ_key_eq(k, key, global)) {
             term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
-            for (size_t j = 0; j < entries; j++) {
-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1,
-                    (j == i) ? value : champ_entry_value(node, j));
-            }
-            for (size_t j = 0; j < nodes; j++) {
-                term_put_tuple_element(
-                    out, CHAMP_FIRST_ENTRY + 2 * entries + j, champ_sub(node, entries, j));
-            }
+            term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+            champ_move(de, se, 2 * entries + nodes);
+            de[2 * i + 1] = value;
             *added = false;
             return out;
         }
         // Slot collision between distinct keys: the resident entry moves down
         // into a new sub-node together with the incoming one.
-        term sub = champ_merge_two(heap, k, champ_entry_value(node, i), term_hash(k, global), key,
-            value, hash, shift + CHAMP_BITS, collided);
+        term sub = champ_merge_two(heap, k, se[2 * i + 1], term_hash(k, global), key, value, hash,
+            shift + CHAMP_BITS, collided);
         uint32_t new_nodemap = nodemap | bit;
         size_t ni = (size_t) champ_index(new_nodemap, bit);
         term out = champ_node_new(heap, datamap & ~bit, new_nodemap, entries - 1, nodes + 1);
-        for (size_t j = 0, d = 0; j < entries; j++) {
-            if (j == i) {
-                continue;
-            }
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d, champ_entry_key(node, j));
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * d + 1, champ_entry_value(node, j));
-            d++;
-        }
-        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries - 1);
-        for (size_t j = 0, w = 0; j <= nodes; j++) {
-            if (j == ni) {
-                term_put_tuple_element(out, base + w++, sub);
-            }
-            if (j < nodes) {
-                term_put_tuple_element(out, base + w++, champ_sub(node, entries, j));
-            }
-        }
+        term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+        term *dn = de + 2 * (entries - 1);
+        champ_move(de, se, 2 * i);
+        champ_move(de + 2 * i, se + 2 * (i + 1), 2 * (entries - 1 - i));
+        champ_move(dn, sn, ni);
+        dn[ni] = sub;
+        champ_move(dn + ni + 1, sn + ni, nodes - ni);
         *added = true;
         return out;
     }
 
     if (nodemap & bit) {
         size_t i = (size_t) champ_index(nodemap, bit);
-        term sub = champ_put_rec(heap, champ_sub(node, entries, i), key, value, hash,
-            shift + CHAMP_BITS, global, added, collided);
+        term sub = champ_put_rec(
+            heap, sn[i], key, value, hash, shift + CHAMP_BITS, global, added, collided);
         term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
-        for (size_t j = 0; j < entries; j++) {
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
-        }
-        for (size_t j = 0; j < nodes; j++) {
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
-                (j == i) ? sub : champ_sub(node, entries, j));
-        }
+        term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+        champ_move(de, se, 2 * entries + nodes);
+        de[2 * entries + i] = sub;
         return out;
     }
 
     // Free slot: the entry goes inline, keeping slot order.
     size_t i = (size_t) champ_index(datamap | bit, bit);
     term out = champ_node_new(heap, datamap | bit, nodemap, entries + 1, nodes);
-    for (size_t j = 0, w = 0; j <= entries; j++) {
-        if (j == i) {
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, key);
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, value);
-            w++;
-        }
-        if (j < entries) {
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
-            w++;
-        }
-    }
-    for (size_t j = 0; j < nodes; j++) {
-        term_put_tuple_element(
-            out, CHAMP_FIRST_ENTRY + 2 * (entries + 1) + j, champ_sub(node, entries, j));
-    }
+    term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+    champ_move(de, se, 2 * i);
+    de[2 * i] = key;
+    de[2 * i + 1] = value;
+    champ_move(de + 2 * (i + 1), se + 2 * i, 2 * (entries - i));
+    champ_move(de + 2 * (entries + 1), sn, nodes);
     *added = true;
     return out;
 }
@@ -420,27 +403,25 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
     GlobalContext *global, bool *found, term *collapsed_key, term *collapsed_value)
 {
     *collapsed_key = term_invalid_term();
-    if (UNLIKELY(champ_is_collision(node))) {
-        size_t count = champ_entries(node);
+    const term *src = champ_body(node);
+    avm_int_t raw = term_to_int(src[CHAMP_DATAMAP_IDX]);
+
+    if (UNLIKELY(raw < 0)) {
+        size_t count = (size_t) ((term_get_tuple_arity(node) - CHAMP_FIRST_ENTRY) / 2);
         for (size_t i = 0; i < count; i++) {
-            if (champ_key_eq(champ_entry_key(node, i), key, global)) {
+            if (champ_key_eq(src[CHAMP_FIRST_ENTRY + 2 * i], key, global)) {
                 *found = true;
                 if (count == 2) {
                     size_t other = 1 - i;
-                    *collapsed_key = champ_entry_key(node, other);
-                    *collapsed_value = champ_entry_value(node, other);
+                    *collapsed_key = src[CHAMP_FIRST_ENTRY + 2 * other];
+                    *collapsed_value = src[CHAMP_FIRST_ENTRY + 2 * other + 1];
                     return term_nil();
                 }
                 term out = champ_collision_new(heap, count - 1);
-                for (size_t j = 0, w = 0; j < count; j++) {
-                    if (j == i) {
-                        continue;
-                    }
-                    term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
-                    term_put_tuple_element(
-                        out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
-                    w++;
-                }
+                term *dst = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+                champ_move(dst, src + CHAMP_FIRST_ENTRY, 2 * i);
+                champ_move(dst + 2 * i, src + CHAMP_FIRST_ENTRY + 2 * (i + 1),
+                    2 * (count - 1 - i));
                 return out;
             }
         }
@@ -448,15 +429,17 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
         return node;
     }
 
-    uint32_t datamap = champ_datamap(node);
-    uint32_t nodemap = champ_nodemap(node);
+    uint32_t datamap = ((uint32_t) raw) & CHAMP_BITMAP_MASK;
+    uint32_t nodemap = (uint32_t) term_to_int(src[CHAMP_NODEMAP_IDX]);
     size_t entries = (size_t) __builtin_popcount(datamap);
     size_t nodes = (size_t) __builtin_popcount(nodemap);
     uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+    const term *se = src + CHAMP_FIRST_ENTRY;
+    const term *sn = se + 2 * entries;
 
     if (datamap & bit) {
         size_t i = (size_t) champ_index(datamap, bit);
-        if (!champ_key_eq(champ_entry_key(node, i), key, global)) {
+        if (!champ_key_eq(se[2 * i], key, global)) {
             *found = false;
             return node;
         }
@@ -464,23 +447,15 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
         if (entries == 2 && nodes == 0 && shift > 0) {
             // This node becomes a single entry: hand it to the parent.
             size_t other = 1 - i;
-            *collapsed_key = champ_entry_key(node, other);
-            *collapsed_value = champ_entry_value(node, other);
+            *collapsed_key = se[2 * other];
+            *collapsed_value = se[2 * other + 1];
             return term_nil();
         }
         term out = champ_node_new(heap, datamap & ~bit, nodemap, entries - 1, nodes);
-        for (size_t j = 0, w = 0; j < entries; j++) {
-            if (j == i) {
-                continue;
-            }
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
-            term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
-            w++;
-        }
-        for (size_t j = 0; j < nodes; j++) {
-            term_put_tuple_element(
-                out, CHAMP_FIRST_ENTRY + 2 * (entries - 1) + j, champ_sub(node, entries, j));
-        }
+        term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+        champ_move(de, se, 2 * i);
+        champ_move(de + 2 * i, se + 2 * (i + 1), 2 * (entries - 1 - i));
+        champ_move(de + 2 * (entries - 1), sn, nodes);
         return out;
     }
 
@@ -492,8 +467,8 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
     size_t i = (size_t) champ_index(nodemap, bit);
     term ck;
     term cv;
-    term sub = champ_remove_rec(
-        heap, champ_sub(node, entries, i), key, hash, shift + CHAMP_BITS, global, found, &ck, &cv);
+    term sub
+        = champ_remove_rec(heap, sn[i], key, hash, shift + CHAMP_BITS, global, found, &ck, &cv);
     if (!*found) {
         return node;
     }
@@ -507,37 +482,20 @@ static term champ_remove_rec(Heap *heap, term node, term key, uint32_t hash, int
         }
         size_t di = (size_t) champ_index(datamap | bit, bit);
         term out = champ_node_new(heap, datamap | bit, nodemap & ~bit, entries + 1, nodes - 1);
-        for (size_t j = 0, w = 0; j <= entries; j++) {
-            if (j == di) {
-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, ck);
-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w + 1, cv);
-                w++;
-            }
-            if (j < entries) {
-                term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * w, champ_entry_key(node, j));
-                term_put_tuple_element(
-                    out, CHAMP_FIRST_ENTRY + 2 * w + 1, champ_entry_value(node, j));
-                w++;
-            }
-        }
-        size_t base = CHAMP_FIRST_ENTRY + 2 * (entries + 1);
-        for (size_t j = 0, w = 0; j < nodes; j++) {
-            if (j == i) {
-                continue;
-            }
-            term_put_tuple_element(out, base + w++, champ_sub(node, entries, j));
-        }
+        term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+        term *dn = de + 2 * (entries + 1);
+        champ_move(de, se, 2 * di);
+        de[2 * di] = ck;
+        de[2 * di + 1] = cv;
+        champ_move(de + 2 * (di + 1), se + 2 * di, 2 * (entries - di));
+        champ_move(dn, sn, i);
+        champ_move(dn + i, sn + i + 1, nodes - 1 - i);
         return out;
     }
     term out = champ_node_new(heap, datamap, nodemap, entries, nodes);
-    for (size_t j = 0; j < entries; j++) {
-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j, champ_entry_key(node, j));
-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * j + 1, champ_entry_value(node, j));
-    }
-    for (size_t j = 0; j < nodes; j++) {
-        term_put_tuple_element(out, CHAMP_FIRST_ENTRY + 2 * entries + j,
-            (j == i) ? sub : champ_sub(node, entries, j));
-    }
+    term *de = champ_body_mut(out) + CHAMP_FIRST_ENTRY;
+    champ_move(de, se, 2 * entries + nodes);
+    de[2 * entries + i] = sub;
     return out;
 }
 
