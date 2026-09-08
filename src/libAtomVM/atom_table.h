@@ -85,6 +85,43 @@ bool atom_table_is_atom_ref_ascii(struct AtomTable *table, atom_ref_t atom);
  * @param   index index of the atom to get the representation of
  * @param   out_len on output, size of the character data
  */
+/**
+ * @brief term_hash's contribution for an atom, derived from its table index.
+ *
+ * @details An atom's identity is its table index, so that is what gets hashed.
+ * Indices are handed out consecutively and a trie slices the low bits four at a
+ * time, so they have to be spread first. Shared with atom_table.c so that the
+ * value a build caches and the value a build computes are the same function --
+ * a map must hash the same either way.
+ *
+ * @param index the atom's table index.
+ * @return the mixed index.
+ */
+static inline uint32_t atom_table_index_hash(uint32_t index)
+{
+    index ^= index >> 16;
+    index *= 0x7feb352du;
+    index ^= index >> 15;
+    index *= 0x846ca68bu;
+    index ^= index >> 16;
+    return index;
+}
+
+/**
+ * @brief Returns atom_table_index_hash for an atom, from the cache when there
+ * is one.
+ *
+ * @details Where the cache costs nothing (see ATOM_TABLE_HASH_CACHE) this reads
+ * a value stored when the atom was interned; where it would cost memory the
+ * caller computes it instead, which is why the mix above is a shared inline and
+ * not private to either side.
+ *
+ * @param table the atom table.
+ * @param index the atom's table index.
+ * @return the mixed index.
+ */
+uint32_t atom_table_get_atom_hash(struct AtomTable *table, atom_index_t index);
+
 const uint8_t *atom_table_get_atom_string(struct AtomTable *table, atom_index_t index, size_t *out_len);
 
 /**
