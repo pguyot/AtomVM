@@ -5286,11 +5286,20 @@ schedule_in:
                 //
                 // Count how many of the entries in list(...) are not already in src
                 //
-                unsigned new_entries = 0;
+                // A hash-backed src needs no count: the result is hash-backed
+                // whatever it says, and the trie's per-put reservation does not
+                // depend on it, so counting would navigate every key twice for
+                // nothing. num_elements is the upper bound, which is all the
+                // collision-node sizing below asks for.
+                bool src_is_hash = term_is_map_hash(src);
+                unsigned new_entries = src_is_hash ? num_elements : 0;
                 for (uint32_t j = 0; j < num_elements; ++j) {
                     term key, value;
                     DECODE_COMPACT_TERM(key, pc);
                     DECODE_COMPACT_TERM(value, pc);
+                    if (src_is_hash) {
+                        continue;
+                    }
 
                     int map_pos = term_map_key_pos(src, key, ctx->global);
                     if (map_pos == TERM_MAP_NOT_FOUND) {
@@ -5309,7 +5318,7 @@ schedule_in:
                 // which a growing insert converts to earlier than a pure
                 // update; the trie's entries are in hash order, so it cannot
                 // feed the ordered merge the flat path below does.
-                bool as_hash = term_is_map_hash(src)
+                bool as_hash = src_is_hash
                     || new_map_size > TERM_MAP_HASH_THRESHOLD
                     || (new_entries > 0 && new_map_size > TERM_MAP_FLAT_GROW_MAX);
                 bool is_shared = !as_hash && new_entries == 0;
@@ -5455,12 +5464,19 @@ schedule_in:
                 const uint8_t *list_pc = pc;
                 uint32_t num_elements = list_len / 2;
                 //
-                // Make sure every key from list is in src
+                // Make sure every key from list is in src. A hash-backed src
+                // skips this: its put reports whether the key was there, so the
+                // check rides along with the update instead of navigating every
+                // key a second time.
                 //
+                bool src_is_hash = term_is_map_hash(src);
                 for (uint32_t j = 0; j < num_elements; ++j) {
                     term key, value;
                     DECODE_COMPACT_TERM(key, pc);
                     DECODE_COMPACT_TERM(value, pc);
+                    if (src_is_hash) {
+                        continue;
+                    }
 
                     int map_pos = term_map_key_pos(src, key, ctx->global);
                     if (map_pos == TERM_MAP_NOT_FOUND) {
@@ -5480,7 +5496,6 @@ schedule_in:
                 // Maybe GC
                 //
                 size_t src_size = term_get_map_size(src);
-                bool src_is_hash = term_is_map_hash(src);
                 TRIM_LIVE_REGS(live);
                 // MEMORY_CAN_SHRINK because put_map is classified as gc in beam_ssa_codegen.erl
                 x_regs[live] = src;
@@ -5504,6 +5519,16 @@ schedule_in:
                         bool added = false;
                         root = termmap_champ_put(
                             &ctx->heap, root, key, value, ctx->global, &added);
+                        if (UNLIKELY(added)) {
+                            // The key was not there: := fails. The half-updated
+                            // trie is unreachable and the next collection takes
+                            // it back.
+                            if (label == 0) {
+                                RAISE_ERROR(BADARG_ATOM);
+                            } else {
+                                JUMP_TO_LABEL(mod, label);
+                            }
+                        }
                     }
                     WRITE_REGISTER_GC_SAFE(dreg, term_alloc_map_hash(&ctx->heap, root, src_size));
                     break;
