@@ -1,0 +1,994 @@
+diff --git a/src/libAtomVM/CMakeLists.txt b/src/libAtomVM/CMakeLists.txt
+index ee4a9c2b5..456851a49 100644
+--- a/src/libAtomVM/CMakeLists.txt
++++ b/src/libAtomVM/CMakeLists.txt
+@@ -69,6 +69,7 @@ set(HEADER_FILES
+     sys.h
+     term_typedef.h
+     term.h
++    term_census.h
+     term_hash.h
+     termmap_champ.h
+     timer_list.h
+@@ -113,6 +114,7 @@ set(SOURCE_FILES
+     scheduler.c
+     stacktrace.c
+     term.c
++    term_census.c
+     term_hash.c
+     termmap_champ.c
+     timer_list.c
+diff --git a/src/libAtomVM/atom_table.c b/src/libAtomVM/atom_table.c
+index 903b980db..bd3d5e823 100644
+--- a/src/libAtomVM/atom_table.c
++++ b/src/libAtomVM/atom_table.c
+@@ -19,6 +19,7 @@
+  */
+ 
+ #include "atom_table.h"
++#include "term_census.h"
+ 
+ #include <stdbool.h>
+ #include <stddef.h>
+@@ -199,8 +200,6 @@ static inline struct HNode *get_published_node(struct AtomTable *table, atom_ind
+ }
+ #endif
+ 
+-// Defined below, next to the rwlock-guarded lookups it belongs with; the
+-// hash getter above it is the one caller that needs it declared early.
+ #ifndef ATOM_TABLE_LOCKFREE_READS
+ static struct HNode *get_node_using_index(struct AtomTable *table, atom_index_t index);
+ #endif
+@@ -443,6 +442,9 @@ bool atom_table_is_equal_to_atom_string(struct AtomTable *table, atom_index_t t_
+ 
+ int atom_table_cmp_using_atom_index(struct AtomTable *table, atom_index_t t_atom_index, atom_index_t other_atom_index)
+ {
++#ifdef AVM_TERM_CENSUS
++    term_census_atom_pair(table, (uint32_t) t_atom_index, (uint32_t) other_atom_index);
++#endif
+ #ifdef ATOM_TABLE_LOCKFREE_READS
+     struct HNode *t_node = get_published_node(table, t_atom_index);
+     struct HNode *other_node = get_published_node(table, other_atom_index);
+diff --git a/src/libAtomVM/term.c b/src/libAtomVM/term.c
+index 8e42da08c..2594010ac 100644
+--- a/src/libAtomVM/term.c
++++ b/src/libAtomVM/term.c
+@@ -833,6 +833,17 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
+ 
+ TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
+ {
++#ifdef AVM_TERM_CENSUS
++    if (!term_census_nested()) {
++        void *ra = __builtin_return_address(0);
++        void *ra2 = __builtin_return_address(1);
++        term_census_enter((int) opts);
++        TermCompareResult result = term_compare0(t, other, opts, global, TERM_COMPARE_INLINE_DEPTH);
++        term_census_leave();
++        term_census_record(ra, ra2, t, other, (int) opts, (int) result, global);
++        return result;
++    }
++#endif
+     return term_compare0(t, other, opts, global, TERM_COMPARE_INLINE_DEPTH);
+ }
+ 
+diff --git a/src/libAtomVM/term.h b/src/libAtomVM/term.h
+index 6d73c2708..d10e5699a 100644
+--- a/src/libAtomVM/term.h
++++ b/src/libAtomVM/term.h
+@@ -44,6 +44,7 @@
+ #include "resources.h"
+ #include "utils.h"
+ 
++#include "term_census.h"
+ #include "term_typedef.h"
+ 
+ #ifdef __cplusplus
+@@ -2725,6 +2726,10 @@ static inline bool term_exact_equals_shallow(term t, term other, bool *equal)
+  */
+ static inline bool term_exact_eq(term t, term other, GlobalContext *global)
+ {
++#ifdef AVM_TERM_CENSUS
++    return term_census_exact_eq(
++        __builtin_return_address(0), __builtin_return_address(1), t, other, global);
++#else
+     bool equal;
+     if (term_exact_equals_shallow(t, other, &equal)) {
+         return equal;
+@@ -2732,6 +2737,7 @@ static inline bool term_exact_eq(term t, term other, GlobalContext *global)
+     return term_compare(t, other, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly),
+                global)
+         == TermEquals;
++#endif
+ }
+ 
+ #define TERM_MAP_PROBE_MAX_ARITY 4
+@@ -2819,7 +2825,7 @@ static inline bool term_map_probe_elem_cmp(term pe, term ke, TermCompareResult *
+ // Compare the (tuple-classified) probe against candidate key k, probe first:
+ // *res = probe <=> k. Returns false when the comparison needs term_compare.
+ // key/key_arity are the probe key and its arity, hoisted by the caller.
+-static inline bool term_map_probe_tup_cmp(const struct TermMapProbe *probe, term key, int key_arity, term k, TermCompareResult *res)
++static inline bool term_map_probe_tup_cmp_impl(const struct TermMapProbe *probe, term key, int key_arity, term k, TermCompareResult *res)
+ {
+     if (!term_is_tuple(k)) {
+         return false;
+@@ -2866,6 +2872,21 @@ static inline bool term_map_probe_tup_cmp(const struct TermMapProbe *probe, term
+     return true;
+ }
+ 
++static inline bool term_map_probe_tup_cmp(const struct TermMapProbe *probe, term key, int key_arity, term k, TermCompareResult *res)
++{
++#ifdef AVM_TERM_CENSUS
++    bool covered = term_map_probe_tup_cmp_impl(probe, key, key_arity, k, res);
++    if (covered && !term_census_nested()) {
++        // The uncovered case is recorded by the term_compare the caller makes.
++        term_census_probe(
++            __builtin_return_address(0), __builtin_return_address(1), key, k, (int) *res);
++    }
++    return covered;
++#else
++    return term_map_probe_tup_cmp_impl(probe, key, key_arity, k, res);
++#endif
++}
++
+ /*
+  * Native records.
+  *
+diff --git a/src/libAtomVM/term_census.c b/src/libAtomVM/term_census.c
+new file mode 100644
+index 000000000..b295d2562
+--- /dev/null
++++ b/src/libAtomVM/term_census.c
+@@ -0,0 +1,774 @@
++/*
++ * This file is part of AtomVM.
++ *
++ * Copyright 2026 Paul Guyot <pguyot@kallisys.net>
++ *
++ * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
++ */
++
++#include "term_census.h"
++
++#ifdef AVM_TERM_CENSUS
++
++#include <dlfcn.h>
++#include <inttypes.h>
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "atom_table.h"
++#include "term.h"
++#include "utils.h"
++
++// ---------------------------------------------------------------------------
++// Shape of one recorded comparison
++// ---------------------------------------------------------------------------
++
++enum CensusType
++{
++    CT_INVALID = 0,
++    CT_SMALLINT,
++    CT_BIGINT,
++    CT_FLOAT,
++    CT_ATOM,
++    CT_NIL,
++    CT_LIST,
++    CT_TUPLE,
++    CT_MAP,
++    CT_BINARY,
++    CT_PID,
++    CT_PORT,
++    CT_REF,
++    CT_FUN,
++    CT_OTHER,
++    CT_MAX
++};
++
++static const char *const census_type_names[CT_MAX] = { "invalid", "smallint", "bigint", "float",
++    "atom", "nil", "list", "tuple", "map", "binary", "pid", "port", "ref", "fun", "other" };
++
++enum CensusDecided
++{
++    DEC_IDENTICAL = 0, // a == b: same immediate or same pointer
++    DEC_TYPE_DIFF, // different type index, ordered without looking further
++    DEC_NUMERIC, // numbers of different or boxed representation
++    DEC_SMALLINT, // two distinct small integers
++    DEC_ATOM_TABLE, // two distinct atoms, ordering needed the table
++    DEC_ATOM_IDENT, // two atoms, equality only: distinct indices, done
++    DEC_IMMED_OTHER, // two distinct immediates of another kind (pid, port)
++    DEC_TUPLE_ARITY, // tuples of different arity
++    DEC_TUPLE_ALL_EQUAL, // same-arity tuples, every element equal
++    DEC_LIST_LEN, // lists of different length / improper
++    DEC_LIST_ALL_EQUAL, // lists equal element by element
++    DEC_BINARY, // binary contents
++    DEC_MAP, // map contents
++    DEC_OTHER,
++    DEC_MAX
++};
++
++static const char *const census_decided_names[DEC_MAX] = { "identical", "type_diff", "numeric",
++    "smallint", "atom_table", "atom_ident", "immed_other", "tuple_arity", "tuple_all_equal",
++    "list_len", "list_all_equal", "binary", "map", "other" };
++
++// kind of comparison the caller asked for
++enum CensusKind
++{
++    CK_ORDER = 0, // ordering, arithmetic number comparison
++    CK_ORDER_EXACT, // ordering, exact (map key order, sort)
++    CK_EQUAL_ONLY, // =:= / =/=, no ordering wanted
++    CK_PROBE // resolved inline by the flat-map probe, never reached term_compare
++};
++
++static const char *const census_kind_names[4]
++    = { "order", "order_exact", "equal_only", "flatmap_probe" };
++
++struct Shape
++{
++    int decided;
++    int elem;
++    int depth;
++    int arity;
++    int pairs;
++};
++
++// ---------------------------------------------------------------------------
++// Storage
++// ---------------------------------------------------------------------------
++
++#define SHAPE_SLOTS (1u << 21)
++#define PAIR_SLOTS (1u << 21)
++#define MAX_SITES 4096
++#define ATOM_BITMAP_WORDS (1u << 14) // 2^20 atom indices
++
++struct Slot
++{
++    uint64_t key;
++    uint64_t count;
++};
++
++static struct Slot *shape_table;
++static struct Slot *pair_table;
++static uint64_t shape_overflow;
++static uint64_t pair_overflow;
++
++static void *sites[MAX_SITES];
++static void *sites2[MAX_SITES];
++static unsigned site_count;
++
++static struct
++{
++    uint64_t logical; // logical comparisons recorded
++    uint64_t nested; // comparisons that were part of another (not recorded)
++    uint64_t tuple_elem_visits;
++    uint64_t list_elem_visits;
++    uint64_t atom_cmp; // atom-vs-atom orderings through the atom table
++    uint64_t atom_cmp_same_index;
++    uint64_t atom_sortkey_decided; // decided within the first 8 bytes
++    uint64_t atom_distinct_pairs;
++    uint64_t atom_distinct_atoms;
++    uint64_t bin_cmp;
++    uint64_t bin_equal;
++    uint64_t bin_bytes_compared;
++    uint64_t probe_cmp;
++} totals;
++
++// [0] = the pair was asked an ordering question, [1] = only "are these the
++// same atom?", which the index alone answers.
++static uint64_t atom_prefix_hist[2][33]; // common prefix in bytes, capped at 32
++static uint64_t atom_bit_hist[2][66]; // first differing bit of the padded name, 64 = equal, 65 = beyond
++static uint64_t atom_len_hist[2][33]; // shorter of the two names
++static uint64_t atom_cmp_kind[2];
++static uint64_t bin_prefix_hist[33];
++static uint32_t *atom_seen;
++
++static pthread_mutex_t census_lock = PTHREAD_MUTEX_INITIALIZER;
++static _Thread_local int census_depth;
++static _Thread_local bool census_analyze;
++// Kind of the logical comparison currently running, so the atom table can say
++// which of its lookups were asked an ordering question and which only "same?".
++static _Thread_local int census_kind_cur = -1;
++
++static int census_kind(int opts);
++static bool census_ready;
++static GlobalContext *census_global;
++static bool census_dumped;
++
++bool term_census_analyzing(void)
++{
++    return census_analyze;
++}
++
++bool term_census_nested(void)
++{
++    // Nested in another logical comparison, or inside the classifier's own
++    // re-walk: either way this comparison is not a separate event.
++    return census_depth > 0 || census_analyze;
++}
++
++void term_census_enter(int opts)
++{
++    if (census_depth == 0) {
++        census_kind_cur = census_kind(opts);
++    }
++    census_depth++;
++}
++
++void term_census_leave(void)
++{
++    census_depth--;
++}
++
++static void census_init(void)
++{
++    if (LIKELY(census_ready)) {
++        return;
++    }
++    shape_table = calloc(SHAPE_SLOTS, sizeof(struct Slot));
++    pair_table = calloc(PAIR_SLOTS, sizeof(struct Slot));
++    atom_seen = calloc(ATOM_BITMAP_WORDS, sizeof(uint32_t));
++    if (shape_table == NULL || pair_table == NULL || atom_seen == NULL) {
++        fprintf(stderr, "term census: out of memory\n");
++        abort();
++    }
++    atexit(term_census_dump);
++    census_ready = true;
++}
++
++static uint64_t mix64(uint64_t x)
++{
++    x ^= x >> 33;
++    x *= 0xff51afd7ed558ccdULL;
++    x ^= x >> 33;
++    x *= 0xc4ceb9fe1a85ec53ULL;
++    x ^= x >> 33;
++    return x;
++}
++
++static void table_bump(struct Slot *table, uint32_t slots, uint64_t key, uint64_t *overflow)
++{
++    uint32_t idx = (uint32_t) (mix64(key + 1) & (slots - 1));
++    for (uint32_t probe = 0; probe < 64; probe++) {
++        struct Slot *slot = &table[(idx + probe) & (slots - 1)];
++        if (slot->count == 0) {
++            slot->key = key;
++            slot->count = 1;
++            return;
++        }
++        if (slot->key == key) {
++            slot->count++;
++            return;
++        }
++    }
++    (*overflow)++;
++}
++
++// A site is the pair (call site, its own caller): the map NIFs all reach the
++// comparator through the same two or three shared helpers, and the inner frame
++// alone cannot tell maps:to_list from maps:merge.
++static unsigned site_id(void *ra, void *ra2)
++{
++    for (unsigned i = 0; i < site_count; i++) {
++        if (sites[i] == ra && sites2[i] == ra2) {
++            return i;
++        }
++    }
++    if (site_count == MAX_SITES) {
++        return MAX_SITES - 1;
++    }
++    sites[site_count] = ra;
++    sites2[site_count] = ra2;
++    return site_count++;
++}
++
++// ---------------------------------------------------------------------------
++// Classification
++// ---------------------------------------------------------------------------
++
++static int census_type(term t)
++{
++    if (term_is_invalid_term(t)) {
++        return CT_INVALID;
++    }
++    if (term_is_integer(t)) {
++        return CT_SMALLINT;
++    }
++    if (term_is_atom(t)) {
++        return CT_ATOM;
++    }
++    if (term_is_nil(t)) {
++        return CT_NIL;
++    }
++    if (term_is_nonempty_list(t)) {
++        return CT_LIST;
++    }
++    if (term_is_pid(t)) {
++        return CT_PID;
++    }
++    if (term_is_port(t)) {
++        return CT_PORT;
++    }
++    if (!term_is_boxed(t)) {
++        return CT_OTHER;
++    }
++    if (term_is_boxed_integer(t)) {
++        return CT_BIGINT;
++    }
++    if (term_is_float(t)) {
++        return CT_FLOAT;
++    }
++    if (term_is_map(t)) {
++        return CT_MAP;
++    }
++    if (term_is_tuple(t)) {
++        return CT_TUPLE;
++    }
++    if (term_is_bitstring(t)) {
++        return CT_BINARY;
++    }
++    if (term_is_reference(t)) {
++        return CT_REF;
++    }
++    if (term_is_function(t)) {
++        return CT_FUN;
++    }
++    return CT_OTHER;
++}
++
++static bool census_is_number(int type)
++{
++    return type == CT_SMALLINT || type == CT_BIGINT || type == CT_FLOAT;
++}
++
++static bool census_equal(term a, term b, int opts, GlobalContext *global)
++{
++    return term_compare(a, b, (TermCompareOpts) opts, global) == TermEquals;
++}
++
++static void census_binary(term a, term b)
++{
++    size_t len_a = term_binary_size(a);
++    size_t len_b = term_binary_size(b);
++    const uint8_t *pa = (const uint8_t *) term_binary_data(a);
++    const uint8_t *pb = (const uint8_t *) term_binary_data(b);
++    size_t shorter = len_a < len_b ? len_a : len_b;
++    size_t common = 0;
++    while (common < shorter && pa[common] == pb[common]) {
++        common++;
++    }
++    totals.bin_cmp++;
++    totals.bin_bytes_compared += common + (common < shorter ? 1 : 0);
++    if (common == shorter && len_a == len_b) {
++        totals.bin_equal++;
++    }
++    bin_prefix_hist[common > 32 ? 32 : common]++;
++}
++
++static void classify(term a, term b, int opts, GlobalContext *global, struct Shape *s, int depth)
++{
++    if (depth > s->depth) {
++        s->depth = depth;
++    }
++    if (a == b) {
++        s->decided = DEC_IDENTICAL;
++        return;
++    }
++    int ta = census_type(a);
++    int tb = census_type(b);
++    if (ta != tb) {
++        if (census_is_number(ta) && census_is_number(tb)) {
++            s->decided = DEC_NUMERIC;
++        } else {
++            s->decided = DEC_TYPE_DIFF;
++        }
++        return;
++    }
++    switch (ta) {
++        case CT_SMALLINT:
++            s->decided = DEC_SMALLINT;
++            return;
++        case CT_ATOM:
++            s->decided
++                = (opts & TermCompareEqualOnly) ? (int) DEC_ATOM_IDENT : (int) DEC_ATOM_TABLE;
++            return;
++        case CT_PID:
++        case CT_PORT:
++            s->decided = DEC_IMMED_OTHER;
++            return;
++        case CT_BIGINT:
++        case CT_FLOAT:
++            s->decided = DEC_NUMERIC;
++            return;
++        case CT_BINARY:
++            census_binary(a, b);
++            s->decided = DEC_BINARY;
++            return;
++        case CT_MAP:
++            s->decided = DEC_MAP;
++            return;
++        case CT_TUPLE: {
++            int arity_a = term_get_tuple_arity(a);
++            int arity_b = term_get_tuple_arity(b);
++            if (depth == 0) {
++                s->arity = arity_a;
++            }
++            if (arity_a != arity_b) {
++                s->decided = DEC_TUPLE_ARITY;
++                return;
++            }
++            for (int i = 0; i < arity_a; i++) {
++                term ea = term_get_tuple_element(a, i);
++                term eb = term_get_tuple_element(b, i);
++                s->pairs++;
++                totals.tuple_elem_visits++;
++                if (ea == eb) {
++                    continue;
++                }
++                if (census_equal(ea, eb, opts, global)) {
++                    continue;
++                }
++                if (depth == 0) {
++                    s->elem = i;
++                }
++                classify(ea, eb, opts, global, s, depth + 1);
++                return;
++            }
++            s->decided = DEC_TUPLE_ALL_EQUAL;
++            return;
++        }
++        case CT_LIST: {
++            int i = 0;
++            while (term_is_nonempty_list(a) && term_is_nonempty_list(b)) {
++                term ea = term_get_list_head(a);
++                term eb = term_get_list_head(b);
++                s->pairs++;
++                totals.list_elem_visits++;
++                if (ea != eb && !census_equal(ea, eb, opts, global)) {
++                    if (depth == 0) {
++                        s->elem = i > 15 ? 15 : i;
++                    }
++                    classify(ea, eb, opts, global, s, depth + 1);
++                    return;
++                }
++                a = term_get_list_tail(a);
++                b = term_get_list_tail(b);
++                if (a == b) {
++                    s->decided = DEC_LIST_ALL_EQUAL;
++                    return;
++                }
++                i++;
++            }
++            if (term_is_nil(a) && term_is_nil(b)) {
++                s->decided = DEC_LIST_ALL_EQUAL;
++            } else if (term_is_nonempty_list(a) != term_is_nonempty_list(b)) {
++                s->decided = DEC_LIST_LEN;
++            } else {
++                classify(a, b, opts, global, s, depth + 1);
++            }
++            return;
++        }
++        default:
++            s->decided = DEC_OTHER;
++            return;
++    }
++}
++
++static unsigned bucket(unsigned n)
++{
++    unsigned b = 0;
++    while (n > 1 && b < 7) {
++        n >>= 1;
++        b++;
++    }
++    return b;
++}
++
++// Which door the comparison came through: the out-of-line comparator, the
++// inline =:= prefix at the call site (which resolves the shallow cases without
++// a call), or the flat-map probe.
++enum CensusEntry
++{
++    CE_TERM_COMPARE = 0,
++    CE_INLINE_EXACT_EQ = 1,
++    CE_PROBE = 2
++};
++
++static uint64_t shape_key(unsigned site, int kind, int entry, int ta, int tb, int result,
++    const struct Shape *s)
++{
++    unsigned elem = s->elem < 0 ? 0 : (s->elem > 15 ? 15 : (unsigned) s->elem);
++    unsigned arity = s->arity > 15 ? 15 : (unsigned) s->arity;
++    unsigned depth = s->depth > 15 ? 15 : (unsigned) s->depth;
++    return ((uint64_t) site) | ((uint64_t) (kind & 3) << 12) | ((uint64_t) (ta & 15) << 14)
++        | ((uint64_t) (tb & 15) << 18) | ((uint64_t) (result & 7) << 22)
++        | ((uint64_t) (s->decided & 15) << 25) | ((uint64_t) arity << 29)
++        | ((uint64_t) elem << 33) | ((uint64_t) depth << 37)
++        | ((uint64_t) bucket((unsigned) s->pairs) << 41) | ((uint64_t) (entry & 3) << 44);
++}
++
++static int census_kind(int opts)
++{
++    if (opts & TermCompareEqualOnly) {
++        return CK_EQUAL_ONLY;
++    }
++    return (opts & TermCompareExact) ? CK_ORDER_EXACT : CK_ORDER;
++}
++
++static int result_code(int result)
++{
++    switch (result) {
++        case TermEquals:
++            return 0;
++        case TermLessThan:
++            return 1;
++        case TermGreaterThan:
++            return 2;
++        default:
++            return 3;
++    }
++}
++
++static _Thread_local int census_entry = CE_TERM_COMPARE;
++
++void term_census_record(
++    void *ra, void *ra2, term a, term b, int opts, int result, GlobalContext *global)
++{
++    census_global = global;
++    struct Shape s = { DEC_OTHER, 0, 0, 0, 0 };
++    census_analyze = true;
++    classify(a, b, opts, global, &s, 0);
++    census_analyze = false;
++
++    pthread_mutex_lock(&census_lock);
++    census_init();
++    totals.logical++;
++    unsigned site = site_id(ra, ra2);
++    table_bump(shape_table, SHAPE_SLOTS,
++        shape_key(site, census_kind(opts), census_entry, census_type(a), census_type(b),
++            result_code(result), &s),
++        &shape_overflow);
++    pthread_mutex_unlock(&census_lock);
++}
++
++bool term_census_exact_eq(void *ra, void *ra2, term a, term b, GlobalContext *global)
++{
++    if (census_analyze || census_depth > 0) {
++        bool equal;
++        if (term_exact_equals_shallow(a, b, &equal)) {
++            return equal;
++        }
++        return term_compare(a, b, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly),
++                   global)
++            == TermEquals;
++    }
++    census_kind_cur = CK_EQUAL_ONLY;
++    census_entry = CE_INLINE_EXACT_EQ;
++    census_depth++;
++    bool equal;
++    if (!term_exact_equals_shallow(a, b, &equal)) {
++        equal = term_compare(a, b, (TermCompareOpts) (TermCompareExact | TermCompareEqualOnly),
++                    global)
++            == TermEquals;
++    }
++    census_depth--;
++    term_census_record(ra, ra2, a, b, TermCompareExact | TermCompareEqualOnly,
++        equal ? TermEquals : TermLessThan, global);
++    census_entry = CE_TERM_COMPARE;
++    return equal;
++}
++
++void term_census_probe(void *ra, void *ra2, term key, term candidate, int result)
++{
++    if (census_analyze) {
++        return;
++    }
++    struct Shape s = { DEC_OTHER, 0, 0, 0, 0 };
++    if (census_global == NULL) {
++        return;
++    }
++    census_analyze = true;
++    classify(key, candidate, TermCompareExact, census_global, &s, 0);
++    census_analyze = false;
++
++    pthread_mutex_lock(&census_lock);
++    census_init();
++    totals.probe_cmp++;
++    unsigned site = site_id(ra, ra2);
++    table_bump(shape_table, SHAPE_SLOTS,
++        shape_key(site, CK_PROBE, CE_PROBE, census_type(key), census_type(candidate),
++            result_code(result), &s),
++        &shape_overflow);
++    pthread_mutex_unlock(&census_lock);
++}
++
++// ---------------------------------------------------------------------------
++// Atoms
++// ---------------------------------------------------------------------------
++
++void term_census_atom_pair(struct AtomTable *table, uint32_t a_index, uint32_t b_index)
++{
++    if (census_analyze) {
++        return;
++    }
++    size_t len_a = 0;
++    size_t len_b = 0;
++    const uint8_t *name_a = atom_table_get_atom_string(table, a_index, &len_a);
++    const uint8_t *name_b = atom_table_get_atom_string(table, b_index, &len_b);
++    if (name_a == NULL || name_b == NULL) {
++        return;
++    }
++    size_t shorter = len_a < len_b ? len_a : len_b;
++    size_t common = 0;
++    while (common < shorter && name_a[common] == name_b[common]) {
++        common++;
++    }
++    // Position of the first differing bit of the names read as zero-padded
++    // big-endian integers: the number of leading bits a term-resident prefix
++    // would need to carry to order this pair without touching the table.
++    unsigned bit;
++    if (common == shorter && len_a == len_b) {
++        bit = 64; // identical names
++    } else {
++        uint8_t byte_a = common < len_a ? name_a[common] : 0;
++        uint8_t byte_b = common < len_b ? name_b[common] : 0;
++        unsigned diff = (unsigned) (byte_a ^ byte_b);
++        unsigned bit_in_byte = 0;
++        while ((diff & 0x80) == 0) {
++            diff <<= 1;
++            bit_in_byte++;
++        }
++        size_t position = common * 8 + bit_in_byte;
++        bit = position >= 64 ? 65 : (unsigned) position;
++    }
++
++    pthread_mutex_lock(&census_lock);
++    census_init();
++    totals.atom_cmp++;
++    if (a_index == b_index) {
++        totals.atom_cmp_same_index++;
++    }
++    if (bit < 64) {
++        totals.atom_sortkey_decided++;
++    }
++    int k = census_kind_cur == CK_EQUAL_ONLY ? 1 : 0;
++    atom_cmp_kind[k]++;
++    atom_prefix_hist[k][common > 32 ? 32 : common]++;
++    atom_bit_hist[k][bit > 65 ? 65 : bit]++;
++    atom_len_hist[k][shorter > 32 ? 32 : shorter]++;
++    uint32_t lo = a_index < b_index ? a_index : b_index;
++    uint32_t hi = a_index < b_index ? b_index : a_index;
++    table_bump(pair_table, PAIR_SLOTS, ((uint64_t) lo << 32) | hi, &pair_overflow);
++    for (int i = 0; i < 2; i++) {
++        uint32_t index = i == 0 ? a_index : b_index;
++        if (index < ATOM_BITMAP_WORDS * 32) {
++            uint32_t *word = &atom_seen[index >> 5];
++            uint32_t mask = 1u << (index & 31);
++            if ((*word & mask) == 0) {
++                *word |= mask;
++                totals.atom_distinct_atoms++;
++            }
++        }
++    }
++    pthread_mutex_unlock(&census_lock);
++}
++
++// ---------------------------------------------------------------------------
++// Dump
++// ---------------------------------------------------------------------------
++
++static void dump_hist(FILE *out, const char *name, const uint64_t *hist, size_t n)
++{
++    fprintf(out, "  \"%s\": [", name);
++    for (size_t i = 0; i < n; i++) {
++        fprintf(out, "%s%" PRIu64, i ? ", " : "", hist[i]);
++    }
++    fprintf(out, "],\n");
++}
++
++void term_census_dump(void)
++{
++    pthread_mutex_lock(&census_lock);
++    if (census_dumped || !census_ready) {
++        pthread_mutex_unlock(&census_lock);
++        return;
++    }
++    census_dumped = true;
++
++    const char *path = getenv("AVM_TERM_CENSUS_OUT");
++    FILE *out = path != NULL ? fopen(path, "w") : stderr;
++    if (out == NULL) {
++        out = stderr;
++    }
++
++    for (uint32_t i = 0; i < PAIR_SLOTS; i++) {
++        if (pair_table[i].count != 0) {
++            totals.atom_distinct_pairs++;
++        }
++    }
++
++    fprintf(out, "{\n");
++    fprintf(out, "  \"totals\": {\n");
++    fprintf(out, "    \"logical\": %" PRIu64 ",\n", totals.logical);
++    fprintf(out, "    \"flatmap_probe\": %" PRIu64 ",\n", totals.probe_cmp);
++    fprintf(out, "    \"tuple_elem_visits\": %" PRIu64 ",\n", totals.tuple_elem_visits);
++    fprintf(out, "    \"list_elem_visits\": %" PRIu64 ",\n", totals.list_elem_visits);
++    fprintf(out, "    \"atom_cmp\": %" PRIu64 ",\n", totals.atom_cmp);
++    fprintf(out, "    \"atom_cmp_ordering\": %" PRIu64 ",\n", atom_cmp_kind[0]);
++    fprintf(out, "    \"atom_cmp_equal_only\": %" PRIu64 ",\n", atom_cmp_kind[1]);
++    fprintf(out, "    \"atom_cmp_same_index\": %" PRIu64 ",\n", totals.atom_cmp_same_index);
++    fprintf(out, "    \"atom_sortkey_decided\": %" PRIu64 ",\n", totals.atom_sortkey_decided);
++    fprintf(out, "    \"atom_distinct_pairs\": %" PRIu64 ",\n", totals.atom_distinct_pairs);
++    fprintf(out, "    \"atom_distinct_atoms\": %" PRIu64 ",\n", totals.atom_distinct_atoms);
++    fprintf(out, "    \"bin_cmp\": %" PRIu64 ",\n", totals.bin_cmp);
++    fprintf(out, "    \"bin_equal\": %" PRIu64 ",\n", totals.bin_equal);
++    fprintf(out, "    \"bin_bytes_compared\": %" PRIu64 ",\n", totals.bin_bytes_compared);
++    fprintf(out, "    \"shape_overflow\": %" PRIu64 ",\n", shape_overflow);
++    fprintf(out, "    \"pair_overflow\": %" PRIu64 ",\n", pair_overflow);
++    fprintf(out, "    \"site_count\": %u\n", site_count);
++    fprintf(out, "  },\n");
++
++    dump_hist(out, "atom_prefix_bytes_order", atom_prefix_hist[0], 33);
++    dump_hist(out, "atom_prefix_bytes_equal", atom_prefix_hist[1], 33);
++    dump_hist(out, "atom_first_diff_bit_order", atom_bit_hist[0], 66);
++    dump_hist(out, "atom_first_diff_bit_equal", atom_bit_hist[1], 66);
++    dump_hist(out, "atom_shorter_len_order", atom_len_hist[0], 33);
++    dump_hist(out, "atom_shorter_len_equal", atom_len_hist[1], 33);
++    dump_hist(out, "binary_prefix_bytes", bin_prefix_hist, 33);
++
++    fprintf(out, "  \"type_names\": [");
++    for (int i = 0; i < CT_MAX; i++) {
++        fprintf(out, "%s\"%s\"", i ? ", " : "", census_type_names[i]);
++    }
++    fprintf(out, "],\n  \"decided_names\": [");
++    for (int i = 0; i < DEC_MAX; i++) {
++        fprintf(out, "%s\"%s\"", i ? ", " : "", census_decided_names[i]);
++    }
++    fprintf(out, "],\n  \"kind_names\": [");
++    for (int i = 0; i < 4; i++) {
++        fprintf(out, "%s\"%s\"", i ? ", " : "", census_kind_names[i]);
++    }
++    fprintf(out, "],\n");
++
++    fprintf(out, "  \"sites\": [\n");
++    for (unsigned i = 0; i < site_count; i++) {
++        Dl_info info;
++        const char *name = "?";
++        const char *name2 = "?";
++        uintptr_t offset = 0;
++        if (dladdr(sites[i], &info) != 0 && info.dli_sname != NULL) {
++            name = info.dli_sname;
++            offset = (uintptr_t) sites[i] - (uintptr_t) info.dli_saddr;
++        }
++        Dl_info info2;
++        if (sites2[i] != NULL && dladdr(sites2[i], &info2) != 0 && info2.dli_sname != NULL) {
++            name2 = info2.dli_sname;
++        }
++        fprintf(out,
++            "    %s{\"id\": %u, \"sym\": \"%s\", \"off\": %" PRIuPTR ", \"addr\": %" PRIuPTR
++            ", \"caller\": \"%s\", \"addr2\": %" PRIuPTR ", \"fbase\": %" PRIuPTR "}\n",
++            i ? ", " : "", i, name, offset, (uintptr_t) sites[i], name2, (uintptr_t) sites2[i],
++            (uintptr_t) (dladdr(sites[i], &info) != 0 ? info.dli_fbase : NULL));
++    }
++    fprintf(out, "  ],\n");
++
++    fprintf(out, "  \"shapes\": [\n");
++    bool first = true;
++    for (uint32_t i = 0; i < SHAPE_SLOTS; i++) {
++        if (shape_table[i].count == 0) {
++            continue;
++        }
++        uint64_t key = shape_table[i].key;
++        fprintf(out,
++            "    %s{\"site\": %u, \"kind\": %u, \"ta\": %u, \"tb\": %u, \"result\": %u, "
++            "\"decided\": %u, \"arity\": %u, \"elem\": %u, \"depth\": %u, \"pairs_log2\": %u, "
++            "\"count\": %" PRIu64 ", \"entry\": %u}\n",
++            first ? "" : ", ", (unsigned) (key & 0xfff), (unsigned) ((key >> 12) & 3),
++            (unsigned) ((key >> 14) & 15), (unsigned) ((key >> 18) & 15),
++            (unsigned) ((key >> 22) & 7), (unsigned) ((key >> 25) & 15),
++            (unsigned) ((key >> 29) & 15), (unsigned) ((key >> 33) & 15),
++            (unsigned) ((key >> 37) & 15), (unsigned) ((key >> 41) & 7), shape_table[i].count,
++            (unsigned) ((key >> 44) & 3));
++        first = false;
++    }
++    fprintf(out, "  ],\n");
++
++    fprintf(out, "  \"atom_pairs\": [\n");
++    first = true;
++    for (uint32_t i = 0; i < PAIR_SLOTS; i++) {
++        if (pair_table[i].count < 1000) {
++            continue;
++        }
++        fprintf(out, "    %s{\"a\": %u, \"b\": %u, \"count\": %" PRIu64 "}\n", first ? "" : ", ",
++            (unsigned) (pair_table[i].key >> 32), (unsigned) (pair_table[i].key & 0xffffffff),
++            pair_table[i].count);
++        first = false;
++    }
++    fprintf(out, "  ]\n}\n");
++
++    if (out != stderr) {
++        fclose(out);
++    }
++    pthread_mutex_unlock(&census_lock);
++}
++
++#endif
+diff --git a/src/libAtomVM/term_census.h b/src/libAtomVM/term_census.h
+new file mode 100644
+index 000000000..ed8d89fac
+--- /dev/null
++++ b/src/libAtomVM/term_census.h
+@@ -0,0 +1,73 @@
++/*
++ * This file is part of AtomVM.
++ *
++ * Copyright 2026 Paul Guyot <pguyot@kallisys.net>
++ *
++ * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
++ */
++
++/**
++ * @file term_census.h
++ * @brief Instrumentation build: record every term comparison a workload makes.
++ *
++ * @details Compiled in only under -DAVM_TERM_CENSUS, and never in a build that
++ * is timed. Each logical comparison -- the outermost one; the walks it makes
++ * internally are part of it, not separate events -- is recorded once, with the
++ * pair re-examined after the fact to say what actually decided it. The point is
++ * to answer what a different representation of atoms or of boxed terms would be
++ * worth, so the record keeps the shape of the operands (types, arity, which
++ * element decided, how deep it went) rather than only a count, and the atom
++ * table keeps a separate record of how much of a name each ordering needed.
++ */
++
++#ifndef _TERM_CENSUS_H_
++#define _TERM_CENSUS_H_
++
++#ifdef AVM_TERM_CENSUS
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "term_typedef.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct GlobalContext;
++struct AtomTable;
++
++/** @brief True while the census is re-walking a pair to classify it. */
++bool term_census_analyzing(void);
++
++/**
++ * @brief Record one logical comparison, already resolved.
++ * @param ra return address of the caller, symbolized at dump time.
++ */
++void term_census_record(
++    void *ra, void *ra2, term a, term b, int opts, int result, struct GlobalContext *global);
++
++/** @brief Whether a nested (already accounted) comparison is running. */
++bool term_census_nested(void);
++void term_census_enter(int opts);
++void term_census_leave(void);
++
++/** @brief =:= as the map descents ask it, recorded at the real call site. */
++bool term_census_exact_eq(void *ra, void *ra2, term a, term b, struct GlobalContext *global);
++
++/** @brief One flat-map probe comparison resolved inline, without term_compare. */
++void term_census_probe(void *ra, void *ra2, term key, term candidate, int result);
++
++/** @brief One atom-vs-atom ordering decided by the atom table. */
++void term_census_atom_pair(struct AtomTable *table, uint32_t a_index, uint32_t b_index);
++
++/** @brief Write the census to $AVM_TERM_CENSUS_OUT (or stderr). Idempotent. */
++void term_census_dump(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
++
++#endif
