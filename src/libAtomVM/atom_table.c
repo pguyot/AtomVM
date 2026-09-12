@@ -199,6 +199,12 @@ static inline struct HNode *get_published_node(struct AtomTable *table, atom_ind
 }
 #endif
 
+// Defined below, next to the rwlock-guarded lookups it belongs with; the
+// hash getter above it is the one caller that needs it declared early.
+#ifndef ATOM_TABLE_LOCKFREE_READS
+static struct HNode *get_node_using_index(struct AtomTable *table, atom_index_t index);
+#endif
+
 uint32_t atom_table_get_atom_hash(struct AtomTable *table, atom_index_t index)
 {
 #if ATOM_TABLE_HASH_CACHE
