@@ -620,6 +620,24 @@ ms_variable(Atom) ->
 
 %% @private
 %% The `N' of a `'$N'' variable atom, which ms_variable/1 has already validated.
+ms_variable_number('$1') ->
+    1;
+ms_variable_number('$2') ->
+    2;
+ms_variable_number('$3') ->
+    3;
+ms_variable_number('$4') ->
+    4;
+ms_variable_number('$5') ->
+    5;
+ms_variable_number('$6') ->
+    6;
+ms_variable_number('$7') ->
+    7;
+ms_variable_number('$8') ->
+    8;
+ms_variable_number('$9') ->
+    9;
 ms_variable_number(Var) ->
     [$$ | Digits] = atom_to_list(Var),
     list_to_integer(Digits).
