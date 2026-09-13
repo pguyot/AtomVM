@@ -381,12 +381,32 @@ test_from_list() ->
     check_from_list([{a, 1}, {b, 2}, {a, 3}, {c, 4}, {b, 5}]),
     %% Unsorted input.
     check_from_list([{3, c}, {1, a}, {2, b}, {0, z}]),
-    %% Large lists that cross the flat->tree threshold (TERM_MAP_HASH_THRESHOLD=32).
+    %% Small and large input lists, including the flat/hash boundary.
     check_from_list([{I, I * 2} || I <- lists:seq(1, 40)]),
     check_from_list([{I, I} || I <- lists:seq(40, 1, -1)]),
     check_from_list([{{b_var, I}, I} || I <- lists:seq(1, 100)]),
     %% Large list with duplicates (last wins).
     check_from_list([{I rem 30, I} || I <- lists:seq(1, 200)]),
+    lists:foreach(
+        fun(N) ->
+            check_from_list([{{b_var, I}, {value, [I]}} || I <- lists:seq(N, 1, -1)]),
+            %% Many input entries can collapse to either representation.
+            check_from_list([{{b_var, I rem N}, I} || I <- lists:seq(1, 3 * N)])
+        end,
+        [127, 128, 129, 512, 2048]
+    ),
+    %% Distinguish exact numeric keys; structurally equal keys keep the last value.
+    Mixed = [1, 1.0, 0.0, -0.0, a, {key, [1, 2]}, <<"key">>, self(), make_ref()],
+    check_from_list([{K, I} || I <- lists:seq(1, 30), K <- Mixed]),
+    %% These integer keys have the same internal 32-bit hash. Neither may
+    %% disappear when duplicate runs are grouped by hash before term order.
+    CollisionKeys = [46834102, 7327637],
+    check_from_list(
+        [{I, I} || I <- lists:seq(1, 200)] ++
+            [{K, V} || V <- lists:seq(1, 10), K <- CollisionKeys]
+    ),
+    check_from_list([{K, V} || V <- lists:seq(1, 100), K <- CollisionKeys]),
+    ?ASSERT_ERROR(maps:from_list(lists:duplicate(200, {a, 1}) ++ [bad]), badarg),
     %% Mixed immediate / tuple keys.
     check_from_list([{a, 1}, {1, b}, {{t, 2}, c}, {-5, d}, {<<"k">>, e}]),
     ok.

@@ -65,6 +65,7 @@
 #include "sys.h"
 #include "tempstack.h"
 #include "term.h"
+#include "term_hash.h"
 #include "term_typedef.h"
 #include "termmap_champ.h"
 #include "unicode.h"
@@ -8259,11 +8260,12 @@ static term *map_hash_array(term map, int n, bool *oom, GlobalContext *glb)
 }
 
 // Build a flat (<= TERM_MAP_HASH_THRESHOLD) or hash map from u entries given as
-// 2*u interleaved sorted (key, value) terms in kv. Reserves heap with kv as GC
+// 2*u interleaved (key, value) terms in kv, sorted for flat maps. Optional
+// precomputed hashes avoid rehashing keys. Reserves heap with kv as GC
 // roots so the pairs survive any collection while reserving, then fills the
 // result. Returns the map, or term_invalid_term() on allocation failure (the
 // caller frees kv and raises). Shared by maps:merge/2 and maps:remove/2.
-static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
+static term map_build_from_kv(Context *ctx, term *kv, size_t u, const uint32_t *hashes)
 {
     if (u <= TERM_MAP_HASH_THRESHOLD) {
         if (UNLIKELY(memory_ensure_free_with_roots(
@@ -8291,10 +8293,14 @@ static term map_build_from_sorted_kv(Context *ctx, term *kv, size_t u)
         free(values);
         return term_invalid_term();
     }
-    for (size_t x = 0; x < u; x++) {
-        keys[x] = kv[2 * x];
+    if (!hashes) {
+        for (size_t x = 0; x < u; x++) {
+            keys[x] = kv[2 * x];
+        }
     }
-    if (UNLIKELY(!termmap_champ_measure(&builder, keys, u, ctx->global))) {
+    bool measured = hashes ? termmap_champ_measure_hashed(&builder, hashes, u)
+                           : termmap_champ_measure(&builder, keys, u, ctx->global);
+    if (UNLIKELY(!measured)) {
         free(keys);
         free(values);
         return term_invalid_term();
@@ -8465,7 +8471,7 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     free(a1);
     free(a2);
 
-    term result = map_build_from_sorted_kv(ctx, kv, u);
+    term result = map_build_from_kv(ctx, kv, u, NULL);
     free(kv);
     if (UNLIKELY(term_is_invalid_term(result))) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -8473,11 +8479,12 @@ static term nif_maps_merge(Context *ctx, int argc, term argv[])
     return result;
 }
 
-// Stable bottom-up merge sort of idx[0..n) by the term order of kv[2*idx[.]].
+// Stable bottom-up merge sort of idx[0..n) by the term order of kv[2*idx[.]],
+// or by hash then term order when precomputed hashes are supplied.
 // Stability (taking the left run on ties) keeps equal keys in ascending original
 // index order, so maps:from_list/1 last-wins dedup can keep the last of each run.
 // tmp is scratch of n ints. Returns 0, or -1 on a term_compare alloc failure.
-static int sort_kv_indices(int *idx, int *tmp, int n, const term *kv, GlobalContext *glb)
+static int sort_kv_indices(int *idx, int *tmp, int n, const term *kv, const uint32_t *hashes, GlobalContext *glb)
 {
     for (int width = 1; width < n; width *= 2) {
         for (int lo = 0; lo < n; lo += 2 * width) {
@@ -8485,7 +8492,12 @@ static int sort_kv_indices(int *idx, int *tmp, int n, const term *kv, GlobalCont
             int hi = (lo + 2 * width < n) ? lo + 2 * width : n;
             int i = lo, j = mid, k = lo;
             while (i < mid && j < hi) {
-                TermCompareResult c = map_key_compare(kv[2 * idx[i]], kv[2 * idx[j]], glb);
+                TermCompareResult c;
+                if (hashes && hashes[idx[i]] != hashes[idx[j]]) {
+                    c = hashes[idx[i]] > hashes[idx[j]] ? TermGreaterThan : TermLessThan;
+                } else {
+                    c = map_key_compare(kv[2 * idx[i]], kv[2 * idx[j]], glb);
+                }
                 if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                     return -1;
                 }
@@ -8535,10 +8547,14 @@ static term nif_maps_from_list(Context *ctx, int argc, term argv[])
     term *kv = malloc(sizeof(term) * 2 * (size_t) len);
     int *idx = malloc(sizeof(int) * (size_t) len);
     int *tmp = malloc(sizeof(int) * (size_t) len);
-    if (UNLIKELY(IS_NULL_PTR(kv) || IS_NULL_PTR(idx) || IS_NULL_PTR(tmp))) {
+    bool hash_order = len > TERM_MAP_HASH_THRESHOLD;
+    uint32_t *hashes = hash_order ? malloc(sizeof(uint32_t) * (size_t) len) : NULL;
+    if (UNLIKELY(IS_NULL_PTR(kv) || IS_NULL_PTR(idx) || IS_NULL_PTR(tmp)
+            || (hash_order && IS_NULL_PTR(hashes)))) {
         free(kv);
         free(idx);
         free(tmp);
+        free(hashes);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term l = argv[0];
@@ -8548,39 +8564,42 @@ static term nif_maps_from_list(Context *ctx, int argc, term argv[])
             free(kv);
             free(idx);
             free(tmp);
+            free(hashes);
             RAISE_ERROR(BADARG_ATOM);
         }
         kv[2 * i] = term_get_tuple_element(e, 0);
         kv[2 * i + 1] = term_get_tuple_element(e, 1);
+        if (hashes) {
+            hashes[i] = term_hash(kv[2 * i], glb);
+        }
         idx[i] = (int) i;
         l = term_get_list_tail(l);
     }
 
-    if (UNLIKELY(sort_kv_indices(idx, tmp, (int) len, kv, glb) < 0)) {
+    if (UNLIKELY(sort_kv_indices(idx, tmp, (int) len, kv, hashes, glb) < 0)) {
         free(kv);
         free(idx);
         free(tmp);
+        free(hashes);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    free(tmp);
-
-    // Collapse equal-key runs (keeping the last, highest-index entry) into a
-    // fresh sorted-unique buffer that becomes the build's GC roots.
-    term *out = malloc(sizeof(term) * 2 * (size_t) len);
-    if (UNLIKELY(IS_NULL_PTR(out))) {
-        free(kv);
-        free(idx);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
+    // Hash tries do not require term-ordered keys. Equal hashes still sort by
+    // exact term order, preserving adjacent duplicate runs and last-wins ties.
+    // Compact indices first: many input entries may collapse to a flat map,
+    // whose surviving keys must then be sorted in term order.
     size_t u = 0;
     for (int x = 0; x < (int) len;) {
         int y = x + 1;
         while (y < (int) len) {
+            if (hashes && hashes[idx[x]] != hashes[idx[y]]) {
+                break;
+            }
             TermCompareResult c = map_key_compare(kv[2 * idx[x]], kv[2 * idx[y]], glb);
             if (UNLIKELY(c == TermCompareMemoryAllocFail)) {
                 free(kv);
                 free(idx);
-                free(out);
+                free(tmp);
+                free(hashes);
                 RAISE_ERROR(OUT_OF_MEMORY_ATOM);
             }
             if (c != TermEquals) {
@@ -8589,15 +8608,39 @@ static term nif_maps_from_list(Context *ctx, int argc, term argv[])
             y++;
         }
         int keep = idx[y - 1];
-        out[2 * u] = kv[2 * keep];
-        out[2 * u + 1] = kv[2 * keep + 1];
-        u++;
+        idx[u++] = keep;
         x = y;
     }
+    if (hash_order && u <= TERM_MAP_HASH_THRESHOLD
+        && UNLIKELY(sort_kv_indices(idx, tmp, (int) u, kv, NULL, glb) < 0)) {
+        free(kv);
+        free(idx);
+        free(tmp);
+        free(hashes);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    free(tmp);
+    // The tail holds non-term hashes; only the preceding 2*u words are roots.
+    term *out = malloc(sizeof(term) * 2 * u + (hash_order ? sizeof(uint32_t) * u : 0));
+    if (UNLIKELY(IS_NULL_PTR(out))) {
+        free(kv);
+        free(idx);
+        free(hashes);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    uint32_t *out_hashes = hash_order ? (uint32_t *) (out + 2 * u) : NULL;
+    for (size_t x = 0; x < u; x++) {
+        out[2 * x] = kv[2 * idx[x]];
+        out[2 * x + 1] = kv[2 * idx[x] + 1];
+        if (hashes) {
+            out_hashes[x] = hashes[idx[x]];
+        }
+    }
+    free(hashes);
     free(kv);
     free(idx);
 
-    term result = map_build_from_sorted_kv(ctx, out, u);
+    term result = map_build_from_kv(ctx, out, u, out_hashes);
     free(out);
     if (UNLIKELY(term_is_invalid_term(result))) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
@@ -8635,7 +8678,7 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
     // build the result with block copies of the unchanged head and tail ranges
     // (the mirror of the insert path in jit_put_map_assoc_one). The generic
     // path below instead compares the key against EVERY entry and rebuilds
-    // through map_build_from_sorted_kv.
+    // through map_build_from_kv.
     if (!term_is_map_hash(map)) {
         int lo = 0;
         int hi = n - 1;
@@ -8732,7 +8775,7 @@ static term nif_maps_remove(Context *ctx, int argc, term argv[])
         }
         memmove(&arr[2 * found_at], &arr[2 * (found_at + 1)],
             sizeof(term) * 2 * (size_t) (n - 1 - found_at));
-        term result = map_build_from_sorted_kv(ctx, arr, (size_t) (n - 1));
+        term result = map_build_from_kv(ctx, arr, (size_t) (n - 1), NULL);
         free(arr);
         if (UNLIKELY(term_is_invalid_term(result))) {
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
