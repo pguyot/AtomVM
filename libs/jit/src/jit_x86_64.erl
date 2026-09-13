@@ -30,6 +30,7 @@
     supports_loop_residency/0,
     supports_inline_tuple2_eq/0,
     supports_select_val_binary_search/0,
+    supports_select_val_ranges/0,
     add_deferred_raise/5,
     take_deferred_raises/1,
     take_deferred_stubs/1,
@@ -483,6 +484,13 @@ supports_inline_tuple2_eq() ->
 %% backends exporting this.
 -spec supports_select_val_binary_search() -> true.
 supports_select_val_binary_search() ->
+    true.
+
+%% Capability marker: the generic layer coalesces consecutive OP_SELECT_VAL
+%% values into ranges tested with a subtract and an unsigned bound compare
+%% (see jit:op_select_val_int_ranges/5) on backends exporting this.
+-spec supports_select_val_ranges() -> true.
+supports_select_val_ranges() ->
     true.
 
 %%-----------------------------------------------------------------------------
