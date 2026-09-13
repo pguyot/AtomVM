@@ -59,6 +59,7 @@ test() ->
     end,
     ok = test_keys(),
     ok = test_values(),
+    ok = test_large_projections(),
     ok = test_to_list(),
     ok = test_from_list(),
     ok = test_size(),
@@ -344,6 +345,24 @@ test_values() ->
     ok = check_bad_map(fun() -> maps:values(id(not_a_map)) end),
     ok.
 
+%% Compound keys and values exercise rooting when the result reservation
+%% collects. Repeat after explicit collections and check the original map too.
+test_large_projections() ->
+    lists:foreach(
+        fun(N) ->
+            M = maps:from_list([{{key, I}, {value, [I, I + 1]}} || I <- lists:seq(1, N)]),
+            lists:foreach(
+                fun(_) ->
+                    erlang:garbage_collect(),
+                    assert_map_projections(M)
+                end,
+                lists:seq(1, 3)
+            )
+        end,
+        [128, 129, 512, 2048]
+    ),
+    ok.
+
 test_to_list() ->
     ?ASSERT_MATCH(maps:to_list(maps:new()), []),
     ?ASSERT_MATCH(lists:sort(maps:to_list(#{a => 1, b => 2, c => 3})), [{a, 1}, {b, 2}, {c, 3}]),
@@ -378,7 +397,7 @@ check_from_list(KVs) ->
     Expected = lists:foldl(fun({K, V}, A) -> A#{K => V} end, #{}, KVs),
     ?ASSERT_EQUALS(Got, Expected),
     ?ASSERT_EQUALS(maps:size(Got), maps:size(Expected)),
-    assert_sorted_keys(Got),
+    assert_map_projections(Got),
     Got.
 
 test_size() ->
@@ -544,23 +563,25 @@ check_merge(M1, M2) ->
         end,
         lists:usort(maps:keys(M1) ++ maps:keys(M2))
     ),
-    assert_sorted_keys(Merged),
+    assert_map_projections(Merged),
     Merged.
 
 %% Build #{KeyFun(I) => I} for I in Lo..Hi.
 rmap(Lo, Hi, KeyFun) ->
     lists:foldl(fun(I, A) -> A#{KeyFun(I) => I} end, #{}, lists:seq(Lo, Hi)).
 
-%% On AtomVM, maps keep keys in term order; assert the invariant where it holds.
-%% (BEAM maps:keys/1 is unordered, so this is a no-op there.)
-assert_sorted_keys(M) ->
-    case erlang:system_info(machine) of
-        "ATOM" ->
-            Ks = maps:keys(M),
-            ?ASSERT_EQUALS(Ks, lists:sort(Ks));
-        _ ->
-            ok
-    end.
+%% Projection order is unspecified, but keys and values must remain paired
+%% (maps:to_list/1 uses the two projections on AtomVM).
+assert_map_projections(M) ->
+    Ks = maps:keys(M),
+    Vs = maps:values(M),
+    ?ASSERT_EQUALS(length(Ks), map_size(M)),
+    %% lists:usort/1 merges numerically equal keys such as 1 and 1.0.
+    Unique = lists:foldl(fun(K, Acc) -> Acc#{K => true} end, #{}, Ks),
+    ?ASSERT_EQUALS(map_size(Unique), map_size(M)),
+    ?ASSERT_EQUALS(length(Vs), map_size(M)),
+    ?ASSERT_EQUALS(lists:sort(Vs), lists:sort([maps:get(K, M) || K <- Ks])),
+    ?ASSERT_EQUALS(maps:from_list(maps:to_list(M)), M).
 
 test_merge_with() ->
     ?ASSERT_EQUALS(maps:merge_with(fun(_K, V1, V2) -> V1 + V2 end, maps:new(), maps:new()), #{}),
@@ -646,7 +667,7 @@ check_remove(Key, Map) ->
                 false -> 0
             end)
     ),
-    assert_sorted_keys(Got),
+    assert_map_projections(Got),
     Got.
 
 test_update() ->

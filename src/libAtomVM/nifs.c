@@ -8776,6 +8776,20 @@ enum MapsProjection
     MapsProjectValues
 };
 
+struct MapsProjectionState
+{
+    Heap *heap;
+    term result;
+    enum MapsProjection what;
+};
+
+static void maps_project_entry(term key, term value, void *arg)
+{
+    struct MapsProjectionState *state = arg;
+    term element = state->what == MapsProjectKeys ? key : value;
+    state->result = term_list_prepend(element, state->result, state->heap);
+}
+
 static term maps_project(Context *ctx, term map, enum MapsProjection what)
 {
     if (UNLIKELY(!term_is_map(map))) {
@@ -8794,40 +8808,30 @@ static term maps_project(Context *ctx, term map, enum MapsProjection what)
         return term_nil();
     }
 
-    // A hash-backed map is materialized once (O(n log n)); a flat map is read in
-    // place.
-    bool oom = false;
-    term *arr = map_hash_array(map, n, &oom, ctx->global);
-    if (UNLIKELY(oom)) {
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-
     size_t need = (size_t) n * CONS_SIZE;
-    // The map itself is the gc root: the collected element terms live in it,
-    // so they are updated by a collection only through this root, and arr is
-    // refilled afterwards.
+    // Reserve before walking, rooting the map so that all projected terms
+    // survive a collection. The walk only allocates from this reservation.
     if (context_avail_free_memory(ctx) < need) {
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, need, 1, &map, MEMORY_CAN_SHRINK)
                 != MEMORY_GC_OK)) {
-            free(arr);
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
-        if (arr != NULL) {
-            if (UNLIKELY(!termmap_champ_fill_array_sorted(
-                    term_get_map_hash_root(map), arr, (size_t) n, ctx->global))) {
-                free(arr);
-                RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-            }
-        }
+    }
+
+    if (term_is_map_hash(map)) {
+        // Projection order is unspecified. Both projections use the same
+        // traversal so maps:to_list/1 can zip them into matching pairs.
+        struct MapsProjectionState state = { &ctx->heap, term_nil(), what };
+        termmap_champ_foreach(term_get_map_hash_root(map), maps_project_entry, &state);
+        return state.result;
     }
 
     term result = term_nil();
     for (int i = n - 1; i >= 0; i--) {
-        term element = (what == MapsProjectKeys) ? merge_key_at(map, arr, i)
-                                                 : merge_value_at(map, arr, i);
+        term element = (what == MapsProjectKeys) ? term_get_map_key(map, i)
+                                                 : term_get_map_value(map, i);
         result = term_list_prepend(element, result, &ctx->heap);
     }
-    free(arr);
     return result;
 }
 
