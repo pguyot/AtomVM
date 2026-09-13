@@ -24,6 +24,7 @@
 
 start() ->
     ok = test_get_0_erase_0(),
+    ok = test_get_exact_keys(),
     put_int(0),
     X = put_int(1),
     put_int(2),
@@ -89,4 +90,31 @@ test_get_0_erase_0() ->
     [{{any_term}, 1}] = erase(),
     [] = get(),
     [] = erase(),
+    ok.
+
+test_get_exact_keys() ->
+    undefined = get(missing),
+    undefined = get({missing}),
+    undefined = put(1, integer),
+    undefined = put(1.0, float),
+    undefined = put([], nil),
+    undefined = put(self(), pid),
+    undefined = put(tail, atom),
+    Key = {stringize(id(123)), id(42)},
+    undefined = put(Key, compound),
+    compound = get(Key),
+    compound = get({stringize(id(123)), id(42)}),
+    integer = get(id(1)),
+    float = get(1.0),
+    nil = get([]),
+    pid = get(self()),
+    atom = get(tail),
+    undefined = get(missing),
+    undefined = get({stringize(id(124)), id(42)}),
+    true = erlang:garbage_collect(),
+    compound = get({stringize(id(123)), id(42)}),
+    integer = get(id(1)),
+    float = get(1.0),
+    _ = erase(),
+    undefined = get(id(1)),
     ok.
