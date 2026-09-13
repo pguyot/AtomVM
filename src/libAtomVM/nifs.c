@@ -245,6 +245,7 @@ static term nif_ets_delete_object(Context *ctx, int argc, term argv[]);
 static term nif_ets_tab2list(Context *ctx, int argc, term argv[]);
 static term nif_ets_first(Context *ctx, int argc, term argv[]);
 static term nif_ets_next(Context *ctx, int argc, term argv[]);
+static term nif_ets_info(Context *ctx, int argc, term argv[]);
 static term nif_erlang_phash2(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_module_set_emulated(Context *ctx, int argc, term argv[]);
 static term nif_atomvm_set_load_binary_emulated(Context *ctx, int argc, term argv[]);
@@ -864,6 +865,11 @@ static const struct Nif ets_first_nif = {
 static const struct Nif ets_next_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ets_next
+};
+
+static const struct Nif ets_info_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ets_info
 };
 
 static const struct Nif phash2_nif = {
@@ -5441,6 +5447,22 @@ static term nif_ets_next(Context *ctx, int argc, term argv[])
         RAISE_ERROR(BADARG_ATOM);
     }
     return ets_key_or_end_of_table(ctx, ret);
+}
+
+static term nif_ets_info(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    VALIDATE_VALUE(argv[0], is_ets_table_id);
+    VALIDATE_VALUE(argv[1], term_is_atom);
+
+    term ret;
+    // A table that does not exist (or that this process may not read) is
+    // `undefined', as in OTP -- not an error.
+    if (UNLIKELY(ets_info(argv[0], argv[1], &ret, ctx) != EtsOk)) {
+        return UNDEFINED_ATOM;
+    }
+    return ret;
 }
 
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[])

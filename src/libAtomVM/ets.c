@@ -634,6 +634,74 @@ static ets_result_t copy_key_maybe_gc(term key, term *ret, Context *ctx)
     return EtsOk;
 }
 
+ets_result_t ets_info(term name_or_ref, term item, term *ret, Context *ctx)
+{
+    assert(ret != NULL);
+
+    struct EtsTable *table = get_table(
+        &ctx->global->ets,
+        name_or_ref,
+        ctx->process_id,
+        TableAccessRead);
+
+    if (table == NULL) {
+        return EtsBadAccess;
+    }
+
+    GlobalContext *global = ctx->global;
+    // Every item below is an immediate (atom or small integer), so this never
+    // allocates and needs no GC: callers can use the result directly.
+    *ret = UNDEFINED_ATOM;
+    if (item == globalcontext_make_atom(global, ATOM_STR("\x6", "keypos"))) {
+        *ret = term_from_int(table->multimap->key_index + 1);
+    } else if (item == globalcontext_make_atom(global, ATOM_STR("\x4", "size"))) {
+        // Counted by walking the buckets: no copy of the objects themselves,
+        // unlike the length(tab2list(T)) this replaces.
+        size_t count = 0;
+        EtsMultimap *multimap = table->multimap;
+        for (int bucket = 0; bucket < ETS_MULTIMAP_NUM_BUCKETS; bucket++) {
+            for (struct EtsMultimapNode *node = multimap->buckets[bucket]; node != NULL; node = node->next) {
+                for (struct EtsMultimapEntry *entry = node->entries; entry != NULL; entry = entry->next) {
+                    count++;
+                }
+            }
+        }
+        *ret = term_from_int(count);
+    } else if (item == globalcontext_make_atom(global, ATOM_STR("\x4", "type"))) {
+        switch (table->type) {
+            case EtsTableBag:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\x3", "bag"));
+                break;
+            case EtsTableDuplicateBag:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\xd", "duplicate_bag"));
+                break;
+            default:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\x3", "set"));
+                break;
+        }
+    } else if (item == globalcontext_make_atom(global, ATOM_STR("\x4", "name"))) {
+        *ret = table->name;
+    } else if (item == globalcontext_make_atom(global, ATOM_STR("\xB", "named_table"))) {
+        *ret = table->named ? TRUE_ATOM : FALSE_ATOM;
+    } else if (item == globalcontext_make_atom(global, ATOM_STR("\xA", "protection"))) {
+        switch (table->access) {
+            case EtsTableAccessPrivate:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\x7", "private"));
+                break;
+            case EtsTableAccessPublic:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\x6", "public"));
+                break;
+            default:
+                *ret = globalcontext_make_atom(global, ATOM_STR("\x9", "protected"));
+                break;
+        }
+    }
+
+    SMP_UNLOCK(table);
+
+    return EtsOk;
+}
+
 ets_result_t ets_first_maybe_gc(term name_or_ref, term *ret, Context *ctx)
 {
     assert(ret != NULL);
