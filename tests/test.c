@@ -681,6 +681,7 @@ struct Test tests[] = {
 
     TEST_CASE(test_inline_arith),
     TEST_CASE(test_select_val_ranges),
+    TEST_CASE(test_leaf_nif_calls),
 
     TEST_CASE(test_crypto_pk),
     TEST_CASE(test_crypto_mac),
