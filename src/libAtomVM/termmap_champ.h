@@ -167,6 +167,13 @@ struct ChampBuilder
 bool termmap_champ_measure(struct ChampBuilder *builder, const term *keys, size_t n, struct GlobalContext *global);
 
 /**
+ * @brief Compute the trie size from precomputed term_hash values for n keys.
+ * Copies the hashes; the caller retains ownership of the input array.
+ * @return false on allocation failure (nothing to free in that case).
+ */
+bool termmap_champ_measure_hashed(struct ChampBuilder *builder, const uint32_t *hashes, size_t n);
+
+/**
  * @brief Build the trie measured by termmap_champ_measure. Consumes the
  * builder's scratch; call termmap_champ_builder_free afterwards either way.
  */

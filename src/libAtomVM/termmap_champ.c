@@ -1121,8 +1121,8 @@ term termmap_champ_from_array(
     return root;
 }
 
-bool termmap_champ_measure(
-    struct ChampBuilder *builder, const term *keys, size_t n, GlobalContext *global)
+static bool champ_measure(struct ChampBuilder *builder, const term *keys,
+    const uint32_t *hashes, size_t n, GlobalContext *global)
 {
     builder->hashes = NULL;
     builder->idx = NULL;
@@ -1140,8 +1140,14 @@ bool termmap_champ_measure(
         termmap_champ_builder_free(builder);
         return false;
     }
+    if (hashes) {
+        memcpy(builder->hashes, hashes, sizeof(uint32_t) * n);
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            builder->hashes[i] = term_hash(keys[i], global);
+        }
+    }
     for (size_t i = 0; i < n; i++) {
-        builder->hashes[i] = term_hash(keys[i], global);
         builder->idx[i] = (int) i;
     }
     struct ChampCtx c = { .keys = keys, .values = NULL, .hashes = builder->hashes };
@@ -1153,6 +1159,17 @@ bool termmap_champ_measure(
         builder->idx[i] = (int) i;
     }
     return true;
+}
+
+bool termmap_champ_measure(
+    struct ChampBuilder *builder, const term *keys, size_t n, GlobalContext *global)
+{
+    return champ_measure(builder, keys, NULL, n, global);
+}
+
+bool termmap_champ_measure_hashed(struct ChampBuilder *builder, const uint32_t *hashes, size_t n)
+{
+    return champ_measure(builder, NULL, hashes, n, NULL);
 }
 
 term termmap_champ_build(
