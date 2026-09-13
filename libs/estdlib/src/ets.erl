@@ -369,9 +369,7 @@ next(_Table, _Key) ->
 %%-----------------------------------------------------------------------------
 -spec select(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}]) -> [term()].
 select(Table, MatchSpec) when is_list(MatchSpec) ->
-    % fully qualified so the call resolves to the NIF, not this stub module
-    Objects = ?MODULE:tab2list(Table),
-    select_objects(Objects, MatchSpec, []).
+    select_objects(select_candidates(Table, MatchSpec), MatchSpec, []).
 
 %%-----------------------------------------------------------------------------
 %% @param   Table a reference to the ets table
@@ -415,9 +413,7 @@ select_count(Table, MatchSpec) ->
 -spec select_delete(Table :: table(), MatchSpec :: [{term(), [term()], [term()]}]) ->
     non_neg_integer().
 select_delete(Table, MatchSpec) when is_list(MatchSpec) ->
-    % fully qualified so the call resolves to the NIF, not this stub module
-    Objects = ?MODULE:tab2list(Table),
-    select_delete0(Objects, Table, MatchSpec, 0).
+    select_delete0(select_candidates(Table, MatchSpec), Table, MatchSpec, 0).
 
 %% @private
 select_delete0([], _Table, _MatchSpec, Count) ->
@@ -457,6 +453,49 @@ match_delete(Table, Pattern) ->
 -spec info(Table :: table(), Item :: atom()) -> term() | undefined.
 info(_Table, _Item) ->
     erlang:nif_error(undefined).
+
+%% @private
+%% The objects a match spec could possibly match. A single clause whose head
+%% is a tuple with a ground key element can only match objects stored under
+%% that key, so look them up instead of copying the whole table -- which is
+%% what ets:match/2 and ets:match_delete/2 ask for whenever the caller knows
+%% the key. Anything else (several clauses, a head that is not a tuple or is
+%% shorter than the key position, a key holding `'_'' or a `'$N'' variable)
+%% still needs the full traversal.
+%% Calls are fully qualified so they resolve to the NIFs, not to this module.
+select_candidates(Table, [{Head, _Guards, _Body}]) when is_tuple(Head) ->
+    case ?MODULE:info(Table, keypos) of
+        KeyPos when is_integer(KeyPos), tuple_size(Head) >= KeyPos ->
+            Key = element(KeyPos, Head),
+            case ms_is_ground(Key) of
+                true -> ?MODULE:lookup(Table, Key);
+                false -> ?MODULE:tab2list(Table)
+            end;
+        _ ->
+            ?MODULE:tab2list(Table)
+    end;
+select_candidates(Table, _MatchSpec) ->
+    ?MODULE:tab2list(Table).
+
+%% @private
+%% Whether a match-spec head subterm is a plain value: no `'_'' wildcard and
+%% no `'$N'' variable anywhere inside it, so it matches only itself.
+ms_is_ground('_') ->
+    false;
+ms_is_ground(Atom) when is_atom(Atom) ->
+    ms_variable(Atom) =:= not_a_variable;
+ms_is_ground(Tuple) when is_tuple(Tuple) ->
+    ms_is_ground_tuple(Tuple, tuple_size(Tuple));
+ms_is_ground([Head | Tail]) ->
+    ms_is_ground(Head) andalso ms_is_ground(Tail);
+ms_is_ground(_Other) ->
+    true.
+
+%% @private
+ms_is_ground_tuple(_Tuple, 0) ->
+    true;
+ms_is_ground_tuple(Tuple, N) ->
+    ms_is_ground(element(N, Tuple)) andalso ms_is_ground_tuple(Tuple, N - 1).
 
 %% @private
 select_objects([], _MatchSpec, Acc) ->

@@ -28,6 +28,8 @@ test() ->
     ok = test_select(),
     ok = test_match(),
     ok = test_info(),
+    ok = test_keypos(),
+    ok = test_bag(),
     ok.
 
 test_select() ->
@@ -52,6 +54,31 @@ test_match() ->
     % A variable repeated in the pattern must bind to the same value everywhere.
     Pairs = new_table([{1, 1}, {2, 3}]),
     [[1]] = ets:match(Pairs, {'$1', '$1'}),
+    ok.
+
+%% select/2 narrows to a lookup when the key element of the pattern is ground,
+%% so it has to find the key at the table's own keypos, not at element 1.
+test_keypos() ->
+    T = ets:new(test, [{keypos, 2}]),
+    true = ets:insert(T, [{a, 1}, {b, 2}, {c, 1}]),
+    [[a]] = ets:match(T, {'$1', 2}),
+    [[c]] = ets:match(T, {'$1', 1, '_'}),
+    [[a], [c]] = lists:sort(ets:match(T, {'$1', '$2'})),
+    [{b, 2}] = ets:select(T, [{{'_', 2}, [], ['$_']}]),
+    % Ground at element 1 but not at the keypos: still a full traversal.
+    [[1]] = ets:match(T, {a, '$1'}),
+    true = ets:match_delete(T, {'_', 2}),
+    [] = ets:match(T, {'$1', 2}),
+    ok.
+
+%% A bag holds several objects under one key: narrowing must return them all.
+test_bag() ->
+    T = ets:new(test, [bag]),
+    true = ets:insert(T, [{k, 1}, {k, 2}, {j, 3}]),
+    [[1], [2]] = lists:sort(ets:match(T, {k, '$1'})),
+    [[k], [k]] = ets:match(T, {'$1', '_'}) -- [[j]],
+    true = ets:match_delete(T, {k, 1}),
+    [[2]] = ets:match(T, {k, '$1'}),
     ok.
 
 test_info() ->
