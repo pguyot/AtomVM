@@ -680,6 +680,7 @@ struct Test tests[] = {
     TEST_CASE_COND(stacktrace_function_args, 0, SKIP_STACKTRACES),
 
     TEST_CASE(test_inline_arith),
+    TEST_CASE(test_select_val_ranges),
 
     TEST_CASE(test_crypto_pk),
     TEST_CASE(test_crypto_mac),

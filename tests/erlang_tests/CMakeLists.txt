@@ -715,6 +715,7 @@ compile_erlang(test_multi_value_comprehension)
 compile_erlang(test_is_integer_3)
 
 compile_erlang(test_inline_arith)
+compile_erlang(test_select_val_ranges)
 compile_erlang(test_typed_cmp)
 
 
@@ -1289,6 +1290,7 @@ set(erlang_test_beams
     test_lists_keyfind.beam
 
     test_inline_arith.beam
+    test_select_val_ranges.beam
     test_typed_cmp.beam
 
     test_code_server_nifs.beam

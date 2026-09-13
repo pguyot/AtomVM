@@ -1243,7 +1243,7 @@ emit_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
             {ok, Entries, RestAfter} ->
                 case
                     erlang:function_exported(MMod, supports_select_val_binary_search, 0) andalso
-                        N >= 6
+                        N >= 4
                 of
                     true ->
                         {
@@ -7745,6 +7745,75 @@ scan_int_compact_term(_) ->
 %% a balanced binary-search tree.
 op_select_val_int_dispatch(MMod, MSt0, SrcValue, Entries, DefaultLabel) ->
     Sorted = lists:keysort(1, Entries),
+    Runs = select_val_int_runs(Sorted, []),
+    case
+        length(Runs) =< 4 andalso 2 * length(Runs) =< length(Sorted) andalso
+            lists:all(fun({Min, Max, _}) -> Max - Min =< 4095 end, Runs)
+    of
+        true ->
+            op_select_val_int_ranges(MMod, MSt0, SrcValue, Runs, DefaultLabel);
+        false ->
+            op_select_val_int_dispatch0(MMod, MSt0, SrcValue, Sorted, DefaultLabel)
+    end.
+
+select_val_int_runs([], Acc) ->
+    lists:reverse(Acc);
+select_val_int_runs([{Value, Label} | Rest], [{Min, Max, Label} | Acc]) when
+    Value =:= Max + 16
+->
+    select_val_int_runs(Rest, [{Min, Value, Label} | Acc]);
+select_val_int_runs([{Value, Label} | Rest], Acc) ->
+    select_val_int_runs(Rest, [{Value, Value, Label} | Acc]).
+
+select_val_check_small_integer(MMod, MSt, {typed, _, {t_integer, Range}}, Reg, Default) ->
+    case is_small_integer_range(Range, {0, 0}, MMod) of
+        true -> MSt;
+        false -> select_val_check_small_integer(MMod, MSt, untyped, Reg, Default)
+    end;
+select_val_check_small_integer(MMod, MSt, _Src, Reg, Default) ->
+    cond_jump_to_label(
+        {Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, Default, MMod, MSt
+    ).
+
+%% Consecutive values sharing a target need one range check, not one table
+%% entry each. Subtraction and an unsigned bound also cover negative words.
+op_select_val_int_ranges(MMod, MSt0, SrcValue, Runs, Default) ->
+    {MSt1, Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+    MSt2 = select_val_check_small_integer(MMod, MSt1, SrcValue, Reg, Default),
+    MSt3 = lists:foldl(
+        fun
+            ({Value, Value, Label}, S0) ->
+                cond_jump_to_label({Reg, '==', Value}, Label, MMod, S0);
+            ({Min, Max, Label}, S0) ->
+                case select_val_known_lower_bound(SrcValue, Min, Max, MMod) of
+                    true ->
+                        cond_jump_to_label({Reg, '<', Max + 1}, Label, MMod, S0);
+                    false ->
+                        {S1, Diff} = MMod:copy_to_native_register(S0, Reg),
+                        S2 = MMod:sub(S1, Diff, Min),
+                        MMod:if_else_block(
+                            S2,
+                            {{free, Diff}, '(uint)>', Max - Min},
+                            fun(S) -> S end,
+                            fun(S) -> MMod:jump_to_label(S, Label) end
+                        )
+                end
+        end,
+        MSt2,
+        Runs
+    ),
+    MMod:free_native_registers(MSt3, [Reg]).
+
+%% A bounded nonnegative input may already imply a run's lower bound.
+%% Its tagged word then needs only the signed upper-bound comparison.
+select_val_known_lower_bound({typed, _, {t_integer, {Low, _} = Range}}, Min, Max, MMod) when
+    is_integer(Low), Low >= 0, Max < 4095
+->
+    term_from_int(Low) >= Min andalso is_small_integer_range(Range, {0, 0}, MMod);
+select_val_known_lower_bound(_, _, _, _) ->
+    false.
+
+op_select_val_int_dispatch0(MMod, MSt0, SrcValue, Sorted, DefaultLabel) ->
     [{MinTagged, _} | _] = Sorted,
     {MaxTagged, _} = lists:last(Sorted),
     N = length(Sorted),
@@ -7758,7 +7827,8 @@ op_select_val_int_dispatch(MMod, MSt0, SrcValue, Entries, DefaultLabel) ->
             Span =< 2 * N andalso Span =< 256
     of
         true ->
-            {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+            {MSt1a, SrcReg} = MMod:move_to_native_register(MSt0, unwrap_typed(SrcValue)),
+            MSt1 = select_val_check_small_integer(MMod, MSt1a, SrcValue, SrcReg, DefaultLabel),
             MSt2 = MMod:jump_table_range_check(MSt1, SrcReg, MinTagged, (Span - 1) * 16),
             MSt3 = MMod:jump_to_label(MSt2, DefaultLabel),
             MSt4 = MMod:jump_table_dispatch(MSt3),
