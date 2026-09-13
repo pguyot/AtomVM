@@ -690,7 +690,9 @@ static TermCompareResult map_exact_equals(term t, term other, int size, GlobalCo
 // equal only to themselves, lists and same-header tuples are walked inline,
 // and the remaining boxed pairs (binaries, floats, big integers, maps, funs,
 // external terms) are delegated per pair to the generic comparator.
-static TermCompareResult term_exact_equals(term t, term other, GlobalContext *global)
+static NOINLINE TermCompareResult term_exact_equals_general(term t, term other, GlobalContext *global);
+
+static inline TermCompareResult term_exact_equals(term t, term other, GlobalContext *global)
 {
     // Stackless prefix for the dominant shallow cases (the Erlang compiler
     // compares #b_var{}-style records constantly): identical terms, distinct
@@ -701,6 +703,11 @@ static TermCompareResult term_exact_equals(term t, term other, GlobalContext *gl
     if (term_exact_equals_shallow(t, other, &shallow)) {
         return shallow ? TermEquals : TermLessThan;
     }
+    return term_exact_equals_general(t, other, global);
+}
+
+static NOINLINE TermCompareResult term_exact_equals_general(term t, term other, GlobalContext *global)
+{
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;
@@ -830,6 +837,7 @@ done:
 #define TERM_COMPARE_INLINE_DEPTH 6
 
 static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts, GlobalContext *global, int depth);
+static NOINLINE TermCompareResult term_compare_general(term t, term other, TermCompareOpts opts, GlobalContext *global);
 
 TermCompareResult term_compare(term t, term other, TermCompareOpts opts, GlobalContext *global)
 {
@@ -982,6 +990,13 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
         }
     }
 
+    return term_compare_general(t, other, opts, global);
+}
+
+// Keep the traversal stack and general dispatch out of the bounded recursive
+// fast paths, so nested scalar records do not reserve the full walker's frame.
+static NOINLINE TermCompareResult term_compare_general(term t, term other, TermCompareOpts opts, GlobalContext *global)
+{
     struct TempStack temp_stack;
     if (UNLIKELY(temp_stack_init(&temp_stack) != TempStackOk)) {
         return TermCompareMemoryAllocFail;

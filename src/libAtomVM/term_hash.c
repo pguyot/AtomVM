@@ -56,9 +56,10 @@
 #define LARGE_PRIME_FUNCTION 16780621
 
 static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global);
+static uint32_t NOINLINE hash_term_complex(term t, uint32_t h, GlobalContext *global);
 
 // Accumulates the entries of a map into an order-independent sum; see the map
-// case of hash_term_incr.
+// case of hash_term_complex.
 struct MapHashAccumulator
 {
     uint32_t sum;
@@ -222,13 +223,21 @@ static uint32_t hash_function(term t, uint32_t h, GlobalContext *global)
     return h * LARGE_PRIME_FUNCTION;
 }
 
-static uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global)
+// Keep scalar hashing inline in recursive folds. Entering the complex walker
+// saves registers for traversal state that atoms and integers never need.
+static inline uint32_t hash_term_incr(term t, uint32_t h, GlobalContext *global)
 {
     if (term_is_atom(t)) {
         return hash_atom(t, h, global);
     } else if (term_is_any_integer(t)) {
         return hash_integer(t, h, global);
-    } else if (term_is_float(t)) {
+    }
+    return hash_term_complex(t, h, global);
+}
+
+static uint32_t NOINLINE hash_term_complex(term t, uint32_t h, GlobalContext *global)
+{
+    if (term_is_float(t)) {
         return hash_float(t, h, global);
     } else if (term_is_local_pid(t)) {
         return hash_local_pid(t, h, global);
