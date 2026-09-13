@@ -43,7 +43,9 @@
     cmp/3,
     tst/3,
     ldr/3,
+    ldrd/3,
     str/3,
+    strd/3,
     lsl/3,
     lsl/4,
     lsr/3,
@@ -502,6 +504,45 @@ str(Cond, Rd, {Rn, Rm}) when is_atom(Rm) ->
     Instr =
         (CondNum bsl 28) bor (2#011 bsl 25) bor (1 bsl 24) bor (1 bsl 23) bor
             (RnNum bsl 16) bor (RdNum bsl 12) bor RmNum,
+    <<Instr:32/little>>.
+
+%% LDRD/STRD Rt, Rt2, [Rn, #offset] -- the doubleword pair form.
+%% Format: cond[31:28] 000 P[24] U[23] 1 W[21] L[20] Rn[19:16] Rt[15:12]
+%%         imm4H[11:8] 11x1[7:4] imm4L[3:0], with the low nibble 1101 for a
+%%         load and 1111 for a store. Rt must be an even register and Rt2 is
+%%         always Rt+1, so only Rt is encoded; lr is not allowed (Rt2 would be
+%%         pc). The 8-bit offset is much smaller than ldr/str's 12 bits.
+-spec ldrd(cc(), arm_gpr_register(), {arm_gpr_register(), integer()}) -> binary().
+ldrd(Cond, Rt, {Rn, Offset}) ->
+    ldrd_strd(Cond, Rt, Rn, Offset, 1).
+
+-spec strd(cc(), arm_gpr_register(), {arm_gpr_register(), integer()}) -> binary().
+strd(Cond, Rt, {Rn, Offset}) ->
+    ldrd_strd(Cond, Rt, Rn, Offset, 0).
+
+ldrd_strd(Cond, Rt, Rn, Offset, Load) when is_integer(Offset) ->
+    CondNum = cond_to_num(Cond),
+    RtNum = reg_to_num(Rt),
+    RnNum = reg_to_num(Rn),
+    %% Rt2 is implicitly Rt+1: the pair must be even-aligned and cannot be
+    %% r14/r15.
+    true = (RtNum rem 2 =:= 0 andalso RtNum =< 12),
+    {U, AbsOffset} =
+        if
+            Offset >= 0 -> {1, Offset};
+            true -> {0, -Offset}
+        end,
+    true = (AbsOffset =< 255),
+    Op =
+        case Load of
+            1 -> 2#1101;
+            0 -> 2#1111
+        end,
+    %% P=1 (offset addressing), U, bit22=1 (immediate), W=0, bit20=0
+    Instr =
+        (CondNum bsl 28) bor (1 bsl 24) bor (U bsl 23) bor (1 bsl 22) bor
+            (RnNum bsl 16) bor (RtNum bsl 12) bor ((AbsOffset bsr 4) bsl 8) bor
+            (Op bsl 4) bor (AbsOffset band 16#F),
     <<Instr:32/little>>.
 
 %%-----------------------------------------------------------------------------
