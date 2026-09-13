@@ -255,3 +255,80 @@ having the hash to hand.)
 
 Not worth doing, with the measurement that says so: a hash in the boxed
 header (above), and a name prefix in the atom term (the `erl_parse` row).
+
+## The rank, re-measured on the finished baseline — 2026-09-13
+
+Idea 3 above was built on `w30/atom-rank` (the code lives in that branch's
+`tools/dev/atom-rank-prototype.patch`, not as tracked source): every atom
+carries a 32-bit order label, atom ordering is a label compare and nothing
+else, `sort_key` and the name comparison are deleted, new atoms are labelled
+in the gaps their merged batch lands in, and only gap exhaustion re-strides.
+It applies to the finished baseline with a three-way merge, and passes the
+Erlang and JIT suites on AArch64 **and on 32-bit arm32**, which it had never
+been run on before.
+
+### It does not move the compiler
+
+Eleven alternating rounds, two warmups, identical AOT payloads; ratio above
+1.0 means the rank is faster.
+
+| file | baseline | with ranks | ratio | 95% CI |
+|---|---:|---:|---:|---:|
+| `stdlib/unicode_util` | 2122.6 ms | 2117.3 ms | 1.0020 | 0.9993-1.0045 |
+| `stdlib/erl_parse` | 1616.9 ms | 1624.3 ms | 0.9981 | 0.9947-1.0017 |
+| `stdlib/lists` | 204.5 ms | 207.4 ms | **0.9787** | **0.9657-0.9898** |
+| `compiler/beam_ssa_opt` | 428.9 ms | 431.9 ms | 0.9953 | 0.9900-0.9998 |
+
+A control run of the same harness against **two builds of identical source**
+(different worktrees, so different paths and code layout) gives `erl_parse`
+0.9943 with a CI of 0.9885-0.9996 and `lists` 0.9935 (0.9833-1.0030). That is
+this measurement's noise floor: **an A/B of two separately built binaries
+resolves nothing below about 0.6%, CI or no CI.** Only `lists` is outside it,
+and it is against the rank -- that file is a 200 ms compile where interning
+dominates and there are almost no atom orderings to win back.
+
+On arm32 (Pi 2, nine rounds) the compiler is likewise a non-event, with much
+wider intervals because each compile is 10-90 s on that box: `erl_parse`
+88,360 ms to 88,386 ms, `lists` 10,323 ms to 10,259 ms, `beam_ssa_opt`
+20,191 ms to 19,981 ms. ESTONE there is 46,125 to 45,655 (0.990x), inside the
+run-to-run spread that host already shows. Peak RSS over an `erl_parse`
+compile is 211,124 KiB against 211,052 KiB -- the 8 bytes per atom are
+invisible at that scale.
+
+### It moves atom ordering by up to five times
+
+`tools/dev/atom_order_bench.erl` sorts 4000 atoms twenty times, in two name
+shapes: one where the first eight bytes tie (the shape the census found in
+`erl_parse`, 63.7% of its atom orderings) and one where they differ in byte
+one.
+
+| | AArch64 baseline | AArch64 rank | arm32 baseline | arm32 rank |
+|---|---:|---:|---:|---:|
+| common prefix | 11,279 us | 5,147 us (**2.19x**) | 473,824 us | 95,537 us (**4.96x**) |
+| distinct prefix | 6,323 us | 4,990 us (**1.27x**) | 359,552 us | 93,782 us (**3.83x**) |
+
+The rank's own time barely moves between the two shapes -- 5.0 against 5.1 ms,
+94 against 96 ms -- which is the property the census asked for: a rank is the
+only one of the three representation ideas whose cost does not depend on what
+the atoms are called. arm32 gains most because it has no `sort_key` at all:
+the cache is compiled out below 64 bits, since the `uint64_t`'s alignment
+doubles `struct HNode` there, so every ordering comparison on a 32-bit target
+walks the names today.
+
+### Verdict
+
+Not merged, and the reason is about workload, not about the rank. The
+comparison it makes cheap has been deliberately removed from the paths we
+benchmark: `maps:from_list` sorts by hash, `maps:keys`/`values` no longer
+materialize a sorted array, the flat-boundary sort in `maps:remove` is gone,
+and `=:=` on two atoms never reaches the comparator. What is left on those
+workloads is its insertion cost, which is what `lists` measures.
+
+It is still the right structure for code that orders atoms in bulk --
+`lists:sort/1` over atoms, `ordsets`/`orddict`/`gb_trees` keyed by atoms,
+`ets` ordered sets -- and on 32-bit targets that is 4-5x, not a percent. The
+cost on those targets is 8 bytes per atom of new RAM (the labels plus the
+by-name index, with nothing given back, since `sort_key` is already compiled
+out) plus retired label arrays that only a reclamation scheme frees. If that
+trade is ever wanted, the thing to fix first is the per-batch insertion cost,
+which is the only measured regression.
