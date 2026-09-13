@@ -324,7 +324,9 @@ def compile_once(executable, sources, includes, timeout):
         command = [str(executable), "-o", output, *includes, *map(str, sources)]
         start = time.perf_counter()
         try:
-            proc = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+            # Drain a pipe so communicate wakes on EOF; wait(timeout) with
+            # DEVNULL polls in up to 50 ms steps on POSIX, quantizing timings.
+            proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
         except subprocess.TimeoutExpired:
             return float("inf"), set(), "timeout"
         elapsed = time.perf_counter() - start
