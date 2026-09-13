@@ -19,6 +19,8 @@ buries.
 """
 import argparse
 import glob
+import hashlib
+import json
 import random
 import statistics
 import subprocess
@@ -29,6 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OTP = ROOT.parent / "otp"
+APP_MACROS = {"compiler": ['-DCOMPILER_VSN="0"'], "crypto": ['-DVSN="5.5.3"']}
 
 
 def includes_for(otp, app):
@@ -39,7 +42,7 @@ def includes_for(otp, app):
     inc += ["-I", str(otp / "erts/include"), "-I", str(otp / "lib")]
     for directory in sorted(glob.glob(str(otp / "lib/*/src"))):
         inc += ["-I", directory]
-    return inc
+    return inc + APP_MACROS.get(app, [])
 
 
 def compile_once(executable, source, inc):
@@ -75,9 +78,19 @@ def main():
                         help="app/module pairs")
     parser.add_argument("--runs", type=int, default=21)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--output", type=Path, help="save raw samples and artifact hashes as JSON")
     args = parser.parse_args()
 
     engines = [(args.a_label, args.a), (args.b_label, args.b)]
+    if args.a_label == args.b_label:
+        parser.error("engine labels must differ")
+    result = {
+        "engines": {label: {"path": str(exe.resolve()),
+                             "sha256": hashlib.sha256(exe.read_bytes()).hexdigest()}
+                    for label, exe in engines},
+        "otp": str(args.otp.resolve()), "runs": args.runs, "warmup": args.warmup,
+        "files": {},
+    }
     for spec in args.files:
         app, module = spec.split("/")
         source = args.otp / "lib" / app / "src" / f"{module}.erl"
@@ -94,6 +107,12 @@ def main():
         a = samples[args.a_label]
         b = samples[args.b_label]
         low, high = boot_ci(a, b)
+        result["files"][spec] = {"samples_seconds": samples,
+                                 "ratio_a_over_b": sum(a) / sum(b),
+                                 "ci95": [low, high]}
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(result, indent=2) + "\n")
         print(f"{spec}: {args.a_label}={statistics.median(a) * 1000:.1f}ms "
               f"{args.b_label}={statistics.median(b) * 1000:.1f}ms "
               f"A/B={sum(a) / sum(b):.4f}x (95% CI {low:.4f}-{high:.4f})", flush=True)

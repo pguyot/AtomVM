@@ -1,0 +1,280 @@
+--- a/libs/jit/src/jit.erl
++++ b/libs/jit/src/jit.erl
+@@ -142,6 +142,7 @@
+     %% never observed before being overwritten. emit_pass skips them
+     %% entirely — smaller and faster code on every backend.
+     dead_moves = #{} :: #{non_neg_integer() => true},
++    live_masks = #{} :: #{non_neg_integer() => non_neg_integer()},
+     %% Size of the opcode stream, to turn a match context tail size into
+     %% the current opcode's byte offset.
+     code_size = 0 :: non_neg_integer(),
+@@ -295,6 +296,7 @@
+         live_capable = LiveCapable,
+         hot_capable = HotCapable,
+         dead_moves = DeadMoves,
++        live_masks = LiveMasks,
+         code_size = byte_size(Opcodes),
+         line_offsets = [],
+         current_line = undefined,
+@@ -1996,9 +1998,17 @@
+     {MSt3, Dest, Rest6} = decode_dest(Rest5, MMod, MSt2),
+     {BifModule, BifFunName, 2} = ImportResolver(Bif),
+     ?TRACE("OP_GC_BIF2 ~p, ~p, ~p, ~p, ~p, ~p\n", [FailLabel, Live, Bif, Arg1, Arg2, Dest]),
+-    MSt4 = op_gc_bif2(MMod, MSt3, FailLabel, Live, Bif, BifModule, BifFunName, Arg1, Arg2, Dest),
+-    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+-    emit_pass(Rest6, MMod, MSt4, State0);
++    case try_fuse_bsl_test(BifModule, BifFunName, Arg1, Arg2, Dest, Rest6, MMod, MSt3, State0) of
++        {fused, MSt4, Rest7} ->
++            ?ASSERT_ALL_NATIVE_FREE(MSt4),
++            emit_pass(Rest7, MMod, MSt4, State0);
++        not_fused ->
++            MSt4 = op_gc_bif2(
++                MMod, MSt3, FailLabel, Live, Bif, BifModule, BifFunName, Arg1, Arg2, Dest
++            ),
++            ?ASSERT_ALL_NATIVE_FREE(MSt4),
++            emit_pass(Rest6, MMod, MSt4, State0)
++    end;
+ % 129
+ emit_pass(<<?OP_IS_BITSTR, Rest0/binary>>, MMod, MSt0, State0) ->
+     ?ASSERT_ALL_NATIVE_FREE(MSt0),
+@@ -6496,6 +6506,154 @@
+             op_gc_bif2_mul_fallback(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+     end.
+ 
++%% Fold a safe shift into an immediately following equality test when the
++%% shifted value is unobservable on both outgoing paths. Restrict speculative
++%% decoding to short x registers and literal integers: it emits no code.
++try_fuse_bsl_test(
++    erlang,
++    'bsl',
++    {typed, {x_reg, SrcX}, {t_integer, Range}} = Src,
++    ShiftTerm,
++    {x_reg, DestX},
++    Rest,
++    MMod,
++    MSt,
++    #state{live_masks = Masks}
++) when
++    SrcX < 16,
++    DestX < 16,
++    is_integer(ShiftTerm),
++    ShiftTerm band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG
++->
++    Shift = ShiftTerm bsr 4,
++    case
++        Shift > 0 andalso Shift < MMod:word_size() * 8 - 4 andalso
++            can_inline_bsl(Range, Shift, MMod)
++    of
++        true ->
++            fuse_bsl_comparison(Rest, DestX, Src, Shift, MMod, MSt, Masks);
++        false ->
++            not_fused
++    end;
++try_fuse_bsl_test(_, _, _, _, _, _, _, _, _) ->
++    not_fused.
++
++fuse_bsl_comparison(<<Op, Rest0/binary>>, DestX, Src, Shift, MMod, MSt, Masks) when
++    Op =:= ?OP_IS_EQ_EXACT; Op =:= ?OP_IS_NOT_EQ_EXACT
++->
++    {Label, Rest1} = decode_label(Rest0),
++    case scan_short_x_register(Rest1) of
++        {ok, DestX, Rest2} ->
++            case scan_int_compact_term(Rest2) of
++                {ok, Value, Rest3} ->
++                    case
++                        maps:get(Label, Masks, 16#FFFFFFFF) band (1 bsl DestX) =:= 0 andalso
++                            jit_liveness:x_register_dead(Rest3, DestX, Masks)
++                    of
++                        true ->
++                            {Min, Max} = small_integer_bounds(MMod),
++                            Preimage = Value bsr Shift,
++                            Possible =
++                                (Preimage bsl Shift) =:= Value andalso
++                                    Preimage >= Min andalso Preimage =< Max,
++                            MSt1 =
++                                case {Possible, Op} of
++                                    {true, ?OP_IS_EQ_EXACT} ->
++                                        op_is_eq_exact(
++                                            MMod, MSt, Label, Src, term_from_int(Preimage)
++                                        );
++                                    {true, ?OP_IS_NOT_EQ_EXACT} ->
++                                        op_is_not_eq_exact(
++                                            MMod, MSt, Label, Src, term_from_int(Preimage)
++                                        );
++                                    {false, ?OP_IS_EQ_EXACT} ->
++                                        MMod:jump_to_label(MSt, Label);
++                                    {false, ?OP_IS_NOT_EQ_EXACT} ->
++                                        MSt
++                                end,
++                            {fused, MSt1, Rest3};
++                        false ->
++                            not_fused
++                    end;
++                _ ->
++                    not_fused
++            end;
++        _ ->
++            not_fused
++    end;
++fuse_bsl_comparison(<<?OP_SELECT_VAL, Rest0/binary>>, DestX, Src, Shift, MMod, MSt, Masks) ->
++    case scan_short_x_register(Rest0) of
++        {ok, DestX, Rest1} ->
++            {Default, Rest2} = decode_label(Rest1),
++            {ListSize, Rest3} = decode_extended_list_header(Rest2),
++            case
++                ListSize =< 8 andalso scan_select_val_int_entries(Rest3, ListSize div 2, MMod, [])
++            of
++                {ok, Entries, Rest4} ->
++                    Labels = [Default | [L || {_, L} <- Entries]],
++                    case
++                        lists:all(
++                            fun(L) -> maps:get(L, Masks, 16#FFFFFFFF) band (1 bsl DestX) =:= 0 end,
++                            Labels
++                        )
++                    of
++                        true ->
++                            WordBits = MMod:word_size() * 8,
++                            {Min, Max} = small_integer_bounds(MMod),
++                            Preimages = lists:filtermap(
++                                fun({Tagged, Label}) ->
++                                    Signed =
++                                        case Tagged band (1 bsl (WordBits - 1)) of
++                                            0 -> Tagged;
++                                            _ -> Tagged - (1 bsl WordBits)
++                                        end,
++                                    Value = Signed bsr 4,
++                                    Preimage = Value bsr Shift,
++                                    case
++                                        (Preimage bsl Shift) =:= Value andalso Preimage >= Min andalso
++                                            Preimage =< Max
++                                    of
++                                        true -> {true, {term_from_int(Preimage), Label}};
++                                        false -> false
++                                    end
++                                end,
++                                Entries
++                            ),
++                            {MSt1, Reg} = MMod:move_to_native_register(MSt, unwrap_typed(Src)),
++                            MSt2 = lists:foldl(
++                                fun({Value, Label}, S) ->
++                                    cond_jump_to_label({Reg, '==', Value}, Label, MMod, S)
++                                end,
++                                MSt1,
++                                Preimages
++                            ),
++                            MSt3 = MMod:free_native_registers(MSt2, [Reg]),
++                            {fused, MMod:jump_to_label(MSt3, Default), Rest4};
++                        false ->
++                            not_fused
++                    end;
++                _ ->
++                    not_fused
++            end;
++        _ ->
++            not_fused
++    end;
++fuse_bsl_comparison(_, _, _, _, _, _, _) ->
++    not_fused.
++
++scan_short_x_register(<<?COMPACT_EXTENDED_TYPED_REGISTER, Rest/binary>>) ->
++    case scan_short_x_register(Rest) of
++        {ok, X, Rest1} ->
++            {_Type, Rest2} = decode_literal(Rest1),
++            {ok, X, Rest2};
++        _ ->
++            nomatch
++    end;
++scan_short_x_register(<<X:4, ?COMPACT_XREG:4, Rest/binary>>) ->
++    {ok, X, Rest};
++scan_short_x_register(_) ->
++    nomatch.
++
+ % Check if left shift can be inlined based on type range and shift amount
+ can_inline_bsl(Range1, ShiftAmount, MMod) ->
+     {MinSafe, MaxSafe} = small_integer_bounds(MMod),
+diff --git a/libs/jit/src/jit_liveness.erl b/libs/jit/src/jit_liveness.erl
+index 23a91def5..90b72e51d 100644
+--- a/libs/jit/src/jit_liveness.erl
++++ b/libs/jit/src/jit_liveness.erl
+@@ -46,6 +46,7 @@
+ -module(jit_liveness).
+ 
+ -export([label_read_masks/1, label_analysis/1, analysis/1, first_unknown/1]).
++-export([x_register_dead/3]).
+ 
+ -include("opcodes.hrl").
+ -include("compact_term.hrl").
+@@ -105,6 +106,40 @@ first_unknown(<<Op, _/binary>> = Bin) ->
+         {call, _, _, _, _, Rest} -> first_unknown(Rest)
+     end.
+ 
++%% Query a short suffix without retaining per-instruction liveness maps.
++%% GC roots count as reads, as in the existing dead-move analysis. Unknown
++%% instructions and an exhausted scan budget conservatively keep the value.
++x_register_dead(Code, X, Masks) when X >= 0, X < 32 ->
++    x_register_dead0(Code, 1 bsl X, Masks, 64).
++
++x_register_dead0(<<>>, _Bit, _Masks, _Budget) ->
++    false;
++x_register_dead0(_Code, _Bit, _Masks, 0) ->
++    false;
++x_register_dead0(Code, Bit, Masks, Budget) ->
++    case op_scan(Code) of
++        {label, Label, _} ->
++            mask_in(Label, Masks) band Bit =:= 0;
++        {plain, Reads, Writes, Rest} ->
++            x_register_dead_step(Reads, Writes, Rest, Bit, Masks, Budget);
++        {branch, Reads, Writes, Labels, Rest} ->
++            masks_union(Labels, Masks) band Bit =:= 0 andalso
++                x_register_dead_step(Reads, Writes, Rest, Bit, Masks, Budget);
++        {terminator, Reads, Labels, _} ->
++            (mask_of(Reads) bor masks_union(Labels, Masks)) band Bit =:= 0;
++        {call, Reads, Writes, _Target, false, Rest} ->
++            x_register_dead_step(Reads, Writes, Rest, Bit, Masks, Budget);
++        {call, Reads, _Writes, Target, true, _} ->
++            (mask_of(Reads) bor mask_in(Target, Masks)) band Bit =:= 0;
++        unknown ->
++            false
++    end.
++
++x_register_dead_step(Reads, Writes, Rest, Bit, Masks, Budget) ->
++    mask_of(Reads) band Bit =:= 0 andalso
++        (mask_of(Writes) band Bit =/= 0 orelse
++            x_register_dead0(Rest, Bit, Masks, Budget - 1)).
++
+ %% Per-block state while scanning: Gen (read-before-written mask), Kill
+ %% (written mask), Succs ([{label, L, KillSnapshot} | exit]).
+ collect_blocks(<<>>, CurLabel, Gen, _Kill, Succs, Acc) ->
+diff --git a/tests/libs/jit/jit_liveness_tests.erl b/tests/libs/jit/jit_liveness_tests.erl
+index bec853bd6..a513f9ed4 100644
+--- a/tests/libs/jit/jit_liveness_tests.erl
++++ b/tests/libs/jit/jit_liveness_tests.erl
+@@ -65,6 +65,28 @@ basic_move_test() ->
+     Masks = masks(<<?LABEL, ?LIT(1), ?MOVE, ?X(0), ?X(1), ?RETURN, ?INT_CALL_END>>),
+     ?assertEqual(2#1, maps:get(1, Masks)).
+ 
++x_register_dead_suffix_test() ->
++    Read = <<?MOVE, ?X(2), ?X(0), ?RETURN>>,
++    Write = <<?MOVE, ?ATOM(0), ?X(2), Read/binary>>,
++    ?assertNot(jit_liveness:x_register_dead(Read, 2, #{})),
++    ?assert(jit_liveness:x_register_dead(Write, 2, #{})),
++    ?assertNot(jit_liveness:x_register_dead(<<?RETURN>>, 0, #{})),
++    ?assert(jit_liveness:x_register_dead(<<?RETURN>>, 2, #{})),
++    ?assertNot(jit_liveness:x_register_dead(<<255>>, 2, #{})),
++    ?assertNot(jit_liveness:x_register_dead(<<>>, 2, #{})).
++
++x_register_dead_gc_roots_test() ->
++    ?assertNot(jit_liveness:x_register_dead(<<?TEST_HEAP, ?LIT(1), ?LIT(3), ?RETURN>>, 2, #{})),
++    ?assert(jit_liveness:x_register_dead(<<?TEST_HEAP, ?LIT(1), ?LIT(2), ?RETURN>>, 2, #{})).
++
++x_register_dead_branch_test() ->
++    Code = <<?IS_NIL, ?LABEL_OP(2), ?X(0), ?MOVE, ?ATOM(0), ?X(2), ?RETURN>>,
++    ?assertNot(jit_liveness:x_register_dead(Code, 2, #{2 => 4})),
++    ?assert(jit_liveness:x_register_dead(Code, 2, #{2 => 0})),
++    ?assertNot(jit_liveness:x_register_dead(Code, 2, #{})),
++    ?assertNot(jit_liveness:x_register_dead(<<?LABEL, ?LIT(2)>>, 2, #{2 => 4})),
++    ?assert(jit_liveness:x_register_dead(<<?LABEL, ?LIT(2)>>, 2, #{2 => 0})).
++
+ branch_kill_snapshot_before_write_test() ->
+     %% label 1; is_nil x0 -> 2; move x0, x1; return; label 2; badmatch x1.
+     %% The branch to 2 is taken BEFORE the x1 write, so in(2)'s x1 read

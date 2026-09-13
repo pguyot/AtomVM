@@ -1,0 +1,256 @@
+diff --git a/libs/jit/src/jit.erl b/libs/jit/src/jit.erl
+index b5a1569da..17f8fd892 100644
+--- a/libs/jit/src/jit.erl
++++ b/libs/jit/src/jit.erl
+@@ -5913,8 +5913,24 @@ op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1,
+             )
+     end.
+ 
+-%% Untag the dividend in place, divide by the literal, re-tag into Dest.
++%% Divide a checked small integer by a positive literal. Backends may operate
++%% on the tagged value directly for powers of two.
+ divrem_lit_smallint_body(MMod, MSt0, BackendOp, R1, DivisorValue, Dest) ->
++    case
++        DivisorValue > 0 andalso (DivisorValue band (DivisorValue - 1)) =:= 0 andalso
++            erlang:function_exported(MMod, divrem_pow2_tagged, 4)
++    of
++        true ->
++            {MSt1, ResReg} = MMod:divrem_pow2_tagged(
++                MSt0, R1, log2_pow2(DivisorValue), BackendOp
++            ),
++            MSt2 = MMod:move_to_vm_register(MSt1, ResReg, Dest),
++            MMod:free_native_registers(MSt2, [ResReg, R1, Dest]);
++        false ->
++            divrem_lit_smallint_native(MMod, MSt0, BackendOp, R1, DivisorValue, Dest)
++    end.
++
++divrem_lit_smallint_native(MMod, MSt0, BackendOp, R1, DivisorValue, Dest) ->
+     {MSt1, R1} = MMod:shift_right_arith(MSt0, {free, R1}, 4),
+     {MSt2, Divisor} = MMod:move_to_native_register(MSt1, DivisorValue),
+     {MSt3, ResReg} = MMod:BackendOp(MSt2, R1, Divisor),
+@@ -6865,15 +6881,14 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
+     case can_inline_pow2_div(Range1, Arg2Value, MMod) of
+         true ->
+             % Power-of-2 division: X div 2^k = X >> k for non-negative X
+-            % The shift by (4+Shift) discards both the 4 tag bits and applies
+-            % the division shift in one operation, so no AND to strip tags is needed.
+             Shift = log2_pow2(Arg2Value),
+             {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+-            {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4 + Shift),
+-            MSt3 = MMod:shift_left(MSt2, Reg1, 4),
+-            MSt4 = MMod:or_(MSt3, Reg1, ?TERM_INTEGER_TAG),
+-            MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
+-            MMod:free_native_registers(MSt5, [Reg1, Dest]);
++            %% Retain the integer scale through the shift; OR restores the
++            %% low tag bits without an untag/retag pair.
++            {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, Shift),
++            MSt3 = MMod:or_(MSt2, Reg1, ?TERM_INTEGER_TAG),
++            MSt4 = MMod:move_to_vm_register(MSt3, Reg1, Dest),
++            MMod:free_native_registers(MSt4, [Reg1, Dest]);
+         false ->
+             case can_inline_div(Range1, Range2, MMod, MSt0) of
+                 true ->
+diff --git a/libs/jit/src/jit_aarch64.erl b/libs/jit/src/jit_aarch64.erl
+index e4c1ed8b8..a59451cd3 100644
+--- a/libs/jit/src/jit_aarch64.erl
++++ b/libs/jit/src/jit_aarch64.erl
+@@ -97,6 +97,7 @@
+     mul_overflow/3,
+     div_/3,
+     rem_/3,
++    divrem_pow2_tagged/4,
+     supports_div/1,
+     supports_fp/1,
+     float_op/5,
+@@ -4378,6 +4379,60 @@ rem_(
+     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, TempReg), DividendReg),
+     {State#state{stream = Stream1, regs = Regs1}, DividendReg}.
+ 
++%% Truncate signed division toward zero while retaining the small-integer
++%% tag. For t = 16*x + 15, bias = (sign(t) & (2^k-1)) << 4:
++%%   tag(x div 2^k) = ((t + bias) asr k) | 15
++%%   tag(x rem 2^k) = ((t + bias) & (((2^k-1) << 4) | 15)) - bias.
++%% Only negative values receive a positive bias, so the addition cannot
++%% overflow even at the small-integer boundaries. The caller checked the tag.
++divrem_pow2_tagged(State, Reg, 0, div_) ->
++    {State, Reg};
++divrem_pow2_tagged(State0, Reg, 0, rem_) ->
++    {move_to_native_register(State0, ?TERM_INTEGER_TAG, Reg), Reg};
++divrem_pow2_tagged(
++    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
++    Reg,
++    1,
++    div_
++) ->
++    %% For a negative t, adding one carries through its all-one tag into
++    %% the integer field. After shifting and retagging this rounds x/2
++    %% toward zero. ADD extracts the sign bit in its shifted operand.
++    Code = <<
++        (jit_aarch64_asm:add(Reg, Reg, Reg, {lsr, 63}))/binary,
++        (jit_aarch64_asm:asr(Reg, Reg, 1))/binary,
++        (jit_aarch64_asm:orr(Reg, Reg, ?TERM_INTEGER_TAG))/binary
++    >>,
++    {State#state{stream = StreamModule:append(Stream0, Code),
++        regs = jit_regs:invalidate_reg(Regs0, Reg)}, Reg};
++divrem_pow2_tagged(
++    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
++    Reg,
++    Shift,
++    Op
++) ->
++    BiasReg = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(Reg))),
++    Mask = ((1 bsl Shift) - 1) bsl 4,
++    I1 = jit_aarch64_asm:asr(BiasReg, Reg, 63),
++    I2 = jit_aarch64_asm:and_(BiasReg, BiasReg, Mask),
++    I3 = jit_aarch64_asm:add(Reg, Reg, BiasReg),
++    Tail =
++        case Op of
++            div_ ->
++                <<
++                    (jit_aarch64_asm:asr(Reg, Reg, Shift))/binary,
++                    (jit_aarch64_asm:orr(Reg, Reg, ?TERM_INTEGER_TAG))/binary
++                >>;
++            rem_ ->
++                <<
++                    (jit_aarch64_asm:and_(Reg, Reg, Mask bor ?TERM_INTEGER_TAG))/binary,
++                    (jit_aarch64_asm:sub(Reg, Reg, BiasReg))/binary
++                >>
++        end,
++    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary, Tail/binary>>),
++    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, BiasReg), Reg),
++    {State#state{stream = Stream1, regs = Regs1}, Reg}.
++
+ %% aarch64 always supports native sdiv.
+ -spec supports_div(state()) -> boolean().
+ supports_div(_State) -> true.
+diff --git a/libs/jit/src/jit_aarch64_asm.erl b/libs/jit/src/jit_aarch64_asm.erl
+index 0cb0d1a40..dd567a313 100644
+--- a/libs/jit/src/jit_aarch64_asm.erl
++++ b/libs/jit/src/jit_aarch64_asm.erl
+@@ -191,13 +191,13 @@ add(Rd, Rn, Rm) when is_atom(Rd), is_atom(Rn), is_atom(Rm) ->
+     add(Rd, Rn, Rm, {lsl, 0}).
+ 
+ %% ADD (shifted register)
+-%% ADD Rd, Rn, Rm, {lsl, #amount}
++%% ADD Rd, Rn, Rm, {lsl|lsr, #amount}
+ %% or ADD (immediate, shifted) ADD Rd, Rn, #imm12, lsl #12
+ -spec add(
+     aarch64_gpr_register(),
+     aarch64_gpr_register(),
+     aarch64_gpr_register() | 0..4095,
+-    {lsl, 0..63}
++    {lsl | lsr, 0..63}
+ ) ->
+     binary().
+ add(Rd, Rn, Imm, {lsl, 12}) when
+@@ -206,16 +206,18 @@ add(Rd, Rn, Imm, {lsl, 12}) when
+     RdNum = reg_to_num(Rd),
+     RnNum = reg_to_num(Rn),
+     <<(16#91400000 bor (Imm bsl 10) bor (RnNum bsl 5) bor RdNum):32/little>>;
+-add(Rd, Rn, Rm, {lsl, Amount}) when
+-    is_atom(Rd), is_atom(Rn), is_atom(Rm), is_integer(Amount), Amount >= 0, Amount =< 63
++add(Rd, Rn, Rm, {Shift, Amount}) when
++    is_atom(Rd), is_atom(Rn), is_atom(Rm), is_integer(Amount), Amount >= 0, Amount =< 63,
++    (Shift =:= lsl orelse Shift =:= lsr)
+ ->
+     RdNum = reg_to_num(Rd),
+     RnNum = reg_to_num(Rn),
+     RmNum = reg_to_num(Rm),
++    ShiftBits = case Shift of lsl -> 0; lsr -> 1 bsl 22 end,
+     %% AArch64 ADD (shifted register) encoding: 10001011000mmmmmiiiiiinnnnndddddd
+     %% 0x8B000000 | Rm << 16 | Amount << 10 | Rn << 5 | Rd
+     <<
+-        (16#8B000000 bor (RmNum bsl 16) bor ((Amount band 16#3F) bsl 10) bor (RnNum bsl 5) bor
++        (16#8B000000 bor ShiftBits bor (RmNum bsl 16) bor ((Amount band 16#3F) bsl 10) bor (RnNum bsl 5) bor
+             RdNum):32/little
+     >>.
+ 
+diff --git a/tests/erlang_tests/test_inline_arith.erl b/tests/erlang_tests/test_inline_arith.erl
+index 95f44c7f6..e446ffe81 100644
+--- a/tests/erlang_tests/test_inline_arith.erl
++++ b/tests/erlang_tests/test_inline_arith.erl
+@@ -53,6 +53,7 @@
+     wide_div_lit/2,
+     wide_rem_lit/2,
+     untyped_divrem_dense/1,
++    pow2_divrem/2,
+     bignum_then_band/1,
+     lcg_loop/2,
+     square_untyped/1,
+@@ -170,6 +171,47 @@ untyped_mul(X, Y) -> id(X) * id(Y).
+ untyped_div_lit(X) -> id(X) div 3.
+ untyped_rem_lit(X) -> id(X) rem 3.
+ 
++% Literal divisors use the new fast path; the test oracle below uses a
++% runtime divisor. Include the widest positive power fitting a 64-bit small.
++pow2_divrem(0, X) -> {id(X) div 1, id(X) rem 1};
++pow2_divrem(1, X) -> {id(X) div 2, id(X) rem 2};
++pow2_divrem(2, X) -> {id(X) div 4, id(X) rem 4};
++pow2_divrem(4, X) -> {id(X) div 16, id(X) rem 16};
++pow2_divrem(8, X) -> {id(X) div 256, id(X) rem 256};
++pow2_divrem(27, X) -> {id(X) div 134217728, id(X) rem 134217728};
++pow2_divrem(58, X) -> {id(X) div 288230376151711744, id(X) rem 288230376151711744}.
++
++test_pow2_divrem() ->
++    Values = [
++        -(1 bsl 80), -(1 bsl 59) - 1, -(1 bsl 59), -(1 bsl 59) + 1,
++        -257, -256, -255, -17, -16, -15, -3, -2, -1, 0, 1, 2, 3,
++        15, 16, 17, 255, 256, 257, (1 bsl 59) - 1, 1 bsl 59, 1 bsl 80
++    ],
++    lists:foreach(
++        fun(K) ->
++            D = id(1 bsl K),
++            lists:foreach(
++                fun(X) ->
++                    Expected = {X div D, X rem D},
++                    Expected = ?MODULE:pow2_divrem(K, X)
++                end,
++                Values
++            ),
++            lists:foreach(
++                fun(Bad) ->
++                    caught = try ?MODULE:pow2_divrem(K, Bad) of
++                        _ -> failed
++                    catch
++                        error:badarith -> caught
++                    end
++                end,
++                [foo, [], 0.5]
++            )
++        end,
++        [0, 1, 2, 4, 8, 27, 58]
++    ),
++    ok.
++
+ % Dividend the compiler proves is an integer but whose range it does not know,
+ % divided by a literal: {tr,_,{t_integer,any}} against {integer,3}. Neither the
+ % shift-by-power-of-two form nor the unguarded inline divide applies, and the
+@@ -377,6 +419,7 @@ start() ->
+     15 = ?MODULE:rem_by_pow2_large(9999),
+ 
+     % Runtime small-integer div/rem fast path with an untyped dividend.
++    ok = test_pow2_divrem(),
+     0 = ?MODULE:untyped_div_lit(2),
+     1 = ?MODULE:untyped_div_lit(3),
+     33 = ?MODULE:untyped_div_lit(99),
+diff --git a/tests/libs/jit/jit_aarch64_asm_tests.erl b/tests/libs/jit/jit_aarch64_asm_tests.erl
+index 2d7735dcc..67fd1ef4b 100644
+--- a/tests/libs/jit/jit_aarch64_asm_tests.erl
++++ b/tests/libs/jit/jit_aarch64_asm_tests.erl
+@@ -62,6 +62,16 @@ add_test_() ->
+             "add x1, x2, x3, lsl #4",
+             jit_aarch64_asm:add(r1, r2, r3, {lsl, 4})
+         ),
++        ?_assertAsmEqual(
++            <<16#8b431041:32/little>>,
++            "add x1, x2, x3, lsr #4",
++            jit_aarch64_asm:add(r1, r2, r3, {lsr, 4})
++        ),
++        ?_assertAsmEqual(
++            <<16#8b47fce7:32/little>>,
++            "add x7, x7, x7, lsr #63",
++            jit_aarch64_asm:add(r7, r7, r7, {lsr, 63})
++        ),
+         ?_assertAsmEqual(
+             <<16#914800e7:32/little>>,
+             "add x7, x7, #0x200, lsl #12",
