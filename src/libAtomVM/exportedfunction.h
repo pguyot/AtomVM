@@ -66,6 +66,9 @@ enum FunctionType
     ModuleFunction = 4,
     BIFFunctionType = 5,
     GCBIFFunctionType = 6,
+    // NIF contract: no Erlang heap/stack/CP changes, GC, traps or rescheduling.
+    // C allocation and side effects are allowed, as are ordinary exceptions.
+    LeafNIFFunctionType = 8,
 #ifndef AVM_NO_JIT
     ModuleNativeFunction = 7
 #endif

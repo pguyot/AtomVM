@@ -472,7 +472,7 @@ static const struct Nif erase_0_nif = {
 };
 
 static const struct Nif erase_1_nif = {
-    .base.type = NIFFunctionType,
+    .base.type = LeafNIFFunctionType,
     .nif_ptr = nif_erlang_erase_1
 };
 
@@ -517,7 +517,7 @@ static const struct Nif fun_info_nif = {
 };
 
 static const struct Nif is_process_alive_nif = {
-    .base.type = NIFFunctionType,
+    .base.type = LeafNIFFunctionType,
     .nif_ptr = nif_erlang_is_process_alive_1
 };
 
@@ -642,12 +642,12 @@ static const struct Nif tuple_to_list_nif = {
 };
 
 static const struct Nif flat_size_nif = {
-    .base.type = NIFFunctionType,
+    .base.type = LeafNIFFunctionType,
     .nif_ptr = nif_erts_debug_flat_size
 };
 
 static const struct Nif erts_internal_cmp_term_nif = {
-    .base.type = NIFFunctionType,
+    .base.type = LeafNIFFunctionType,
     .nif_ptr = nif_erts_internal_cmp_term
 };
 
@@ -672,7 +672,7 @@ static const struct Nif get_0_nif = {
 };
 
 static const struct Nif put_nif = {
-    .base.type = NIFFunctionType,
+    .base.type = LeafNIFFunctionType,
     .nif_ptr = nif_erlang_put_2
 };
 
@@ -753,6 +753,11 @@ static const struct Nif memory_nif = {
 static const struct Nif monitor_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_erlang_monitor
+};
+
+static const struct Nif demonitor_1_nif = {
+    .base.type = LeafNIFFunctionType,
+    .nif_ptr = nif_erlang_demonitor
 };
 
 static const struct Nif demonitor_nif = {
