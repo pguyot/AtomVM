@@ -94,6 +94,14 @@ ets_result_t ets_delete_object(term name_or_ref, term tuple, Context *ctx);
 ets_result_t ets_to_list_maybe_gc(term name_or_ref, term *ret, Context *ctx);
 ets_result_t ets_first_maybe_gc(term name_or_ref, term *ret, Context *ctx);
 ets_result_t ets_next_maybe_gc(term name_or_ref, term key, term *ret, Context *ctx);
+/**
+ * @brief Return one item of a table's metadata, as ets:info/2 does.
+ *
+ * @details Every supported item (keypos, size, type, name, named_table,
+ * protection) is an immediate term, so this never allocates. An unrecognised
+ * item yields `undefined' rather than an error, matching ets:info/2.
+ */
+ets_result_t ets_info(term name_or_ref, term item, term *ret, Context *ctx);
 
 #ifdef __cplusplus
 }
