@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OTP = ROOT.parent / "otp"
 DEFAULT_BEAM_ERLC = Path("/opt/local/bin/erlc")
-APP_MACROS = {"crypto": ["-DVSN=\"5.5.3\""]}
+APP_MACROS = {"compiler": ['-DCOMPILER_VSN="0"'], "crypto": ['-DVSN="5.5.3"']}
 
 
 def base_includes(otp):
@@ -49,8 +49,11 @@ def compile_once(executable, sources, includes, timeout):
         command = [str(executable), "-o", output, *includes, *map(str, sources)]
         start = time.perf_counter()
         try:
-            proc = subprocess.run(command, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, timeout=timeout)
+            # With DEVNULL and a timeout, POSIX Popen.wait polls in up to
+            # 50 ms steps. A pipe lets communicate wake on EOF instead, so
+            # the timer measures process completion rather than the next poll.
+            proc = subprocess.run(command, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=timeout)
             status = proc.returncode
         except subprocess.TimeoutExpired:
             return float("inf"), set(), "timeout"
