@@ -575,6 +575,38 @@ ms_match_tuple(Pattern, Value, N, Bindings) ->
     end.
 
 %% @private
+%% '$1'..'$9' cover essentially every match spec in practice and are decided
+%% here by a jump on the atom itself. The general case has to spell the atom
+%% out, and atom_to_list allocates -- which this is called often enough to
+%% notice, once per atom of the pattern per object traversed.
+ms_variable('$1') ->
+    {ok, '$1'};
+ms_variable('$2') ->
+    {ok, '$2'};
+ms_variable('$3') ->
+    {ok, '$3'};
+ms_variable('$4') ->
+    {ok, '$4'};
+ms_variable('$5') ->
+    {ok, '$5'};
+ms_variable('$6') ->
+    {ok, '$6'};
+ms_variable('$7') ->
+    {ok, '$7'};
+ms_variable('$8') ->
+    {ok, '$8'};
+ms_variable('$9') ->
+    {ok, '$9'};
+ms_variable('_') ->
+    not_a_variable;
+ms_variable('$_') ->
+    not_a_variable;
+ms_variable('$$') ->
+    not_a_variable;
+ms_variable(true) ->
+    not_a_variable;
+ms_variable(false) ->
+    not_a_variable;
 ms_variable(Atom) ->
     case atom_to_list(Atom) of
         [$$ | Digits] when Digits =/= [] ->
