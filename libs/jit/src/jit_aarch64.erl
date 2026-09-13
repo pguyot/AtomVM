@@ -52,6 +52,7 @@
     call_ext_last_direct/5,
     supports_inline_tuple2_eq/0,
     supports_select_val_binary_search/0,
+    supports_select_val_ranges/0,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -5241,6 +5242,13 @@ supports_inline_tuple2_eq() ->
 %% backends exporting this.
 -spec supports_select_val_binary_search() -> true.
 supports_select_val_binary_search() ->
+    true.
+
+%% Capability marker: the generic layer coalesces consecutive OP_SELECT_VAL
+%% values into ranges tested with a subtract and an unsigned bound compare
+%% (see jit:op_select_val_int_ranges/5) on backends exporting this.
+-spec supports_select_val_ranges() -> true.
+supports_select_val_ranges() ->
     true.
 
 %% Tail-position variant of the *_with_cp_direct calls: no cp is set (the

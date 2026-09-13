@@ -1241,14 +1241,19 @@ emit_pass(<<?OP_SELECT_VAL, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Rest4} =
         case scan_select_val_int_entries(Rest3, N, MMod, []) of
             {ok, Entries, RestAfter} ->
+                Sorted = lists:keysort(1, Entries),
+                Runs = select_val_int_runs(Sorted, []),
                 case
-                    erlang:function_exported(MMod, supports_select_val_binary_search, 0) andalso
-                        N >= 4
+                    N >= 4 andalso
+                        (select_val_ranges_supported(MMod, Runs, Sorted) orelse
+                            erlang:function_exported(
+                                MMod, supports_select_val_binary_search, 0
+                            ))
                 of
                     true ->
                         {
                             op_select_val_int_dispatch(
-                                MMod, MSt1, SrcValue, Entries, DefaultLabel
+                                MMod, MSt1, SrcValue, Sorted, Runs, DefaultLabel
                             ),
                             RestAfter
                         };
@@ -7743,18 +7748,24 @@ scan_int_compact_term(_) ->
 %% Dense value sets become a computed-branch jump table (range check +
 %% indexed br into a row of b instructions, O(1) like BeamAsm); sparse ones
 %% a balanced binary-search tree.
-op_select_val_int_dispatch(MMod, MSt0, SrcValue, Entries, DefaultLabel) ->
-    Sorted = lists:keysort(1, Entries),
-    Runs = select_val_int_runs(Sorted, []),
-    case
-        length(Runs) =< 4 andalso 2 * length(Runs) =< length(Sorted) andalso
-            lists:all(fun({Min, Max, _}) -> Max - Min =< 4095 end, Runs)
-    of
+op_select_val_int_dispatch(MMod, MSt0, SrcValue, Sorted, Runs, DefaultLabel) ->
+    case select_val_ranges_supported(MMod, Runs, Sorted) of
         true ->
             op_select_val_int_ranges(MMod, MSt0, SrcValue, Runs, DefaultLabel);
         false ->
             op_select_val_int_dispatch0(MMod, MSt0, SrcValue, Sorted, DefaultLabel)
     end.
+
+%% A few coalesced ranges replace at least twice as many compares with a
+%% subtract and an unsigned bound test, which a backend advertising
+%% supports_select_val_ranges/0 can emit whether or not it has a jump table.
+select_val_ranges_supported(MMod, Runs, Sorted) ->
+    erlang:function_exported(MMod, supports_select_val_ranges, 0) andalso
+        select_val_ranges_fit(Runs, Sorted).
+
+select_val_ranges_fit(Runs, Sorted) ->
+    length(Runs) =< 4 andalso 2 * length(Runs) =< length(Sorted) andalso
+        lists:all(fun({Min, Max, _}) -> Max - Min =< 4095 end, Runs).
 
 select_val_int_runs([], Acc) ->
     lists:reverse(Acc);
