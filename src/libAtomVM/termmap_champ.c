@@ -194,7 +194,6 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
         return term_invalid_term();
     }
     uint32_t hash = term_hash(key, global);
-    int shift = 0;
     for (;;) {
         const term *body = champ_body(node);
         avm_int_t raw = term_to_int(body[CHAMP_DATAMAP_IDX]);
@@ -210,7 +209,16 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
             return term_invalid_term();
         }
         uint32_t datamap = ((uint32_t) raw) & CHAMP_BITMAP_MASK;
-        uint32_t bit = ((uint32_t) 1) << champ_slot(hash, shift);
+        uint32_t nodemap = (uint32_t) term_to_int(body[CHAMP_NODEMAP_IDX]);
+        uint32_t slot = hash & CHAMP_MASK;
+        // Full internal nodes have no inline entries and store child pointers
+        // in slot order, so their descent needs no population counts.
+        if (datamap == 0 && nodemap == CHAMP_BITMAP_MASK) {
+            node = body[CHAMP_FIRST_ENTRY + slot];
+            hash >>= CHAMP_BITS;
+            continue;
+        }
+        uint32_t bit = ((uint32_t) 1) << slot;
         if (datamap & bit) {
             int i = champ_index(datamap, bit);
             if (champ_key_eq(body[CHAMP_FIRST_ENTRY + 2 * i], key, global)) {
@@ -218,14 +226,13 @@ term termmap_champ_get(term node, term key, GlobalContext *global)
             }
             return term_invalid_term();
         }
-        uint32_t nodemap = (uint32_t) term_to_int(body[CHAMP_NODEMAP_IDX]);
         if (!(nodemap & bit)) {
             return term_invalid_term();
         }
         int entries = __builtin_popcount(datamap);
         int i = champ_index(nodemap, bit);
         node = body[CHAMP_FIRST_ENTRY + 2 * entries + i];
-        shift += CHAMP_BITS;
+        hash >>= CHAMP_BITS;
     }
 }
 
