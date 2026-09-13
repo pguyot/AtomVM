@@ -60,15 +60,17 @@ test_match() ->
 %% so it has to find the key at the table's own keypos, not at element 1.
 test_keypos() ->
     T = ets:new(test, [{keypos, 2}]),
-    true = ets:insert(T, [{a, 1}, {b, 2}, {c, 1}]),
-    [[a]] = ets:match(T, {'$1', 2}),
-    [[c]] = ets:match(T, {'$1', 1, '_'}),
-    [[a], [c]] = lists:sort(ets:match(T, {'$1', '$2'})),
+    true = ets:insert(T, [{a, 1}, {b, 2}, {c, 3}]),
+    [[a]] = ets:match(T, {'$1', 1}),
+    [[c]] = ets:match(T, {'$1', 3}),
+    [] = ets:match(T, {'$1', 9}),
+    [[a, 1], [b, 2], [c, 3]] = lists:sort(ets:match(T, {'$1', '$2'})),
     [{b, 2}] = ets:select(T, [{{'_', 2}, [], ['$_']}]),
     % Ground at element 1 but not at the keypos: still a full traversal.
     [[1]] = ets:match(T, {a, '$1'}),
     true = ets:match_delete(T, {'_', 2}),
     [] = ets:match(T, {'$1', 2}),
+    [[a, 1], [c, 3]] = lists:sort(ets:match(T, {'$1', '$2'})),
     ok.
 
 %% A bag holds several objects under one key: narrowing must return them all.
@@ -76,9 +78,10 @@ test_bag() ->
     T = ets:new(test, [bag]),
     true = ets:insert(T, [{k, 1}, {k, 2}, {j, 3}]),
     [[1], [2]] = lists:sort(ets:match(T, {k, '$1'})),
-    [[k], [k]] = ets:match(T, {'$1', '_'}) -- [[j]],
+    [[j], [k], [k]] = lists:sort(ets:match(T, {'$1', '_'})),
     true = ets:match_delete(T, {k, 1}),
     [[2]] = ets:match(T, {k, '$1'}),
+    [[j], [k]] = lists:sort(ets:match(T, {'$1', '_'})),
     ok.
 
 test_info() ->
