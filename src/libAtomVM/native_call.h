@@ -99,7 +99,7 @@ static inline term native_call_invoke(Context *ctx, const struct ExportedFunctio
             default:
                 return gcbif->gcbif3_ptr(ctx, 0, 0, ctx->x[0], ctx->x[1], ctx->x[2]);
         }
-    } else if (native->type == NIFFunctionType) {
+    } else if (native->type == NIFFunctionType || native->type == LeafNIFFunctionType) {
         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(native);
         ctx->nif_call_arity = arity;
         term return_value = nif->nif_ptr(ctx, arity, ctx->x);

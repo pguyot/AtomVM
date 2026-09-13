@@ -825,10 +825,12 @@ enum TrapAndLoadResult jit_trap_and_load(Context *ctx, Module *mod, uint32_t lab
 // pointers (4-aligned | 1).
 #define JIT_NATIVE_STAY ((Context *) 3)
 
-static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words, bool allow_stay)
+static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words, bool allow_stay, const struct ExportedFunction *func)
 {
     TRACE("jit_call_ext: arity=%d index=%d n_words=%d\n", arity, index, n_words);
-    const struct ExportedFunction *func = module_resolve_function(jit_state->module, index, ctx->global);
+    if (func == NULL) {
+        func = module_resolve_function(jit_state->module, index, ctx->global);
+    }
     if (IS_NULL_PTR(func)) {
         return jit_raise_undef_import(ctx, jit_state, offset, index, arity);
     }
@@ -843,6 +845,7 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
     enum FunctionType func_type = func->type;
 #endif
     switch (func_type) {
+        case LeafNIFFunctionType:
         case NIFFunctionType: {
             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
             ctx->nif_call_arity = arity;
@@ -1035,7 +1038,7 @@ static Context *jit_call_ext0(Context *ctx, JITState *jit_state, int offset, int
 
 static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
-    return jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, false);
+    return jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, false, NULL);
 }
 
 static term jit_module_get_atom_term_by_id(JITState *jit_state, int atom_index)
@@ -1896,10 +1899,56 @@ static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 
 // OP_CALL_EXT/OP_CALL_EXT_ONLY/OP_CALL_EXT_LAST direct dispatch: same
 // contract as call_fun_direct.
+static NOINLINE Context *jit_leaf_nif_error(Context *ctx, JITState *jit_state, int offset, int index, int arity)
+{
+    PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST_MFA(
+        term_invalid_term(), offset, jit_state->module, index, arity);
+    UNREACHABLE();
+}
+
 static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
     jit_state->continuation = 0;
-    Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true);
+    const struct ExportedFunction *func = NULL;
+    // A non-tail leaf NIF can return to the native caller directly. Existing
+    // fragments require the generic path's consolidation before native resume.
+    // No NIF arity roots are needed under the leaf contract.
+    if (n_words == CALL_EXT_NO_DEALLOC_MFA) {
+#if defined(HAVE_ATOMIC)
+        func = atomic_load_explicit(
+            (const struct ExportedFunction *_Atomic *) &jit_state->module->imported_funcs[index],
+            memory_order_acquire);
+        enum FunctionType type = atomic_load_explicit(
+            (const _Atomic enum FunctionType *) &func->type, memory_order_acquire);
+#else
+        func = jit_state->module->imported_funcs[index];
+        enum FunctionType type = func->type;
+#endif
+        if (type == LeafNIFFunctionType && ctx->heap.root->next == NULL) {
+#ifndef NDEBUG
+            HeapFragment *saved_root = ctx->heap.root;
+            term *saved_heap_ptr = ctx->heap.heap_ptr;
+            term *saved_stack = ctx->e;
+            cp_t saved_cp = ctx->cp;
+            int saved_reductions = jit_state->remaining_reductions;
+#endif
+            term result = EXPORTED_FUNCTION_TO_NIF(func)->nif_ptr(ctx, arity, ctx->x);
+            assert(ctx->heap.root == saved_root && ctx->heap.heap_ptr == saved_heap_ptr);
+            assert(ctx->e == saved_stack && ctx->cp == saved_cp);
+            assert(jit_state->remaining_reductions == saved_reductions);
+            assert(!context_get_flags(ctx, Trap));
+            if (UNLIKELY(term_is_invalid_term(result))) {
+                Context *failed = jit_leaf_nif_error(ctx, jit_state, offset, index, arity);
+                return jit_direct_continuation(ctx, jit_state, failed);
+            }
+            ctx->x[0] = result;
+            return (uintptr_t) JIT_NATIVE_STAY;
+        }
+        if (type == UnresolvedFunctionCall) {
+            func = NULL;
+        }
+    }
+    Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true, func);
     if (result == JIT_NATIVE_STAY) {
         return (uintptr_t) JIT_NATIVE_STAY;
     }

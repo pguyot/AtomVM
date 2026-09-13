@@ -2237,6 +2237,7 @@ schedule_in:
                 }
 
                 switch (func->type) {
+                    case LeafNIFFunctionType:
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
                         ctx->nif_call_arity = arity;
@@ -2360,6 +2361,7 @@ schedule_in:
                 }
 
                 switch (func->type) {
+                    case LeafNIFFunctionType:
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
                         ctx->nif_call_arity = arity;
@@ -3486,6 +3488,7 @@ schedule_in:
                 }
 
                 switch (func->type) {
+                    case LeafNIFFunctionType:
                     case NIFFunctionType: {
                         const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
                         ctx->nif_call_arity = arity;
