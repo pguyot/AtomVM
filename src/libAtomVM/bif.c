@@ -2380,7 +2380,7 @@ term bif_erlang_greater_than_or_equal_2(Context *ctx, uint32_t fail_label, term 
     }
 }
 
-term bif_erlang_get_1(Context *ctx, uint32_t fail_label, term arg1)
+static NOINLINE term bif_erlang_get_slow(Context *ctx, uint32_t fail_label, term arg1)
 {
     term value;
     DictionaryFunctionResult result = dictionary_get(&ctx->dictionary, arg1, &value, ctx->global);
@@ -2389,6 +2389,22 @@ term bif_erlang_get_1(Context *ctx, uint32_t fail_label, term arg1)
     }
 
     return value;
+}
+
+term bif_erlang_get_1(Context *ctx, uint32_t fail_label, term key)
+{
+    struct ListHead *dictionary = &ctx->dictionary;
+    struct ListHead *item = dictionary->next;
+    if (item == dictionary) {
+        return UNDEFINED_ATOM;
+    }
+    struct DictEntry *first = GET_LIST_ENTRY(item, struct DictEntry, head);
+    if (first->key == key) {
+        return first->value;
+    }
+    // A matching first entry needs no traversal frame or out parameter.
+    // All other lookups retain the shared exact-equality implementation.
+    return bif_erlang_get_slow(ctx, fail_label, key);
 }
 
 term bif_erlang_min_2(Context *ctx, uint32_t fail_label, term arg1, term arg2)
