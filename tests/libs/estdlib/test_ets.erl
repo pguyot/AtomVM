@@ -27,6 +27,7 @@
 test() ->
     ok = test_select(),
     ok = test_match(),
+    ok = test_info(),
     ok.
 
 test_select() ->
@@ -51,6 +52,22 @@ test_match() ->
     % A variable repeated in the pattern must bind to the same value everywhere.
     Pairs = new_table([{1, 1}, {2, 3}]),
     [[1]] = ets:match(Pairs, {'$1', '$1'}),
+    ok.
+
+test_info() ->
+    T = new_table([{a, 1}, {b, 2}]),
+    1 = ets:info(T, keypos),
+    2 = ets:info(T, size),
+    set = ets:info(T, type),
+    test = ets:info(T, name),
+    false = ets:info(T, named_table),
+    protected = ets:info(T, protection),
+    undefined = ets:info(T, no_such_item),
+    Bag = ets:new(other, [bag, private, {keypos, 3}]),
+    3 = ets:info(Bag, keypos),
+    0 = ets:info(Bag, size),
+    bag = ets:info(Bag, type),
+    private = ets:info(Bag, protection),
     ok.
 
 new_table(Tuples) ->

@@ -449,15 +449,14 @@ match_delete(Table, Pattern) ->
 %% @returns the value of the item, or `undefined' for unsupported items
 %% @doc Return information about a table.
 %%
-%% Only `size' is currently supported (computed by a full table traversal);
-%% any other item returns `undefined'.
+%% `keypos', `size', `type', `name', `named_table' and `protection' are
+%% supported; any other item returns `undefined', as does a table that does
+%% not exist or that this process may not read.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec info(Table :: table(), Item :: atom()) -> term() | undefined.
-info(Table, size) ->
-    length(?MODULE:tab2list(Table));
 info(_Table, _Item) ->
-    undefined.
+    erlang:nif_error(undefined).
 
 %% @private
 select_objects([], _MatchSpec, Acc) ->
