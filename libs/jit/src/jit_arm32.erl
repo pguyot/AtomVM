@@ -25,6 +25,7 @@
     new/3,
     set_live_masks/2,
     supports_loop_residency/0,
+    supports_select_val_ranges/0,
     stream/1,
     offset/1,
     flush/1,
@@ -456,6 +457,13 @@ set_live_masks(State, {Masks, _CallTargets}) ->
     State#state{live_masks = Masks}.
 
 supports_loop_residency() -> false.
+
+%% Capability marker: the generic layer coalesces consecutive OP_SELECT_VAL
+%% values into ranges tested with a subtract and an unsigned bound compare
+%% (see jit:op_select_val_int_ranges/5) on backends exporting this.
+-spec supports_select_val_ranges() -> true.
+supports_select_val_ranges() ->
+    true.
 
 %% ARM (A32) instructions are a fixed 4 bytes; an x-store is a single `str'.
 pending_nop_bytes(4) -> jit_arm32_asm:nop().
