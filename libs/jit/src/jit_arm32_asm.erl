@@ -19,6 +19,8 @@
 -module(jit_arm32_asm).
 
 -export([
+    ldmia_wb/2,
+    stmia_wb/2,
     add/3,
     add/4,
     adds/3,
@@ -617,6 +619,30 @@ pop(RegList) ->
     RegMask = reglist_to_mask(RegList),
     %% LDMIA SP!: cond=AL 1000 1011 1101 reglist
     Instr = (14 bsl 28) bor (2#100010111101 bsl 16) bor RegMask,
+    <<Instr:32/little>>.
+
+%% LDMIA Rn!, {reglist} / STMIA Rn!, {reglist}
+%%
+%% Encoding: cond[31:28] 100 P U S W L Rn[19:16] reglist[15:0], with P=0 (increment
+%% after), U=1 (up), S=0, W=1 (writeback). Unlike ldrd/strd these need only word
+%% alignment, which is all a 32-bit AtomVM heap pointer has, and they move up to
+%% four words per instruction.
+-spec ldmia_wb(arm_gpr_register(), [arm_gpr_register()]) -> binary().
+ldmia_wb(Rn, RegList) ->
+    ldmstm_ia_wb(Rn, RegList, 1).
+
+-spec stmia_wb(arm_gpr_register(), [arm_gpr_register()]) -> binary().
+stmia_wb(Rn, RegList) ->
+    ldmstm_ia_wb(Rn, RegList, 0).
+
+ldmstm_ia_wb(Rn, RegList, Load) ->
+    RnNum = reg_to_num(Rn),
+    RegMask = reglist_to_mask(RegList),
+    %% The base must not be in the list: with writeback that is UNPREDICTABLE.
+    true = (RegMask band (1 bsl RnNum)) =:= 0,
+    true = RegMask =/= 0,
+    Opcode = 2#10001010 bor Load,
+    Instr = (14 bsl 28) bor (Opcode bsl 20) bor (RnNum bsl 16) bor RegMask,
     <<Instr:32/little>>.
 
 reglist_to_mask(RegList) ->

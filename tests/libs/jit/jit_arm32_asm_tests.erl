@@ -339,6 +339,63 @@ pop_test_() ->
         )
     ].
 
+ldm_stm_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#E8B60007:32/little>>,
+            "ldmia r6!, {r0, r1, r2}",
+            jit_arm32_asm:ldmia_wb(r6, [r0, r1, r2])
+        ),
+        ?_assertAsmEqual(
+            <<16#E8A50007:32/little>>,
+            "stmia r5!, {r0, r1, r2}",
+            jit_arm32_asm:stmia_wb(r5, [r0, r1, r2])
+        ),
+        ?_assertAsmEqual(
+            <<16#E8B4000F:32/little>>,
+            "ldmia r4!, {r0, r1, r2, r3}",
+            jit_arm32_asm:ldmia_wb(r4, [r0, r1, r2, r3])
+        ),
+        ?_assertAsmEqual(
+            <<16#E8A4000F:32/little>>,
+            "stmia r4!, {r0, r1, r2, r3}",
+            jit_arm32_asm:stmia_wb(r4, [r0, r1, r2, r3])
+        ),
+        ?_assertAsmEqual(
+            <<16#E8B60003:32/little>>,
+            "ldmia r6!, {r0, r1}",
+            jit_arm32_asm:ldmia_wb(r6, [r0, r1])
+        ),
+        %% The register list is a bitmask, so the order it is written in makes
+        %% no difference to the encoding.
+        ?_assertEqual(
+            jit_arm32_asm:ldmia_wb(r6, [r0, r1, r2]),
+            jit_arm32_asm:ldmia_wb(r6, [r2, r0, r1])
+        ),
+        %% The base must not appear in the list: with writeback that is
+        %% UNPREDICTABLE.
+        ?_assertError({badmatch, false}, jit_arm32_asm:ldmia_wb(r0, [r0, r1])),
+        ?_assertError({badmatch, false}, jit_arm32_asm:stmia_wb(r1, [r0, r1])),
+        ?_assertError({badmatch, false}, jit_arm32_asm:ldmia_wb(r0, []))
+    ].
+
+ldrd_strd_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#E1C600D4:32/little>>, "ldrd r0, r1, [r6, #4]", jit_arm32_asm:ldrd(al, r0, {r6, 4})
+        ),
+        ?_assertAsmEqual(
+            <<16#E1C500F4:32/little>>, "strd r0, r1, [r5, #4]", jit_arm32_asm:strd(al, r0, {r5, 4})
+        ),
+        ?_assertAsmEqual(
+            <<16#E1C620DC:32/little>>,
+            "ldrd r2, r3, [r6, #12]",
+            jit_arm32_asm:ldrd(al, r2, {r6, 12})
+        ),
+        %% Rt must be even: Rt2 is implicitly Rt+1.
+        ?_assertError({badmatch, false}, jit_arm32_asm:ldrd(al, r1, {r6, 4}))
+    ].
+
 bkpt_test_() ->
     [
         ?_assertAsmEqual(<<16#E1200070:32/little>>, "bkpt #0", jit_arm32_asm:bkpt(0)),
