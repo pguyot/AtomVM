@@ -258,6 +258,17 @@
 -define(JITSTATE_MODULE(Reg), {Reg, 0}).
 -define(JITSTATE_CONTINUATION(Reg), {Reg, 16#4}).
 -define(JITSTATE_REDUCTIONCOUNT(Reg), {Reg, 16#8}).
+%% The remaining reduction count lives in r11 for the whole native
+%% invocation: the dispatch loop seeds it from jit_state->remaining_reductions
+%% and declares r11 clobbered, so it is callee-saved across primitive calls
+%% for free. It is the only pinned value that memory does NOT track on every
+%% write -- decrementing it is a bare `subs' -- so it must be flushed back
+%% wherever C can read it: before tail-calling a primitive (call_primitive_last)
+%% and before the *_direct wrappers, whose jit_direct_continuation check reads
+%% the count from memory. Never flushed AFTER a call: the primitive may have
+%% written 0 itself to force a reschedule, and a late flush of our stale copy
+%% would stomp that.
+-define(REDUCTIONS_REG, r11).
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 %% NULL for a module pinned to emulated execution: its cp low word is a
@@ -769,7 +780,7 @@ call_primitive_last0(
 
                 % Save lr around the call (ip pads to 8-byte alignment),
                 % write e back to ctx, call, then return to the C dispatcher.
-                #state{stream = Stream2b} = emit_e_writeback(State3),
+                #state{stream = Stream2b} = emit_reductions_flush(emit_e_writeback(State3)),
                 PushLR = jit_arm32_asm:push([r12, lr]),
                 Call = jit_arm32_asm:blx(al, Temp),
                 Stream3 = StreamModule:append(
@@ -787,7 +798,9 @@ call_primitive_last0(
             _ ->
                 % For 4 or fewer args, use tail call
                 State2 = set_registers_args(State1, Args1, 0),
-                tail_call_with_jit_state_registers_only(emit_e_writeback(State2), Temp)
+                tail_call_with_jit_state_registers_only(
+                    emit_reductions_flush(emit_e_writeback(State2)), Temp
+                )
         end,
     State5 = State4#state{
         regs = jit_regs:set_masks(
@@ -1787,6 +1800,16 @@ shift_left(
 %% allocation bumps it in ctx — so it needs no write-back.
 emit_e_writeback(#state{stream_module = StreamModule, stream = Stream0} = State) ->
     Stream1 = StreamModule:append(Stream0, jit_arm32_asm:str(al, ?E_REG, ?Y_REGS)),
+    State#state{stream = Stream1}.
+
+%% Write the pinned reduction count back to jit_state. Emitted only where C
+%% can read it -- before tail-calling a primitive and before the *_direct
+%% wrappers, whose jit_direct_continuation check loads it from memory -- and
+%% never after a call. See ?REDUCTIONS_REG.
+emit_reductions_flush(#state{stream_module = StreamModule, stream = Stream0} = State) ->
+    Stream1 = StreamModule:append(
+        Stream0, jit_arm32_asm:str(al, ?REDUCTIONS_REG, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG))
+    ),
     State#state{stream = Stream1}.
 
 call_func_ptr(StateP, FuncPtrTuple, Args) ->
@@ -4071,12 +4094,10 @@ decrement_reductions_and_maybe_schedule_next(
 ) ->
     Avail = jit_regs:available_regs(Regs0),
     Temp = first_avail(Avail),
-    % jit_state is pinned: load, decrement and store the reduction count
-    % through it directly.
-    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
-    I2 = jit_arm32_asm:subs(al, Temp, Temp, 1),
-    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    % Decrement the pinned reduction count in-register: no memory traffic on
+    % this path, which is the hot back-edge of every loop (see ?REDUCTIONS_REG).
+    I2 = jit_arm32_asm:subs(al, ?REDUCTIONS_REG, ?REDUCTIONS_REG, 1),
+    Stream1 = StreamModule:append(Stream0, I2),
     BNEOffset = StreamModule:offset(Stream1),
     % Branch if reduction count is not zero
     ?ASSERT(byte_size(jit_arm32_asm:b(ne, 0)) =:= 4),
@@ -4091,7 +4112,7 @@ decrement_reductions_and_maybe_schedule_next(
     State1 = State0#state{stream = Stream2},
     State2 = call_primitive_last(State1, ?PRIM_SCHEDULE_NEXT_CP, [ctx, jit_state]),
     % No prologue at the continuation point: the dispatch loop owns saving
-    % r4-r11 and re-seeds the pinned registers on re-entry.
+    % r4-r6 and r11, and re-seeds the pinned registers on re-entry.
     #state{stream = Stream3} = State2,
     ContinuationOffset = StreamModule:offset(Stream3),
     Stream4 = Stream3,
@@ -4121,17 +4142,12 @@ call_only_or_schedule_next(
     %% Label: pendings the target reads keep their store.
     #state{
         stream_module = StreamModule,
-        stream = Stream0,
-        regs = Regs0
+        stream = Stream0
     } = State0 = pending_filter_label(StateP, Label),
-    Avail = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Avail),
-    % jit_state is pinned: load, decrement and store the reduction count
-    % through it directly.
-    I1 = jit_arm32_asm:ldr(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
-    I2 = jit_arm32_asm:subs(al, Temp, Temp, 1),
-    I3 = jit_arm32_asm:str(al, Temp, ?JITSTATE_REDUCTIONCOUNT(?JITSTATE_REG)),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary, I3/binary>>),
+    % Decrement the pinned reduction count in-register: no memory traffic on
+    % this path, which is the hot back-edge of every loop (see ?REDUCTIONS_REG).
+    I2 = jit_arm32_asm:subs(al, ?REDUCTIONS_REG, ?REDUCTIONS_REG, 1),
+    Stream1 = StreamModule:append(Stream0, I2),
     % Use trampoline technique: branch if zero (eq) to skip over the long branch
     % If not zero, we want to continue execution at Label
     % If zero, we want to fall through to scheduling code
@@ -4301,7 +4317,12 @@ allocate_frame_fast(
 call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     {State1, AdrOffset, TempReg} = set_cp(State0),
     State1b = emit_call_ext_fast_path(State1, Index, no_frame_pop),
-    {State2, ResultReg} = call_primitive_no_reload(State1b, Primitive, Args),
+    %% The primitive's jit_direct_continuation check reads remaining_reductions
+    %% from memory: flush the pinned register before the call, never after (the
+    %% NIF may itself have zeroed it to force a reschedule). The inline fast
+    %% path above stays in native code and needs no flush.
+    State1c = emit_reductions_flush(State1b),
+    {State2, ResultReg} = call_primitive_no_reload(State1c, Primitive, Args),
     %% JIT_NATIVE_STAY (a NIF that returned to this very call site) falls
     %% through the dispatch block, so the resume point -- and with it the cp
     %% this site just stored -- is the instruction after it.
@@ -4319,7 +4340,10 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
 %%-----------------------------------------------------------------------------
 -spec call_primitive_direct(state(), non_neg_integer(), [arg()]) -> state().
 call_primitive_direct(State0, Primitive, Args) ->
-    {State1, ResultReg} = call_primitive_no_reload(State0, Primitive, Args),
+    %% Same contract as call_ext_with_cp_direct: flush before, not after.
+    {State1, ResultReg} = call_primitive_no_reload(
+        emit_reductions_flush(State0), Primitive, Args
+    ),
     State2 = direct_dispatch(State1, ResultReg, false),
     State3 = free_native_register(State2, ResultReg),
     State4 = State3#state{regs = jit_regs:invalidate_all(State3#state.regs)},

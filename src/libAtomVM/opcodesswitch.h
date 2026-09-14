@@ -1896,14 +1896,20 @@ schedule_in:
             }
 #elif JIT_ARCH_TARGET == JIT_ARCH_ARM32
             // arm32 pinned-register convention: generated code reads ctx
-            // from r11, jit_state from r10, the primitives table from r9
-            // and keeps ctx->e in r8 (callee-saved, preserved by C
-            // primitives). The boundary also owns saving r4-r7: generated
-            // code uses them as cache registers with no prologue frame, so
-            // they are declared as clobbers here. Only e is seeded (there
-            // are no inline heap operations); generated code writes it
-            // back to ctx before every C call. The entry pointer rides in
-            // r4 (a clobbered-by-variable callee-saved register).
+            // from r7, jit_state from r10, the primitives table from r9,
+            // keeps ctx->e in r8 and the remaining reduction count in r11
+            // (all callee-saved, preserved by C primitives). The boundary
+            // also owns saving r4-r6 and r11: generated code uses them
+            // with no prologue frame, so they are declared as clobbers
+            // here. e and the reduction count are seeded (there are no
+            // inline heap operations, so hp is not pinned); generated code
+            // writes e back to ctx before every C call. The reduction
+            // count, unlike e, is NOT kept current in memory on every
+            // decrement -- that is the point of pinning it -- so generated
+            // code flushes it explicitly at the few points where C can
+            // observe it (call_primitive_last and the *_direct wrappers).
+            // The entry pointer rides in r4 (a clobbered-by-variable
+            // callee-saved register).
             Context *new_ctx;
             {
                 register Context *pin_ctx __asm__("r7") = ctx;
@@ -1923,11 +1929,22 @@ schedule_in:
 #define AVM_JIT_ARM32_FP_CLOBBERS
 #endif
                 __asm__ volatile(
+                    // Seed the pinned remaining-reductions register (r11,
+                    // jit_state offset 0x8, asserted in jit.c).
+                    "ldr r11, [r10, #8]\n\t"
                     "blx r4"
                     : "=r"(result_reg), "+r"(pin_ctx), "+r"(pin_js), "+r"(pin_p),
                       "+r"(pin_e), "+r"(entry_reg)
                     :
-                    : "r1", "r2", "r3", "r5", "r6", "r12", "lr",
+                    // r11 is the ARM frame pointer when one is in use. It is
+                    // listed as a clobber, never bound to a register variable:
+                    // a variable would make the compiler materialize its value
+                    // into r11 around the asm, which is the undefined-behaviour
+                    // shape that once cost us a dropped heap-pointer bump. A
+                    // clobber is honoured or rejected at compile time, so a
+                    // -fno-omit-frame-pointer build fails loudly rather than
+                    // miscompiling.
+                    : "r1", "r2", "r3", "r5", "r6", "r11", "r12", "lr",
                       AVM_JIT_ARM32_FP_CLOBBERS "memory", "cc");
                 new_ctx = result_reg;
             }
