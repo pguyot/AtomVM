@@ -26,6 +26,7 @@
     set_live_masks/2,
     supports_loop_residency/0,
     supports_select_val_ranges/0,
+    get_list_head_tail/4,
     stream/1,
     offset/1,
     flush/1,
@@ -456,6 +457,12 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% first_avail/1, mask_to_list/1, args_regs/1, prepare_call_scratch/1) is shared
 %% across the register-based backends and flows through jit_regs.
 -define(FIRST_AVAIL_REGS, ?AVAILABLE_REGS).
+
+%% ldrd/strd move a doubleword through an even register and its successor, so
+%% the pair has to be allocated together. Only r0/r2/r4 can start one here
+%% (r6's successor r7 is ctx). Returns `none' when no pair is free, in which
+%% case the caller emits the two-instruction-per-word form instead.
+-define(REG_PAIRS, [{r0, r1}, {r2, r3}, {r4, r5}]).
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, jit_state).
 -include("jit_backend_regs_impl.hrl").
@@ -4291,20 +4298,89 @@ read_heap_fragments(
 %% two halves.
 %% @end
 %%-----------------------------------------------------------------------------
+%%-----------------------------------------------------------------------------
+%% @doc OP_GET_LIST: fetch both cells of a cons with one ldrd. The cells are
+%% adjacent and the pair is doubleword-aligned (a cons is allocated on the
+%% heap, which is doubleword-aligned), and cell[0] is the tail with cell[1]
+%% the head -- exactly the order an even/odd register pair receives them. Head
+%% and tail land in DISTINCT registers, so a following read of either elides
+%% the reload; the generic path reuses one temp and evicts the first.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_list_head_tail(state(), {free, arm32_register()}, vm_register(), vm_register()) ->
+    state().
+get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
+    is_integer(H), is_integer(T), H < ?MAX_REG, T < ?MAX_REG, H =/= T
+->
+    #state{stream_module = SM, regs = Regs0} =
+        State1 = pending_elide_prev(pending_elide_prev(State0, H), T),
+    case first_avail_pair(jit_regs:available_regs(Regs0)) of
+        {TailReg, HeadReg} ->
+            Ldrd = jit_arm32_asm:ldrd(al, TailReg, {ListReg, 0}),
+            StreamA = SM:append(State1#state.stream, Ldrd),
+            %% Note each store while its str is the last instruction, so
+            %% pending_note_store records the right offset.
+            StH = jit_arm32_asm:str(al, HeadReg, ?X_REG(H)),
+            StreamB = SM:append(StreamA, StH),
+            StateB = pending_note_store(State1#state{stream = StreamB}, H),
+            StT = jit_arm32_asm:str(al, TailReg, ?X_REG(T)),
+            StreamC = SM:append(StateB#state.stream, StT),
+            StateC = pending_note_store(StateB#state{stream = StreamC}, T),
+            Regs1 = jit_regs:free_reg(StateC#state.regs, reg_bit(ListReg)),
+            Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, H}),
+            Regs3 = jit_regs:invalidate_vm_loc(Regs2, {x_reg, T}),
+            Regs4 = jit_regs:set_contents(Regs3, HeadReg, {x_reg, H}),
+            Regs5 = jit_regs:set_contents(Regs4, TailReg, {x_reg, T}),
+            StateC#state{regs = Regs5};
+        none ->
+            get_list_head_tail_generic(State0, ListReg, {x_reg, H}, {x_reg, T})
+    end;
+get_list_head_tail(State0, {free, ListReg}, HeadDest, TailDest) ->
+    %% y_reg / ptr destinations, or no free register pair: the two-load form.
+    get_list_head_tail_generic(State0, ListReg, HeadDest, TailDest).
+
+get_list_head_tail_generic(State0, ListReg, HeadDest, TailDest) ->
+    State1 = move_array_element(State0, ListReg, ?LIST_HEAD_INDEX, HeadDest),
+    State2 = free_native_register(State1, HeadDest),
+    State3 = move_array_element(State2, ListReg, ?LIST_TAIL_INDEX, TailDest),
+    State4 = free_native_register(State3, ListReg),
+    free_native_register(State4, TailDest).
+
 -spec allocate_frame_fast(state(), non_neg_integer()) -> state().
 allocate_frame_fast(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, StackNeed
 ) ->
-    Tmp = first_avail(jit_regs:available_regs(Regs0)),
-    Code = <<
-        (jit_arm32_asm:sub(al, ?E_REG, ?E_REG, (StackNeed + ?CP_SIZE_IN_TERMS) * 4))/binary,
-        (jit_arm32_asm:ldr(al, Tmp, ?CP))/binary,
-        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4}))/binary,
-        (jit_arm32_asm:ldr(al, Tmp, ?CP_MODULE))/binary,
-        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4 + 4}))/binary
-    >>,
+    Avail = jit_regs:available_regs(Regs0),
+    Bump = jit_arm32_asm:sub(al, ?E_REG, ?E_REG, (StackNeed + ?CP_SIZE_IN_TERMS) * 4),
+    %% ?CP and ?CP_MODULE are adjacent and doubleword-aligned, and so is the
+    %% pair of stack slots, so one ldrd/strd moves the whole cp_t.
+    ?ASSERT(element(2, ?CP) + 4 =:= element(2, ?CP_MODULE)),
+    {Code, Regs1} =
+        case first_avail_pair(Avail) of
+            {Low, High} when StackNeed * 4 + 4 =< 255 ->
+                {
+                    <<
+                        Bump/binary,
+                        (jit_arm32_asm:ldrd(al, Low, ?CP))/binary,
+                        (jit_arm32_asm:strd(al, Low, {?E_REG, StackNeed * 4}))/binary
+                    >>,
+                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Low), High)
+                };
+            _ ->
+                Tmp = first_avail(Avail),
+                {
+                    <<
+                        Bump/binary,
+                        (jit_arm32_asm:ldr(al, Tmp, ?CP))/binary,
+                        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4}))/binary,
+                        (jit_arm32_asm:ldr(al, Tmp, ?CP_MODULE))/binary,
+                        (jit_arm32_asm:str(al, Tmp, {?E_REG, StackNeed * 4 + 4}))/binary
+                    >>,
+                    jit_regs:invalidate_reg(Regs0, Tmp)
+                }
+        end,
     Stream1 = StreamModule:append(Stream0, Code),
-    State#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Tmp)}.
+    State#state{stream = Stream1, regs = Regs1}.
 
 %%-----------------------------------------------------------------------------
 %% @doc OP_CALL_EXT with direct dispatch: the primitive resolves the callee
@@ -4389,19 +4465,36 @@ emit_call_ext_fast_path(StateP, Index, NWords) ->
         true ->
             [T0, T1, T2 | _] = Avail,
             %% ctx->cp = load_cp(ctx->e + NWords); ctx->e += NWords + CP_SIZE_IN_TERMS.
-            %% cp_t spans two words on 32-bit, so it moves in two halves.
+            %% One ldrd/strd when an even register pair is free, since the two
+            %% cp words are adjacent at both ends (see allocate_frame_fast).
             FramePop =
                 case is_integer(NWords) andalso NWords >= 0 of
                     true ->
-                        <<
-                            (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4}))/binary,
-                            (jit_arm32_asm:str(al, T2, ?CP))/binary,
-                            (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4 + 4}))/binary,
-                            (jit_arm32_asm:str(al, T2, ?CP_MODULE))/binary,
-                            (jit_arm32_asm:add(
-                                al, ?E_REG, ?E_REG, (NWords + ?CP_SIZE_IN_TERMS) * 4
-                            ))/binary
-                        >>;
+                        Bump = jit_arm32_asm:add(
+                            al, ?E_REG, ?E_REG, (NWords + ?CP_SIZE_IN_TERMS) * 4
+                        ),
+                        %% T0/T1 still hold the resolved ModuleFunction here
+                        %% (T2 is dead, which is why the fallback reuses it):
+                        %% the pair must avoid them.
+                        PairAvail =
+                            jit_regs:available_regs(Regs0) band
+                                bnot (reg_bit(T0) bor reg_bit(T1)),
+                        case first_avail_pair(PairAvail) of
+                            {Low, _High} when NWords * 4 + 4 =< 255 ->
+                                <<
+                                    (jit_arm32_asm:ldrd(al, Low, {?E_REG, NWords * 4}))/binary,
+                                    (jit_arm32_asm:strd(al, Low, ?CP))/binary,
+                                    Bump/binary
+                                >>;
+                            _ ->
+                                <<
+                                    (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4}))/binary,
+                                    (jit_arm32_asm:str(al, T2, ?CP))/binary,
+                                    (jit_arm32_asm:ldr(al, T2, {?E_REG, NWords * 4 + 4}))/binary,
+                                    (jit_arm32_asm:str(al, T2, ?CP_MODULE))/binary,
+                                    Bump/binary
+                                >>
+                        end;
                     false ->
                         <<>>
                 end,
@@ -4669,6 +4762,20 @@ ldr_y_reg(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, DstReg),
     State#state{stream = Stream1, regs = Regs1}.
+
+%% @private
+%% The first free even/odd register pair usable by ldrd/strd, or `none'.
+first_avail_pair(Avail) ->
+    first_avail_pair0(?REG_PAIRS, Avail).
+
+first_avail_pair0([], _Avail) ->
+    none;
+first_avail_pair0([{Low, High} | Tail], Avail) ->
+    Mask = reg_bit(Low) bor reg_bit(High),
+    case Avail band Mask =:= Mask of
+        true -> {Low, High};
+        false -> first_avail_pair0(Tail, Avail)
+    end.
 
 reg_bit(r0) -> ?REG_BIT_R0;
 reg_bit(r1) -> ?REG_BIT_R1;
