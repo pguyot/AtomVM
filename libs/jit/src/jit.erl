@@ -1426,16 +1426,7 @@ emit_pass(<<?OP_GET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
             false -> collect_get_tuple_elements(Rest3, Source, MMod, MSt2, State0)
         end,
     {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2b, Source),
-    MSt5 = MMod:move_array_element(MSt4, Reg, Element + 1, Dest),
-    MSt5b = MMod:free_native_registers(MSt5, [Dest]),
-    MSt5c = lists:foldl(
-        fun({OtherElement, OtherDest}, AccMSt0) ->
-            AccMSt1 = MMod:move_array_element(AccMSt0, Reg, OtherElement + 1, OtherDest),
-            MMod:free_native_registers(AccMSt1, [OtherDest])
-        end,
-        MSt5b,
-        Others
-    ),
+    MSt5c = emit_tuple_element_run(MMod, MSt4, Reg, [{Element, Dest} | Others]),
     MSt6 = MMod:free_native_registers(MSt5c, [Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
     emit_pass(Rest4, MMod, MSt6, State0);
@@ -8070,6 +8061,31 @@ term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
             MMod:free_native_registers(BSt5, [AllocMatchStateReg, NewSrc])
         end
     ).
+
+%% Emit a run of reads from one tuple, pairing adjacent fields into a single
+%% two-word load where the backend has one (aarch64's ldp -- BEAM calls the
+%% fused form get_two_tuple_elements). The pair needs consecutive fields and
+%% distinct x-register destinations; anything else falls back to one load each.
+emit_tuple_element_run(MMod, MSt, Reg, Elements) ->
+    Paired =
+        erlang:function_exported(MMod, move_array_elements_pair, 5),
+    emit_tuple_element_run(MMod, MSt, Reg, Elements, Paired).
+
+emit_tuple_element_run(_MMod, MSt, _Reg, [], _Paired) ->
+    MSt;
+emit_tuple_element_run(
+    MMod, MSt0, Reg, [{E1, {x_reg, X1} = D1}, {E2, {x_reg, X2} = D2} | Tail], true
+) when
+    E2 =:= E1 + 1, X1 =/= X2, is_integer(X1), is_integer(X2)
+->
+    MSt1 = MMod:move_array_elements_pair(MSt0, Reg, E1 + 1, D1, D2),
+    MSt2 = MMod:free_native_registers(MSt1, [D1]),
+    MSt3 = MMod:free_native_registers(MSt2, [D2]),
+    emit_tuple_element_run(MMod, MSt3, Reg, Tail, true);
+emit_tuple_element_run(MMod, MSt0, Reg, [{Element, Dest} | Tail], Paired) ->
+    MSt1 = MMod:move_array_element(MSt0, Reg, Element + 1, Dest),
+    MSt2 = MMod:free_native_registers(MSt1, [Dest]),
+    emit_tuple_element_run(MMod, MSt2, Reg, Tail, Paired).
 
 %% Fresh native register holding Value with its boxed tag stripped.
 %%
