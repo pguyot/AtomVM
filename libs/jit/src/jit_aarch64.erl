@@ -1658,6 +1658,29 @@ invert_cb(cbnz_w) -> cbz_w.
 invert_tb(tbz) -> tbnz;
 invert_tb(tbnz) -> tbz.
 
+%% @private
+%% The single bit that separates a primary tag from the other two a term can
+%% carry (see the tag-test clauses of if_block_cond/2).
+primary_tag_bit(?TERM_PRIMARY_BOXED) -> 0;
+primary_tag_bit(?TERM_PRIMARY_LIST) -> 1.
+
+%% @private
+%% if_block_cond returns the branch that SKIPS the block, i.e. the one taken
+%% when the condition is false. For `!= Tag' the block runs when the tag
+%% differs, so the skip is taken when it matches -- when the bit is clear.
+emit_primary_tag_test(
+    #state{stream_module = StreamModule, stream = Stream0} = State0, RegOrTuple, Reg, Cmp, Tag
+) ->
+    Bit = primary_tag_bit(Tag),
+    {Instr, Branch} =
+        case Cmp of
+            '!=' -> {jit_aarch64_asm:tbz(Reg, Bit, 0), {tbz, Reg, Bit}};
+            '==' -> {jit_aarch64_asm:tbnz(Reg, Bit, 0), {tbnz, Reg, Bit}}
+        end,
+    Stream1 = StreamModule:append(Stream0, Instr),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1#state{stream = Stream1}, Branch, 0}.
+
 %% Invert an aarch64 condition code (if_block_cond returns the branch-if-false
 %% code; jump_to_label_cond needs branch-if-true).
 invert_cc(eq) -> ne;
@@ -1883,7 +1906,9 @@ if_block(
     Stream3 = lists:foldl(
         fun({ReplacementOffset, CC}, AccStream) ->
             BranchOffset = OffsetAfter - ReplacementOffset,
-            NewBranchInstr = jit_aarch64_asm:bcc(CC, BranchOffset),
+            %% rewrite_branch_instruction, not bcc: a sub-condition can be a
+            %% register or bit test (cbz/tbz), not only a condition code.
+            NewBranchInstr = rewrite_branch_instruction(CC, BranchOffset),
             StreamModule:replace(AccStream, ReplacementOffset, NewBranchInstr)
         end,
         Stream2,
@@ -2327,6 +2352,32 @@ if_block_cond(
     Regs1 = jit_regs:invalidate_reg(State1#state.regs, Temp),
     State2 = State1#state{stream = Stream1, regs = Regs1},
     {State2, eq, byte_size(TestCode)};
+%% A primary tag test is one bit test.
+%%
+%% The four primary tags are CP 0b00, LIST 0b01, BOXED 0b10 and IMMED 0b11. Of
+%% the three a term can carry, BOXED is the only one with bit 0 clear and LIST
+%% the only one with bit 1 clear, so either test is a single tbz/tbnz instead
+%% of and + cmp + branch. IMMED has no such bit and keeps the general form.
+%%
+%% This is only true because a CP never reaches a type test. CPs live in
+%% ctx->cp and in the stack slots the GC skips by recognising this very tag,
+%% and the compiler never reads one as a term -- BEAM's own JIT assumes exactly
+%% the same thing (its is_nonempty_list is a bare tbnz). It is an assumption,
+%% not a free win: if it were broken, a CP would now pass the boxed test and
+%% the load that follows would dereference it, where the two-bit compare would
+%% have rejected it.
+if_block_cond(State0, {{free, Reg} = RegTuple, '&', ?TERM_PRIMARY_MASK, Cmp, Tag}) when
+    ?IS_GPR(Reg) andalso
+        (Cmp =:= '!=' orelse Cmp =:= '==') andalso
+        (Tag =:= ?TERM_PRIMARY_BOXED orelse Tag =:= ?TERM_PRIMARY_LIST)
+->
+    emit_primary_tag_test(State0, RegTuple, Reg, Cmp, Tag);
+if_block_cond(State0, {Reg, '&', ?TERM_PRIMARY_MASK, Cmp, Tag}) when
+    ?IS_GPR(Reg) andalso
+        (Cmp =:= '!=' orelse Cmp =:= '==') andalso
+        (Tag =:= ?TERM_PRIMARY_BOXED orelse Tag =:= ?TERM_PRIMARY_LIST)
+->
+    emit_primary_tag_test(State0, Reg, Reg, Cmp, Tag);
 if_block_cond(
     #state{
         stream_module = StreamModule,
