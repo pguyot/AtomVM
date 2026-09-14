@@ -61,12 +61,14 @@ endfunction()
 
 compile_erlang(test_clocks "")
 compile_erlang(test_smp "")
+compile_erlang(test_update_record_rebuild ../../../../../tests/erlang_tests/)
 compile_erlang(test_crypto ../../../esp32/test/main/test_erl_sources/)
 
 set(erlang_test_beams
     test_clocks.beam
     test_smp.beam
     test_crypto.beam
+    test_update_record_rebuild.beam
 )
 
 if(NOT AVM_DISABLE_JIT)
