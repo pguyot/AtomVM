@@ -111,9 +111,21 @@ pending_flush_label(#state{live_masks = undefined} = State, _Label) ->
 pending_flush_label(#state{pending_x = P} = State, _Label) when map_size(P) =:= 0 ->
     State;
 pending_flush_label(
-    #state{pending_x = P, live_masks = Masks} = State, Label
+    #state{live_masks = Masks} = State, Label
 ) ->
-    Mask = maps:get(Label, Masks, -1),
+    pending_flush_mask(State, maps:get(Label, Masks, -1)).
+
+%% Window end somewhere other than a label, with the live-out set given
+%% explicitly. A return is the case that matters: control leaves without
+%% passing through a label, so the window never ended and every store in it
+%% survived -- including the ones to registers the caller may not read. BEAM's
+%% calling convention leaves only x0 live across a return, so the rest are
+%% dead and their stores can go.
+pending_flush_mask(#state{live_masks = undefined} = State, _Mask) ->
+    State;
+pending_flush_mask(#state{pending_x = P} = State, _Mask) when map_size(P) =:= 0 ->
+    State;
+pending_flush_mask(#state{pending_x = P} = State, Mask) ->
     Stream1 = maps:fold(
         fun(X, {Off, Width, _D}, StAcc) ->
             case Mask band (1 bsl X) of
