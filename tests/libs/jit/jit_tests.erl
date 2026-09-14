@@ -785,20 +785,16 @@ fuse_tuple_multi_get_x86_64_test() ->
         {_, _},
         binary:match(CompiledCode, <<16#48, 16#83, 16#e0, 16#fc, 16#4c, 16#8b, 16#18>>)
     ),
-    % All three elements loaded from the same untagged pointer:
+    % All three elements loaded from the same untagged pointer. Asserted one
+    % load at a time rather than as one run: what sits between them depends on
+    % whether the write-through store to each x register survives, and x[1] and
+    % x[2] are dead at the return that follows, so theirs are nopped out.
     %   4c 8b 58 08    mov  0x8(%rax),%r11     (element 0 -> x[1])
-    %   4c 89 5f 60    mov  %r11,0x60(%rdi)
     %   4c 8b 58 10    mov  0x10(%rax),%r11    (element 1 -> x[2])
-    %   4c 89 5f 68    mov  %r11,0x68(%rdi)
     %   4c 8b 58 18    mov  0x18(%rax),%r11    (element 2 -> x[0])
-    ?assertMatch(
-        {_, _},
-        binary:match(
-            CompiledCode,
-            <<16#4c, 16#8b, 16#58, 16#08, 16#4d, 16#89, 16#5e, 16#60, 16#4c, 16#8b, 16#58, 16#10,
-                16#4d, 16#89, 16#5e, 16#68, 16#4c, 16#8b, 16#58, 16#18>>
-        )
-    ),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#4c, 16#8b, 16#58, 16#08>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#4c, 16#8b, 16#58, 16#10>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#4c, 16#8b, 16#58, 16#18>>)),
     ok.
 
 fuse_tuple_arity_only_x86_64_test() ->
