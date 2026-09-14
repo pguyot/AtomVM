@@ -2134,9 +2134,8 @@ move_to_vm_register_test_() ->
                 %% Test: Immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, 42, {x_reg, 0}, <<
-                        "   0:	d2800547 	mov	x7, #0x2a\n"
-                        "   4:	aa0703f9 	mov	x25, x7\n"
-                        "   8:	f9002ea7 	str	x7, [x21, #88]"
+                        "   0:	d2800559 	mov	x25, #0x2a\n"
+                        "   4:	f9002eb9 	str	x25, [x21, #88]"
                     >>)
                 end),
                 ?_test(begin
@@ -2167,9 +2166,8 @@ move_to_vm_register_test_() ->
                 %% Test: x_reg to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 1}, {x_reg, 2}, <<
-                        "   0:	aa1a03e7 	mov	x7, x26\n"
-                        "   4:	aa0703fb 	mov	x27, x7\n"
-                        "   8:	f90036a7 	str	x7, [x21, #104]"
+                        "   0:	aa1a03fb 	mov	x27, x26\n"
+                        "   4:	f90036bb 	str	x27, [x21, #104]"
                     >>)
                 end),
                 %% Test: x_reg to ptr
@@ -2181,9 +2179,8 @@ move_to_vm_register_test_() ->
                 %% Test: ptr to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {ptr, r9}, {x_reg, 3}, <<
-                        "   0:	f9400127 	ldr	x7, [x9]\n"
-                        "   4:	aa0703fc 	mov	x28, x7\n"
-                        "   8:	f9003aa7 	str	x7, [x21, #112]"
+                        "   0:	f940013c 	ldr	x28, [x9]\n"
+                        "   4:	f9003abc 	str	x28, [x21, #112]"
                     >>)
                 end),
                 %% Test: x_reg to y_reg
@@ -2195,17 +2192,15 @@ move_to_vm_register_test_() ->
                 %% Test: y_reg to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {y_reg, 0}, {x_reg, 3}, <<
-                        "   0:	f94002e7 	ldr	x7, [x23]\n"
-                        "   4:	aa0703fc 	mov	x28, x7\n"
-                        "   8:	f9003aa7 	str	x7, [x21, #112]"
+                        "   0:	f94002fc 	ldr	x28, [x23]\n"
+                        "   4:	f9003abc 	str	x28, [x21, #112]"
                     >>)
                 end),
                 %% Test: y_reg to y_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {y_reg, 1}, {x_reg, 3}, <<
-                        "   0:	f94006e7 	ldr	x7, [x23, #8]\n"
-                        "   4:	aa0703fc 	mov	x28, x7\n"
-                        "   8:	f9003aa7 	str	x7, [x21, #112]"
+                        "   0:	f94006fc 	ldr	x28, [x23, #8]\n"
+                        "   4:	f9003abc 	str	x28, [x21, #112]"
                     >>)
                 end),
                 %% Test: Native register to x_reg
@@ -2235,12 +2230,11 @@ move_to_vm_register_test_() ->
                 %% Test: Large immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, 16#123456789abcdef0, {x_reg, 0}, <<
-                        "   0:	d29bde07 	mov	x7, #0xdef0\n"
-                        "   4:	f2b35787 	movk	x7, #0x9abc, lsl #16\n"
-                        "   8:	f2cacf07 	movk	x7, #0x5678, lsl #32\n"
-                        "   c:	f2e24687 	movk	x7, #0x1234, lsl #48\n"
-                        "  10:	aa0703f9 	mov	x25, x7\n"
-                        "  14:	f9002ea7 	str	x7, [x21, #88]"
+                        "   0:	d29bde19 	mov	x25, #0xdef0\n"
+                        "   4:	f2b35799 	movk	x25, #0x9abc, lsl #16\n"
+                        "   8:	f2cacf19 	movk	x25, #0x5678, lsl #32\n"
+                        "   c:	f2e24699 	movk	x25, #0x1234, lsl #48\n"
+                        "  10:	f9002eb9 	str	x25, [x21, #88]"
                     >>)
                 end),
                 ?_test(begin
@@ -2297,9 +2291,8 @@ move_to_vm_register_test_() ->
                 %% Test: Negative immediate to x_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, -1, {x_reg, 0}, <<
-                        "   0:	92800007 	mov	x7, #0xffffffffffffffff\n"
-                        "   4:	aa0703f9 	mov	x25, x7\n"
-                        "   8:	f9002ea7 	str	x7, [x21, #88]"
+                        "   0:	92800019 	mov	x25, #0xffffffffffffffff\n"
+                        "   4:	f9002eb9 	str	x25, [x21, #88]"
                     >>)
                 end),
                 %% Test: ptr with offset to fp_reg (term_to_float)
@@ -2837,34 +2830,39 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     ?assertStream(aarch64, Dump, Stream).
 
 %% After copying an x_reg to another vm location, the temp register holding the
-%% x_reg value is cached so a subsequent load of the same x_reg skips the ldr
+%% x_reg value is cached so a subsequent load of the same x_reg skips the ldr.
+%%
+%% Only for destinations above x3: x0-x3 are computed into their own home
+%% register now (there is no separate temp to cache), so the copy is a whole
+%% instruction shorter and the source's cache entry is what pays for it. That
+%% trade measures as a net win -- erl_scan's native code drops 0.98% -- but it
+%% is a trade, so this covers the case where the temp still exists.
 cached_move_to_vm_x_reg_reuse_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    State1 = ?BACKEND:move_to_vm_register(State0, {x_reg, 1}, {x_reg, 0}),
+    State1 = ?BACKEND:move_to_vm_register(State0, {x_reg, 1}, {x_reg, 5}),
     Offset1 = ?BACKEND:offset(State1),
     {State2, r7} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
         "   0:	aa1a03e7 	mov	x7, x26\n"
-        "   4:	aa0703f9 	mov	x25, x7\n"
-        "   8:	f9002ea7 	str	x7, [x21, #88]"
+        "   4:	f90042a7 	str	x7, [x21, #128]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
 %% After copying a y_reg to an x_reg, the temp register holding the y_reg value
-%% is cached so a subsequent load of the same y_reg skips the ldrs
+%% is cached so a subsequent load of the same y_reg skips the ldr. Above x3,
+%% for the reason above.
 cached_move_to_vm_y_reg_reuse_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    State1 = ?BACKEND:move_to_vm_register(State0, {y_reg, 0}, {x_reg, 0}),
+    State1 = ?BACKEND:move_to_vm_register(State0, {y_reg, 0}, {x_reg, 5}),
     Offset1 = ?BACKEND:offset(State1),
     {State2, r7} = ?BACKEND:move_to_native_register(State1, {y_reg, 0}),
     ?assertEqual(Offset1, ?BACKEND:offset(State2)),
     Stream = ?BACKEND:stream(State2),
     Dump = <<
         "   0:	f94002e7 	ldr	x7, [x23]\n"
-        "   4:	aa0703f9 	mov	x25, x7\n"
-        "   8:	f9002ea7 	str	x7, [x21, #88]"
+        "   4:	f90042a7 	str	x7, [x21, #128]"
     >>,
     ?assertStream(aarch64, Dump, Stream).
 
@@ -3156,10 +3154,9 @@ large_operand_test_() ->
             large_operand_dump(
                 State2,
                 <<
-                    "   0:	d28acf07 	mov	x7, #0x5678\n"
-                    "   4:	f2a24687 	movk	x7, #0x1234, lsl #16\n"
-                    "   8:	aa0703fa 	mov	x26, x7\n"
-                    "   c:	f90032a7 	str	x7, [x21, #96]"
+                    "   0:	d28acf1a 	mov	x26, #0x5678\n"
+                    "   4:	f2a2469a 	movk	x26, #0x1234, lsl #16\n"
+                    "   8:	f90032ba 	str	x26, [x21, #96]"
                 >>
             )
         end},
