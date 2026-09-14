@@ -783,9 +783,19 @@ emit_pass(<<?OP_DEALLOCATE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     emit_pass(Rest1, MMod, MSt2, State0);
 % 19
-emit_pass(<<?OP_RETURN, Rest/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
-    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+emit_pass(<<?OP_RETURN, Rest0/binary>>, MMod, MSt0a, #state{tail_cache = TC} = State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0a),
     ?TRACE("OP_RETURN\n", []),
+    %% Control leaves here without passing through a label, so the deferred-store
+    %% window never ends and every store in it survives -- including stores to
+    %% registers no caller may read. Only x0 is live across a return, so end the
+    %% window explicitly with that live-out set and let the rest go.
+    MSt0 =
+        case erlang:function_exported(MMod, pending_flush_mask, 2) of
+            true -> MMod:pending_flush_mask(MSt0a, 1);
+            false -> MSt0a
+        end,
+    Rest = Rest0,
     % Optimized return: check if returning within the same module, in which case
     % we jump directly to the continuation rather than going through PRIM_RETURN.
     MSt5T =
