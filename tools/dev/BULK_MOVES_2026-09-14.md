@@ -306,3 +306,110 @@ rather than just the instruction count, so the bandwidth argument above does not
 dispose of it. It is worth doing -- but there is no x86_64 hardware here to
 measure it on (Rosetta gives correct results and meaningless timings), so it
 should be measured on a real machine before being trusted.
+
+---
+
+# Part 3: x86_64, and four instruction-family evaluations
+
+## x86_64 SSE pairing (shipped, commit 9f70da643)
+
+Measured and validated; see the commit message. A 5-tuple is 10 instructions
+before and 7 after, an arity-2 tuple 5 and 3. Corpus size -0.09%, which
+understates it: `movups` is a byte longer than the `mov` pair it replaces, so
+the real win -- half the memory operations -- does not appear in a byte count.
+
+Validated under Rosetta against a matched baseline (pairing on vs off, identical
+11-test failure set, all explained by the mbedtls-less build). **Both sides were
+verified by looking for `movups` bytes in a precompiled beam before the run was
+trusted.** The ninja dependency from `libs/jit` to the precompiled test beams
+does not fire reliably; it produced a "passing" result from stale codegen twice.
+`rm -rf <build>/tests/erlang_tests/<arch>` before any such A/B.
+
+## ubfm / sbfm / bfm
+
+Counting uses, BeamAsm against us: `ubfx` 8/0, `bfi` 7/0, `ubfiz` 3/0,
+`sbfx` 2/0. We emit `lsl`/`lsr` (which are themselves UBFM aliases) 11 times
+each.
+
+Census of adjacent instruction pairs over 96209 instructions of compiled
+`lists` and `maps`:
+
+    529   asr + orr      asr x9, x9, #63  |  orr x8, x8, x9
+    305   and + lsr      and x7, x7, #0xffffff  |  lsr x7, x7, #2
+    232   lsl + add      lsl x7, x7, #6  |  add x7, x7, #0xb
+
+  - `and` + `lsr` is a textbook `ubfx x7, x7, #2, #22`. **305 sites, worth
+    doing.**
+  - `asr` + `orr` is not a bitfield op but *is* a single instruction: aarch64
+    ALU ops take a shifted register operand, so this is
+    `orr x8, x8, x9, asr #63`. **529 sites, the largest of the three, and it
+    shortens a dependency chain rather than just removing an instruction.**
+  - `lsl` + `add` is header construction, `(arity << 6) | tag`. `bfi` could do
+    it in one only if a register already held the tag, which would cost the
+    `mov` it saved. **Not worth it.**
+
+So the real finding here is not the bitfield family specifically but the
+**shifted-register operand form**, which we never emit and which covers the
+largest pair.
+
+## stp with the zero register
+
+**No.** Over the same corpus there are 48 `str xzr` in total, all isolated
+stores to the same slot. There is no run of zero words to pair: the thing we
+write in runs is NIL (0x3b), not zero, which is why init_yregs materialises a
+register for it in the first place.
+
+## cset / csetm / csel for reducing branches
+
+Measured on **non-DWARF** output, because `jit_dwdump.sh` splits fused
+conditional branches and would have inflated this badly.
+
+93062 instructions contain 3104 forward conditional branches, of which 1218
+skip only 1-3 instructions. That looked like the opportunity. It is not --
+sampling what they skip:
+
+    784   tbnz +1  ||  b <far>              long-branch trampoline
+    264   tbnz +2  ||  mov x0, x0 ; ret     conditional return
+    131   tbnz +2  ||  and x0, #~3 ; br x0  conditional indirect branch
+     27   branch pairs
+
+**None of these are value selection.** They are all control flow, so `csel`
+does not apply to any of them. Our JIT emits VM-level control flow as control
+flow; the "compute one of two values" shape that `csel` exists for barely
+occurs. Scanning the frontend: of 64 `if_else_block` sites, **2** have both arms
+moving to the same destination, which is the only shape `csel` could collapse.
+BeamAsm's 12 uses are hand-written at specific sites, one of which is
+`update_record`'s reuse choice -- the same site is one of our 2.
+
+Worth noting as a side effect: those 784 trampolines are a direct cost of the
+cold-arm outlining, which moved fallback code to the module tail and put it out
+of `tbnz`'s +/-32KB range. That trade still looks right on size, but it is where
+the two-instruction branches come from.
+
+## arm32 condition flags
+
+The arm32 backend already uses predication heavily: about 5580 predicated
+non-branch instructions in 86355. Counting literal condition atoms in the
+backend source finds only 13, which is misleading -- most call sites pass the
+condition in a variable.
+
+Remaining opportunity: 5537 forward conditional branches, of which 717 skip 1-3
+instructions (0.83% of all instructions) and could become predicated
+instructions instead. That is smaller than it looks, and ARM deprecated wide
+predication in ARMv8 for a reason: on an out-of-order ARMv7-A core a
+well-predicted short branch costs about what the predicated instructions would.
+**Low priority.**
+
+## Ranking what is left
+
+    529   orr/add/sub with a shifted register operand   (aarch64, dependency chain)
+    327   consecutive str pairs still unpaired          (aarch64, size only)
+    305   ubfx for and+lsr                              (aarch64)
+    291   consecutive ldr pairs still unpaired          (aarch64, ldp)
+      2   csel-shaped if_else_block sites               (aarch64)
+      0   stp xzr                                       (no opportunity)
+
+Given that `stp` measured as a pure size win, the two pairing rows should be
+expected to behave the same way. The shifted-register and `ubfx` rows are the
+ones that remove work from a dependency chain rather than just instruction
+slots, so they are the ones worth measuring for speed.
