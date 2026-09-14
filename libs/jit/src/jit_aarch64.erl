@@ -3000,6 +3000,17 @@ move_to_vm_register_emit(#state{regs = Regs0} = State0, {x_reg, extra}, Dest) ->
             jit_regs:set_contents(Regs0, Temp, {x_reg, ?MAX_REG})
         }
     end);
+%% x0-x3 live in a home register, and a store only reads its source: store
+%% straight from the home rather than copying it to a scratch first. Same
+%% reason as move_to_array_element; this is the x-to-y and x-to-ptr case.
+move_to_vm_register_emit(#state{} = StateP, {x_reg, X}, {y_reg, _} = Dest) when
+    is_integer(X), X < ?X_HOME_COUNT
+->
+    move_to_vm_register_emit(pending_clear_x(StateP, X), x_home(X), Dest);
+move_to_vm_register_emit(#state{} = StateP, {x_reg, X}, {ptr, _} = Dest) when
+    is_integer(X), X < ?X_HOME_COUNT
+->
+    move_to_vm_register_emit(pending_clear_x(StateP, X), x_home(X), Dest);
 move_to_vm_register_emit(#state{} = StateP, {x_reg, X}, Dest) ->
     #state{regs = Regs0} = State0 = pending_clear_x(StateP, X),
     with_temp(State0, Dest, fun(Temp) ->

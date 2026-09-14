@@ -2175,8 +2175,7 @@ move_to_vm_register_test_() ->
                 %% Test: x_reg to ptr
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 1}, {ptr, r8}, <<
-                        "   0:	aa1a03e7 	mov	x7, x26\n"
-                        "   4:	f9000107 	str	x7, [x8]"
+                        "   0:	f900011a 	str	x26, [x8]"
                     >>)
                 end),
                 %% Test: ptr to x_reg
@@ -2190,8 +2189,7 @@ move_to_vm_register_test_() ->
                 %% Test: x_reg to y_reg
                 ?_test(begin
                     move_to_vm_register_test0(State0, {x_reg, 0}, {y_reg, 1}, <<
-                        "   0:	aa1903e7 	mov	x7, x25\n"
-                        "   4:	f90006e7 	str	x7, [x23, #8]"
+                        "   0:	f90006f9 	str	x25, [x23, #8]"
                     >>)
                 end),
                 %% Test: y_reg to x_reg
