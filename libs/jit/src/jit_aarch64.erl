@@ -22,6 +22,7 @@
 
 -export([
     word_size/0,
+    pending_flush_mask/2,
     new/3,
     stream/1,
     offset/1,
@@ -53,6 +54,7 @@
     supports_inline_tuple2_eq/0,
     supports_select_val_binary_search/0,
     supports_select_val_ranges/0,
+    and_to_native_register/3,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -3353,9 +3355,18 @@ move_to_array_element(
     Reg,
     Index
 ) ->
-    {State1, Temp} = copy_to_native_register(State0, Value),
-    State2 = move_to_array_element(State1, Temp, Reg, Index),
-    free_native_register(State2, Temp).
+    %% A store only reads its source, so when the value already sits in a
+    %% register -- an x0-x3 home, or one the cache is holding -- store straight
+    %% from it. Copying it to a scratch first cost a mov per element, which
+    %% put_tuple2 and put_list paid for every field.
+    case value_in_register(State0, Value) of
+        {ok, SrcReg} ->
+            move_to_array_element(State0, SrcReg, Reg, Index);
+        false ->
+            {State1, Temp} = copy_to_native_register(State0, Value),
+            State2 = move_to_array_element(State1, Temp, Reg, Index),
+            free_native_register(State2, Temp)
+    end.
 
 %%-----------------------------------------------------------------------------
 %% @doc Emit a move of a value (integer, vm register or native register) to an
@@ -4023,6 +4034,50 @@ op_imm(
 %% @param Val immediate value to AND
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+%%-----------------------------------------------------------------------------
+%% @doc Fresh register holding `Value band Mask', leaving Value's own register
+%% alone.
+%%
+%% `and_/3' is in-place, so the frontend's "load then mask" idiom has to copy
+%% the value out first. When the value lives in an x0-x3 home register that
+%% copy is a whole instruction, and it also throws away the home's cached
+%% contents; the three-operand form does both in one `and' and keeps the cache.
+%% This is what lets BeamAsm write `and x0, x25, -8' where we wrote
+%% `mov x7, x25' then `and x7, x7, -8'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec and_to_native_register(state(), value(), integer()) -> {state(), aarch64_register()}.
+and_to_native_register(#state{regs = Regs0} = State0, Value, Mask) when is_integer(Mask) ->
+    case value_in_register(State0, Value) of
+        {ok, SrcReg} ->
+            Dest = first_avail(jit_regs:available_regs(Regs0)),
+            State1 = op_imm(State0, and_, Dest, SrcReg, Mask),
+            Regs1 = jit_regs:invalidate_reg(State1#state.regs, Dest),
+            {State1#state{regs = jit_regs:alloc_reg(Regs1, reg_bit(Dest))}, Dest};
+        false ->
+            {State1, Reg} = move_to_native_register(State0, Value),
+            and_(State1, {free, Reg}, Mask)
+    end.
+
+%% @private
+%% The register a value can be read from without emitting anything: an x0-x3
+%% home, or a register the cache says already holds it. Anything else has to be
+%% materialized first.
+value_in_register(_State, Reg) when ?IS_GPR(Reg) ->
+    {ok, Reg};
+value_in_register(_State, {x_reg, X}) when is_integer(X), X < ?X_HOME_COUNT ->
+    {ok, x_home(X)};
+value_in_register(#state{regs = Regs}, Value) ->
+    case jit_regs:value_to_contents(Value, ?MAX_REG) of
+        unknown ->
+            false;
+        Contents ->
+            case jit_regs:find_reg_with_contents(Regs, Contents) of
+                {ok, CachedReg} -> {ok, CachedReg};
+                _ -> false
+            end
+    end.
+
 and_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State,
     {free, Reg},
