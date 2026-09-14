@@ -55,6 +55,7 @@
     supports_select_val_binary_search/0,
     supports_select_val_ranges/0,
     and_to_native_register/3,
+    move_array_elements_pair/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -455,6 +456,9 @@
     (?REG_BIT_R25 bor ?REG_BIT_R26 bor ?REG_BIT_R27 bor ?REG_BIT_R28)
 ).
 -define(X_HOME_COUNT, 4).
+%% Largest array index an ldp can reach: its offset is a scaled 7-bit signed
+%% immediate, so 504 bytes, so 63 words.
+-define(LDP_MAX_INDEX, 63).
 
 -define(AVAILABLE_REGS_MASK,
     (?REG_BIT_R7 bor ?REG_BIT_R8 bor ?REG_BIT_R9 bor ?REG_BIT_R10 bor ?REG_BIT_R11 bor
@@ -4034,6 +4038,50 @@ op_imm(
 %% @param Val immediate value to AND
 %% @return Updated backend state
 %%-----------------------------------------------------------------------------
+%%-----------------------------------------------------------------------------
+%% @doc Read two adjacent array words into two x registers with one ldp.
+%%
+%% The same trick as get_list_head_tail, for the consecutive fields of a tuple:
+%% BEAM calls it get_two_tuple_elements. For x0-x3 the destination IS the home
+%% register, so the paired load writes it directly.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec move_array_elements_pair(
+    state(), aarch64_register(), non_neg_integer(), vm_register(), vm_register()
+) -> state().
+move_array_elements_pair(State0, Reg, Index, Dest1, Dest2) when
+    not (is_integer(Index) andalso Index >= 0 andalso Index =< ?LDP_MAX_INDEX)
+->
+    %% ldp's offset is a scaled 7-bit signed immediate, so it only reaches
+    %% index 63. Past that, two separate loads say the same thing.
+    State1 = move_array_element(State0, Reg, Index, Dest1),
+    State2 = free_native_register(State1, Dest1),
+    State3 = move_array_element(State2, Reg, Index + 1, Dest2),
+    free_native_register(State3, Dest2);
+move_array_elements_pair(State0, Reg, Index, {x_reg, X1}, {x_reg, X2}) when
+    is_integer(X1), is_integer(X2), X1 < ?MAX_REG, X2 < ?MAX_REG, X1 =/= X2
+->
+    #state{stream_module = SM, regs = Regs0} =
+        State1 = pending_elide_prev(pending_elide_prev(State0, X1), X2),
+    Avail0 = jit_regs:available_regs(Regs0),
+    {Reg1, Avail1} = get_list_dest_reg(X1, Avail0),
+    {Reg2, _Avail2} = get_list_dest_reg(X2, Avail1),
+    %% The {Base, Imm} form: ldp/4 takes {Base} and is POST-INDEXED, which
+    %% writes the bumped address back to the base register.
+    Ldp = jit_aarch64_asm:ldp(Reg1, Reg2, {Reg, Index * ?WORD_SIZE}),
+    StreamA = SM:append(State1#state.stream, Ldp),
+    %% Each store is noted while it is the last instruction emitted, so
+    %% pending_note_store records the right offset.
+    St1 = jit_aarch64_asm:str(Reg1, ?X_REG(X1)),
+    StateB = pending_note_store(State1#state{stream = SM:append(StreamA, St1)}, X1),
+    St2 = jit_aarch64_asm:str(Reg2, ?X_REG(X2)),
+    StateC = pending_note_store(StateB#state{stream = SM:append(StateB#state.stream, St2)}, X2),
+    Regs1 = jit_regs:invalidate_vm_loc(StateC#state.regs, {x_reg, X1}),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, X2}),
+    Regs3 = jit_regs:set_contents(Regs2, Reg1, {x_reg, X1}),
+    Regs4 = jit_regs:set_contents(Regs3, Reg2, {x_reg, X2}),
+    StateC#state{regs = Regs4}.
+
 %%-----------------------------------------------------------------------------
 %% @doc Fresh register holding `Value band Mask', leaving Value's own register
 %% alone.
