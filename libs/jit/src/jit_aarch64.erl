@@ -599,7 +599,10 @@ x_read(Dst, X) ->
 %% pending-elision bookkeeping (which assumes the str is the last emitted
 %% instruction) stays correct.
 x_home_update(Src, X) when is_integer(X), X < ?X_HOME_COUNT ->
-    jit_aarch64_asm:mov(x_home(X), Src);
+    case x_home(X) of
+        Src -> <<>>;
+        Home -> jit_aarch64_asm:mov(Home, Src)
+    end;
 x_home_update(_Src, _X) ->
     <<>>.
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
@@ -3051,7 +3054,17 @@ with_temp(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Dest, EmitFn
 ) ->
     AR0 = jit_regs:available_regs(Regs0),
-    Temp = first_avail(AR0),
+    %% When the destination is an x register with a home, compute into the home
+    %% itself: otherwise the value lands in a scratch and is copied there, which
+    %% is a mov per load into x0-x3. Every EmitFn here emits a single
+    %% instruction whose source does not depend on the temp, so writing the home
+    %% early cannot disturb it, and x_home_update/2 notices it has nothing left
+    %% to do.
+    Temp =
+        case Dest of
+            {x_reg, X} when is_integer(X), X < ?X_HOME_COUNT -> x_home(X);
+            _ -> first_avail(AR0)
+        end,
     TempBit = reg_bit(Temp),
     {Code, Regs1} = EmitFn(Temp),
     Stream1 = StreamModule:append(Stream0, Code),
