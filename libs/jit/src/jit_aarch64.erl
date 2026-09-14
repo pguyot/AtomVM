@@ -3137,13 +3137,19 @@ move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State =
         pending_elide_prev(State0, X),
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
-    I1 = jit_aarch64_asm:ldr(Temp, {Reg, Index * ?WORD_SIZE}),
-    I2 = <<(x_home_update(Temp, X))/binary, (jit_aarch64_asm:str(Temp, ?X_REG(X)))/binary>>,
+    %% Load straight into the home register when the destination has one:
+    %% going through a scratch costs a mov per element, which a run of
+    %% get_tuple_element pays for every field.
+    Dest =
+        case X < ?X_HOME_COUNT of
+            true -> x_home(X);
+            false -> first_avail(jit_regs:available_regs(Regs0))
+        end,
+    I1 = jit_aarch64_asm:ldr(Dest, {Reg, Index * ?WORD_SIZE}),
+    I2 = jit_aarch64_asm:str(Dest, ?X_REG(X)),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
-    Regs2 = jit_regs:set_contents(Regs1, Temp, {x_reg, X}),
+    Regs2 = jit_regs:set_contents(Regs1, Dest, {x_reg, X}),
     pending_note_store(State#state{stream = Stream1, regs = Regs2}, X);
 move_array_element(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =

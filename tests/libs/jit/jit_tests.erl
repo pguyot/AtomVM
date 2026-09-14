@@ -984,11 +984,12 @@ fuse_tagged_tuple_single_aarch64_test() ->
         jit_aarch64, ?FUSE_TT_SINGLE_CODE, ?FUSE_TT_SINGLE_ATU8, <<>>
     ),
     % Fused: tag atom read into scratch x9 keeps x8 (the pointer) live, then the
-    % field is read from x8 directly.
-    %   09 05 40 f9    ldr  x9, [x8, #8]     (tag atom into scratch)
-    %   07 09 40 f9    ldr  x7, [x8, #16]    (field read from kept pointer)
+    % field is read from x8 directly -- and straight into x0's home register,
+    % with no scratch in between.
+    %   09 05 40 f9    ldr  x9,  [x8, #8]     (tag atom into scratch)
+    %   19 09 40 f9    ldr  x25, [x8, #16]    (field read from kept pointer)
     ?assertMatch({_, _}, binary:match(CompiledCode, <<16#09, 16#05, 16#40, 16#f9>>)),
-    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#07, 16#09, 16#40, 16#f9>>)),
+    ?assertMatch({_, _}, binary:match(CompiledCode, <<16#19, 16#09, 16#40, 16#f9>>)),
     ok.
 
 %%-----------------------------------------------------------------------------
