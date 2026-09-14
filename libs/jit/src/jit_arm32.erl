@@ -28,6 +28,7 @@
     supports_loop_residency/0,
     supports_select_val_ranges/0,
     get_list_head_tail/4,
+    copy_array_elements/5,
     stream/1,
     offset/1,
     flush/1,
@@ -464,6 +465,8 @@ debugger(#state{stream_module = StreamModule, stream = Stream0} = State) ->
 %% (r6's successor r7 is ctx). Returns `none' when no pair is free, in which
 %% case the caller emits the two-instruction-per-word form instead.
 -define(REG_PAIRS, [{r0, r1}, {r2, r3}, {r4, r5}]).
+%% ldrd/strd take an unscaled 8-bit offset, so they reach word 255 div 4.
+-define(LDRD_MAX_INDEX, 63).
 -define(MASK_TO_LIST_REGS, ?FIRST_AVAIL_REGS).
 -define(JITSTATE_ARG_REG, jit_state).
 -include("jit_backend_regs_impl.hrl").
@@ -4763,6 +4766,50 @@ ldr_y_reg(
     Stream1 = StreamModule:append(Stream0, Code),
     Regs1 = jit_regs:invalidate_reg(Regs0, DstReg),
     State#state{stream = Stream1, regs = Regs1}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Copy `Count' consecutive words from one boxed term to another, moving a
+%% register pair per `ldrd'/`strd' where one is free and the offsets reach.
+%%
+%% This is update_record's rebuild copy. `ldrd'/`strd' take an 8-bit unscaled
+%% offset, so they reach word 63; past that, for a trailing odd word, and when
+%% no even/odd pair is free, the one-at-a-time form says the same thing.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec copy_array_elements(
+    state(), arm32_register(), arm32_register(), non_neg_integer(), integer()
+) -> state().
+copy_array_elements(State0, SrcReg, DestReg, From, Count) ->
+    copy_array_elements_run(State0, SrcReg, DestReg, From, Count).
+
+copy_array_elements_run(State, _SrcReg, _DestReg, _Index, Count) when Count =< 0 ->
+    State;
+copy_array_elements_run(
+    #state{stream_module = SM, stream = Stream0, regs = Regs0} = State0,
+    SrcReg,
+    DestReg,
+    Index,
+    Count
+) when Count >= 2, Index >= 0, Index =< ?LDRD_MAX_INDEX ->
+    case first_avail_pair(jit_regs:available_regs(Regs0)) of
+        {Low, High} ->
+            Ldrd = jit_arm32_asm:ldrd(al, Low, {SrcReg, Index * 4}),
+            Strd = jit_arm32_asm:strd(al, Low, {DestReg, Index * 4}),
+            Stream1 = SM:append(Stream0, <<Ldrd/binary, Strd/binary>>),
+            Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Low), High),
+            State1 = State0#state{stream = Stream1, regs = Regs1},
+            copy_array_elements_run(State1, SrcReg, DestReg, Index + 2, Count - 2);
+        none ->
+            copy_array_element_single(State0, SrcReg, DestReg, Index, Count)
+    end;
+copy_array_elements_run(State0, SrcReg, DestReg, Index, Count) ->
+    copy_array_element_single(State0, SrcReg, DestReg, Index, Count).
+
+copy_array_element_single(State0, SrcReg, DestReg, Index, Count) ->
+    {State1, Value} = get_array_element(State0, SrcReg, Index),
+    State2 = move_to_array_element(State1, Value, DestReg, Index),
+    State3 = free_native_register(State2, Value),
+    copy_array_elements_run(State3, SrcReg, DestReg, Index + 1, Count - 1).
 
 %% @private
 %% The first free even/odd register pair usable by ldrd/strd, or `none'.
