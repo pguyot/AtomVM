@@ -31,6 +31,9 @@ TARGET=$1
 BEAM=$2
 OUT=${3:-$(mktemp -d)}
 : "${JITDW:?set JITDW to a directory of jit beams built with -DJIT_DWARF}"
+# llvm-objdump picks a restricted subtarget for the arm32 ELF and prints
+# <unknown> for perfectly ordinary ARM encodings (ldrd, strd, even bx). Use
+# OBJDUMP=arm-none-eabi-objdump for that target.
 OBJDUMP=${OBJDUMP:-llvm-objdump}
 
 mkdir -p "$OUT"
