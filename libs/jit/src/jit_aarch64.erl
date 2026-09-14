@@ -58,6 +58,7 @@
     can_test_in_place/1,
     move_array_elements_pair/5,
     move_to_vm_registers_pair/4,
+    move_to_array_elements_pair/5,
     copy_array_elements/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
@@ -4189,6 +4190,61 @@ move_array_elements_pair(State0, Reg, Index, {x_reg, X1}, {x_reg, X2}) when
     Regs3 = jit_regs:set_contents(Regs2, Reg1, {x_reg, X1}),
     Regs4 = jit_regs:set_contents(Regs3, Reg2, {x_reg, X2}),
     StateC#state{regs = Regs4}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Store two values into consecutive array slots with a single `stp'.
+%%
+%% This is how a tuple or a cons cell gets built two words per instruction,
+%% which is what BEAM's emit_put_tuple2 does. Either value may already be in a
+%% register -- an x0-x3 home, or one the cache is holding -- in which case it is
+%% stored straight from there; otherwise it is materialised into a scratch that
+%% is released again once the store is out. `stp' allows the same register
+%% twice, so repeated values need no special case.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec move_to_array_elements_pair(
+    state(), value(), value(), aarch64_register(), non_neg_integer()
+) -> state().
+move_to_array_elements_pair(State0, Value1, Value2, Reg, Index) when
+    is_integer(Index), Index >= 0, Index =< ?LDP_MAX_INDEX
+->
+    {State1, Reg1, Own1} = store_operand(State0, Value1),
+    {State2, Reg2, Own2} = store_operand(State1, Value2),
+    #state{stream_module = SM, stream = Stream0} = State2,
+    I = jit_aarch64_asm:stp(Reg1, Reg2, {Reg, Index * ?WORD_SIZE}),
+    State3 = State2#state{stream = SM:append(Stream0, I)},
+    release_operand(release_operand(State3, Reg1, Own1), Reg2, Own2);
+move_to_array_elements_pair(State0, Value1, Value2, Reg, Index) ->
+    %% stp reaches slot 63 with its scaled 7-bit offset; past that, two stores
+    %% say the same thing.
+    State1 = move_to_array_element(State0, Value1, Reg, Index),
+    move_to_array_element(State1, Value2, Reg, Index + 1).
+
+store_operand(#state{regs = Regs} = State0, Value) ->
+    case value_in_register(State0, Value) of
+        {ok, Reg} ->
+            %% A register found this way may only be *caching* the value, in
+            %% which case it is still in the available pool -- and
+            %% materialising the other half of the pair would then allocate
+            %% straight over it. Hold it for the duration. (This is why the
+            %% one-at-a-time store path can use value_in_register directly: it
+            %% never keeps a register across an allocation.)
+            Bit = reg_bit(Reg),
+            case jit_regs:available_regs(Regs) band Bit of
+                0 -> {State0, Reg, borrowed};
+                _ -> {State0#state{regs = jit_regs:alloc_reg(Regs, Bit)}, Reg, reserved}
+            end;
+        false ->
+            {State1, Reg} = move_to_native_register(State0, Value),
+            {State1, Reg, owned}
+    end.
+
+release_operand(State, _Reg, borrowed) ->
+    State;
+release_operand(#state{regs = Regs} = State, Reg, reserved) ->
+    State#state{regs = jit_regs:free_reg(Regs, reg_bit(Reg))};
+release_operand(State, Reg, owned) ->
+    free_native_register(State, Reg).
 
 %%-----------------------------------------------------------------------------
 %% @doc Copy `Count' consecutive words from one boxed term to another, moving a
