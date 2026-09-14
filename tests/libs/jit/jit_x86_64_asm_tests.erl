@@ -227,6 +227,28 @@ movq_test_() ->
         )
     ].
 
+movups_test_() ->
+    [
+        %% Verified byte-for-byte against clang -arch x86_64. The x86_64 asm
+        %% cross-check needs an x86_64-prefixed binutils, which an Apple
+        %% Silicon host does not have, so these encodings are the reference.
+        ?_assertAsmEqual(
+            <<16#41, 16#0F, 16#10, 16#46, 16#58>>,
+            "movups 0x58(%r14), %xmm0",
+            jit_x86_64_asm:movups(xmm0, {16#58, r14})
+        ),
+        ?_assertAsmEqual(
+            <<16#0F, 16#11, 16#40, 16#08>>,
+            "movups %xmm0, 0x8(%rax)",
+            jit_x86_64_asm:movups({16#8, rax}, xmm0)
+        ),
+        ?_assertAsmEqual(
+            <<16#0F, 16#10, 16#8B, 16#00, 16#01, 16#00, 16#00>>,
+            "movups 0x100(%rbx), %xmm1",
+            jit_x86_64_asm:movups(xmm1, {16#100, rbx})
+        )
+    ].
+
 movabsq_test_() ->
     [
         ?_assertAsmEqual(
