@@ -3136,18 +3136,17 @@ emit_pass(<<?OP_INIT_YREGS, Rest0/binary>>, MMod, MSt0, State) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {ListSize, Rest1} = decode_extended_list_header(Rest0),
     ?TRACE("OP_INIT_YREGS ~p\n", [ListSize]),
-    {MSt1, Rest2} = lists:foldl(
-        fun(_, {AccMSt0, AccRest0}) ->
+    {MSt1, RevDests, Rest2} = lists:foldl(
+        fun(_, {AccMSt0, AccDests, AccRest0}) ->
             {AccMSt1, Dest, AccRest1} = decode_dest(AccRest0, MMod, AccMSt0),
-            AccMSt2 = MMod:move_to_vm_register(AccMSt1, ?TERM_NIL, Dest),
-            AccMSt3 = MMod:free_native_registers(AccMSt2, [Dest]),
-            {AccMSt3, AccRest1}
+            {AccMSt1, [Dest | AccDests], AccRest1}
         end,
-        {MSt0, Rest1},
+        {MSt0, [], Rest1},
         lists:duplicate(ListSize, [])
     ),
-    ?ASSERT_ALL_NATIVE_FREE(MSt1),
-    emit_pass(Rest2, MMod, MSt1, State);
+    MSt2 = emit_init_yregs(MMod, MSt1, lists:reverse(RevDests)),
+    ?ASSERT_ALL_NATIVE_FREE(MSt2),
+    emit_pass(Rest2, MMod, MSt2, State);
 % 173
 emit_pass(<<?OP_RECV_MARKER_BIND, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -8064,6 +8063,77 @@ term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
             MMod:free_native_registers(BSt5, [AllocMatchStateReg, NewSrc])
         end
     ).
+
+%% Emit init_yregs: set a list of stack slots to NIL.
+%%
+%% Done one slot at a time this costs two instructions each, because the
+%% constant is re-materialised for every store. Loading NIL once and reusing it
+%% removes half of them on every backend, and where the backend can store a
+%% register pair, consecutive slots go two at a time.
+%%
+%% BeamAsm reaches for a vector register here (`movi v0.2d, -1' then
+%% `stp q0, q0'), which fills four slots per instruction. That does not pay for
+%% us: a census of init_yregs over the OTP-29 corpus finds 27740 runs of a
+%% single slot against 1040 of four or more, so the extra setup instruction per
+%% site costs more than the wider store saves -- q registers score 108133
+%% instructions against 79120 for plain paired stores (118290 before). BEAM can
+%% afford the setup because its NIL is all-ones, so `movi' alone builds it;
+%% AtomVM's NIL is 0x3b and would need a `dup' from a general register too.
+emit_init_yregs(_MMod, MSt, []) ->
+    MSt;
+emit_init_yregs(MMod, MSt0, [Dest]) ->
+    MSt1 = MMod:move_to_vm_register(MSt0, ?TERM_NIL, Dest),
+    MMod:free_native_registers(MSt1, [Dest]);
+emit_init_yregs(MMod, MSt0, Dests0) when length(Dests0) > 1 ->
+    case
+        erlang:function_exported(MMod, constants_are_free, 0) andalso
+            MMod:constants_are_free()
+    of
+        true -> emit_init_yregs_plain(MMod, MSt0, Dests0);
+        false -> emit_init_yregs_hoisted(MMod, MSt0, Dests0)
+    end.
+
+emit_init_yregs_plain(_MMod, MSt, []) ->
+    MSt;
+emit_init_yregs_plain(MMod, MSt0, [Dest | Tail]) ->
+    MSt1 = MMod:move_to_vm_register(MSt0, ?TERM_NIL, Dest),
+    MSt2 = MMod:free_native_registers(MSt1, [Dest]),
+    emit_init_yregs_plain(MMod, MSt2, Tail).
+
+emit_init_yregs_hoisted(MMod, MSt0, Dests0) ->
+    %% Every store writes the same value to a distinct slot, so sorting only
+    %% changes which of them end up adjacent -- and adjacency is what pairs.
+    Dests =
+        case
+            lists:all(
+                fun
+                    ({y_reg, Y}) -> is_integer(Y);
+                    (_) -> false
+                end,
+                Dests0
+            )
+        of
+            true -> lists:sort(Dests0);
+            false -> Dests0
+        end,
+    {MSt1, NilReg} = MMod:move_to_native_register(MSt0, ?TERM_NIL),
+    Paired = erlang:function_exported(MMod, move_to_vm_registers_pair, 4),
+    MSt2 = emit_init_yregs_stores(MMod, MSt1, NilReg, Dests, Paired),
+    MMod:free_native_registers(MSt2, [NilReg]).
+
+emit_init_yregs_stores(_MMod, MSt, _NilReg, [], _Paired) ->
+    MSt;
+emit_init_yregs_stores(
+    MMod, MSt0, NilReg, [{y_reg, Y1} = D1, {y_reg, Y2} = D2 | Tail], true
+) when
+    is_integer(Y1), Y2 =:= Y1 + 1
+->
+    MSt1 = MMod:move_to_vm_registers_pair(MSt0, NilReg, D1, D2),
+    emit_init_yregs_stores(MMod, MSt1, NilReg, Tail, true);
+emit_init_yregs_stores(MMod, MSt0, NilReg, [Dest | Tail], Paired) ->
+    MSt1 = MMod:move_to_vm_register(MSt0, NilReg, Dest),
+    MSt2 = MMod:free_native_registers(MSt1, [Dest]),
+    emit_init_yregs_stores(MMod, MSt2, NilReg, Tail, Paired).
 
 %% Emit a run of reads from one tuple, pairing adjacent fields into a single
 %% two-word load where the backend has one (aarch64's ldp -- BEAM calls the
