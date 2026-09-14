@@ -1463,8 +1463,21 @@ emit_pass(<<?OP_PUT_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
                 %% is a pure bump allocation plus two stores: inline it
                 %% instead of paying a primitive call per cons.
                 {MSt4, Ptr} = MMod:heap_bump_alloc(MSt3, 2),
-                MSt5a = MMod:move_to_array_element(MSt4, Tail, Ptr, ?LIST_TAIL_INDEX),
-                MSt5b = MMod:move_to_array_element(MSt5a, Head, Ptr, ?LIST_HEAD_INDEX),
+                %% The tail sits at slot 0 and the head at slot 1, so the two
+                %% stores are adjacent and go out as one paired store where the
+                %% backend has one.
+                MSt5b =
+                    case erlang:function_exported(MMod, move_to_array_elements_pair, 5) of
+                        true ->
+                            MMod:move_to_array_elements_pair(
+                                MSt4, Tail, Head, Ptr, ?LIST_TAIL_INDEX
+                            );
+                        false ->
+                            MSt5a = MMod:move_to_array_element(
+                                MSt4, Tail, Ptr, ?LIST_TAIL_INDEX
+                            ),
+                            MMod:move_to_array_element(MSt5a, Head, Ptr, ?LIST_HEAD_INDEX)
+                    end,
                 MSt5c = MMod:free_native_registers(MSt5b, [Head, Tail]),
                 MSt5d = MMod:or_(MSt5c, Ptr, ?TERM_PRIMARY_LIST),
                 MSt6 = MMod:move_to_vm_register(MSt5d, Ptr, Dest),
@@ -2991,17 +3004,9 @@ emit_pass(<<?OP_PUT_TUPLE2, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Dest, Rest1} = decode_dest(Rest0, MMod, MSt0),
     {ListSize, Rest2} = decode_extended_list_header(Rest1),
     ?TRACE("OP_PUT_TUPLE2 ~p, [", [Dest]),
-    {MSt3, ResultReg} = alloc_tuple(MMod, MSt1, ListSize),
-    {MSt4, Rest3} = lists:foldl(
-        fun(Index, {AccMSt0, AccRest0}) ->
-            {AccMSt1, Element, AccRest1} = decode_compact_term(AccRest0, MMod, AccMSt0, State0),
-            ?TRACE("~p,", [Element]),
-            AccMSt2 = MMod:move_to_array_element(AccMSt1, Element, ResultReg, Index),
-            AccMSt3 = MMod:free_native_registers(AccMSt2, [Element]),
-            {AccMSt3, AccRest1}
-        end,
-        {MSt3, Rest2},
-        lists:seq(1, ListSize)
+    {MSt3, ResultReg, FirstSlot, Pending} = alloc_tuple_cells(MMod, MSt1, ListSize),
+    {MSt4, Rest3} = emit_array_words(
+        MMod, MSt3, Rest2, State0, ResultReg, FirstSlot, Pending, ListSize
     ),
     ?TRACE("]\n", []),
     MSt5 = MMod:or_(MSt4, ResultReg, ?TERM_PRIMARY_BOXED),
@@ -8082,6 +8087,57 @@ copy_array_elements_loop(MMod, MSt0, SrcReg, DestReg, Index, Count) ->
     MSt2 = MMod:move_to_array_element(MSt1, SrcValue, DestReg, Index),
     MSt3 = MMod:free_native_registers(MSt2, [SrcValue]),
     copy_array_elements_loop(MMod, MSt3, SrcReg, DestReg, Index + 1, Count - 1).
+
+%% Reserve the cells for a put_tuple2 without writing the header yet.
+%%
+%% Returns the first slot still to be written and the values already queued for
+%% it. On the inline path the header is left unwritten so it can pair with the
+%% first element; the primitive path writes it itself, so only the elements are
+%% left, starting at slot 1.
+alloc_tuple_cells(MMod, MSt0, Size) ->
+    case erlang:function_exported(MMod, heap_bump_alloc, 2) of
+        true ->
+            {MSt1, Ptr} = MMod:heap_bump_alloc(MSt0, Size + 1),
+            {MSt1, Ptr, 0, [(Size bsl 6) bor ?TERM_BOXED_TUPLE]};
+        false ->
+            {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
+            {MSt2, Ptr} = MMod:and_(MSt1, {free, ResultReg}, ?TERM_PRIMARY_CLEAR_MASK),
+            {MSt2, Ptr, 1, []}
+    end.
+
+%% Write a run of values into consecutive array slots, decoding the ones that
+%% still have to come off the instruction stream.
+%%
+%% Adjacent slots share a single paired store where the backend has one, which
+%% is what BEAM's emit_put_tuple2 does with stp. Elements are decoded only as
+%% each pair needs them and flushed as soon as both halves are in hand, so at
+%% most two are ever live: decoding a wide tuple up front would exhaust the
+%% register file on the narrower backends.
+emit_array_words(MMod, MSt0, Rest0, State, Reg, Index, Queued, Remaining) ->
+    Paired = erlang:function_exported(MMod, move_to_array_elements_pair, 5),
+    emit_array_words(MMod, MSt0, Rest0, State, Reg, Index, Queued, Remaining, Paired).
+
+emit_array_words(_MMod, MSt, Rest, _State, _Reg, _Index, [], 0, _Paired) ->
+    {MSt, Rest};
+emit_array_words(MMod, MSt0, Rest0, State, Reg, Index, [V1, V2], Remaining, true) ->
+    MSt1 = MMod:move_to_array_elements_pair(MSt0, V1, V2, Reg, Index),
+    MSt2 = MMod:free_native_registers(MSt1, [V1]),
+    MSt3 = MMod:free_native_registers(MSt2, [V2]),
+    emit_array_words(MMod, MSt3, Rest0, State, Reg, Index + 2, [], Remaining, true);
+emit_array_words(MMod, MSt0, Rest0, State, Reg, Index, [Value | Queued], Remaining, Paired) when
+    Remaining =:= 0 orelse not Paired
+->
+    MSt1 = MMod:move_to_array_element(MSt0, Value, Reg, Index),
+    MSt2 = MMod:free_native_registers(MSt1, [Value]),
+    emit_array_words(MMod, MSt2, Rest0, State, Reg, Index + 1, Queued, Remaining, Paired);
+emit_array_words(MMod, MSt0, Rest0, State, Reg, Index, Queued, Remaining, Paired) when
+    Remaining > 0
+->
+    {MSt1, Element, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State),
+    ?TRACE("~p,", [Element]),
+    emit_array_words(
+        MMod, MSt1, Rest1, State, Reg, Index, Queued ++ [Element], Remaining - 1, Paired
+    ).
 
 %% Emit init_yregs: set a list of stack slots to NIL.
 %%

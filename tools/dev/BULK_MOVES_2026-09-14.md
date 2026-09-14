@@ -215,3 +215,94 @@ benchmark pinned to one core. Always check `vcgencmd measure_clock arm` --
   AtomVM** (`erlang:system_info(machine)` is `"ATOM"`, and `asm/3` returns the
   input unchanged). Run them on host BEAM with binutils on PATH to get the
   cross-check; verify it is live by feeding a deliberately wrong expectation.
+
+---
+
+# Part 2: term construction (put_tuple2 / put_list)
+
+The first half of this document was about *copying* runs of words. Construction
+is the bigger target and was unpaired everywhere.
+
+Census over the OTP-29 corpus:
+
+    put_tuple2   80235 sites   286617 stores   ->  174451 paired
+    put_list     81650 sites   163300 stores   ->   81650 paired
+    total                      449917          ->  256101   (-43%)
+
+That is ~194k instructions, more than the ~118k the update_record copy saved.
+Tuple arities are heavily concentrated: 55614 sites at arity 2 and 14982 at
+arity 3, so most of it is a single pair plus a remainder.
+
+Shipped on aarch64: `stp` for both. A cons cell is now one instruction instead
+of two, and a 5-tuple's block went from 8 instructions to 5.
+
+    aarch64 corpus code size  -0.70%   (the largest single change this session)
+
+Every other backend is byte-identical -- none of them has the capability.
+
+## The speed result: none, and the reason
+
+**On aarch64 this is a code-size optimisation only.** Two measurements agree.
+
+An interleaved A/B over a construction-heavy loop (20 cons cells and three
+tuples per iteration, 15 runs, same VM binary with only the benchmark's
+precompiled native code differing):
+
+    baseline 37783 us   paired 37662 us   1.0032x
+
+And the instruction itself, on Apple Silicon:
+
+    6-word tuple:   6 x str  0.694 ns     3 x stp  0.698 ns
+    cons cell:      2 x str  0.680 ns     1 x stp  0.684 ns
+
+`stp` is not faster than `str`. Both forms move the same number of bytes, and
+the store unit is bandwidth-limited rather than issue-limited, so removing the
+instruction removes nothing that was on the critical path. This is the same
+shape as the q-register result in Part 1, and for the same underlying reason.
+
+The change is kept for the code size: AtomVM ships precompiled native code, and
+-0.70% of it is worth having when it costs nothing.
+
+## Why it does not extend to arm32 or armv6m
+
+The instructions exist on both (`stm`, `strd`), but measured on a Cortex-A7,
+above the loop floor:
+
+    16 cons cells (32 words)      32 x str    36.00 cycles
+                                  16 x stm{2} 34.74
+                                  16 x strd   31.04
+    10 arity-2 tuples (30 words)  30 x str    24.20 cycles
+                                  10 x stm{3} 29.40   <- worse than plain stores
+
+`stm` has a per-instruction overhead that only amortises with a wide register
+list, and a wide list is exactly what term construction cannot offer: arity 2
+dominates. `strd` does win on cons cells, but it carries the ARMv6 alignment
+hazard documented in Part 1 and a 32-bit heap is only word aligned.
+
+Two further constraints make it worse than the measurements suggest:
+
+  - `stm`'s register list is a bitmask, so it always stores in ascending
+    register-number order. For a copy we choose both ends; for construction the
+    values are wherever they already are, so half the time the order is wrong
+    and fixing it costs the `mov` the pairing saved.
+  - Thumb-1 `STM` always writes back, so the tuple pointer needed afterwards
+    has to be copied first -- one extra instruction, which for the dominant
+    arity-2 case cancels the entire saving (3 stores becomes mov + stm + str).
+
+So the answer for these two backends is not "not yet", it is "no".
+
+## x86_64: the one candidate left, and it is a different mechanism
+
+x86_64 has no GPR pair store, so BEAM does something else there: when two
+consecutive tuple elements are *adjacent in memory* it moves both with one
+16-byte SSE load and one store (`vmovups`), and when they are adjacent but
+reversed it loads-and-swaps with `vpermilpd`. Our x86_64 has no x-home
+registers, so every element is loaded from `ctx->x[]` -- and the corpus is full
+of tuples built from consecutive x registers, which is exactly the case it
+detects. Our 5-tuple is 10 instructions where BEAM's is 6.
+
+That is not the same trade as `stp`: it halves the number of memory *operations*
+rather than just the instruction count, so the bandwidth argument above does not
+dispose of it. It is worth doing -- but there is no x86_64 hardware here to
+measure it on (Rosetta gives correct results and meaningless timings), so it
+should be measured on a real machine before being trusted.
