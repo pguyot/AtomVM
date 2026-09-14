@@ -18,7 +18,7 @@ entry size differs per backend.
 
 | backend | before | after | change |
 |---|---:|---:|---:|
-| aarch64 | 34,815,424 | 34,275,272 | **-1.55%** |
+| aarch64 | 34,815,424 | 33,776,812 | **-2.98%** |
 | xtensa | 29,376,531 | 29,132,802 | -0.83% |
 | wasm32 | 35,773,933 | 35,519,386 | -0.71% |
 | armv6m | 21,343,852 | 21,223,680 | -0.56% |
@@ -27,8 +27,9 @@ entry size differs per backend.
 | riscv64 | 26,403,328 | 26,286,784 | -0.44% |
 | x86_64 | 31,720,999 | 31,607,718 | -0.36% |
 
-aarch64 gets three times the rest because three of the six changes only pay
-where x0-x3 have home registers, which today is aarch64 alone.
+aarch64 gets six times the rest because five of the eight changes only pay
+where x0-x3 have home registers, which today is aarch64 alone. The other three
+are frontend and every backend gets them; that is the -0.36% to -0.83%.
 
 ## What the code looks like now
 
@@ -62,24 +63,27 @@ because it pairs its stores with `stp` and bumps the heap inside them
 
 Seven interleaved ESTONE rounds against the pre-audit baseline (`ae29b507a`).
 
-**ESTONE 2,465,970 -> 2,474,096, 1.0033.** The total barely moves, because the
-micros that dominate ESTONE's wall time here are C-bound. The micros that do
-tuple and list work move properly:
+**ESTONE 1.0031**, over two seven-round sessions that agreed to within 0.02%
+(1.0033 and 1.0031). The total barely moves because the micros that dominate
+ESTONE's wall time here are C-bound. The ones that do list and tuple work move,
+and agree across both sessions:
 
-| micro | base (us) | new (us) | new/base |
-|---|---:|---:|---:|
-| msgp_medium | 295,681 | 259,973 | **0.879** |
-| msgp | 298,226 | 267,433 | **0.897** |
-| lists | 12,226 | 11,749 | 0.961 |
-| large_local_dataset_work | 3,405 | 3,360 | 0.987 |
-| ets | 46,478 | 46,291 | 0.996 |
-| generic | 83,996 | 83,986 | 1.000 |
-| bif_dispatch | 7,316 | 7,317 | 1.000 |
-| alloc | 1,473 | 1,497 | 1.016 |
-| links | 1,539 | 1,579 | 1.026 |
+| micro | new/base | (earlier session) |
+|---|---:|---:|
+| lists | **0.923** | 0.961 |
+| large_dataset_work | 0.957 | 0.995 |
+| large_local_dataset_work | 0.969 | 0.987 |
+| links | 0.981 | 1.026 |
+| binary_h | 0.984 | 1.009 |
+| ets | 0.984 | 0.996 |
+| trav | 0.996 | 1.002 |
+| fcalls | 1.000 | 1.001 |
+| pattern | 0.997 | 0.999 |
 
-Message passing gaining 10-12% is the tuple work showing up: a send copies the
-term, and copying builds tuples.
+`msgp` and `msgp_medium` are left out on purpose: they read 0.897/0.879 in the
+first session and 0.999/1.049 in the second, on a machine that had background
+work in between. They are the scheduler-bound micros this bench has always been
+unable to resolve, and neither reading should be quoted.
 
 ## Performance, arm32
 
@@ -114,6 +118,16 @@ no home registers for the rest to exploit. Numbers to follow.
    straight from wherever it already is.
 6. **Read two adjacent fields with one `ldp`** (`a6697cbd4`), BEAM's
    `get_two_tuple_elements`.
+7. **Store x0-x3 to a y register or pointer straight from the home**
+   (`29762db79`). Same argument as the array store, applied to the other store
+   path; worth 1.8% of `erl_scan` on its own.
+8. **Compute into the home register rather than a scratch** (`b2cf0b6ac`).
+   `with_temp/3` emitted into a scratch and then copied, so every load or
+   immediate landing in x0-x3 cost a mov. This one is a trade: the scratch used
+   to keep the *source's* cache entry alive, so a later read of it was free. Net
+   -0.98% on `erl_scan`, so the trade pays, and the two tests guarding the
+   cache-reuse property now exercise it above x3 where the scratch still
+   exists.
 
 ## What did not land, and what it is worth
 
