@@ -9,6 +9,15 @@ Reading AtomVM's generated code next to BeamAsm's for the same source, on
 AArch64, and checking what differs against the fusion rules BEAM actually
 declares. Nothing here is implemented yet; this is the shopping list.
 
+> **Correction (same day).** The AArch64 dumps below were taken through
+> `jit_dwdump.sh`, and `jit_dwarf` does not export `committed_offset/1` -- the
+> thing a backend checks before emitting a fused forward conditional branch. So
+> these dumps show `b.cond skip ; b target` where the real build emits one
+> `b.cond target`. Finding 7 is overstated sevenfold (0.58%, not 4.32%) and the
+> absolute instruction counts are inflated. See
+> [CODEGEN_RESULTS_2026-09-14.md](CODEGEN_RESULTS_2026-09-14.md) for numbers
+> taken on the stream the build actually uses.
+
 ## Method
 
 Both compilers can be made to annotate their output with the BEAM opcode each

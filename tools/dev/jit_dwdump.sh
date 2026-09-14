@@ -6,7 +6,14 @@
 # SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 #
 # Disassemble AtomVM's JIT output for any target, from any host, with the BEAM
-# opcode names carried through as symbols. Companion to `erl +JDdump true`,
+# opcode names carried through as symbols.
+#
+# WARNING: this is NOT the code the build emits. jit_dwarf does not export
+# committed_offset/1, which is what a backend checks before it will emit a
+# fused forward conditional branch, so every such branch appears here as the
+# two-instruction "b.cond skip ; b target" form instead of one b.cond. Use it
+# to read what an opcode lowers to, not to count instructions -- for counts,
+# precompile without dwarf and disassemble the raw avmN chunk. Companion to `erl +JDdump true`,
 # which writes BeamAsm's own assembly -- annotated with its opcode names the
 # same way -- to <module>.asm, so the two can be read side by side.
 #
