@@ -1219,8 +1219,11 @@ emit_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
     {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     MSt4 = MMod:move_array_element(MSt3, Reg, 0, Reg),
-    {MSt5, ArityReg} = MMod:shift_right(MSt4, {free, Reg}, 6),
-    MSt6 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, Label, MMod, MSt5),
+    %% Compare the whole header rather than shifting the arity out of it (see
+    %% ?TUPLE_HEADER). This also rejects a boxed non-tuple, which the shift did
+    %% not: BEAM only ever emits test_arity after is_tuple, so that cannot
+    %% happen, but failing the test is the right answer if it ever did.
+    MSt6 = cond_jump_to_label({{free, Reg}, '!=', ?TUPLE_HEADER(Arity)}, Label, MMod, MSt4),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
     emit_pass(Rest3, MMod, MSt6, State0);
 % 59
@@ -8218,14 +8221,28 @@ emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMo
     ),
     {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt4, HeaderReg} = MMod:get_array_element(MSt3, Reg, 0),
-    MSt4a = cond_jump_to_label(
-        {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
-        IsTupleLabel,
-        MMod,
-        MSt4
-    ),
-    {MSt4b, ArityReg} = MMod:shift_right(MSt4a, {free, HeaderReg}, 6),
-    MSt5 = cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt4b),
+    %% A tuple header IS the arity shifted up, since ?TERM_BOXED_TUPLE is 0, so
+    %% "is it a tuple" and "is its arity N" are one comparison against
+    %% ?TUPLE_HEADER(N) -- provided both tests fail to the same place. When they
+    %% do not (a `case' with several tuple patterns), they stay apart so each
+    %% can branch to its own label, which is why BEAM keeps an
+    %% i_is_tuple_of_arity_ff alongside its i_is_tuple_of_arity.
+    MSt5 =
+        case IsTupleLabel =:= TestArityLabel of
+            true ->
+                cond_jump_to_label(
+                    {{free, HeaderReg}, '!=', ?TUPLE_HEADER(Arity)}, IsTupleLabel, MMod, MSt4
+                );
+            false ->
+                MSt4a = cond_jump_to_label(
+                    {HeaderReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_TUPLE},
+                    IsTupleLabel,
+                    MMod,
+                    MSt4
+                ),
+                {MSt4b, ArityReg} = MMod:shift_right(MSt4a, {free, HeaderReg}, 6),
+                cond_jump_to_label({{free, ArityReg}, '!=', Arity}, TestArityLabel, MMod, MSt4b)
+        end,
     MSt8 = lists:foldl(
         fun({Element, Dest}, AccMSt0) ->
             AccMSt1 = MMod:move_array_element(AccMSt0, Reg, Element + 1, Dest),
