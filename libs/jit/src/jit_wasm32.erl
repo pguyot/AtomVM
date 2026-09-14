@@ -47,6 +47,7 @@
 -export([
     word_size/0,
     supports_tail_cache/0,
+    constants_are_free/0,
     new/3,
     stream/1,
     offset/1,
@@ -230,6 +231,18 @@ word_size() -> 4.
 %% compiles to a separate WASM function.
 -spec supports_tail_cache() -> boolean().
 supports_tail_cache() -> false.
+
+%%-----------------------------------------------------------------------------
+%% @doc Materialising an immediate costs no more than referencing a register.
+%%
+%% wasm32 is a stack machine: `i32.const 59' and `local.get n' are the same two
+%% bytes, so hoisting a repeated constant into a local buys nothing per use and
+%% still pays for the `local.set'. The frontend skips constant-hoisting
+%% transforms (init_yregs) on backends that say so here.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec constants_are_free() -> boolean().
+constants_are_free() -> true.
 
 -spec new(any(), module(), stream()) -> state().
 new(Variant, StreamModule, Stream) ->
