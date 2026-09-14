@@ -18,7 +18,7 @@ entry size differs per backend.
 
 | backend | before | after | change |
 |---|---:|---:|---:|
-| aarch64 | 34,815,424 | 33,776,812 | **-2.98%** |
+| aarch64 | 34,815,424 | 33,181,268 | **-4.69%** |
 | xtensa | 29,376,531 | 29,132,802 | -0.83% |
 | wasm32 | 35,773,933 | 35,519,386 | -0.71% |
 | armv6m | 21,343,852 | 21,223,680 | -0.56% |
@@ -27,9 +27,11 @@ entry size differs per backend.
 | riscv64 | 26,403,328 | 26,286,784 | -0.44% |
 | x86_64 | 31,720,999 | 31,607,718 | -0.36% |
 
-aarch64 gets six times the rest because five of the eight changes only pay
-where x0-x3 have home registers, which today is aarch64 alone. The other three
-are frontend and every backend gets them; that is the -0.36% to -0.83%.
+aarch64 gets six to thirteen times the rest because seven of the ten changes
+only pay where x0-x3 have home registers, which today is aarch64 alone. The
+other three are frontend and every backend gets them; that is the -0.36% to
+-0.83%. The seven other backends are byte-identical before and after the last
+two changes, which is the check that they really are aarch64-only.
 
 ## What the code looks like now
 
@@ -63,27 +65,26 @@ because it pairs its stores with `stp` and bumps the heap inside them
 
 Seven interleaved ESTONE rounds against the pre-audit baseline (`ae29b507a`).
 
-**ESTONE 1.0031**, over two seven-round sessions that agreed to within 0.02%
-(1.0033 and 1.0031). The total barely moves because the micros that dominate
-ESTONE's wall time here are C-bound. The ones that do list and tuple work move,
-and agree across both sessions:
+**ESTONE 1.0111.** The first eight changes were worth 1.0031, consistent across
+two seven-round sessions; the bit test and the in-place test operand took it to
+1.0111. The total is held down by the micros that dominate ESTONE's wall time
+here being C-bound. The ones that do list and tuple work:
 
-| micro | new/base | (earlier session) |
-|---|---:|---:|
-| lists | **0.923** | 0.961 |
-| large_dataset_work | 0.957 | 0.995 |
-| large_local_dataset_work | 0.969 | 0.987 |
-| links | 0.981 | 1.026 |
-| binary_h | 0.984 | 1.009 |
-| ets | 0.984 | 0.996 |
-| trav | 0.996 | 1.002 |
-| fcalls | 1.000 | 1.001 |
-| pattern | 0.997 | 0.999 |
+| micro | new/base | (8 changes) | (earlier session) |
+|---|---:|---:|---:|
+| lists | **0.923** | 0.923 | 0.961 |
+| large_dataset_work | 0.973 | 0.957 | 0.995 |
+| large_local_dataset_work | 0.982 | 0.969 | 0.987 |
+| pattern | 0.984 | 0.997 | 0.999 |
+| ets | 0.988 | 0.984 | 0.996 |
+| binary_h | 0.994 | 0.984 | 1.009 |
+| fcalls | 1.000 | 1.000 | 1.001 |
 
-`msgp` and `msgp_medium` are left out on purpose: they read 0.897/0.879 in the
-first session and 0.999/1.049 in the second, on a machine that had background
-work in between. They are the scheduler-bound micros this bench has always been
-unable to resolve, and neither reading should be quoted.
+`msgp` and `msgp_medium` are left out on purpose: across three sessions on the
+same binaries they have read 0.879, 1.049 and 1.028. They are the
+scheduler-bound micros this bench has never been able to resolve, and no
+reading of them should be quoted. `trav` (1.031) and `links` (1.025) moved
+within the same band on a run where nothing touching them changed.
 
 ## Performance, arm32
 
@@ -141,6 +142,16 @@ the reason `supports_loop_residency` is still false there.
 7. **Store x0-x3 to a y register or pointer straight from the home**
    (`29762db79`). Same argument as the array store, applied to the other store
    path; worth 1.8% of `erl_scan` on its own.
+9. **Test a primary tag with one bit test** (`06dcb0e67`). Of the three tags a
+   term can carry, BOXED is the only one with bit 0 clear and LIST the only one
+   with bit 1 clear, so either test is one `tbz`/`tbnz`. This is an assumption,
+   not a free win: it holds only because a CP never reaches a type test, which
+   is exactly what BEAM's JIT assumes. Worth 2.03% of `erl_scan` against the
+   2.08% the census predicted.
+10. **Let a condition test a value where it already lives** (`a689cbf5d`), so a
+   type test reads the x0-x3 home instead of a copy. A tuple type test is now
+   `tbnz`/`and`/`ldr`/`cmp`/`b.ne` -- instruction for instruction what BeamAsm
+   emits, down from eleven.
 8. **Compute into the home register rather than a scratch** (`b2cf0b6ac`).
    `with_temp/3` emitted into a scratch and then copied, so every load or
    immediate landing in x0-x3 cost a mov. This one is a trade: the scratch used
@@ -156,12 +167,15 @@ is where these should be judged rather than in the abstract:
 
 | finding | size on this module | why not done |
 |---|---:|---|
-| 1 remainder: reg-to-reg movs | **5.98%** | Still the largest single category. Removing the rest needs the condition emitters to take a VM register operand, so the tag test can read x25 directly -- a change across every clause of `if_block_cond` and every backend. |
-| 6: tag tests as one bit test | 2.08% | Real, but it trades safety: `tbnz` cannot separate boxed (0b10) from CP (0b00), so it relies on a CP never reaching a type test. BEAM assumes exactly this, but our current form rejects a CP correctly and the new one would dereference it. Worth a deliberate decision rather than a quiet one. |
+| 1 remainder: scratch-to-scratch movs | 2.17% | The home-register copies are gone; what is left never touched a home. |
 | 7: branch peephole | 0.58% inverted pairs + 0.98% chains | Smaller than the audit claimed -- see the trap below. The chain collapse wants a label-alias map threaded through every backend's branch resolution. |
 | 8: outline slow paths | 0 | Size-neutral by construction: the code is still emitted, just elsewhere. It is an I-cache change and needs a different measurement. |
 | 9: post-indexed heap stores | small | Pairs with the store half of finding 3; both belong in one go at `put_tuple2`/`put_list`. |
 | 10: `i_mul_add` | small | Lowest value of the ten, unchanged. |
+
+Findings 6 and the rest of 1 landed after this table was first written; the
+two together took aarch64 from -2.98% to -4.69% and ESTONE from 1.0031 to
+1.0111. Everything above still only reaches arm32 once x0-x3 have homes there.
 
 ## Two measurement traps, both of which caught me
 
