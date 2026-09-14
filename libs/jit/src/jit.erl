@@ -1768,8 +1768,7 @@ emit_pass(<<?OP_IS_FUNCTION2, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_IS_FUNCTION2 ~p,~p,~p\n", [Label, Arg1, ArityTerm]),
     {MSt3, FuncPtr} = term_is_boxed_with_tag_and_get_ptr(Label, Arg1, ?TERM_BOXED_FUN, MMod, MSt2),
     {MSt4, Arity} = term_to_int(ArityTerm, Label, MMod, MSt3),
-    {MSt5, ModuleReg} = MMod:get_array_element(MSt4, FuncPtr, 1),
-    {MSt6, IndexOrModuleReg} = MMod:get_array_element(MSt5, FuncPtr, 2),
+    {MSt6, ModuleReg, IndexOrModuleReg} = get_array_element_pair(MMod, MSt4, FuncPtr, 1),
     MSt7 = MMod:if_else_block(
         MSt6,
         {IndexOrModuleReg, '&', ?TERM_IMMED2_TAG_MASK, '!=', ?TERM_IMMED2_ATOM},
@@ -1875,8 +1874,7 @@ emit_pass(<<?OP_BS_GET_BINARY2, Rest0/binary>>, MMod, MSt0, State0) ->
     {Unit, Rest5} = decode_literal(Rest4),
     {FlagsValue, Rest6} = decode_literal(Rest5),
     {MSt3, MatchStateRegPtr} = verify_is_match_state_and_get_ptr(MMod, MSt2, Src),
-    {MSt4, BSBinaryReg0} = MMod:get_array_element(MSt3, MatchStateRegPtr, 1),
-    {MSt5, BSOffsetReg0} = MMod:get_array_element(MSt4, MatchStateRegPtr, 2),
+    {MSt5, BSBinaryReg0, BSOffsetReg0} = get_array_element_pair(MMod, MSt3, MatchStateRegPtr, 1),
     MSt6 =
         if
             FlagsValue =/= 0 ->
@@ -1981,8 +1979,7 @@ emit_pass(<<?OP_BS_SKIP_BITS2, Rest0/binary>>, MMod, MSt0, State0) ->
                 MSt5 = scale_size_by_unit(SizeReg, Unit, Fail, MMod, MSt4),
                 {MSt5, SizeReg}
         end,
-    {MSt7, BSBinaryReg} = MMod:get_array_element(MSt6, MatchStateRegPtr, 1),
-    {MSt8, BSOffsetReg} = MMod:get_array_element(MSt7, MatchStateRegPtr, 2),
+    {MSt8, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt6, MatchStateRegPtr, 1),
     MSt9 = MMod:add(MSt8, BSOffsetReg, NumBits),
     MSt10 = MMod:free_native_registers(MSt9, [NumBits]),
     {MSt11, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt10),
@@ -1999,8 +1996,7 @@ emit_pass(<<?OP_BS_TEST_TAIL2, Rest0/binary>>, MMod, MSt0, State0) ->
     {Bits, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_BS_TEST_TAIL2 ~p, ~p, ~p\n", [Fail, Src, Bits]),
     {MSt2, MatchStateRegPtr} = verify_is_match_state_and_get_ptr(MMod, MSt1, Src),
-    {MSt3, BSBinaryReg} = MMod:get_array_element(MSt2, MatchStateRegPtr, 1),
-    {MSt4, BSOffsetReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 2),
+    {MSt4, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt2, MatchStateRegPtr, 1),
     MSt5 = MMod:free_native_registers(MSt4, [MatchStateRegPtr]),
     MSt6 = MMod:add(MSt5, BSOffsetReg, Bits),
     {MSt7, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt6),
@@ -2073,8 +2069,7 @@ emit_pass(<<?OP_BS_TEST_UNIT, Rest0/binary>>, MMod, MSt0, State0) ->
     {Unit, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_BS_TEST_UNIT ~p, ~p, ~p\n", [Fail, Src, Unit]),
     {MSt2, MatchStateRegPtr} = verify_is_match_state_and_get_ptr(MMod, MSt1, Src),
-    {MSt3, BSBinaryReg} = MMod:get_array_element(MSt2, MatchStateRegPtr, 1),
-    {MSt4, BSOffsetReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 2),
+    {MSt4, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt2, MatchStateRegPtr, 1),
     MSt5 = MMod:free_native_registers(MSt4, [MatchStateRegPtr]),
     {MSt6, BSBinarySize} = term_bit_size({free, BSBinaryReg}, MMod, MSt5),
     % BSBinarySize = source bit size
@@ -2094,8 +2089,7 @@ emit_pass(<<?OP_BS_MATCH_STRING, Rest0/binary>>, MMod, MSt0, State0) ->
     {Offset, Rest4} = decode_literal(Rest3),
     ?TRACE("OP_BS_MATCH_STRING ~p,~p,~p,~p\n", [Fail, Src, Bits, Offset]),
     {MSt2, MatchStateRegPtr} = verify_is_match_state_and_get_ptr(MMod, MSt1, Src),
-    {MSt3, BSBinaryReg} = MMod:get_array_element(MSt2, MatchStateRegPtr, 1),
-    {MSt4, BSOffsetReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 2),
+    {MSt4, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt2, MatchStateRegPtr, 1),
     {MSt5, MatchResult} = MMod:call_primitive(MSt4, ?PRIM_BITSTRING_MATCH_MODULE_STR, [
         ctx, jit_state, {free, BSBinaryReg}, BSOffsetReg, Offset, Bits
     ]),
@@ -3022,8 +3016,7 @@ emit_pass(<<?OP_BS_GET_TAIL, Rest0/binary>>, MMod, MSt0, State0) ->
     {Live, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_BS_GET_TAIL ~p, ~p, ~p\n", [Src, Dest, Live]),
     {MSt3, MatchStateRegPtr} = verify_is_match_state_and_get_ptr(MMod, MSt2, Src),
-    {MSt4, BSBinaryReg} = MMod:get_array_element(MSt3, MatchStateRegPtr, 1),
-    {MSt5, BSOffsetReg} = MMod:get_array_element(MSt4, MatchStateRegPtr, 2),
+    {MSt5, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt3, MatchStateRegPtr, 1),
     MSt6 = MMod:free_native_registers(MSt5, [MatchStateRegPtr]),
     {MSt7, BSBinaryReg} = MMod:and_(MSt6, {free, BSBinaryReg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt8, ResultTerm, NewMatchState} = do_get_tail(
@@ -3462,8 +3455,7 @@ emit_pass(<<?OP_BS_MATCH, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_BS_MATCH ~p, ~p, [", [Fail, MatchState]),
     {MSt2, MatchStateReg0} = MMod:move_to_native_register(MSt1, MatchState),
     {MSt3, MatchStateReg1} = MMod:and_(MSt2, MatchStateReg0, ?TERM_PRIMARY_CLEAR_MASK),
-    {MSt4, BSBinaryReg} = MMod:get_array_element(MSt3, MatchStateReg1, 1),
-    {MSt5, BSOffsetReg} = MMod:get_array_element(MSt4, MatchStateReg1, 2),
+    {MSt5, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt3, MatchStateReg1, 1),
     MSt6 = MMod:free_native_registers(MSt5, [MatchStateReg1]),
     {MSt7, BSBinaryReg} = MMod:and_(MSt6, {free, BSBinaryReg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt8, Rest4, MatchStateReg2, NewBSOffsetReg} = emit_pass_bs_match(
@@ -6026,10 +6018,20 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
                 %% probe_mismatch | (Diff >> 63) is zero exactly when the
                 %% call can be skipped.
                 {BSt1, ProbeReg} = MMod:read_shrink_probe_mismatch(BSt0),
-                {BSt2, DiffCopy} = MMod:copy_to_native_register(BSt1, AvailReg),
-                {BSt3, SignReg} = MMod:shift_right_arith(BSt2, {free, DiffCopy}, 63),
-                BSt4 = MMod:or_(BSt3, ProbeReg, SignReg),
-                BSt5 = MMod:free_native_registers(BSt4, [SignReg]),
+                %% Backends whose ALU ops carry a shift on their second source
+                %% do the copy, the shift and the or in one instruction.
+                BSt5 =
+                    case erlang:function_exported(MMod, or_shifted_arith, 4) of
+                        true ->
+                            MMod:or_shifted_arith(BSt1, ProbeReg, AvailReg, 63);
+                        false ->
+                            {BSt2, DiffCopy} = MMod:copy_to_native_register(BSt1, AvailReg),
+                            {BSt3, SignReg} = MMod:shift_right_arith(
+                                BSt2, {free, DiffCopy}, 63
+                            ),
+                            BSt4 = MMod:or_(BSt3, ProbeReg, SignReg),
+                            MMod:free_native_registers(BSt4, [SignReg])
+                    end,
                 MMod:if_block(BSt5, {{free, ProbeReg}, '(uint)>', 0}, fun(CSt0) ->
                     {CSt1, ResultReg} = MMod:call_primitive(CSt0, ?PRIM_TEST_HEAP, [
                         ctx, jit_state, HeapNeed, Live
@@ -6076,9 +6078,16 @@ op_return_same_module(MMod, MSt0) ->
                 {{free, CpReg1}, '==', {free, ModuleIndexReg}},
                 % Same module: fast intra-module return
                 fun(BSt0) ->
-                    % Mask to get lower 24 bits and shift right by 2 for offset
-                    {BSt1, CpReg0} = MMod:and_(BSt0, {free, CpReg0}, 16#FFFFFF),
-                    {BSt3, CPReg1} = MMod:shift_right(BSt1, {free, CpReg0}, 2),
+                    % The offset is bits 23..2 of the cp: one bitfield extract
+                    % where the backend has one, otherwise mask then shift.
+                    {BSt3, CPReg1} =
+                        case erlang:function_exported(MMod, extract_bits, 4) of
+                            true ->
+                                MMod:extract_bits(BSt0, {free, CpReg0}, 2, 22);
+                            false ->
+                                {BSt1, CpMasked} = MMod:and_(BSt0, {free, CpReg0}, 16#FFFFFF),
+                                MMod:shift_right(BSt1, {free, CpMasked}, 2)
+                        end,
                     % Jump to continuation (this is a tail call)
                     MMod:jump_to_continuation(BSt3, {free, CPReg1})
                 end
@@ -7900,8 +7909,7 @@ emit_select_val_tree(MMod, MSt0, SrcReg, Entries) ->
 %% bs_get_integer2: extraction through the C primitive, updating the match
 %% state offset and storing the result on success.
 op_bs_get_integer2_prim(Fail, NumBits, FlagsValue, MatchStateRegPtr, Dest, MMod, MSt0) ->
-    {MSt1, BSBinaryReg} = MMod:get_array_element(MSt0, MatchStateRegPtr, 1),
-    {MSt2, BSOffsetReg} = MMod:get_array_element(MSt1, MatchStateRegPtr, 2),
+    {MSt2, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt0, MatchStateRegPtr, 1),
     {MSt3, Result} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_EXTRACT_INTEGER, [
         ctx, jit_state, {free, BSBinaryReg}, BSOffsetReg, NumBits, {free, FlagsValue}
     ]),
@@ -7919,8 +7927,7 @@ op_bs_get_integer2_prim(Fail, NumBits, FlagsValue, MatchStateRegPtr, Dest, MMod,
 %% Sub binaries, resource-managed refc binaries and unaligned offsets fall
 %% back to the primitive; running out of bits jumps to the fail label.
 op_bs_get_integer2_inline(Fail, NumBits, MatchStateRegPtr, Dest, MMod, MSt0) ->
-    {MSt1, BSBinaryReg} = MMod:get_array_element(MSt0, MatchStateRegPtr, 1),
-    {MSt2, BSOffsetReg} = MMod:get_array_element(MSt1, MatchStateRegPtr, 2),
+    {MSt2, BSBinaryReg, BSOffsetReg} = get_array_element_pair(MMod, MSt0, MatchStateRegPtr, 1),
     MMod:if_else_block(
         MSt2,
         {BSOffsetReg, '&', 16#7, '!=', 0},
@@ -8087,6 +8094,19 @@ copy_array_elements_loop(MMod, MSt0, SrcReg, DestReg, Index, Count) ->
     MSt2 = MMod:move_to_array_element(MSt1, SrcValue, DestReg, Index),
     MSt3 = MMod:free_native_registers(MSt2, [SrcValue]),
     copy_array_elements_loop(MMod, MSt3, SrcReg, DestReg, Index + 1, Count - 1).
+
+%% Read two consecutive array elements, as one paired load where the backend
+%% has one. Ten sites want this shape: the module/index pair an external call
+%% resolves, and the binary/offset pair every bitstring match state carries.
+get_array_element_pair(MMod, MSt0, Reg, Index) ->
+    case erlang:function_exported(MMod, get_array_elements_pair, 3) of
+        true ->
+            MMod:get_array_elements_pair(MSt0, Reg, Index);
+        false ->
+            {MSt1, R1} = MMod:get_array_element(MSt0, Reg, Index),
+            {MSt2, R2} = MMod:get_array_element(MSt1, Reg, Index + 1),
+            {MSt2, R1, R2}
+    end.
 
 %% Reserve the cells for a put_tuple2 without writing the header yet.
 %%

@@ -46,6 +46,34 @@ list_to_integer(X, B) -> erlang:list_to_integer(X, B).
     end)
 ).
 
+orr_asr_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#08, 16#FD, 16#87, 16#AA>>,
+            "orr x8, x8, x7, asr #63",
+            jit_aarch64_asm:orr_asr(r8, r8, r7, 63)
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 16#08, 16#83, 16#AA>>,
+            "orr x1, x2, x3, asr #2",
+            jit_aarch64_asm:orr_asr(r1, r2, r3, 2)
+        )
+    ].
+
+ubfx_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#E7, 16#5C, 16#42, 16#D3>>,
+            "ubfx x7, x7, #2, #22",
+            jit_aarch64_asm:ubfx(r7, r7, 2, 22)
+        ),
+        ?_assertAsmEqual(
+            <<16#41, 16#1C, 16#40, 16#D3>>,
+            "ubfx x1, x2, #0, #8",
+            jit_aarch64_asm:ubfx(r1, r2, 0, 8)
+        )
+    ].
+
 add_test_() ->
     [
         ?_assertAsmEqual(
