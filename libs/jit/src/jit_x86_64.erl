@@ -74,6 +74,8 @@
     move_to_cp/2,
     move_array_element/4,
     move_to_array_element/4,
+    move_to_array_elements_pair/5,
+    pairs_memory_adjacent_only/0,
     move_to_array_element/5,
     load_be_unsigned/3,
     store_be/4,
@@ -3280,6 +3282,66 @@ get_array_element(
     Reg :: x86_64_register(),
     Index :: non_neg_integer()
 ) -> state().
+%%-----------------------------------------------------------------------------
+%% @doc Pairing only pays when the two sources are adjacent in memory.
+%%
+%% The aarch64 pairing works on the destination side, so it pairs any two
+%% values; here the whole trick is one SSE load covering both sources, so a
+%% value that is not in memory next to its neighbour gains nothing. The
+%% frontend uses this to keep a tuple's arity word out of the pairing, which
+%% would otherwise consume the first element and leave the second unpaired --
+%% and arity 2 is over two thirds of all put_tuple2 sites.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec pairs_memory_adjacent_only() -> boolean().
+pairs_memory_adjacent_only() -> true.
+
+%%-----------------------------------------------------------------------------
+%% @doc Store two values into consecutive array slots.
+%%
+%% x86_64 has no paired general-register store, so the lever here is the source
+%% side instead: `ctx->x[]' is an array, so two consecutive x registers are 16
+%% adjacent bytes and one unaligned SSE move carries both -- four instructions
+%% become two. This is what BEAM does in its own emit_put_tuple2, and it is a
+%% different trade from the aarch64 pairing: it halves the number of memory
+%% operations rather than just the instruction count.
+%%
+%% The unaligned form is the one we want: the heap and ctx->x[] are only
+%% 8-byte aligned. xmm0 is safe to use -- the float paths only hold it within a
+%% single operation, and the C-to-native boundary already declares xmm0-xmm15
+%% clobbered.
+%%
+%% Anything but a consecutive pair of x registers falls back to one store each.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec move_to_array_elements_pair(
+    state(), value(), value(), x86_64_register(), non_neg_integer()
+) -> state().
+move_to_array_elements_pair(
+    #state{stream_module = StreamModule} = State0,
+    {x_reg, X1},
+    {x_reg, X2},
+    Reg,
+    Index
+) when
+    is_integer(X1),
+    is_integer(X2),
+    X2 =:= X1 + 1,
+    X2 < ?MAX_REG,
+    ?IS_GPR(Reg),
+    is_integer(Index)
+->
+    %% Reads both from memory, so both pending stores have to survive, exactly
+    %% as in the one-at-a-time path below.
+    State1 = pending_clear_x(pending_clear_x(State0, X1), X2),
+    I1 = jit_x86_64_asm:movups(xmm0, ?X_REG(X1)),
+    I2 = jit_x86_64_asm:movups({Index * ?WORD_SIZE, Reg}, xmm0),
+    Stream1 = StreamModule:append(State1#state.stream, <<I1/binary, I2/binary>>),
+    State1#state{stream = Stream1};
+move_to_array_elements_pair(State0, Value1, Value2, Reg, Index) ->
+    State1 = move_to_array_element(State0, Value1, Reg, Index),
+    move_to_array_element(State1, Value2, Reg, Index + 1).
+
 move_to_array_element(
     #state{stream_module = StreamModule, stream = _Stream0, regs = Regs0} =
         State0,
