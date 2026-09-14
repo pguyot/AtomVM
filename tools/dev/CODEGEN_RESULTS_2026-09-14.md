@@ -87,11 +87,31 @@ unable to resolve, and neither reading should be quoted.
 
 ## Performance, arm32
 
-Building and measuring on `mx2.local` (Pi 2) against `avm-red2`, the arm32
-baseline that already carries the r11 reduction pinning and the ldrd/strd
-work. Expect little: five of the six changes are either frontend (which arm32
-gets, and which is where its -0.48% comes from) or aarch64-only, and arm32 has
-no home registers for the rest to exploit. Numbers to follow.
+**No measurable change, which is the expected answer.** Five interleaved ESTONE
+rounds on `mx2.local` against `avm-red2` -- the arm32 baseline that already
+carries the r11 reduction pinning and the ldrd/strd work:
+
+| build | ESTONE | vs GRiSP |
+|---|---:|---:|
+| `avm-red2` (baseline) | 48,365 | 0.765 |
+| `avm-cg` (this work) | 48,179 | 0.762 |
+| GRiSP OTP 29 arm32 JIT | 63,246 | 1.000 |
+
+0.9962, inside the noise. Five of the eight changes cannot reach arm32 at all
+(no home registers), and the three that can are worth -0.48% of code size,
+which is far below what this board can resolve: the per-round spread is
+39,559-52,088 for the baseline alone, and the board was throttled to 600 MHz
+throughout (`get_throttled` 0x50005, the same under-voltage documented in
+ARM32_CATCHUP).
+
+The per-micro table is not worth quoting either. Its two largest movers are
+`bif_dispatch` (1.221) and `large_local_dataset_work` (1.171) -- two of the
+four micros that the throttling window lands on -- and the next two are `msgp`
+and `msgp_medium`, the scheduler-bound pair. Nothing in it is attributable.
+
+Getting arm32 to move needs the changes it cannot currently reach: home
+registers for x0-x3, which is the same blocker as the rest of finding 1 and
+the reason `supports_loop_residency` is still false there.
 
 ## What landed
 
