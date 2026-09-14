@@ -134,15 +134,24 @@ Corpus code size, 260 modules, jump table excluded, over both commits:
 The four backends with no paired load take the frontend fallback for
 update_record and only see the init_yregs change; wasm32 sees neither.
 
-aarch64 end to end, interleaved A/B over 15 runs, a loop of two updates to a
-31-word record through an opaque call so neither can go in place:
+End to end on a loop of two updates to a 31-word record, each through an opaque
+call so neither can go in place. Same VM binary on each side; only the
+precompiled native code of the benchmark module differs, which isolates the
+codegen exactly. Interleaved, median:
 
-    baseline   median 12144 us   (min 12035, max 12210)
-    pair copy  median 10583 us   (min 10464, max 10728)
-    1.1475x
+    aarch64 (Apple Silicon, 15 runs)   11512 us -> 10163 us   1.1327x
+    arm32   (Cortex-A7, 11 runs)      337269 us -> 318810 us  1.0579x
 
-arm32 is measured at the instruction level above (1.35x on the copy itself,
-average over alignments) rather than end to end.
+The arm32 figure is smaller than the 1.35x the instruction-level measurement
+predicts for the copy, and that is the expected shape: on a Pi 2 the rest of the
+VM is proportionally much slower (small caches, memory-bound, throttled to
+600 MHz), so the copy is a smaller share of the total. Both sides produce the
+same checksum, and `test-erlang` passes natively on the Pi with the new codegen.
+
+A caution on the arm32 number: taken while a build was running on the same
+machine it read 1.015x. The 1.0579x above is with the machine quiescent and the
+benchmark pinned to one core. Always check `vcgencmd measure_clock arm` --
+`scaling_cur_freq` does not show this part throttling.
 
 ## Method notes
 
