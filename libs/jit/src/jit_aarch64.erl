@@ -58,6 +58,7 @@
     can_test_in_place/1,
     move_array_elements_pair/5,
     move_to_vm_registers_pair/4,
+    copy_array_elements/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -4188,6 +4189,54 @@ move_array_elements_pair(State0, Reg, Index, {x_reg, X1}, {x_reg, X2}) when
     Regs3 = jit_regs:set_contents(Regs2, Reg1, {x_reg, X1}),
     Regs4 = jit_regs:set_contents(Regs3, Reg2, {x_reg, X2}),
     StateC#state{regs = Regs4}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Copy `Count' consecutive words from one boxed term to another, moving a
+%% register pair per `ldp'/`stp' where the offsets reach.
+%%
+%% This is update_record's rebuild copy. `ldp'/`stp' take a scaled 7-bit signed
+%% offset, so they reach word 63; past that, and for a trailing odd word, the
+%% one-at-a-time form says the same thing.
+%%
+%% The two scratch registers are picked straight out of the available mask and
+%% not allocated, because nothing between the `ldp' and the `stp' can allocate.
+%% `SrcReg' and `DestReg' are already marked used, so they cannot be picked.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec copy_array_elements(
+    state(), aarch64_register(), aarch64_register(), non_neg_integer(), integer()
+) -> state().
+copy_array_elements(State0, SrcReg, DestReg, From, Count) ->
+    copy_array_elements_run(State0, SrcReg, DestReg, From, Count).
+
+copy_array_elements_run(State, _SrcReg, _DestReg, _Index, Count) when Count =< 0 ->
+    State;
+copy_array_elements_run(
+    #state{stream_module = SM, stream = Stream0, regs = Regs0} = State0,
+    SrcReg,
+    DestReg,
+    Index,
+    Count
+) when Count >= 2, Index >= 0, Index =< ?LDP_MAX_INDEX ->
+    case mask_to_list(jit_regs:available_regs(Regs0)) of
+        [Reg1, Reg2 | _] ->
+            Ldp = jit_aarch64_asm:ldp(Reg1, Reg2, {SrcReg, Index * ?WORD_SIZE}),
+            Stp = jit_aarch64_asm:stp(Reg1, Reg2, {DestReg, Index * ?WORD_SIZE}),
+            Stream1 = SM:append(Stream0, <<Ldp/binary, Stp/binary>>),
+            Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg1), Reg2),
+            State1 = State0#state{stream = Stream1, regs = Regs1},
+            copy_array_elements_run(State1, SrcReg, DestReg, Index + 2, Count - 2);
+        _ ->
+            copy_array_element_single(State0, SrcReg, DestReg, Index, Count)
+    end;
+copy_array_elements_run(State0, SrcReg, DestReg, Index, Count) ->
+    copy_array_element_single(State0, SrcReg, DestReg, Index, Count).
+
+copy_array_element_single(State0, SrcReg, DestReg, Index, Count) ->
+    {State1, Value} = get_array_element(State0, SrcReg, Index),
+    State2 = move_to_array_element(State1, Value, DestReg, Index),
+    State3 = free_native_register(State2, Value),
+    copy_array_elements_run(State3, SrcReg, DestReg, Index + 1, Count - 1).
 
 %%-----------------------------------------------------------------------------
 %% @doc Store one register into two consecutive y slots with a single `stp'.
