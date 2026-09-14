@@ -2438,8 +2438,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, 2),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	aa1903e7 	mov	x7, x25\n"
-                        "   4:	f9000907 	str	x7, [x8, #16]"
+                        "   0:	f9000919 	str	x25, [x8, #16]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2448,8 +2447,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, r9),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	aa1903e7 	mov	x7, x25\n"
-                        "   4:	f8297907 	str	x7, [x8, x9, lsl #3]"
+                        "   0:	f8297919 	str	x25, [x8, x9, lsl #3]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -2478,8 +2476,7 @@ move_to_array_element_test_() ->
                     State1 = ?BACKEND:move_to_array_element(State0, {x_reg, 0}, r8, 2, 1),
                     Stream = ?BACKEND:stream(State1),
                     Dump = <<
-                        "   0:	aa1903e7 	mov	x7, x25\n"
-                        "   4:	f9000d07 	str	x7, [x8, #24]"
+                        "   0:	f9000d19 	str	x25, [x8, #24]"
                     >>,
                     ?assertStream(aarch64, Dump, Stream)
                 end),
@@ -3138,8 +3135,7 @@ large_operand_test_() ->
                 State2,
                 <<
                     "   0:	aa1903e7 	mov	x7, x25\n"
-                    "   4:	aa1a03e8 	mov	x8, x26\n"
-                    "   8:	f91000e8 	str	x8, [x7, #8192]"
+                    "   4:	f91000fa 	str	x26, [x7, #8192]"
                 >>
             )
         end},
