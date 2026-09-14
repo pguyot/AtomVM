@@ -1221,7 +1221,7 @@ emit_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
     MSt4 = MMod:move_array_element(MSt3, Reg, 0, Reg),
     %% Compare the whole header rather than shifting the arity out of it (see
     %% ?TUPLE_HEADER). This also rejects a boxed non-tuple, which the shift did
-    %% not: BEAM only ever emits test_arity after is_tuple, so that cannot
+    %% not: BEAM only ever emits test_arity after is_tuple, so that could not
     %% happen, but failing the test is the right answer if it ever did.
     MSt6 = cond_jump_to_label({{free, Reg}, '!=', ?TUPLE_HEADER(Arity)}, Label, MMod, MSt4),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
@@ -1405,12 +1405,34 @@ emit_pass(<<?OP_GET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
     {Element, Rest2} = decode_literal(Rest1),
     {MSt2, Dest, Rest3} = decode_dest(Rest2, MMod, MSt1),
     ?TRACE("OP_GET_TUPLE_ELEMENT ~p, ~p, ~p\n", [Source, Element, Dest]),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Source),
+    %% Strip the boxed tag once for the whole run of reads from this tuple,
+    %% rather than per element. The is_tuple/is_tagged_tuple fusions already do
+    %% this when the reads follow the type test directly, but anything in
+    %% between -- a test_heap, most commonly -- ends that run and leaves the
+    %% reads here. BEAM has the same adjacency limit and solves it the same
+    %% way, by re-establishing the pointer for the run (load_tuple_ptr).
+    %% A read whose destination is the source register ends the run: the ops
+    %% after it read the new value, not the tuple.
+    {Others, Rest4, MSt2b} =
+        case Dest =:= unwrap_typed(Source) of
+            true -> {[], Rest3, MSt2};
+            false -> collect_get_tuple_elements(Rest3, Source, MMod, MSt2, State0)
+        end,
+    {MSt3, Reg} = MMod:move_to_native_register(MSt2b, Source),
     {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
     MSt5 = MMod:move_array_element(MSt4, Reg, Element + 1, Dest),
-    MSt6 = MMod:free_native_registers(MSt5, [Reg, Dest]),
+    MSt5b = MMod:free_native_registers(MSt5, [Dest]),
+    MSt5c = lists:foldl(
+        fun({OtherElement, OtherDest}, AccMSt0) ->
+            AccMSt1 = MMod:move_array_element(AccMSt0, Reg, OtherElement + 1, OtherDest),
+            MMod:free_native_registers(AccMSt1, [OtherDest])
+        end,
+        MSt5b,
+        Others
+    ),
+    MSt6 = MMod:free_native_registers(MSt5c, [Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
-    emit_pass(Rest3, MMod, MSt6, State0);
+    emit_pass(Rest4, MMod, MSt6, State0);
 % 67
 emit_pass(<<?OP_SET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -8224,8 +8246,8 @@ emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMo
     %% A tuple header IS the arity shifted up, since ?TERM_BOXED_TUPLE is 0, so
     %% "is it a tuple" and "is its arity N" are one comparison against
     %% ?TUPLE_HEADER(N) -- provided both tests fail to the same place. When they
-    %% do not (a `case' with several tuple patterns), they stay apart so each
-    %% can branch to its own label, which is why BEAM keeps an
+    %% do not (a `case' with several tuple patterns), they have to stay apart to
+    %% branch to their own labels, which is why BEAM keeps an
     %% i_is_tuple_of_arity_ff alongside its i_is_tuple_of_arity.
     MSt5 =
         case IsTupleLabel =:= TestArityLabel of
