@@ -1163,8 +1163,7 @@ emit_pass(<<?OP_IS_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_BINARY ~p, ~p\n", [Label, Arg1]),
     MSt2 = verify_is_binary(Arg1, Label, MMod, MSt1),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Arg1),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2, Arg1),
     {MSt5, TagReg} = MMod:get_array_element(MSt4, Reg, 0),
     {MSt6, TagReg} = MMod:and_(MSt5, {free, TagReg}, ?TERM_BOXED_TAG_MASK),
     %% is_binary/1 is false for a non-byte-aligned bitstring
@@ -1226,8 +1225,7 @@ emit_pass(<<?OP_TEST_ARITY, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     {Arity, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_TEST_ARITY ~p, ~p, ~p\n", [Label, Arg1, Arity]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt3, Reg} = boxed_ptr_to_native_register(MMod, MSt1, Arg1),
     MSt4 = MMod:move_array_element(MSt3, Reg, 0, Reg),
     %% Compare the whole header rather than shifting the arity out of it (see
     %% ?TUPLE_HEADER). This also rejects a boxed non-tuple, which the shift did
@@ -1389,8 +1387,7 @@ emit_pass(<<?OP_GET_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, HeadDest, Rest2} = decode_dest(Rest1, MMod, MSt1),
     {MSt3, TailDest, Rest3} = decode_dest(Rest2, MMod, MSt2),
     ?TRACE("OP_GET_LIST ~p, ~p, ~p\n", [List, HeadDest, TailDest]),
-    {MSt4, Reg} = MMod:move_to_native_register(MSt3, List),
-    {MSt5, Reg} = MMod:and_(MSt4, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, Reg} = boxed_ptr_to_native_register(MMod, MSt3, List),
     %% Backends exporting get_list_head_tail/4 fetch both cells with one
     %% paired load and keep head and tail in DISTINCT registers (each tracked
     %% as its destination VM register), so a following read of either elides
@@ -1428,8 +1425,7 @@ emit_pass(<<?OP_GET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
             true -> {[], Rest3, MSt2};
             false -> collect_get_tuple_elements(Rest3, Source, MMod, MSt2, State0)
         end,
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2b, Source),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2b, Source),
     MSt5 = MMod:move_array_element(MSt4, Reg, Element + 1, Dest),
     MSt5b = MMod:free_native_registers(MSt5, [Dest]),
     MSt5c = lists:foldl(
@@ -1453,8 +1449,7 @@ emit_pass(<<?OP_SET_TUPLE_ELEMENT, Rest0/binary>>, MMod, MSt0, State0) ->
     %% No write barrier needed: the compiler emits set_tuple_element only
     %% right after the tuple's creation, with no possible GC in between, so
     %% the tuple cannot be in the old generation.
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Tuple),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2, Tuple),
     MSt5 = MMod:move_to_array_element(MSt4, NewElement, Reg, Position + 1),
     MSt6 = MMod:free_native_registers(MSt5, [NewElement, Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
@@ -1604,8 +1599,7 @@ emit_pass(
                 ),
                 {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_ENSURE_FPREGS, [jit_state]),
                 MSt3 = MMod:free_native_registers(MSt2, [ResultReg]),
-                {MSt3b, Reg} = MMod:move_to_native_register(MSt3, SrcValue),
-                {MSt3c, Reg} = MMod:and_(MSt3b, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+                {MSt3c, Reg} = boxed_ptr_to_native_register(MMod, MSt3, SrcValue),
                 MMod:move_to_vm_register(MSt3c, {free, {ptr, Reg, 1}}, FPReg)
         end,
     ?ASSERT_ALL_NATIVE_FREE(MSt4),
@@ -1617,8 +1611,7 @@ emit_pass(<<?OP_FMOVE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_FMOVE ~p, ~p\n", [SrcValue, FPReg]),
     {MSt2, ResultReg} = MMod:call_primitive(MSt1, ?PRIM_ENSURE_FPREGS, [jit_state]),
     MSt3 = MMod:free_native_registers(MSt2, [ResultReg]),
-    {MSt4, Reg} = MMod:move_to_native_register(MSt3, SrcValue),
-    {MSt5, Reg} = MMod:and_(MSt4, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt5, Reg} = boxed_ptr_to_native_register(MMod, MSt3, SrcValue),
     MSt6 = MMod:move_to_vm_register(MSt5, {free, {ptr, Reg, 1}}, FPReg),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
     emit_pass(Rest2, MMod, MSt6, State0);
@@ -2982,8 +2975,7 @@ emit_pass(<<?OP_GET_HD, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
     {MSt2, Dest, Rest3} = decode_dest(Rest1, MMod, MSt1),
     ?TRACE("OP_GET_HD ~p, ~p\n", [SrcValue, Dest]),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, SrcValue),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2, SrcValue),
     MSt5 = MMod:move_array_element(MSt4, Reg, ?LIST_HEAD_INDEX, Dest),
     MSt6 = MMod:free_native_registers(MSt5, [Dest, Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
@@ -2994,8 +2986,7 @@ emit_pass(<<?OP_GET_TL, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt1, SrcValue, Rest1} = decode_compact_term(Rest0, MMod, MSt0, State0),
     {MSt2, Dest, Rest3} = decode_dest(Rest1, MMod, MSt1),
     ?TRACE("OP_GET_TL ~p, ~p\n", [SrcValue, Dest]),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, SrcValue),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2, SrcValue),
     MSt5 = MMod:move_array_element(MSt4, Reg, ?LIST_TAIL_INDEX, Dest),
     MSt6 = MMod:free_native_registers(MSt5, [Dest, Reg]),
     ?ASSERT_ALL_NATIVE_FREE(MSt6),
@@ -3040,8 +3031,7 @@ emit_pass(<<?OP_BS_GET_TAIL, Rest0/binary>>, MMod, MSt0, State0) ->
         Src, Live, BSOffsetReg, BSBinaryReg, MMod, MSt7
     ),
     MSt9 = MMod:free_native_registers(MSt8, [BSBinaryReg]),
-    {MSt10, MatchStateReg1} = MMod:move_to_native_register(MSt9, NewMatchState),
-    {MSt11, MatchStateReg1} = MMod:and_(MSt10, {free, MatchStateReg1}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt11, MatchStateReg1} = boxed_ptr_to_native_register(MMod, MSt9, NewMatchState),
     MSt12 = MMod:move_to_array_element(MSt11, BSOffsetReg, MatchStateReg1, 2),
     MSt13 = MMod:move_to_vm_register(MSt12, ResultTerm, Dest),
     MSt14 = MMod:free_native_registers(MSt13, [MatchStateReg1, BSOffsetReg, ResultTerm, Dest]),
@@ -3067,8 +3057,7 @@ emit_pass(<<?OP_BS_GET_POSITION, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, Dest, Rest2} = decode_dest(Rest1, MMod, MSt1),
     {_Live, Rest3} = decode_literal(Rest2),
     ?TRACE("OP_BS_GET_POSITION ~p, ~p, ~p\n", [Src, Dest, _Live]),
-    {MSt3, Reg} = MMod:move_to_native_register(MSt2, Src),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = boxed_ptr_to_native_register(MMod, MSt2, Src),
     MSt5 = MMod:move_array_element(MSt4, Reg, 2, Reg),
     {MSt6, Reg} = term_from_int(Reg, MMod, MSt5),
     MSt7 = MMod:move_to_vm_register(MSt6, Reg, Dest),
@@ -3705,8 +3694,7 @@ emit_pass(
             FieldAtom = AtomResolver(FieldAtomIndex),
             case maps:find(FieldAtom, field_position_map(FieldAtoms)) of
                 {ok, Position} ->
-                    {MSt3, SrcReg} = MMod:move_to_native_register(MSt2, Src),
-                    {MSt4, SrcReg} = MMod:and_(MSt3, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
+                    {MSt4, SrcReg} = boxed_ptr_to_native_register(MMod, MSt2, Src),
                     MSt5 = MMod:move_array_element(MSt4, SrcReg, Position, Dest),
                     MSt6 = MMod:free_native_registers(MSt5, [SrcReg, Dest]),
                     ?ASSERT_ALL_NATIVE_FREE(MSt6),
@@ -4287,8 +4275,7 @@ emit_pass_update_record_inplace(Rest0, MMod, MSt0, State0) ->
 
 emit_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0) ->
     {MSt1, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
-    {MSt2, SrcReg} = MMod:move_to_native_register(MSt1, Src),
-    {MSt3, SrcReg} = MMod:and_(MSt2, {free, SrcReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt3, SrcReg} = boxed_ptr_to_native_register(MMod, MSt1, Src),
     {MSt4, Dest, Rest4} = decode_dest(Rest3, MMod, MSt3),
     {ListLen, Rest5} = decode_extended_list_header(Rest4),
     ?TRACE("OP_UPDATE_RECORD ~p, ~p, ~p, ~p, [", [Hint, Size, Src, Dest]),
@@ -5018,8 +5005,7 @@ is_known_binary(_MMod, _MSt, _) ->
 %% is guarded by its branch: the tree-size slot does not exist on an empty flat
 %% map (3 words), and the keys word is not a pointer on a tree map.
 op_gc_bif1_map_size(MMod, MSt0, Arg, Dest) ->
-    {MSt1, MapReg} = MMod:move_to_native_register(MSt0, Arg),
-    {MSt2, MapReg} = MMod:and_(MSt1, {free, MapReg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt2, MapReg} = boxed_ptr_to_native_register(MMod, MSt0, Arg),
     {MSt3, KeysReg} = MMod:get_array_element(MSt2, MapReg, ?TERM_MAP_KEYS_OFFSET),
     %% Both branches leave the tagged size term in ResultReg (seeded here).
     {MSt4, ResultReg} = MMod:move_to_native_register(MSt3, 0),
@@ -8084,6 +8070,22 @@ term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
             MMod:free_native_registers(BSt5, [AllocMatchStateReg, NewSrc])
         end
     ).
+
+%% Fresh native register holding Value with its boxed tag stripped.
+%%
+%% Backends exporting and_to_native_register/3 do this with one three-operand
+%% instruction and leave the source register alone; the rest copy the value out
+%% and mask it in place, which costs an extra instruction whenever the source
+%% already sits in a register (an x0-x3 home on aarch64, or anything the
+%% register cache is holding).
+boxed_ptr_to_native_register(MMod, MSt0, Value) ->
+    case erlang:function_exported(MMod, and_to_native_register, 3) of
+        true ->
+            MMod:and_to_native_register(MSt0, Value, ?TERM_PRIMARY_CLEAR_MASK);
+        false ->
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, Value),
+            MMod:and_(MSt1, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK)
+    end.
 
 term_from_catch_label(Dest, Label, MMod, MSt1) ->
     %% A catch term is (module_index << 24) | (label << imm2size) | CATCH:
