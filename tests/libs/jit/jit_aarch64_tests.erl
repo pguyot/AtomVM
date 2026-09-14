@@ -2337,9 +2337,8 @@ move_array_element_test_() ->
                 %% move_array_element: reg[x] to x_reg
                 ?_test(begin
                     move_array_element_test0(State0, r8, 2, {x_reg, 0}, <<
-                        "   0:	f9400907 	ldr	x7, [x8, #16]\n"
-                        "   4:	aa0703f9 	mov	x25, x7\n"
-                        "   8:	f9002ea7 	str	x7, [x21, #88]"
+                        "   0:	f9400919 	ldr	x25, [x8, #16]\n"
+                        "   4:	f9002eb9 	str	x25, [x21, #88]"
                     >>)
                 end),
                 %% move_array_element: reg[x] to ptr
@@ -3113,9 +3112,8 @@ large_operand_test_() ->
                 State2,
                 <<
                     "   0:	aa1903e7 	mov	x7, x25\n"
-                    "   4:	f95000e8 	ldr	x8, [x7, #8192]\n"
-                    "   8:	aa0803fa 	mov	x26, x8\n"
-                    "   c:	f90032a8 	str	x8, [x21, #96]"
+                    "   4:	f95000fa 	ldr	x26, [x7, #8192]\n"
+                    "   8:	f90032ba 	str	x26, [x21, #96]"
                 >>
             )
         end},
