@@ -22,6 +22,7 @@
 
 -export([
     word_size/0,
+    pending_flush_mask/2,
     new/3,
     stream/1,
     offset/1,

@@ -22,6 +22,7 @@
 
 -export([
     word_size/0,
+    pending_flush_mask/2,
     new/3,
     set_live_masks/2,
     supports_loop_residency/0,
