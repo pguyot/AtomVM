@@ -33,6 +33,10 @@
 
 -define(TERM_BOXED_TAG_MASK, 16#3F).
 -define(TERM_BOXED_TUPLE, 16#0).
+%% A tuple's boxed header word: the arity shifted above the 6 tag bits, with
+%% ?TERM_BOXED_TUPLE (0) as the tag. Comparing a header against this constant
+%% tests "is a tuple" and "has this arity" at once.
+-define(TUPLE_HEADER(Arity), (((Arity) bsl 6) bor ?TERM_BOXED_TUPLE)).
 -define(TERM_BOXED_BIN_MATCH_STATE, 16#4).
 -define(TERM_BOXED_POSITIVE_INTEGER, 16#8).
 -define(TERM_BOXED_NEGATIVE_INTEGER, 16#C).
