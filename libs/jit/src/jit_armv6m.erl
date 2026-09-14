@@ -68,6 +68,7 @@
     set_bs_offset/2,
     copy_to_native_register/2,
     get_array_element/3,
+    copy_array_elements/5,
     increment_sp/2,
     set_continuation_to_label/2,
     set_continuation_to_offset/1,
@@ -3165,6 +3166,96 @@ move_array_element(
     }.
 
 %% @doc move reg[x] to a vm or native register
+%%-----------------------------------------------------------------------------
+%% @doc Copy `Count' consecutive words from one boxed term to another with
+%% `ldmia'/`stmia', moving several words per instruction.
+%%
+%% This is update_record's rebuild copy, which one word at a time costs an
+%% `ldr' and an `str' each -- four bytes per word, on the backend where code
+%% size matters most. ARMv6-M has no `ldrd', and all its accesses must be word
+%% aligned, so `ldmia'/`stmia' are the only way to move more than one word at a
+%% time. They take low registers only, which is the whole allocatable file here.
+%%
+%% They have no immediate offset, so the run streams off two bases with
+%% writeback. Registers are too scarce to spend one on a copy of the source
+%% pointer, so the source streams in `SrcReg' itself and is wound back
+%% afterwards with a single `subs' -- the reuse path still needs the original.
+%% That buys a third data register, which is the difference between two words
+%% per pair of instructions and three.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec copy_array_elements(
+    state(), armv6m_register(), armv6m_register(), non_neg_integer(), integer()
+) -> state().
+copy_array_elements(#state{regs = Regs0} = State0, SrcReg, DestReg, From, Count) when
+    Count >= 2
+->
+    Offset = From * 4,
+    Advance = Offset + Count * 4,
+    case mask_to_list(jit_regs:available_regs(Regs0)) of
+        [DstBase | Data] when
+            length(Data) >= 2,
+            Offset =< 7,
+            Advance =< 255
+        ->
+            copy_array_elements_ldm(
+                State0, SrcReg, DestReg, Offset, Advance, Count, DstBase, lists:sublist(Data, 4)
+            );
+        _ ->
+            copy_array_elements_scalar(State0, SrcReg, DestReg, From, Count)
+    end;
+copy_array_elements(State0, SrcReg, DestReg, From, Count) ->
+    copy_array_elements_scalar(State0, SrcReg, DestReg, From, Count).
+
+copy_array_elements_ldm(
+    #state{stream_module = SM, stream = Stream0, regs = Regs0} = State0,
+    SrcReg,
+    DestReg,
+    Offset,
+    Advance,
+    Count,
+    DstBase,
+    Group
+) ->
+    Setup = <<
+        (jit_armv6m_asm:adds(DstBase, DestReg, Offset))/binary,
+        (jit_armv6m_asm:adds(SrcReg, Offset))/binary
+    >>,
+    Regs1 = lists:foldl(
+        fun(R, Acc) -> jit_regs:invalidate_reg(Acc, R) end,
+        Regs0,
+        [SrcReg, DstBase | Group]
+    ),
+    State1 = State0#state{stream = SM:append(Stream0, Setup), regs = Regs1},
+    #state{stream = Stream1} =
+        State2 = copy_array_elements_ldm_run(
+            State1, SrcReg, DstBase, Group, Count
+        ),
+    %% Both bases advanced by exactly `Advance' bytes; put the source back.
+    State2#state{stream = SM:append(Stream1, jit_armv6m_asm:subs(SrcReg, Advance))}.
+
+copy_array_elements_ldm_run(State, _SrcReg, _DstBase, _Group, 0) ->
+    State;
+copy_array_elements_ldm_run(
+    #state{stream_module = SM, stream = Stream0} = State0, SrcReg, DstBase, Group, Count
+) ->
+    Take = min(Count, length(Group)),
+    List = lists:sublist(Group, Take),
+    Code = <<
+        (jit_armv6m_asm:ldmia_wb(SrcReg, List))/binary,
+        (jit_armv6m_asm:stmia_wb(DstBase, List))/binary
+    >>,
+    State1 = State0#state{stream = SM:append(Stream0, Code)},
+    copy_array_elements_ldm_run(State1, SrcReg, DstBase, Group, Count - Take).
+
+copy_array_elements_scalar(State, _SrcReg, _DestReg, _Index, Count) when Count =< 0 ->
+    State;
+copy_array_elements_scalar(State0, SrcReg, DestReg, Index, Count) ->
+    {State1, Value} = get_array_element(State0, SrcReg, Index),
+    State2 = move_to_array_element(State1, Value, DestReg, Index),
+    State3 = free_native_register(State2, Value),
+    copy_array_elements_scalar(State3, SrcReg, DestReg, Index + 1, Count - 1).
+
 -spec get_array_element(state(), armv6m_register() | {free, armv6m_register()}, non_neg_integer()) ->
     {state(), armv6m_register()}.
 get_array_element(

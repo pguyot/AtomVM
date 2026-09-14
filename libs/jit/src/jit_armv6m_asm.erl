@@ -56,6 +56,8 @@
     adr/2,
     push/1,
     pop/1,
+    ldmia_wb/2,
+    stmia_wb/2,
     reg_to_num/1
 ]).
 
@@ -675,6 +677,39 @@ pop(RegList) when is_list(RegList) ->
     {LowRegMask, PCBit} = process_reglist(RegList, pc),
     %% Thumb POP encoding: 1011110Plllllll where P=PC bit, lllllll=low register mask
     <<(16#BC00 bor (PCBit bsl 8) bor LowRegMask):16/little>>.
+
+%% ARMv6-M Thumb LDMIA / STMIA with writeback
+%%
+%% LDMIA Rn!, {list}: 1100 1 Rn(3) list(8); STMIA Rn!, {list}: 1100 0 Rn(3) list(8).
+%% Base and list are low registers only, which is the whole allocatable file on
+%% this backend. ARMv6-M has no LDRD, and its loads must be word aligned anyway,
+%% so this is the only way to move more than one word per instruction.
+-spec ldmia_wb(arm_gpr_register(), [arm_gpr_register()]) -> binary().
+ldmia_wb(Rn, RegList) ->
+    <<(16#C800 bor ldmstm_fields(Rn, RegList)):16/little>>.
+
+-spec stmia_wb(arm_gpr_register(), [arm_gpr_register()]) -> binary().
+stmia_wb(Rn, RegList) ->
+    <<(16#C000 bor ldmstm_fields(Rn, RegList)):16/little>>.
+
+ldmstm_fields(Rn, RegList) ->
+    RnNum = reg_to_num(Rn),
+    true = RnNum =< 7,
+    Mask = lists:foldl(
+        fun(Reg, Acc) ->
+            Num = reg_to_num(Reg),
+            true = Num =< 7,
+            Acc bor (1 bsl Num)
+        end,
+        0,
+        RegList
+    ),
+    true = Mask =/= 0,
+    %% With the base in the list, LDM does not write back and STM is
+    %% UNPREDICTABLE unless it is the lowest-numbered register. Neither is worth
+    %% encoding here.
+    true = (Mask band (1 bsl RnNum)) =:= 0,
+    (RnNum bsl 8) bor Mask.
 
 %% ARMv6-M Thumb NOP instruction
 %% NOP - no operation (encoded as mov r8, r8)

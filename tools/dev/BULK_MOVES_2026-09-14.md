@@ -124,14 +124,62 @@ pointer, which has the same ARMv6 exposure.** Unnoticed because every arm32 CI
 job is `-mcpu=cortex-a7`, which is ARMv7-A, where word-aligned `ldrd` is merely
 slow rather than unpredictable.
 
+### armv6m: the same lever, and the backend where it matters most
+
+ARMv6-M has no `ldrd` at all -- it is Thumb-only, and all its accesses must be
+word aligned -- so the alignment question above does not arise. What it does
+have is Thumb-1 `LDMIA`/`STMIA` with writeback, low registers only, which is the
+whole allocatable file on this backend. Code size is the metric that matters on
+a microcontroller, and one word at a time costs four bytes per word.
+
+Registers are the constraint. Only six are allocatable (`r7 r6 r5 r4 r3 r1`),
+and `SrcReg` and `DestReg` are both live across the copy, leaving four. Spending
+two on stream bases would leave two data registers. Instead the source streams
+in `SrcReg` itself and is wound back afterwards with a single `subs`, which buys
+a third data register -- the difference between two words per pair of
+instructions and three. That is safe as long as the rewind is exact, which is
+what the new test below is for.
+
+A 9-word record: 18 instructions before, 9 after (two setup, six `ldmia`/`stmia`,
+one rewind). Corpus code size -0.25%.
+
+Note that the ARMv6 hazard described above is about ARMv6-**A** (ARM1176,
+Raspberry Pi 1 and Zero), reached through the `arm32` backend. It has nothing to
+do with the `armv6m` backend, which cannot emit `ldrd` in the first place.
+
+## Testing
+
+`update_record`'s rebuild path had no dedicated test -- `test_update_record_inplace`
+covers only the other hint. `tests/erlang_tests/test_update_record_rebuild.erl`
+now covers it, and the rp2 firmware test suite compiles the same module so it
+runs on emulated Cortex-M0+ under rp2040js.
+
+Two things were needed to make it a real test.
+
+1. **An identity function is not an opaque barrier.** It gets inlined, the record
+   is then a known literal, and an update to a field that already holds that
+   value folds away entirely. Every site came out `copy`-hinted, and `copy`
+   never reads the source pointer after the copy -- so the rewind was untested.
+   Round-tripping through the process dictionary gives the compiler a term it
+   knows nothing about; every site is then `reuse`-hinted, which is the path
+   that does read it.
+2. **Sizes have to straddle the register group.** The records are 3, 5, 19, 20
+   and 21 words, which covers every tail length past a whole group of three and
+   two runs shorter than one group.
+
+Verified by mutation: shortening the armv6m rewind by one word makes
+`test_update_record_rebuild` fail under rp2040js (crash report, "Expected 139
+Was 843"), and restoring it makes it pass. Before the two fixes above, the same
+mutation passed.
+
 ## Results
 
 Corpus code size, 260 modules, jump table excluded, over both commits:
 
-    aarch64 -0.39%   arm32  -0.44%   riscv32 -0.12%   riscv64 -0.10%
-    xtensa  -0.07%   x86_64 -0.07%   armv6m  -0.06%   wasm32   0.00%
+    arm32  -0.44%   aarch64 -0.39%   armv6m  -0.31%   riscv32 -0.12%
+    riscv64 -0.10%  xtensa  -0.07%   x86_64  -0.07%   wasm32   0.00%
 
-The four backends with no paired load take the frontend fallback for
+The four backends with no multi-word load take the frontend fallback for
 update_record and only see the init_yregs change; wasm32 sees neither.
 
 End to end on a loop of two updates to a 31-word record, each through an opaque
