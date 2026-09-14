@@ -59,6 +59,9 @@
     move_array_elements_pair/5,
     move_to_vm_registers_pair/4,
     move_to_array_elements_pair/5,
+    or_shifted_arith/4,
+    get_array_elements_pair/3,
+    extract_bits/4,
     copy_array_elements/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
@@ -4190,6 +4193,84 @@ move_array_elements_pair(State0, Reg, Index, {x_reg, X1}, {x_reg, X2}) when
     Regs3 = jit_regs:set_contents(Regs2, Reg1, {x_reg, X1}),
     Regs4 = jit_regs:set_contents(Regs3, Reg2, {x_reg, X2}),
     StateC#state{regs = Regs4}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Load two consecutive array elements into two fresh registers with one
+%% `ldp'.
+%%
+%% `ldp' needs distinct destinations, which two fresh allocations always are,
+%% and reaches element 63 with its scaled 7-bit offset. A destination may alias
+%% the base: that is only unpredictable for the writeback form, which this is
+%% not.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_array_elements_pair(state(), aarch64_register(), non_neg_integer()) ->
+    {state(), aarch64_register(), aarch64_register()}.
+get_array_elements_pair(#state{regs = Regs0} = State0, Reg, Index) when
+    is_integer(Index), Index >= 0, Index =< ?LDP_MAX_INDEX
+->
+    case mask_to_list(jit_regs:available_regs(Regs0)) of
+        [Reg1, Reg2 | _] ->
+            #state{stream_module = SM, stream = Stream0} = State0,
+            I = jit_aarch64_asm:ldp(Reg1, Reg2, {Reg, Index * ?WORD_SIZE}),
+            Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, Reg1), reg_bit(Reg1)),
+            Regs2 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs1, Reg2), reg_bit(Reg2)),
+            {State0#state{stream = SM:append(Stream0, I), regs = Regs2}, Reg1, Reg2};
+        _ ->
+            get_array_elements_pair_slow(State0, Reg, Index)
+    end;
+get_array_elements_pair(State0, Reg, Index) ->
+    get_array_elements_pair_slow(State0, Reg, Index).
+
+get_array_elements_pair_slow(State0, Reg, Index) ->
+    {State1, R1} = get_array_element(State0, Reg, Index),
+    {State2, R2} = get_array_element(State1, Reg, Index + 1),
+    {State2, R1, R2}.
+
+%%-----------------------------------------------------------------------------
+%% @doc `Dest = Dest bor (Src asr Shift)' in one instruction.
+%%
+%% AArch64 ALU instructions carry a shift on their second source at no cost, so
+%% a shift feeding an ORR does not need its own instruction -- nor does the copy
+%% the two-operand shift would otherwise need, since the shifted-register form
+%% reads Src without destroying it.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec or_shifted_arith(state(), aarch64_register(), aarch64_register(), 0..63) -> state().
+or_shifted_arith(
+    #state{stream_module = SM, stream = Stream0, regs = Regs0} = State0, Dest, Src, Shift
+) when ?IS_GPR(Dest), ?IS_GPR(Src), is_integer(Shift) ->
+    I = jit_aarch64_asm:orr_asr(Dest, Dest, Src, Shift),
+    State0#state{
+        stream = SM:append(Stream0, I), regs = jit_regs:invalidate_reg(Regs0, Dest)
+    }.
+
+%%-----------------------------------------------------------------------------
+%% @doc `(Value bsr Lsb) band ((1 bsl Width) - 1)' in one `ubfx'.
+%%
+%% Saves the mask-then-shift pair the frontend would otherwise emit.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec extract_bits(state(), value(), 0..63, 1..64) -> {state(), aarch64_register()}.
+extract_bits(State0, {free, Reg}, Lsb, Width) when ?IS_GPR(Reg) ->
+    %% Same convention as and_/3: an already-owned register is rewritten in
+    %% place and handed back still allocated.
+    extract_bits_emit(State0, Reg, Lsb, Width);
+extract_bits(State0, Value, Lsb, Width) when
+    is_integer(Lsb), is_integer(Width), Lsb >= 0, Width >= 1, Lsb + Width =< 64
+->
+    {State1, Src} = move_to_native_register(State0, Value),
+    extract_bits_emit(State1, Src, Lsb, Width).
+
+extract_bits_emit(State1, Src, Lsb, Width) ->
+    #state{stream_module = SM, stream = Stream1, regs = Regs1} = State1,
+    I = jit_aarch64_asm:ubfx(Src, Src, Lsb, Width),
+    {
+        State1#state{
+            stream = SM:append(Stream1, I), regs = jit_regs:invalidate_reg(Regs1, Src)
+        },
+        Src
+    }.
 
 %%-----------------------------------------------------------------------------
 %% @doc Store two values into consecutive array slots with a single `stp'.

@@ -60,6 +60,8 @@
     movk/3,
     movz/3,
     orr/3,
+    orr_asr/4,
+    ubfx/4,
     ret/0,
     nop/0,
     str/2,
@@ -691,6 +693,41 @@ find_ones_run([0 | Rest], Pos, OnesCount, StartPos, none) ->
 %% Emit an ORR instruction (AArch64 encoding)
 %% ORR Rd, Rn, Rm - performs bitwise OR of Rn and Rm, storing result in Rd
 %% Special cases: ORR Rd, XZR, Rm is equivalent to MOV Rd, Rm
+%% ORR Rd, Rn, Rm, asr #Shift -- the shifted-register operand form.
+%%
+%% AArch64 ALU instructions carry a shift on their second source for free, so a
+%% separate shift instruction feeding an ORR is one instruction, not two. The
+%% shift field is 00=LSL 01=LSR 10=ASR 11=ROR.
+-spec orr_asr(
+    aarch64_gpr_register(), aarch64_gpr_register(), aarch64_gpr_register(), 0..63
+) -> binary().
+orr_asr(Rd, Rn, Rm, Shift) when
+    is_atom(Rd), is_atom(Rn), is_atom(Rm), is_integer(Shift), Shift >= 0, Shift =< 63
+->
+    <<
+        (16#AA000000 bor (2#10 bsl 22) bor (reg_to_num(Rm) bsl 16) bor (Shift bsl 10) bor
+            (reg_to_num(Rn) bsl 5) bor reg_to_num(Rd)):32/little
+    >>.
+
+%% UBFX Rd, Rn, #Lsb, #Width -- unsigned bitfield extract, an alias of UBFM.
+%%
+%% Replaces the mask-then-shift pair: (x >> Lsb) & ((1 << Width) - 1).
+-spec ubfx(aarch64_gpr_register(), aarch64_gpr_register(), 0..63, 1..64) -> binary().
+ubfx(Rd, Rn, Lsb, Width) when
+    is_atom(Rd),
+    is_atom(Rn),
+    is_integer(Lsb),
+    is_integer(Width),
+    Lsb >= 0,
+    Width >= 1,
+    Lsb + Width =< 64
+->
+    %% UBFM Rd, Rn, #immr, #imms with immr = Lsb, imms = Lsb + Width - 1.
+    <<
+        (16#D3400000 bor (Lsb bsl 16) bor ((Lsb + Width - 1) bsl 10) bor
+            (reg_to_num(Rn) bsl 5) bor reg_to_num(Rd)):32/little
+    >>.
+
 -spec orr(aarch64_gpr_register(), aarch64_gpr_register() | xzr, aarch64_gpr_register()) -> binary().
 orr(DstReg, xzr, SrcReg) when is_atom(DstReg), is_atom(SrcReg) ->
     %% ORR Rd, XZR, Rm - equivalent to MOV Rd, Rm
