@@ -1118,11 +1118,11 @@ emit_pass(<<?OP_IS_REFERENCE, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_REFERENCE ~p, ~p\n", [Label, Arg1]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
+    MSt3a = cond_jump_to_label(
+        {Op, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
     ),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = untag_after_test(MMod, MSt3a, Op, Own, Arg1),
     MSt5 = MMod:move_array_element(MSt4, Reg, 0, Reg),
     {MSt6, Reg} = MMod:and_(MSt5, {free, Reg}, ?TERM_BOXED_TAG_MASK),
     MSt7 = cond_jump_to_label(
@@ -1180,11 +1180,11 @@ emit_pass(<<?OP_IS_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_LIST ~p, ~p\n", [Label, Arg1]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
     MSt3 = cond_jump_to_label(
         {'and', [
-            {Reg, '!=', ?TERM_NIL},
-            {{free, Reg}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}
+            {Op, '!=', ?TERM_NIL},
+            {test_operand_arg(Op, Own), '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}
         ]},
         Label,
         MMod,
@@ -1198,9 +1198,12 @@ emit_pass(<<?OP_IS_NONEMPTY_LIST, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_NONEMPTY_LIST ~p, ~p\n", [Label, Arg1]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
     MSt3 = cond_jump_to_label(
-        {{free, Reg}, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST}, Label, MMod, MSt2
+        {test_operand_arg(Op, Own), '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_LIST},
+        Label,
+        MMod,
+        MSt2
     ),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
     emit_pass(Rest2, MMod, MSt3, State0);
@@ -2029,11 +2032,11 @@ emit_pass(<<?OP_IS_BITSTR, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_BITSTR ~p, ~p\n", [Label, Arg1]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
+    MSt3a = cond_jump_to_label(
+        {Op, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
     ),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = untag_after_test(MMod, MSt3a, Op, Own, Arg1),
     MSt5 = MMod:move_array_element(MSt4, Reg, 0, Reg),
     {MSt6, Reg} = MMod:and_(MSt5, {free, Reg}, ?TERM_BOXED_TAG_MASK),
     MSt7 = cond_jump_to_label(
@@ -3527,11 +3530,11 @@ emit_pass(<<?OP_IS_ANY_NATIVE_RECORD, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Src, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_ANY_NATIVE_RECORD ~p, ~p\n", [Label, Src]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Src),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Src),
+    MSt3a = cond_jump_to_label(
+        {Op, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
     ),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = untag_after_test(MMod, MSt3a, Op, Own, Src),
     {MSt5, TagReg} = MMod:get_array_element(MSt4, Reg, 0),
     MSt6 = cond_jump_to_label(
         {TagReg, '&', ?TERM_BOXED_TAG_MASK, '!=', ?TERM_BOXED_RECORD}, Label, MMod, MSt5
@@ -8087,6 +8090,44 @@ emit_tuple_element_run(MMod, MSt0, Reg, [{Element, Dest} | Tail], Paired) ->
     MSt2 = MMod:free_native_registers(MSt1, [Dest]),
     emit_tuple_element_run(MMod, MSt2, Reg, Tail, Paired).
 
+%% Operand for a read-only condition test.
+%%
+%% Backends that can test a value where it already lives -- an x0-x3 home
+%% register on aarch64 -- take the VM register as-is and emit nothing. The rest
+%% get a materialized copy, which the caller owns and must release. That copy
+%% is what every type test of x0-x3 used to pay for.
+test_operand(MMod, MSt0, Value0) ->
+    %% Type information is only a hint to the frontend; what the backend needs
+    %% to recognise is the register underneath it.
+    Value = unwrap_typed(Value0),
+    case
+        erlang:function_exported(MMod, can_test_in_place, 1) andalso
+            MMod:can_test_in_place(Value)
+    of
+        true ->
+            {MSt0, Value, borrowed};
+        false ->
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, Value0),
+            {MSt1, Reg, owned}
+    end.
+
+%% The operand as the condition should name it: an owned register is consumed
+%% by the test, a borrowed one is only read.
+test_operand_arg(Operand, owned) -> {free, Operand};
+test_operand_arg(Operand, borrowed) -> Operand.
+
+%% Strip the boxed tag straight after a type test.
+%%
+%% When the test materialized its operand, mask that register in place -- which
+%% is exactly what this code did before the operand indirection existed, and
+%% avoids re-deriving the value from the VM register, which can cost a reload
+%% if the test invalidated the cache. When the operand was borrowed, nothing
+%% was materialized and the three-operand form reads the home directly.
+untag_after_test(MMod, MSt, Op, owned, _Value) ->
+    MMod:and_(MSt, {free, Op}, ?TERM_PRIMARY_CLEAR_MASK);
+untag_after_test(MMod, MSt, _Op, borrowed, Value) ->
+    boxed_ptr_to_native_register(MMod, MSt, Value).
+
 %% Fresh native register holding Value with its boxed tag stripped.
 %%
 %% Backends exporting and_to_native_register/3 do this with one three-operand
@@ -8119,11 +8160,11 @@ term_from_catch_label(Dest, Label, MMod, MSt1) ->
     MMod:free_native_registers(MSt5, [Reg, Dest]).
 
 term_is_boxed_with_tag_and_get_ptr(Label, Arg1, BoxedTag, MMod, MSt1) ->
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    MSt3 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
+    MSt3a = cond_jump_to_label(
+        {Op, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED}, Label, MMod, MSt2
     ),
-    {MSt4, Reg} = MMod:and_(MSt3, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt4, Reg} = untag_after_test(MMod, MSt3a, Op, Own, Arg1),
     {MSt5, BoxTagReg} = MMod:get_array_element(MSt4, Reg, 0),
     MSt6 = cond_jump_to_label(
         {{free, BoxTagReg}, '&', ?TERM_BOXED_TAG_MASK, '!=', BoxedTag}, Label, MMod, MSt5
@@ -8262,14 +8303,14 @@ collect_get_tuple_elements(Rest, _SrcArg, _MMod, MSt, _State0) ->
 emit_fused_tuple_ops(IsTupleLabel, TestArityLabel, Arg1, Arity, GetElements, MMod, MSt0) ->
     %% The BEAM Types chunk (versions 2-4, up to OTP 29) does not encode tuple
     %% arity, so {typed, _, t_tuple} never carries an arity to specialize on.
-    {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
-    MSt2 = cond_jump_to_label(
-        {Reg, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
+    {MSt1, Op, Own} = test_operand(MMod, MSt0, Arg1),
+    MSt2a = cond_jump_to_label(
+        {Op, '&', ?TERM_PRIMARY_MASK, '!=', ?TERM_PRIMARY_BOXED},
         IsTupleLabel,
         MMod,
         MSt1
     ),
-    {MSt3, Reg} = MMod:and_(MSt2, {free, Reg}, ?TERM_PRIMARY_CLEAR_MASK),
+    {MSt3, Reg} = untag_after_test(MMod, MSt2a, Op, Own, Arg1),
     {MSt4, HeaderReg} = MMod:get_array_element(MSt3, Reg, 0),
     %% A tuple header IS the arity shifted up, since ?TERM_BOXED_TUPLE is 0, so
     %% "is it a tuple" and "is its arity N" are one comparison against
