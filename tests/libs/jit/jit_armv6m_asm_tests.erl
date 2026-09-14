@@ -296,6 +296,48 @@ adr_test_() ->
         ?_assertAsmEqual(<<16#a0ff:16/little>>, "adr r0, .+1024", jit_armv6m_asm:adr(r0, 1024))
     ].
 
+ldm_stm_test_() ->
+    [
+        ?_assertAsmEqual(
+            <<16#cf1a:16/little>>,
+            "ldmia r7!, {r1, r3, r4}",
+            jit_armv6m_asm:ldmia_wb(r7, [r1, r3, r4])
+        ),
+        ?_assertAsmEqual(
+            <<16#c61a:16/little>>,
+            "stmia r6!, {r1, r3, r4}",
+            jit_armv6m_asm:stmia_wb(r6, [r1, r3, r4])
+        ),
+        ?_assertAsmEqual(
+            <<16#c806:16/little>>, "ldmia r0!, {r1, r2}", jit_armv6m_asm:ldmia_wb(r0, [r1, r2])
+        ),
+        ?_assertAsmEqual(
+            <<16#c51e:16/little>>,
+            "stmia r5!, {r1, r2, r3, r4}",
+            jit_armv6m_asm:stmia_wb(r5, [r1, r2, r3, r4])
+        ),
+        %% A one-register list is legal, and is how the tail of a run keeps both
+        %% bases advancing in step.
+        ?_assertAsmEqual(
+            <<16#cf10:16/little>>, "ldmia r7!, {r4}", jit_armv6m_asm:ldmia_wb(r7, [r4])
+        ),
+        ?_assertAsmEqual(
+            <<16#c610:16/little>>, "stmia r6!, {r4}", jit_armv6m_asm:stmia_wb(r6, [r4])
+        ),
+        %% The list is a bitmask, so the order it is written in does not matter.
+        ?_assertEqual(
+            jit_armv6m_asm:ldmia_wb(r7, [r1, r3, r4]),
+            jit_armv6m_asm:ldmia_wb(r7, [r4, r1, r3])
+        ),
+        %% High registers are not encodable, and the base must not be in the
+        %% list: LDM would not write back and STM would be UNPREDICTABLE.
+        ?_assertError({badmatch, false}, jit_armv6m_asm:ldmia_wb(r7, [r7, r1])),
+        ?_assertError({badmatch, false}, jit_armv6m_asm:stmia_wb(r6, [r6])),
+        ?_assertError({badmatch, false}, jit_armv6m_asm:ldmia_wb(r7, [r8])),
+        ?_assertError({badmatch, false}, jit_armv6m_asm:ldmia_wb(r12, [r1])),
+        ?_assertError({badmatch, false}, jit_armv6m_asm:ldmia_wb(r7, []))
+    ].
+
 push_test_() ->
     [
         %% ARMv6-M Thumb PUSH instruction (low registers + optional LR)
