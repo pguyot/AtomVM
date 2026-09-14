@@ -4273,14 +4273,17 @@ emit_pass_update_record(Rest2, Hint, Size, MMod, MSt0, State0) ->
     {ListLen, Rest5} = decode_extended_list_header(Rest4),
     ?TRACE("OP_UPDATE_RECORD ~p, ~p, ~p, ~p, [", [Hint, Size, Src, Dest]),
     {MSt6, DestReg} = alloc_tuple(MMod, MSt4, Size),
-    {MSt7, ReuseReg} = MMod:move_to_native_register(
-        MSt6,
+    %% The copy runs first: it is the one part of this opcode that wants every
+    %% spare register (arm32 streams it through an ldm/stm register list), and
+    %% the reuse flag is only read by the update loop below.
+    MSt7 = copy_array_elements(MMod, MSt6, SrcReg, DestReg, 1, Size),
+    {MSt8, ReuseReg} = MMod:move_to_native_register(
+        MSt7,
         if
             Hint =:= reuse -> 1;
             true -> 0
         end
     ),
-    MSt8 = copy_array_elements(MMod, MSt7, SrcReg, DestReg, 1, Size),
     {MSt9, Rest6} = lists:foldl(
         fun(_Index, {AccMSt0, AccRest0}) ->
             {UpdateIx, AccRest1} = decode_literal(AccRest0),
