@@ -55,6 +55,7 @@
     supports_select_val_binary_search/0,
     supports_select_val_ranges/0,
     and_to_native_register/3,
+    can_test_in_place/1,
     move_array_elements_pair/5,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
@@ -1503,7 +1504,7 @@ jump_to_label_cond(StateP, {'and', _} = Cond, Label) ->
 jump_to_label_cond(StateP, Cond, Label) ->
     #state{stream_module = SM, labels = Labels} = State = pending_filter_label(StateP, Label),
     Offset0 = SM:offset(State#state.stream),
-    {State1, CC, BranchInstrOffset} = if_block_cond(State, Cond),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State, resolve_test_operands(Cond)),
     BranchOffset = Offset0 + BranchInstrOffset,
     case Labels of
         #{Label := LabelOffset} ->
@@ -1657,6 +1658,36 @@ invert_cb(cbnz_w) -> cbz_w.
 
 invert_tb(tbz) -> tbnz;
 invert_tb(tbnz) -> tbz.
+
+%%-----------------------------------------------------------------------------
+%% @doc Whether a condition can name this value directly, with nothing emitted.
+%%
+%% True for x0-x3, whose value always sits in a home register: a test can read
+%% it there instead of the caller copying it into a scratch first. Everything
+%% else has to be materialized, which is what the frontend does when this says
+%% no.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec can_test_in_place(value()) -> boolean().
+can_test_in_place({x_reg, X}) when is_integer(X), X < ?X_HOME_COUNT -> true;
+can_test_in_place(_Value) -> false.
+
+%% @private
+%% Resolve the VM registers a condition may name (see can_test_in_place/1) to
+%% the register the value already lives in, before the if_block_cond/2 clauses
+%% match. Only operand positions can hold an {x_reg, _}: everything else a
+%% condition carries is an integer or an atom.
+resolve_test_operands({'and', Conds}) ->
+    {'and', [resolve_test_operands(C) || C <- Conds]};
+resolve_test_operands({'(wide)', Cond}) ->
+    {'(wide)', resolve_test_operands(Cond)};
+resolve_test_operands(Cond) when is_tuple(Cond) ->
+    list_to_tuple([resolve_test_operand(E) || E <- tuple_to_list(Cond)]);
+resolve_test_operands(Cond) ->
+    Cond.
+
+resolve_test_operand({x_reg, X}) when is_integer(X), X < ?X_HOME_COUNT -> x_home(X);
+resolve_test_operand(E) -> E.
 
 %% @private
 %% The single bit that separates a primary tag from the other two a term can
@@ -1894,7 +1925,7 @@ if_block(
     {Replacements, State1} = lists:foldl(
         fun(Cond, {AccReplacements, AccState}) ->
             Offset = StreamModule:offset(AccState#state.stream),
-            {NewAccState, CC, ReplaceDelta} = if_block_cond(AccState, Cond),
+            {NewAccState, CC, ReplaceDelta} = if_block_cond(AccState, resolve_test_operands(Cond)),
             {[{Offset + ReplaceDelta, CC} | AccReplacements], NewAccState}
         end,
         {[], State0},
@@ -1924,7 +1955,7 @@ if_block(
     BlockFn
 ) ->
     Offset = StreamModule:offset(Stream0),
-    {State1, CC, BranchInstrOffset} = if_block_cond(State0, Cond),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State0, resolve_test_operands(Cond)),
     State2 = pending_exit_cond(BlockFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
     OffsetAfter = StreamModule:offset(Stream2),
@@ -1956,7 +1987,7 @@ if_else_block(
     BlockFalseFn
 ) ->
     Offset = StreamModule:offset(Stream0),
-    {State1, CC, BranchInstrOffset} = if_block_cond(State0, Cond),
+    {State1, CC, BranchInstrOffset} = if_block_cond(State0, resolve_test_operands(Cond)),
     State2 = pending_exit_cond(BlockTrueFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
     %% Emit unconditional branch to skip the else block (will be replaced)
