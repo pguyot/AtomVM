@@ -1234,7 +1234,7 @@ merge_loc_entries([{Off, Loc}]) ->
     [{Off, Off, Loc}];
 merge_loc_entries([{Off1, Loc1}, {_Off2, Loc2} | Rest]) when Loc1 =:= Loc2 ->
     merge_loc_entries([{Off1, Loc1} | Rest]);
-merge_loc_entries([{Off1, Loc1}, {Off2, _} | _] = [_ | Tail]) ->
+merge_loc_entries([{Off1, Loc1} | [{Off2, _} | _] = Tail]) ->
     [{Off1, Off2, Loc1} | merge_loc_entries(Tail)].
 
 calculate_address_range(#dwarf{opcodes = []}) ->
