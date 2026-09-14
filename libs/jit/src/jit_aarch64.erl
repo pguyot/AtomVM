@@ -57,6 +57,7 @@
     and_to_native_register/3,
     can_test_in_place/1,
     move_array_elements_pair/5,
+    move_to_vm_registers_pair/4,
     call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     return_if_not_equal_to_ctx/2,
@@ -4187,6 +4188,40 @@ move_array_elements_pair(State0, Reg, Index, {x_reg, X1}, {x_reg, X2}) when
     Regs3 = jit_regs:set_contents(Regs2, Reg1, {x_reg, X1}),
     Regs4 = jit_regs:set_contents(Regs3, Reg2, {x_reg, X2}),
     StateC#state{regs = Regs4}.
+
+%%-----------------------------------------------------------------------------
+%% @doc Store one register into two consecutive y slots with a single `stp'.
+%%
+%% Used by init_yregs, where the same NIL sits in both slots, so the two source
+%% operands of the `stp' are the same register.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec move_to_vm_registers_pair(state(), aarch64_register(), vm_register(), vm_register()) ->
+    state().
+move_to_vm_registers_pair(
+    #state{stream_module = SM, stream = Stream0, regs = Regs0} = State0,
+    Reg,
+    {y_reg, Y1},
+    {y_reg, Y2}
+) when
+    is_atom(Reg),
+    is_integer(Y1),
+    Y2 =:= Y1 + 1,
+    Y1 >= 0,
+    Y1 =< ?LDP_MAX_INDEX
+->
+    I = jit_aarch64_asm:stp(Reg, Reg, {?E_REG, Y1 * ?WORD_SIZE}),
+    Regs1 = jit_regs:invalidate_vm_loc(Regs0, {y_reg, Y1}),
+    Regs2 = jit_regs:invalidate_vm_loc(Regs1, {y_reg, Y2}),
+    Regs3 = jit_regs:set_contents(Regs2, Reg, {y_reg, Y2}),
+    State0#state{stream = SM:append(Stream0, I), regs = Regs3};
+move_to_vm_registers_pair(State0, Reg, Dest1, Dest2) ->
+    %% stp's offset is a scaled 7-bit signed immediate, so it only reaches
+    %% slot 63; past that two stores say the same thing.
+    State1 = move_to_vm_register(State0, Reg, Dest1),
+    State2 = free_native_registers(State1, [Dest1]),
+    State3 = move_to_vm_register(State2, Reg, Dest2),
+    free_native_registers(State3, [Dest2]).
 
 %%-----------------------------------------------------------------------------
 %% @doc Fresh register holding `Value band Mask', leaving Value's own register
