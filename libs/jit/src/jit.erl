@@ -8098,7 +8098,23 @@ alloc_tuple_cells(MMod, MSt0, Size) ->
     case erlang:function_exported(MMod, heap_bump_alloc, 2) of
         true ->
             {MSt1, Ptr} = MMod:heap_bump_alloc(MSt0, Size + 1),
-            {MSt1, Ptr, 0, [(Size bsl 6) bor ?TERM_BOXED_TUPLE]};
+            Header = (Size bsl 6) bor ?TERM_BOXED_TUPLE,
+            case
+                erlang:function_exported(MMod, pairs_memory_adjacent_only, 0) andalso
+                    MMod:pairs_memory_adjacent_only()
+            of
+                false ->
+                    %% The header is a register operand like any other, so it
+                    %% pairs with the first element for free.
+                    {MSt1, Ptr, 0, [Header]};
+                true ->
+                    %% Pairing needs both sources adjacent in memory, which an
+                    %% immediate never is. Writing the header on its own keeps
+                    %% the elements paired with each other instead of the first
+                    %% one being spent on it.
+                    MSt2 = MMod:move_to_array_element(MSt1, Header, Ptr, 0),
+                    {MSt2, Ptr, 1, []}
+            end;
         false ->
             {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_ALLOC_TUPLE, [ctx, Size]),
             {MSt2, Ptr} = MMod:and_(MSt1, {free, ResultReg}, ?TERM_PRIMARY_CLEAR_MASK),

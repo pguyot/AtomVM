@@ -22,6 +22,7 @@
 
 -export([
     movq/2,
+    movups/2,
     movabsq/2,
     movl/2,
     movzbq/2,
@@ -203,6 +204,31 @@ movsd({Disp, Base}, XmmSrc) when is_atom(Base), is_atom(XmmSrc) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(Base),
     <<16#F2, (rex_opt(0, REX_R, 0, REX_B))/binary, 16#0F, 16#11,
         (sse_modrm_mem(MODRM_REG, MODRM_RM, Disp))/binary>>.
+
+% movups xmm, [Base+Disp]  (0F 10 /r): load 16 bytes into an xmm register.
+% movups [Base+Disp], xmm  (0F 11 /r): store them back.
+%
+% Same shape as movsd without the F2 prefix, and it moves a pair of terms
+% rather than one. The unaligned form is the one we want: the heap and ctx->x[]
+% are only 8-byte aligned.
+movups(XmmDst, {Disp, Base}) when is_atom(XmmDst), is_atom(Base) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmDst),
+    {REX_B, MODRM_RM} = x86_64_x_reg(Base),
+    <<
+        (rex_opt(0, REX_R, 0, REX_B))/binary,
+        16#0F,
+        16#10,
+        (sse_modrm_mem(MODRM_REG, MODRM_RM, Disp))/binary
+    >>;
+movups({Disp, Base}, XmmSrc) when is_atom(Base), is_atom(XmmSrc) ->
+    {REX_R, MODRM_REG} = x86_64_xmm_reg(XmmSrc),
+    {REX_B, MODRM_RM} = x86_64_x_reg(Base),
+    <<
+        (rex_opt(0, REX_R, 0, REX_B))/binary,
+        16#0F,
+        16#11,
+        (sse_modrm_mem(MODRM_REG, MODRM_RM, Disp))/binary
+    >>.
 
 % Scalar double arithmetic, xmm-to-xmm: XmmDst = XmmDst <op> XmmSrc.
 addsd(XmmDst, XmmSrc) -> sse_arith(16#58, XmmDst, XmmSrc).
