@@ -4194,26 +4194,44 @@ call_primitive_with_cp(State0, Primitive, Args) ->
     rewrite_cp_offset(State2, RewriteOffset, TempReg).
 
 -spec set_cp(state()) -> {state(), non_neg_integer(), arm32_register()}.
-set_cp(State0) ->
+set_cp(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0) ->
     % cp is two words: the Module pointer (jit_state->module) at ?CP_MODULE and
     % the absolute address of the resume point at ?CP. That address is built
     % pc-relatively by an ADRL pair -- ARM's idiom for a pc-relative address
     % wider than one rotated immediate -- which rewrite_cp_offset/3 patches once
     % the resume point is known. The second `add` becomes a nop whenever the
     % whole displacement fits the first.
-    {#state{stream_module = StreamModule, stream = Stream0} = State1, ModReg} =
-        get_module(State0),
-    IModStore = jit_arm32_asm:str(al, ModReg, ?CP_MODULE),
-    Stream1 = StreamModule:append(Stream0, IModStore),
-    State2 = free_native_register(State1#state{stream = Stream1}, ModReg),
-    TempReg = first_avail(jit_regs:available_regs(State2#state.regs)),
-    AdrOffset = StreamModule:offset(Stream1),
+    %
+    % The two words are adjacent and doubleword-aligned, so a register pair
+    % writes the whole cp_t with one store. The ADRL pair goes first so its
+    % patched displacement is still measured from the offset returned here, and
+    % the module load sits between it and the store, where it fills the slot the
+    % dependent store would otherwise stall in.
+    ?ASSERT(element(2, ?CP) + 4 =:= element(2, ?CP_MODULE)),
     Placeholder = <<16#FFFFFFFF:32>>,
-    IStore = jit_arm32_asm:str(al, TempReg, ?CP),
-    Stream2 = StreamModule:append(
-        Stream1, <<Placeholder/binary, Placeholder/binary, IStore/binary>>
-    ),
-    {State2#state{stream = Stream2}, AdrOffset, TempReg}.
+    AdrOffset = StreamModule:offset(Stream0),
+    IModLoad = fun(Reg) -> jit_arm32_asm:ldr(al, Reg, ?JITSTATE_MODULE(?JITSTATE_REG)) end,
+    {Code, TempReg, Regs1} =
+        case first_avail_pair(jit_regs:available_regs(Regs0)) of
+            {Low, High} ->
+                {
+                    <<Placeholder/binary, Placeholder/binary, (IModLoad(High))/binary,
+                        (jit_arm32_asm:strd(al, Low, ?CP))/binary>>,
+                    Low,
+                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Low), High)
+                };
+            none ->
+                Addr = first_avail(jit_regs:available_regs(Regs0)),
+                Mod = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(Addr))),
+                {
+                    <<Placeholder/binary, Placeholder/binary, (IModLoad(Mod))/binary,
+                        (jit_arm32_asm:str(al, Addr, ?CP))/binary,
+                        (jit_arm32_asm:str(al, Mod, ?CP_MODULE))/binary>>,
+                    Addr,
+                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Addr), Mod)
+                }
+        end,
+    {State0#state{stream = StreamModule:append(Stream0, Code), regs = Regs1}, AdrOffset, TempReg}.
 
 %%-----------------------------------------------------------------------------
 %% @doc Bump-allocate NWords terms from the context heap, returning a freshly
@@ -4630,22 +4648,55 @@ return_to_cp_address(StateP) ->
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
         State = pending_clear_all(StateP),
     Avail0 = jit_regs:available_regs(Regs0),
-    ModReg = first_avail(Avail0),
-    AddrReg = first_avail(Avail0 band (bnot reg_bit(ModReg))),
-    I1 = jit_arm32_asm:ldr(al, ModReg, ?CP_MODULE),
-    I2 = jit_arm32_asm:ldr(al, AddrReg, ?MODULE_NATIVE_CODE(ModReg)),
-    I3 = jit_arm32_asm:cmp(al, AddrReg, 0),
-    %% Emulated target: skip the three instructions below and fall through.
-    I4 = jit_arm32_asm:b(eq, 16),
+    %% The resume address is the last thing the block needs and the first thing
+    %% it can load: it depends only on ctx, whereas the emulated-target test is
+    %% a two-deep chain through the module pointer. Loading it up front turns
+    %% the `ldr'/`bx' pair -- a load-use stall on an in-order core -- into four
+    %% instructions of distance. ?CP and ?CP_MODULE are adjacent and
+    %% doubleword-aligned, so when a register pair is free the whole cp_t
+    %% arrives in one access.
+    ?ASSERT(element(2, ?CP) + 4 =:= element(2, ?CP_MODULE)),
+    {Load, AddrReg, ModReg, Regs1} =
+        case first_avail_pair(Avail0) of
+            {Low, High} ->
+                {
+                    jit_arm32_asm:ldrd(al, Low, ?CP),
+                    Low,
+                    High,
+                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Low), High)
+                };
+            _ ->
+                A = first_avail(Avail0),
+                M = first_avail(Avail0 band (bnot reg_bit(A))),
+                {
+                    <<
+                        (jit_arm32_asm:ldr(al, A, ?CP))/binary,
+                        (jit_arm32_asm:ldr(al, M, ?CP_MODULE))/binary
+                    >>,
+                    A,
+                    M,
+                    jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, A), M)
+                }
+        end,
+    %% The native-code field only has to survive a `cmp'; with no call in
+    %% between, ip is a legal home for it if the pool happens to be empty.
+    NativeReg =
+        case Avail0 band (bnot (reg_bit(AddrReg) bor reg_bit(ModReg))) of
+            0 -> ?IP_REG;
+            Avail1 -> first_avail(Avail1)
+        end,
+    I2 = jit_arm32_asm:ldr(al, NativeReg, ?MODULE_NATIVE_CODE(ModReg)),
+    I3 = jit_arm32_asm:cmp(al, NativeReg, 0),
+    %% Emulated target: skip the two instructions below and fall through.
+    I4 = jit_arm32_asm:b(eq, 12),
     I5 = jit_arm32_asm:str(al, ModReg, ?JITSTATE_MODULE(?JITSTATE_REG)),
-    I6 = jit_arm32_asm:ldr(al, AddrReg, ?CP),
     %% No frame: the pinned registers stay live across this native jump and
     %% lr still holds the C dispatcher return address.
-    I7 = jit_arm32_asm:bx(al, AddrReg),
-    Code = <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary>>,
+    I6 = jit_arm32_asm:bx(al, AddrReg),
+    Code = <<Load/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>,
     Stream1 = StreamModule:append(Stream0, Code),
-    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, ModReg), AddrReg),
-    State#state{stream = Stream1, regs = Regs1}.
+    Regs2 = jit_regs:invalidate_reg(Regs1, NativeReg),
+    State#state{stream = Stream1, regs = Regs2}.
 
 set_bs(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
