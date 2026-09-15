@@ -1996,6 +1996,82 @@ if_else_block(
     {State1, CC, BranchInstrOffset} = if_block_cond(State0, resolve_test_operands(Cond)),
     State2 = pending_exit_cond(BlockTrueFn(pending_enter_cond(State1))),
     Stream2 = State2#state.stream,
+    BranchAt = Offset + BranchInstrOffset,
+    case StreamModule:offset(Stream2) =:= BranchAt + 4 of
+        true ->
+            %% The true arm emitted nothing, so the whole construct is
+            %% `if not Cond -> ElseArm end' and the unconditional branch that
+            %% would jump over the else arm is the true arm's only content.
+            %% One inverted conditional branch over the else arm says the same
+            %% thing in one instruction instead of two.
+            if_else_block_empty_true(State2, State1, CC, BranchAt, BlockFalseFn);
+        false ->
+            if_else_block_general(
+                State2, State1, CC, Offset, BranchInstrOffset, BlockFalseFn
+            )
+    end.
+
+%% @private
+%% The true arm emitted nothing. Whether one branch can reach past the else arm
+%% is not known until the else arm has been emitted, and by then it is too late
+%% to insert the pair -- so this takes a reservation from branch_hints exactly
+%% like a forward fused branch: try one instruction, and on overflow record the
+%% branch id so the next pass reserves two and takes the general path.
+%% emit_finalize_loop already re-emits while overflows is non-empty.
+%%
+%% fused_branch_bytes/2 does the rest: it inverts the condition (CC is the
+%% jump-to-else test, and we want to jump past the else arm instead) and
+%% returns four bytes when the displacement fits the branch form, eight when it
+%% does not.
+if_else_block_empty_true(
+    #state{stream_module = StreamModule, branch_counter = BId, branch_hints = Hints} = State2,
+    State1,
+    CC,
+    BranchAt,
+    BlockFalseFn
+) ->
+    State2a = State2#state{branch_counter = BId + 1},
+    case maps:get(BId, Hints, 4) of
+        4 ->
+            StateElse = State2a#state{regs = State1#state.regs},
+            State3 = pending_exit_cond(BlockFalseFn(pending_enter_cond(StateElse))),
+            #state{stream = Stream5} = State3,
+            Code = fused_branch_bytes(CC, StreamModule:offset(Stream5) - BranchAt),
+            MergedRegs = jit_regs:merge(
+                State2#state.regs, State3#state.regs, avail_mask(State3)
+            ),
+            case byte_size(Code) of
+                4 ->
+                    State3#state{
+                        stream = StreamModule:replace(Stream5, BranchAt, Code),
+                        regs = MergedRegs
+                    };
+                _ ->
+                    %% Too far for one branch. This pass is discarded and
+                    %% re-emitted with a two-instruction reservation; leave an
+                    %% in-range placeholder so nothing raises meanwhile.
+                    Safe = rewrite_branch_instruction(CC, 4),
+                    State3#state{
+                        stream = StreamModule:replace(Stream5, BranchAt, Safe),
+                        regs = MergedRegs,
+                        overflows = (State3#state.overflows)#{BId => 8}
+                    }
+            end;
+        _ ->
+            %% Reserved two instructions on a previous pass: take the general
+            %% path, which emits exactly that.
+            if_else_block_general(State2a, State1, CC, BranchAt, 0, BlockFalseFn)
+    end.
+
+%% @private
+if_else_block_general(
+    #state{stream_module = StreamModule, stream = Stream2} = State2,
+    State1,
+    CC,
+    Offset,
+    BranchInstrOffset,
+    BlockFalseFn
+) ->
     %% Emit unconditional branch to skip the else block (will be replaced)
     ElseJumpOffset = StreamModule:offset(Stream2),
     ElseJumpInstr = jit_aarch64_asm:b(0),
