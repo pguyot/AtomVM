@@ -1628,24 +1628,50 @@ if_block_cond(
 if_block_cond(
     #state{
         stream_module = StreamModule,
-        stream = Stream0
+        stream = Stream0,
+        regs = Regs0
     } = State0,
     {{free, Reg} = RegTuple, '&', Mask, '!=', Val}
 ) when ?IS_GPR(Reg) ->
-    % AND with mask
     OffsetBefore = StreamModule:offset(Stream0),
-    {State1, Reg} = and_(State0, RegTuple, Mask),
-    Stream1 = State1#state.stream,
-    % Compare with value
-    I2 = jit_arm32_asm:cmp(al, Reg, Val),
-    Stream2 = StreamModule:append(Stream1, I2),
-    OffsetAfter = StreamModule:offset(Stream2),
+    %% `and Dst, Reg, #Mask' costs the same whichever register it writes, so
+    %% when the mask is an ARM immediate and a scratch is free, write the
+    %% scratch and leave Reg holding what the register cache believes it does.
+    %% Walking a list, the term tested here is read again by the very next
+    %% instruction, and clobbering it forces a reload from ctx->x.
+    Scratch = jit_regs:available_regs(Regs0) band (bnot reg_bit(Reg)),
+    State1 =
+        case {Scratch, logical_immediate(Mask)} of
+            {_, none} ->
+                {StateIP, Reg} = and_(State0, RegTuple, Mask),
+                emit_masked_compare(StateIP, Reg, Val);
+            {0, _} ->
+                {StateIP, Reg} = and_(State0, RegTuple, Mask),
+                emit_masked_compare(StateIP, Reg, Val);
+            {_, {Op, Imm}} ->
+                Dst = first_avail(Scratch),
+                IMask =
+                    case Op of
+                        plain -> jit_arm32_asm:and_(al, Dst, Reg, Imm);
+                        inverted -> jit_arm32_asm:bic(al, Dst, Reg, Imm)
+                    end,
+                StateM = State0#state{
+                    stream = StreamModule:append(Stream0, IMask),
+                    regs = jit_regs:invalidate_reg(Regs0, Dst)
+                },
+                emit_masked_compare(StateM, Dst, Val)
+        end,
+    OffsetAfter = StreamModule:offset(State1#state.stream),
     CC = eq,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
-    Stream3 = StreamModule:append(Stream2, <<16#FFFFFFFF:32>>),
-    State3 = State1#state{stream = Stream3},
-    State4 = if_block_free_reg(RegTuple, State3),
+    Stream3 = StreamModule:append(State1#state.stream, <<16#FFFFFFFF:32>>),
+    State4 = if_block_free_reg(RegTuple, State1#state{stream = Stream3}),
     {State4, CC, OffsetAfter - OffsetBefore}.
+
+%% @private
+%% The `cmp' that follows a masking AND in an if_block_cond/2 tag test.
+emit_masked_compare(#state{stream_module = StreamModule, stream = Stream0} = State, Reg, Val) ->
+    State#state{stream = StreamModule:append(Stream0, jit_arm32_asm:cmp(al, Reg, Val))}.
 
 %% @private
 %% The right-hand side of a `cmp': the constant itself whenever ARM can encode
