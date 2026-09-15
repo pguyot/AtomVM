@@ -288,7 +288,7 @@
 %% cp_t is two terms wide on 32-bit (CP_SIZE_IN_TERMS).
 -define(CP_SIZE_IN_TERMS, 2).
 
--define(JUMP_TABLE_ENTRY_SIZE, 8).
+-define(JUMP_TABLE_ENTRY_SIZE, 4).
 
 %% ARM32 register mappings
 
@@ -498,9 +498,8 @@ pending_note_store(#state{stream_module = SM, stream = St} = State, X) ->
 %% 0 (special entry for lines and labels information) to LabelsCount included
 %% (special entry for OP_INT_CALL_END).
 %%
-%% On this platform, each jump table entry is 8 bytes.
+%% On this platform, each jump table entry is one 4-byte branch to the label.
 %% ```
-%% push {r1, r4, r5, r6, r7, r8, r9, r10, r11, lr}
 %% b <label>
 %% ```
 %%
@@ -521,13 +520,10 @@ jump_table0(
     N,
     LabelsCount
 ) ->
-    % Jump table entry: nop + branch placeholder. No prologue: the dispatch
-    % loop owns saving r4-r11 and the pinned registers are already live.
-    % The nop keeps the branch at entry+4, where patch_branch expects it.
-    I1 = jit_arm32_asm:nop(),
-    I2 = <<16#FFFFFFFF:32>>,
-
-    JumpEntry = <<I1/binary, I2/binary>>,
+    % Jump table entry: a branch placeholder, nothing else. No prologue: the
+    % dispatch loop owns saving r4-r11 and the pinned registers are already
+    % live, so the entry is one instruction wide like aarch64's.
+    JumpEntry = <<16#FFFFFFFF:32>>,
     Stream1 = StreamModule:append(Stream0, JumpEntry),
 
     jump_table0(State#state{stream = Stream1}, N + 1, LabelsCount).
@@ -5005,12 +5001,8 @@ add_label(
     Label,
     LabelOffset
 ) when is_integer(Label) ->
-    % Patch the jump table entry immediately
-    % Each ARM32 jump table entry is 8 bytes:
-    % - push {r1, r4-r11, lr} (4 bytes) at offset 0
-    % - b <label> (4 bytes) at offset 4
-    JumpTableEntryStart = JumpTableStart + Label * ?JUMP_TABLE_ENTRY_SIZE,
-    BranchOffset = JumpTableEntryStart + 4,
+    % Patch the jump table entry immediately: it is the 4-byte branch itself.
+    BranchOffset = JumpTableStart + Label * ?JUMP_TABLE_ENTRY_SIZE,
 
     % Calculate relative offset from the branch instruction to target label
     Rel = LabelOffset - BranchOffset,

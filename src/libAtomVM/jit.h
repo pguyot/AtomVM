@@ -113,7 +113,7 @@ typedef struct Module Module;
 
 #if defined(__arm__) && defined(AVM_JIT_ARM32)
 #define JIT_ARCH_TARGET JIT_ARCH_ARM32
-#define JIT_JUMPTABLE_ENTRY_SIZE 8
+#define JIT_JUMPTABLE_ENTRY_SIZE 4
 #define JIT_JUMPTABLE_OFFSET 0
 // Pinned-register convention (see the aarch64 block for the general
 // contract): ctx in r7, jit_state in r10, the primitives table in r9 and
@@ -414,7 +414,7 @@ enum TrapAndLoadResult
 #define CALL_EXT_NO_DEALLOC -1
 #define CALL_EXT_NO_DEALLOC_MFA -2
 
-#define JIT_FORMAT_VERSION 10
+#define JIT_FORMAT_VERSION 11
 
 #define JIT_VARIANT_PIC 1
 #define JIT_VARIANT_FLOAT32 2
