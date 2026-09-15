@@ -1551,14 +1551,16 @@ move_array_element_x_reg_invalidates_vm_loc_cache_test() ->
     {State1, r6} = ?BACKEND:move_to_native_register(State0, {x_reg, 5}),
     {State2, r5} = ?BACKEND:move_to_native_register(State1, {x_reg, 0}),
     S3 = ?BACKEND:move_array_element(State2, r10, 0, {x_reg, 5}),
-    {S4, _Reg} = ?BACKEND:move_to_native_register(S3, {x_reg, 5}),
+    %% r6's cache of x[5] is stale after the store, so the read must not come
+    %% back as r6; it comes back as the register the store wrote from, with no
+    %% reload.
+    {S4, r4} = ?BACKEND:move_to_native_register(S3, {x_reg, 5}),
     Stream = ?BACKEND:stream(S4),
     Dump = <<
         "   0:	e5976040 	ldr	r6, [r7, #64]	@ 0x40\n"
         "   4:	e597502c 	ldr	r5, [r7, #44]	@ 0x2c\n"
         "   8:	e59a4000 	ldr	r4, [sl]\n"
-        "   c:	e5874040 	str	r4, [r7, #64]	@ 0x40\n"
-        "  10:	e5974040 	ldr	r4, [r7, #64]	@ 0x40"
+        "   c:	e5874040 	str	r4, [r7, #64]	@ 0x40"
     >>,
     ?assertStream(arm32, Dump, Stream).
 

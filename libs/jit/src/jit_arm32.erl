@@ -2555,7 +2555,11 @@ move_array_element(
     I2 = jit_arm32_asm:str(al, Temp, ?X_REG(X)),
     Stream1 = StreamModule:append(State#state.stream, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(Regs0, {x_reg, X}),
-    Regs2 = jit_regs:invalidate_reg(Regs1, Temp),
+    %% Temp still holds what was just stored: record it, so the next read of
+    %% x[X] -- and walking a list there is always one, immediately -- reuses
+    %% the register instead of loading back what this str just wrote. This is
+    %% what the aarch64 backend already does here.
+    Regs2 = jit_regs:set_contents(Regs1, Temp, {x_reg, X}),
     %% The str to x[X] is the last emitted instruction.
     pending_note_store(State#state{stream = Stream1, regs = Regs2}, X);
 move_array_element(
@@ -2584,7 +2588,9 @@ move_array_element(
     I3 = jit_arm32_asm:str(al, Temp2, ?X_REG(X)),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, I2/binary, I3/binary>>),
     Regs1 = jit_regs:invalidate_vm_loc(State1#state.regs, {x_reg, X}),
-    Regs2 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs1, Temp1), Temp2),
+    Regs2 = jit_regs:set_contents(
+        jit_regs:invalidate_reg(Regs1, Temp1), Temp2, {x_reg, X}
+    ),
     %% The str to x[X] is the last emitted instruction.
     pending_note_store(State1#state{stream = Stream2, regs = Regs2}, X);
 move_array_element(
