@@ -1239,28 +1239,25 @@ if_block_cond(
     {State2, le, byte_size(I1)};
 %% Handle {Val, '<', Reg} for values > 255, need to load into temp register
 if_block_cond(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {Val, '<', RegOrTuple}
 ) when is_integer(Val) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     Offset0 = StreamModule:offset(Stream0),
-    State1 = mov_immediate(State0, Temp, Val),
+    {State1, CmpRhs, Borrowed} = cmp_operand(State0, Val),
     Stream1 = State1#state.stream,
     Offset1 = StreamModule:offset(Stream1),
-    I1 = jit_arm32_asm:cmp(al, Reg, Temp),
+    I1 = jit_arm32_asm:cmp(al, Reg, CmpRhs),
     %% Branch if less than or equal (to skip the block when Val >= Reg)
     I2 = jit_arm32_asm:b(le, 0),
     Code = <<I1/binary, I2/binary>>,
     Stream2 = StreamModule:append(Stream1, Code),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
-    State3 = State2#state{stream = Stream2, regs = Regs2},
+    State3 = release_cmp_operand(State2#state{stream = Stream2}, Borrowed),
     {State3, le, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
@@ -1297,51 +1294,26 @@ if_block_cond(
     State2 = State1#state{stream = Stream1},
     {State2, CC, byte_size(I1)};
 if_block_cond(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<', Val}
 ) when is_integer(Val) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
     Offset0 = StreamModule:offset(Stream0),
-    State1 = mov_immediate(State0, Temp, Val),
+    {State1, CmpRhs, Borrowed} = cmp_operand(State0, Val),
     Stream1 = State1#state.stream,
     Offset1 = StreamModule:offset(Stream1),
-    I1 = jit_arm32_asm:cmp(al, Reg, Temp),
+    I1 = jit_arm32_asm:cmp(al, Reg, CmpRhs),
     % ge = greater than or equal
     CC = ge,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
-    State3 = State2#state{stream = Stream2, regs = Regs2},
+    State3 = release_cmp_operand(State2#state{stream = Stream2}, Borrowed),
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
-if_block_cond(
-    #state{stream_module = StreamModule, regs = Regs0} = State0,
-    {Val, '<', RegOrTuple}
-) when is_integer(Val) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
-    Reg =
-        case RegOrTuple of
-            {free, Reg0} -> Reg0;
-            RegOrTuple -> RegOrTuple
-        end,
-    State1 = mov_immediate(State0, Temp, Val),
-    Stream0 = State1#state.stream,
-    I1 = jit_arm32_asm:cmp(al, Reg, Temp),
-    % le = less than or equal (branch when Val >= Reg, i.e., NOT Val < Reg)
-    CC = le,
-    ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, 16#FFFFFFFF:32>>),
-    State2 = if_block_free_reg(RegOrTuple, State1),
-    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
-    State3 = State2#state{stream = Stream1, regs = Regs2},
-    {State3, CC, byte_size(I1)};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '<u', RegB}
@@ -1464,50 +1436,44 @@ if_block_cond(
     State3 = if_block_free_reg({free, RegB}, State2),
     {State3, CC, byte_size(I1)};
 if_block_cond(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '==', Val}
 ) when is_integer(Val) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
     Offset0 = StreamModule:offset(Stream0),
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    State1 = mov_immediate(State0, Temp, Val),
+    {State1, CmpRhs, Borrowed} = cmp_operand(State0, Val),
     Stream1 = State1#state.stream,
     Offset1 = StreamModule:offset(Stream1),
-    I1 = jit_arm32_asm:cmp(al, Reg, Temp),
+    I1 = jit_arm32_asm:cmp(al, Reg, CmpRhs),
     CC = ne,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
-    State3 = State2#state{stream = Stream2, regs = Regs2},
+    State3 = release_cmp_operand(State2#state{stream = Stream2}, Borrowed),
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
-    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
     {RegOrTuple, '!=', Val}
 ) when is_integer(Val) ->
-    Available = jit_regs:available_regs(Regs0),
-    Temp = first_avail(Available),
     Offset0 = StreamModule:offset(Stream0),
     Reg =
         case RegOrTuple of
             {free, Reg0} -> Reg0;
             RegOrTuple -> RegOrTuple
         end,
-    State1 = mov_immediate(State0, Temp, Val),
+    {State1, CmpRhs, Borrowed} = cmp_operand(State0, Val),
     Stream1 = State1#state.stream,
     Offset1 = StreamModule:offset(Stream1),
-    I1 = jit_arm32_asm:cmp(al, Reg, Temp),
+    I1 = jit_arm32_asm:cmp(al, Reg, CmpRhs),
     CC = eq,
     ?ASSERT(byte_size(jit_arm32_asm:b(CC, 0)) =:= 4),
     Stream2 = StreamModule:append(Stream1, <<I1/binary, 16#FFFFFFFF:32>>),
     State2 = if_block_free_reg(RegOrTuple, State1),
-    Regs2 = jit_regs:invalidate_reg(State2#state.regs, Temp),
-    State3 = State2#state{stream = Stream2, regs = Regs2},
+    State3 = release_cmp_operand(State2#state{stream = Stream2}, Borrowed),
     {State3, CC, Offset1 - Offset0 + byte_size(I1)};
 if_block_cond(
     #state{
@@ -1680,6 +1646,29 @@ if_block_cond(
     State3 = State1#state{stream = Stream3},
     State4 = if_block_free_reg(RegTuple, State3),
     {State4, CC, OffsetAfter - OffsetBefore}.
+
+%% @private
+%% The right-hand side of a `cmp': the constant itself whenever ARM can encode
+%% it as a rotated byte, and only otherwise a scratch register holding it.
+%% Returns the borrowed register, or `none'.
+-spec cmp_operand(state(), integer()) ->
+    {state(), arm32_register() | integer(), arm32_register() | none}.
+cmp_operand(#state{regs = Regs0} = State0, Val) ->
+    Unsigned = Val band 16#FFFFFFFF,
+    case jit_arm32_asm:encode_imm(Unsigned) of
+        false ->
+            Temp = first_avail(jit_regs:available_regs(Regs0)),
+            {mov_immediate(State0, Temp, Val), Temp, Temp};
+        _ ->
+            {State0, Unsigned, none}
+    end.
+
+%% @private
+%% Invalidate whatever cmp_operand/2 borrowed, if anything.
+release_cmp_operand(State, none) ->
+    State;
+release_cmp_operand(#state{regs = Regs} = State, Temp) ->
+    State#state{regs = jit_regs:invalidate_reg(Regs, Temp)}.
 
 -spec if_block_free_reg(arm32_register() | {free, arm32_register()}, state()) -> state().
 if_block_free_reg({free, Reg}, State0) ->
