@@ -3333,26 +3333,53 @@ set_continuation_to_label(
     % Calculate jump table entry offset
     JumpTableEntryOffset = (Label * ?JUMP_TABLE_ENTRY_SIZE) + JumpTableOffset,
 
-    MovPCOffset = StreamModule:offset(Stream0),
-    % mov Temp1, pc gives MovPCOffset + 8 in ARM32
-    I1 = jit_arm32_asm:mov(al, Temp1, pc),
-    Stream1 = StreamModule:append(Stream0, I1),
+    PCOffset = StreamModule:offset(Stream0),
+    % A data-processing instruction reads pc as its own offset + 8.
+    Displacement = JumpTableEntryOffset - PCOffset - 8,
 
-    % Calculate what we need to load: JumpTableEntryOffset - (MovPCOffset + 8)
-    ImmediateValue = JumpTableEntryOffset - MovPCOffset - 8,
+    State1 = materialize_pc_relative(State, Temp1, Temp2, Displacement),
 
-    % Generate mov_immediate to load the calculated offset
-    State1 = mov_immediate(State#state{stream = Stream1}, Temp2, ImmediateValue),
-
-    % Add PC + offset, load jit_state, and store continuation
-    I2 = jit_arm32_asm:add(al, Temp2, Temp2, Temp1),
-    I3 = jit_arm32_asm:mov(al, Temp1, ?JITSTATE_REG),
-    I4 = jit_arm32_asm:str(al, Temp2, ?JITSTATE_CONTINUATION(Temp1)),
-
-    Code = <<I2/binary, I3/binary, I4/binary>>,
-    Stream2 = StreamModule:append(State1#state.stream, Code),
+    % jit_state is pinned, so the continuation stores straight through it.
+    IStore = jit_arm32_asm:str(al, Temp2, ?JITSTATE_CONTINUATION(?JITSTATE_REG)),
+    Stream2 = StreamModule:append(State1#state.stream, IStore),
     Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(State#state.regs, Temp1), Temp2),
     State1#state{stream = Stream2, regs = Regs1}.
+
+%% @private
+%% Put pc + Displacement in Dst. The jump table sits at the module start and
+%% these sites are after it, so the displacement is almost always a small
+%% negative number that one `sub Dst, pc, #imm' covers; a 16-bit one takes a
+%% second add/sub of the low byte, exactly as rewrite_cp_offset/3 splits its
+%% ADRL. Anything wider falls back to materializing pc and the displacement
+%% separately, which is what this used to do unconditionally.
+materialize_pc_relative(
+    #state{stream_module = StreamModule, stream = Stream0} = State, Scratch, Dst, Displacement
+) ->
+    Op =
+        case Displacement < 0 of
+            true -> fun jit_arm32_asm:sub/4;
+            false -> fun jit_arm32_asm:add/4
+        end,
+    Magnitude = abs(Displacement),
+    Low = Magnitude band 16#FF,
+    High = Magnitude - Low,
+    case {jit_arm32_asm:encode_imm(Magnitude), Magnitude =< 16#FFFF} of
+        {false, false} ->
+            I1 = jit_arm32_asm:mov(al, Scratch, pc),
+            State1 = mov_immediate(
+                State#state{stream = StreamModule:append(Stream0, I1)}, Dst, Displacement
+            ),
+            I2 = jit_arm32_asm:add(al, Dst, Dst, Scratch),
+            State1#state{stream = StreamModule:append(State1#state.stream, I2)};
+        {false, true} ->
+            Code = <<
+                (Op(al, Dst, pc, High))/binary,
+                (Op(al, Dst, Dst, Low))/binary
+            >>,
+            State#state{stream = StreamModule:append(Stream0, Code)};
+        _ ->
+            State#state{stream = StreamModule:append(Stream0, Op(al, Dst, pc, Magnitude))}
+    end.
 
 %% @doc Set the continuation to a given offset
 %% Return a reference so the offset will be updated with update_branches
