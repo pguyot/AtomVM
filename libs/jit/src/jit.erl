@@ -1151,11 +1151,15 @@ emit_pass(<<?OP_IS_NIL, Rest0/binary>>, MMod, MSt0, State0) ->
     {Label, Rest1} = decode_label(Rest0),
     {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
     ?TRACE("OP_IS_NIL ~p, ~p\n", [Label, Arg1]),
-    {MSt2, Reg} = MMod:move_to_native_register(MSt1, Arg1),
-    MSt3 = cond_jump_to_label({Reg, '!=', ?TERM_NIL}, Label, MMod, MSt2),
-    MSt4 = MMod:free_native_registers(MSt3, [Reg]),
-    ?ASSERT_ALL_NATIVE_FREE(MSt4),
-    emit_pass(Rest2, MMod, MSt4, State0);
+    %% Test the value where it already lives when the backend can: copying it
+    %% into a scratch first only to compare it leaves the copy dead, since a
+    %% compare does not write its operand.
+    {MSt2, Op, Own} = test_operand(MMod, MSt1, Arg1),
+    MSt3 = cond_jump_to_label(
+        {test_operand_arg(Op, Own), '!=', ?TERM_NIL}, Label, MMod, MSt2
+    ),
+    ?ASSERT_ALL_NATIVE_FREE(MSt3),
+    emit_pass(Rest2, MMod, MSt3, State0);
 % 53
 emit_pass(<<?OP_IS_BINARY, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
