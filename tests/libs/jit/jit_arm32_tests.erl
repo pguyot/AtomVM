@@ -554,10 +554,9 @@ if_block_test_() ->
                         <<
                             "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
                             "   4:	e5975030 	ldr	r5, [r7, #48]	@ 0x30\n"
-                            "   8:	e3a04b01 	mov	r4, #1024	@ 0x400\n"
-                            "   c:	e1560004 	cmp	r6, r4\n"
-                            "  10:	aa000000 	bge	0x18\n"
-                            "  14:	e2855002 	add	r5, r5, #2"
+                            "   8:	e3560b01 	cmp	r6, #1024	@ 0x400\n"
+                            "   c:	aa000000 	bge	0x14\n"
+                            "  10:	e2855002 	add	r5, r5, #2"
                         >>,
                     ?assertStream(arm32, Dump, Stream),
                     ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
