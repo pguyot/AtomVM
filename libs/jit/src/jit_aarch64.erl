@@ -2145,6 +2145,22 @@ if_block_cond(
     State1 = if_block_free_reg(RegOrTuple, State0),
     State2 = State1#state{stream = Stream1},
     {State2, le, byte_size(I1)};
+%% Unsigned above zero is just "not zero", and the skip is "is zero": `cbz'
+%% says that in one instruction where the general clause below needs a `cmp'
+%% and a `b.ls'.
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '(uint)>', 0}
+) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    I = jit_aarch64_asm:cbz(Reg, 0),
+    Stream1 = StreamModule:append(Stream0, I),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1#state{stream = Stream1}, {cbz, Reg}, 0};
 %% Unsigned above: jump over the block when Reg <= Val (unsigned). Used for
 %% two-sided corridor checks folded into one compare via unsigned wrap.
 if_block_cond(
