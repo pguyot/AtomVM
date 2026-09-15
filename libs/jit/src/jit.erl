@@ -7279,8 +7279,9 @@ op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
     %% ANY Arg1, no type test needed — an immediate's low tag bits (1111)
     %% can never appear in a boxed/list pointer word, and boxed integers
     %% are normalized so a bignum is never =:= to a small literal.
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
-    cond_jump_to_label({{free, Arg1Reg}, '!=', Arg2}, Label, MMod, MSt1);
+    %% The compare only reads Arg1, so name it where it already lives.
+    {MSt1, Op, Own} = test_operand(MMod, MSt0, unwrap_typed(Arg1)),
+    cond_jump_to_label({test_operand_arg(Op, Own), '!=', Arg2}, Label, MMod, MSt1);
 op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
     %% Either operand's type proves it is a non-boxed immediate (see
     %% is_immediate_type/1): exact equality is then a single native word
@@ -7301,10 +7302,13 @@ op_is_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
 %% never collides with an immediate's word. JumpCond is '!=' for is_eq_exact
 %% (jump to Label when NOT equal) or '==' for is_ne_exact (jump when equal).
 op_is_exact_eq_immediate(MMod, MSt0, Label, Arg1, Arg2, JumpCond) ->
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
-    {MSt2, Arg2Reg} = MMod:move_to_native_register(MSt1, unwrap_typed(Arg2)),
-    MSt3 = cond_jump_to_label({{free, Arg1Reg}, JumpCond, Arg2Reg}, Label, MMod, MSt2),
-    MMod:free_native_registers(MSt3, [Arg2Reg]).
+    %% Both operands are only read by the compare.
+    {MSt1, Op1, Own1} = test_operand(MMod, MSt0, unwrap_typed(Arg1)),
+    {MSt2, Op2, Own2} = test_operand(MMod, MSt1, unwrap_typed(Arg2)),
+    MSt3 = cond_jump_to_label(
+        {test_operand_arg(Op1, Own1), JumpCond, Op2}, Label, MMod, MSt2
+    ),
+    release_test_operand(MMod, MSt3, Op2, Own2).
 
 %% A decoded operand whose static type proves it is a non-boxed immediate.
 is_immediate_typed({typed, _Arg, Type}) -> is_immediate_type(Type);
@@ -7608,8 +7612,8 @@ op_is_not_eq_exact(
 %% with the literal as the second argument.
 op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) when is_integer(Arg2) ->
     %% Single tagged cmp is exact for any Arg1: see op_is_eq_exact.
-    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, unwrap_typed(Arg1)),
-    cond_jump_to_label({{free, Arg1Reg}, '==', Arg2}, Label, MMod, MSt1);
+    {MSt1, Op, Own} = test_operand(MMod, MSt0, unwrap_typed(Arg1)),
+    cond_jump_to_label({test_operand_arg(Op, Own), '==', Arg2}, Label, MMod, MSt1);
 op_is_not_eq_exact(MMod, MSt0, Label, Arg1, Arg2) ->
     %% Immediate-typed operand: single native word compare (see op_is_eq_exact).
     case is_immediate_typed(Arg1) orelse is_immediate_typed(Arg2) of
@@ -8300,6 +8304,11 @@ test_operand(MMod, MSt0, Value0) ->
 %% by the test, a borrowed one is only read.
 test_operand_arg(Operand, owned) -> {free, Operand};
 test_operand_arg(Operand, borrowed) -> Operand.
+
+%% Release a test operand: an owned register was materialised for the test and
+%% is ours to free, a borrowed one belongs to whoever already held the value.
+release_test_operand(MMod, MSt, Reg, owned) -> MMod:free_native_registers(MSt, [Reg]);
+release_test_operand(_MMod, MSt, _Reg, borrowed) -> MSt.
 
 %% Strip the boxed tag straight after a type test.
 %%
