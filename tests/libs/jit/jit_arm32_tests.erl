@@ -228,15 +228,15 @@ jump_table_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 3),
     Stream = ?BACKEND:stream(State1),
-    % 4 entries (0..3) * 8 bytes each = 32 bytes
-    ?assertEqual(32, byte_size(Stream)).
+    % 4 entries (0..3) * 4 bytes each = 16 bytes
+    ?assertEqual(16, byte_size(Stream)).
 
 add_label_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 3),
     State2 = ?BACKEND:add_label(State1, 1),
     State3 = ?BACKEND:add_label(State2, 2),
-    ?assertEqual(32, ?BACKEND:offset(State3)).
+    ?assertEqual(16, ?BACKEND:offset(State3)).
 
 and_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -337,20 +337,17 @@ decrement_reductions_test() ->
     Stream = ?BACKEND:stream(State3),
     Dump =
         <<
-            "   0:	e320f000 	nop	{0}\n"
-            "   4:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
-            "   8:	e320f000 	nop	{0}\n"
-            "   c:	ea000001 	b	0x18\n"
-            "  10:	e320f000 	nop	{0}\n"
-            "  14:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
-            "  18:	e25bb001 	subs	fp, fp, #1\n"
-            "  1c:	1a000005 	bne	0x38\n"
-            "  20:	e28f6010 	add	r6, pc, #16\n"
-            "  24:	e58a6004 	str	r6, [sl, #4]\n"
-            "  28:	e5996008 	ldr	r6, [r9, #8]\n"
-            "  2c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  30:	e58ab008 	str	fp, [sl, #8]\n"
-            "  34:	e12fff16 	bx	r6"
+            "   0:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
+            "   4:	ea000000 	b	0xc\n"
+            "   8:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
+            "   c:	e25bb001 	subs	fp, fp, #1\n"
+            "  10:	1a000005 	bne	0x2c\n"
+            "  14:	e28f6010 	add	r6, pc, #16\n"
+            "  18:	e58a6004 	str	r6, [sl, #4]\n"
+            "  1c:	e5996008 	ldr	r6, [r9, #8]\n"
+            "  20:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  24:	e58ab008 	str	fp, [sl, #8]\n"
+            "  28:	e12fff16 	bx	r6"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -800,28 +797,25 @@ call_only_or_schedule_next_and_label_relocation_test() ->
     Stream = ?BACKEND:stream(State8),
     Dump =
         <<
-            "   0:	e320f000 	nop	{0}\n"
-            "   4:	ea00000f 	b	0x48\n"
-            "   8:	e320f000 	nop	{0}\n"
-            "   c:	ea000001 	b	0x18\n"
-            "  10:	e320f000 	nop	{0}\n"
-            "  14:	ea000007 	b	0x38\n"
-            "  18:	e25bb001 	subs	fp, fp, #1\n"
-            "  1c:	1a000005 	bne	0x38\n"
-            "  20:	e24f5018 	sub	r5, pc, #24\n"
-            "  24:	e58a5004 	str	r5, [sl, #4]\n"
-            "  28:	e5996008 	ldr	r6, [r9, #8]\n"
-            "  2c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  30:	e58ab008 	str	fp, [sl, #8]\n"
-            "  34:	e12fff16 	bx	r6\n"
-            "  38:	e5996000 	ldr	r6, [r9]\n"
-            "  3c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  40:	e58ab008 	str	fp, [sl, #8]\n"
-            "  44:	e12fff16 	bx	r6\n"
-            "  48:	e5996004 	ldr	r6, [r9, #4]\n"
-            "  4c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  50:	e58ab008 	str	fp, [sl, #8]\n"
-            "  54:	e12fff16 	bx	r6"
+            "   0:	ea00000d 	b	0x3c\n"
+            "   4:	ea000000 	b	0xc\n"
+            "   8:	ea000007 	b	0x2c\n"
+            "   c:	e25bb001 	subs	fp, fp, #1\n"
+            "  10:	1a000005 	bne	0x2c\n"
+            "  14:	e24f5014 	sub	r5, pc, #20\n"
+            "  18:	e58a5004 	str	r5, [sl, #4]\n"
+            "  1c:	e5996008 	ldr	r6, [r9, #8]\n"
+            "  20:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  24:	e58ab008 	str	fp, [sl, #8]\n"
+            "  28:	e12fff16 	bx	r6\n"
+            "  2c:	e5996000 	ldr	r6, [r9]\n"
+            "  30:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  34:	e58ab008 	str	fp, [sl, #8]\n"
+            "  38:	e12fff16 	bx	r6\n"
+            "  3c:	e5996004 	ldr	r6, [r9, #4]\n"
+            "  40:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  44:	e58ab008 	str	fp, [sl, #8]\n"
+            "  48:	e12fff16 	bx	r6"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -837,24 +831,21 @@ call_only_or_schedule_next_known_label_test() ->
     Stream = ?BACKEND:stream(State7),
     Dump =
         <<
-            "   0:	e320f000 	nop	{0}\n"
-            "   4:	ea00000b 	b	0x38\n"
-            "   8:	e320f000 	nop	{0}\n"
-            "   c:	ea000001 	b	0x18\n"
-            "  10:	e320f000 	nop	{0}\n"
-            "  14:	eaffffff 	b	0x18\n"
-            "  18:	e25bb001 	subs	fp, fp, #1\n"
-            "  1c:	1afffffd 	bne	0x18\n"
-            "  20:	e24f5018 	sub	r5, pc, #24\n"
-            "  24:	e58a5004 	str	r5, [sl, #4]\n"
-            "  28:	e5996008 	ldr	r6, [r9, #8]\n"
-            "  2c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  30:	e58ab008 	str	fp, [sl, #8]\n"
-            "  34:	e12fff16 	bx	r6\n"
-            "  38:	e5996004 	ldr	r6, [r9, #4]\n"
-            "  3c:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  40:	e58ab008 	str	fp, [sl, #8]\n"
-            "  44:	e12fff16 	bx	r6"
+            "   0:	ea000009 	b	0x2c\n"
+            "   4:	ea000000 	b	0xc\n"
+            "   8:	eaffffff 	b	0xc\n"
+            "   c:	e25bb001 	subs	fp, fp, #1\n"
+            "  10:	1afffffd 	bne	0xc\n"
+            "  14:	e24f5014 	sub	r5, pc, #20\n"
+            "  18:	e58a5004 	str	r5, [sl, #4]\n"
+            "  1c:	e5996008 	ldr	r6, [r9, #8]\n"
+            "  20:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  24:	e58ab008 	str	fp, [sl, #8]\n"
+            "  28:	e12fff16 	bx	r6\n"
+            "  2c:	e5996004 	ldr	r6, [r9, #4]\n"
+            "  30:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  34:	e58ab008 	str	fp, [sl, #8]\n"
+            "  38:	e12fff16 	bx	r6"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -882,21 +873,18 @@ return_labels_and_lines_test() ->
     Stream = ?BACKEND:stream(State4),
     Dump =
         <<
-            "   0:	e320f000 	nop	{0}\n"
-            "   4:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
-            "   8:	e320f000 	nop	{0}\n"
-            "   c:	eaffffff 	b	0x10\n"
-            "  10:	e320f000 	nop	{0}\n"
-            "  14:	ea000001 	b	0x20\n"
-            "  18:	e28f0000 	add	r0, pc, #0\n"
-            "  1c:	e12fff1e 	bx	lr\n"
-            "  20:	01000200 	mrseq	r0, R8_usr\n"
-            "  24:	10000000 	andne	r0, r0, r0\n"
-            "  28:	00000200 	andeq	r0, r0, r0, lsl #4\n"
-            "  2c:	02002000 	andeq	r2, r0, #0\n"
-            "  30:	00000a00 	andeq	r0, r0, r0, lsl #20\n"
-            "  34:	14001000 	strne	r1, [r0], #-0\n"
-            "  38:	20000000 	andcs	r0, r0, r0"
+            "   0:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
+            "   4:	ea000001 	b	0x10\n"
+            "   8:	ea000004 	b	0x20\n"
+            "   c:	e28f0000 	add	r0, pc, #0\n"
+            "  10:	e12fff1e 	bx	lr\n"
+            "  14:	01000200 	mrseq	r0, R8_usr\n"
+            "  18:	10000000 	andne	r0, r0, r0\n"
+            "  1c:	00000200 	andeq	r0, r0, r0, lsl #4\n"
+            "  20:	02002000 	andeq	r2, r0, #0\n"
+            "  24:	00000a00 	andeq	r0, r0, r0, lsl #20\n"
+            "  28:	14001000 	strne	r1, [r0], #-0\n"
+            "  2c:	20000000 	andcs	r0, r0, r0"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -931,38 +919,34 @@ call_or_schedule_next_test() ->
     Stream = ?BACKEND:stream(State10),
     Dump =
         <<
-            "   0:	e320f000 	nop	{0}\n"
-            "   4:	ea000019 	b	0x70\n"
-            "   8:	e320f000 	nop	{0}\n"
-            "   c:	ea000003 	b	0x20\n"
-            "  10:	e320f000 	nop	{0}\n"
-            "  14:	ea00000d 	b	0x50\n"
-            "  18:	e320f000 	nop	{0}\n"
-            "  1c:	ea00000f 	b	0x60\n"
-            "  20:	e28f0028 	add	r0, pc, #40	@ 0x28\n"
-            "  24:	e320f000 	nop	{0}\n"
-            "  28:	e59a1000 	ldr	r1, [sl]\n"
-            "  2c:	e1c707f0 	strd	r0, [r7, #112]	@ 0x70\n"
-            "  30:	e25bb001 	subs	fp, fp, #1\n"
-            "  34:	1a000005 	bne	0x50\n"
-            "  38:	e24f5030 	sub	r5, pc, #48	@ 0x30\n"
-            "  3c:	e58a5004 	str	r5, [sl, #4]\n"
-            "  40:	e5996008 	ldr	r6, [r9, #8]\n"
+            "   0:	ea000016 	b	0x60\n"
+            "   4:	ea000001 	b	0x10\n"
+            "   8:	ea00000c 	b	0x40\n"
+            "   c:	ea00000f 	b	0x50\n"
+            "  10:	e28f0028 	add	r0, pc, #40	@ 0x28\n"
+            "  14:	e320f000 	nop	{0}\n"
+            "  18:	e59a1000 	ldr	r1, [sl]\n"
+            "  1c:	e1c707f0 	strd	r0, [r7, #112]	@ 0x70\n"
+            "  20:	e25bb001 	subs	fp, fp, #1\n"
+            "  24:	1a000005 	bne	0x40\n"
+            "  28:	e24f5028 	sub	r5, pc, #40	@ 0x28\n"
+            "  2c:	e58a5004 	str	r5, [sl, #4]\n"
+            "  30:	e5996008 	ldr	r6, [r9, #8]\n"
+            "  34:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  38:	e58ab008 	str	fp, [sl, #8]\n"
+            "  3c:	e12fff16 	bx	r6\n"
+            "  40:	e5996000 	ldr	r6, [r9]\n"
             "  44:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
             "  48:	e58ab008 	str	fp, [sl, #8]\n"
             "  4c:	e12fff16 	bx	r6\n"
-            "  50:	e5996000 	ldr	r6, [r9]\n"
+            "  50:	e5996004 	ldr	r6, [r9, #4]\n"
             "  54:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
             "  58:	e58ab008 	str	fp, [sl, #8]\n"
             "  5c:	e12fff16 	bx	r6\n"
             "  60:	e5996004 	ldr	r6, [r9, #4]\n"
             "  64:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
             "  68:	e58ab008 	str	fp, [sl, #8]\n"
-            "  6c:	e12fff16 	bx	r6\n"
-            "  70:	e5996004 	ldr	r6, [r9, #4]\n"
-            "  74:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  78:	e58ab008 	str	fp, [sl, #8]\n"
-            "  7c:	e12fff16 	bx	r6"
+            "  6c:	e12fff16 	bx	r6"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1618,7 +1602,7 @@ jump_table_large_labels_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:jump_table(State0, 512),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual((512 + 1) * 8, byte_size(Stream)).
+    ?assertEqual((512 + 1) * 4, byte_size(Stream)).
 
 %% mul/3 has a shift-and-add clause per constant the compiler emits (tuple and
 %% record index scaling), plus a generic fallback for everything else. Only the
