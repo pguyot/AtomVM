@@ -3543,9 +3543,11 @@ get_module_atom_index(
     }.
 
 %% @doc Perform an AND of a register with an immediate.
-%% JIT currently calls this with two values: ?TERM_PRIMARY_CLEAR_MASK (-4) to
-%% clear bits and ?TERM_BOXED_TAG_MASK (0x3F). We can avoid any literal pool
-%% by using BIC for -4.
+%% ARM data-processing immediates are a byte rotated by an even amount, and BIC
+%% is AND-NOT, so between the two every mask the JIT actually uses --
+%% ?TERM_PRIMARY_CLEAR_MASK (-4), ?TERM_BOXED_TAG_MASK (0x3F), the 24-bit mask
+%% -- fits in one instruction, with no literal and no scratch register. Only a
+%% mask that is neither goes through a materialized immediate.
 and_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
     {free, Reg},
@@ -3560,59 +3562,64 @@ and_(
 and_(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
     {free, Reg},
-    16#FFFFFF
-) ->
-    I1 = jit_arm32_asm:lsl(al, Reg, Reg, 8),
-    I2 = jit_arm32_asm:lsr(al, Reg, Reg, 8),
-    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-    {State0#state{stream = Stream1, regs = Regs1}, Reg};
-and_(
-    #state{stream_module = StreamModule, regs = Regs0} = State0,
-    {free, Reg},
     Val
-) when Val < 0 andalso Val >= -256 ->
-    Avail = jit_regs:available_regs(Regs0),
-    case Avail of
-        0 ->
-            % No available registers, use r0 as temp and save it to r12
-            Stream0 = State0#state.stream,
-            % Save r0 to r12
-            Save = jit_arm32_asm:mov(al, ?IP_REG, r0),
-            Stream1 = StreamModule:append(Stream0, Save),
-            % Load immediate value into r0
-            State1 = mov_immediate(State0#state{stream = Stream1}, r0, bnot (Val)),
-            Stream2 = State1#state.stream,
-            % Perform BIC operation
-            I = jit_arm32_asm:bic(al, Reg, Reg, r0),
-            Stream3 = StreamModule:append(Stream2, I),
-            % Restore r0 from r12
-            Restore = jit_arm32_asm:mov(al, r0, ?IP_REG),
-            Stream4 = StreamModule:append(Stream3, Restore),
-            Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
-            {State0#state{stream = Stream4, regs = Regs1}, Reg};
-        _ ->
-            Temp = first_avail(Avail),
-            TempBit = reg_bit(Temp),
-            AT = Avail band (bnot TempBit),
-            State1 = mov_immediate(
-                State0#state{regs = jit_regs:set_available_regs(Regs0, AT)}, Temp, bnot (Val)
-            ),
-            Stream1 = State1#state.stream,
-            I = jit_arm32_asm:bic(al, Reg, Reg, Temp),
-            Stream2 = StreamModule:append(Stream1, I),
-            Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(State1#state.regs, Reg), Temp),
-            {
-                State1#state{
-                    stream = Stream2,
-                    regs = jit_regs:set_available_regs(Regs1, AT bor TempBit)
-                },
-                Reg
-            }
+) when is_integer(Val) ->
+    case logical_immediate(Val) of
+        none ->
+            and_materialized(State0, Reg, Val);
+        {Op, Imm} ->
+            I =
+                case Op of
+                    plain -> jit_arm32_asm:and_(al, Reg, Reg, Imm);
+                    inverted -> jit_arm32_asm:bic(al, Reg, Reg, Imm)
+                end,
+            Stream1 = StreamModule:append(Stream0, I),
+            {State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Reg)}, Reg}
     end;
 and_(
+    #state{stream_module = StreamModule, regs = Regs0} =
+        State0,
+    Reg,
+    ?TERM_PRIMARY_CLEAR_MASK
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    ResultReg = first_avail(Avail),
+    ResultBit = reg_bit(ResultReg),
+    I1 = jit_arm32_asm:bic(al, ResultReg, Reg, bnot ?TERM_PRIMARY_CLEAR_MASK),
+    Stream1 = StreamModule:append(State0#state.stream, I1),
+    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
+    {
+        State0#state{
+            stream = Stream1,
+            regs = jit_regs:alloc_reg(Regs1, ResultBit)
+        },
+        ResultReg
+    }.
+
+%% @private
+%% How an ARM data-processing instruction can take Mask: directly as a rotated
+%% byte, as the complement of one via BIC, or not at all.
+-spec logical_immediate(integer()) -> {plain | inverted, non_neg_integer()} | none.
+logical_immediate(Mask) ->
+    Val = Mask band 16#FFFFFFFF,
+    case jit_arm32_asm:encode_imm(Val) of
+        false ->
+            Inverted = (bnot Val) band 16#FFFFFFFF,
+            case jit_arm32_asm:encode_imm(Inverted) of
+                false -> none;
+                _ -> {inverted, Inverted}
+            end;
+        _ ->
+            {plain, Val}
+    end.
+
+%% @private
+%% AND with a mask that is neither a rotated-byte immediate nor the complement
+%% of one: materialize it, preferring a scratch register and falling back to
+%% borrowing r0 through ip when the pool is empty.
+and_materialized(
     #state{stream_module = StreamModule, regs = Regs0} = State0,
-    {free, Reg},
+    Reg,
     Val
 ) ->
     Avail = jit_regs:available_regs(Regs0),
@@ -3652,27 +3659,7 @@ and_(
                 },
                 Reg
             }
-    end;
-and_(
-    #state{stream_module = StreamModule, regs = Regs0} =
-        State0,
-    Reg,
-    ?TERM_PRIMARY_CLEAR_MASK
-) ->
-    Avail = jit_regs:available_regs(Regs0),
-    ResultReg = first_avail(Avail),
-    ResultBit = reg_bit(ResultReg),
-    I1 = jit_arm32_asm:lsr(al, ResultReg, Reg, 2),
-    I2 = jit_arm32_asm:lsl(al, ResultReg, ResultReg, 2),
-    Stream1 = StreamModule:append(State0#state.stream, <<I1/binary, I2/binary>>),
-    Regs1 = jit_regs:invalidate_reg(Regs0, ResultReg),
-    {
-        State0#state{
-            stream = Stream1,
-            regs = jit_regs:alloc_reg(Regs1, ResultBit)
-        },
-        ResultReg
-    }.
+    end.
 
 or_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, Reg, SrcReg) when
     is_atom(SrcReg)
@@ -3682,6 +3669,24 @@ or_(#state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State0#state{stream = Stream1, regs = Regs1};
 or_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    Reg,
+    Val
+) when is_integer(Val) ->
+    % ARM encodes a rotated byte inline, which covers every tag the JIT ORs or
+    % XORs in; only a wider constant needs a scratch register.
+    case jit_arm32_asm:encode_imm(Val band 16#FFFFFFFF) of
+        false ->
+            or_materialized(State0, Reg, Val);
+        _ ->
+            I = jit_arm32_asm:orr(al, Reg, Reg, Val band 16#FFFFFFFF),
+            Stream1 = StreamModule:append(Stream0, I),
+            State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Reg)}
+    end.
+
+%% @private
+%% OR/XOR with a constant too wide for an ARM immediate.
+or_materialized(
     #state{stream_module = StreamModule, regs = Regs0} = State0,
     Reg,
     Val
@@ -3708,6 +3713,24 @@ xor_(
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     State0#state{stream = Stream1, regs = Regs1};
 xor_(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    Reg,
+    Val
+) when is_integer(Val) ->
+    % ARM encodes a rotated byte inline, which covers every tag the JIT ORs or
+    % XORs in; only a wider constant needs a scratch register.
+    case jit_arm32_asm:encode_imm(Val band 16#FFFFFFFF) of
+        false ->
+            xor_materialized(State0, Reg, Val);
+        _ ->
+            I = jit_arm32_asm:eor(al, Reg, Reg, Val band 16#FFFFFFFF),
+            Stream1 = StreamModule:append(Stream0, I),
+            State0#state{stream = Stream1, regs = jit_regs:invalidate_reg(Regs0, Reg)}
+    end.
+
+%% @private
+%% OR/XOR with a constant too wide for an ARM immediate.
+xor_materialized(
     #state{stream_module = StreamModule, regs = Regs0} = State0,
     Reg,
     Val

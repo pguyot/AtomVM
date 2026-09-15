@@ -179,20 +179,19 @@ call_primitive_6_args_test() ->
     Dump =
         <<
             "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-            "   4:	e3a05003 	mov	r5, #3\n"
-            "   8:	e1c66005 	bic	r6, r6, r5\n"
-            "   c:	e5975030 	ldr	r5, [r7, #48]	@ 0x30\n"
-            "  10:	e59940b8 	ldr	r4, [r9, #184]	@ 0xb8\n"
-            "  14:	e92d4010 	push	{r4, lr}\n"
-            "  18:	e1a00006 	mov	r0, r6\n"
-            "  1c:	e3a01040 	mov	r1, #64	@ 0x40\n"
-            "  20:	e3a02008 	mov	r2, #8\n"
-            "  24:	e1a03005 	mov	r3, r5\n"
-            "  28:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
-            "  2c:	e12fff34 	blx	r4\n"
-            "  30:	e1a06000 	mov	r6, r0\n"
-            "  34:	e8bd4010 	pop	{r4, lr}\n"
-            "  38:	e5978028 	ldr	r8, [r7, #40]	@ 0x28"
+            "   4:	e3c66003 	bic	r6, r6, #3\n"
+            "   8:	e5975030 	ldr	r5, [r7, #48]	@ 0x30\n"
+            "   c:	e59940b8 	ldr	r4, [r9, #184]	@ 0xb8\n"
+            "  10:	e92d4010 	push	{r4, lr}\n"
+            "  14:	e1a00006 	mov	r0, r6\n"
+            "  18:	e3a01040 	mov	r1, #64	@ 0x40\n"
+            "  1c:	e3a02008 	mov	r2, #8\n"
+            "  20:	e1a03005 	mov	r3, r5\n"
+            "  24:	e5878028 	str	r8, [r7, #40]	@ 0x28\n"
+            "  28:	e12fff34 	blx	r4\n"
+            "  2c:	e1a06000 	mov	r6, r0\n"
+            "  30:	e8bd4010 	pop	{r4, lr}\n"
+            "  34:	e5978028 	ldr	r8, [r7, #40]	@ 0x28"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -246,8 +245,7 @@ and_test() ->
     Dump =
         <<
             "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-            "   4:	e3a050fc 	mov	r5, #252	@ 0xfc\n"
-            "   8:	e0066005 	and	r6, r6, r5"
+            "   4:	e20660fc 	and	r6, r6, #252	@ 0xfc"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -259,8 +257,7 @@ or_test() ->
     Dump =
         <<
             "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-            "   4:	e3a0500f 	mov	r5, #15\n"
-            "   8:	e1866005 	orr	r6, r6, r5"
+            "   4:	e386600f 	orr	r6, r6, #15"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -372,8 +369,7 @@ xor_test() ->
     Dump =
         <<
             "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-            "   4:	e3a050ff 	mov	r5, #255	@ 0xff\n"
-            "   8:	e0266005 	eor	r6, r6, r5"
+            "   4:	e22660ff 	eor	r6, r6, #255	@ 0xff"
         >>,
     ?assertStream(arm32, Dump, Stream).
 
@@ -1408,36 +1404,38 @@ fixed_dst_y_reg_load_preserves_cache_test() ->
     >>,
     ?assertStream(arm32, Dump, Stream).
 
-%% and_ with negative immediate should invalidate temp register cache
+%% and_ with a negative mask too wide for an ARM immediate still borrows a
+%% scratch register, and must invalidate its cache
 and_negative_imm_invalidates_temp_cache_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, r6} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
     {State2, r5} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
     State3 = ?BACKEND:free_native_registers(State2, [r10]),
-    {State4, r6} = ?BACKEND:and_(State3, {free, r6}, -4),
+    {State4, r6} = ?BACKEND:and_(State3, {free, r6}, -16#12346),
     {State5, r5} = ?BACKEND:move_to_native_register(State4, {x_reg, 1}),
     Stream = ?BACKEND:stream(State5),
     Dump = <<
         "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
         "   4:	e5975030 	ldr	r5, [r7, #48]	@ 0x30\n"
-        "   8:	e3a04003 	mov	r4, #3\n"
-        "   c:	e1c66004 	bic	r6, r6, r4"
+        "   8:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
+        "   c:	e0066004 	and	r6, r6, r4"
     >>,
     ?assertStream(arm32, Dump, Stream).
 
-%% and_ with positive immediate should invalidate temp register cache
+%% and_ with a positive mask too wide for an ARM immediate still borrows a
+%% scratch register, and must invalidate its cache
 and_positive_imm_invalidates_temp_cache_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, r6} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
     {State2, r5} = ?BACKEND:move_to_native_register(State1, {x_reg, 1}),
     State3 = ?BACKEND:free_native_registers(State2, [r10]),
-    {State4, r6} = ?BACKEND:and_(State3, {free, r6}, 16#3F),
+    {State4, r6} = ?BACKEND:and_(State3, {free, r6}, 16#12345),
     {State5, r5} = ?BACKEND:move_to_native_register(State4, {x_reg, 1}),
     Stream = ?BACKEND:stream(State5),
     Dump = <<
         "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
         "   4:	e5975030 	ldr	r5, [r7, #48]	@ 0x30\n"
-        "   8:	e3a0403f 	mov	r4, #63	@ 0x3f\n"
+        "   8:	ffffffff 			@ <UNDEFINED> instruction: 0xffffffff\n"
         "   c:	e0066004 	and	r6, r6, r4"
     >>,
     ?assertStream(arm32, Dump, Stream).
@@ -1818,8 +1816,7 @@ and_large_immediate_test_() ->
             Dump =
                 <<
                     "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-                    "   4:	e1a06406 	lsl	r6, r6, #8\n"
-                    "   8:	e1a06426 	lsr	r6, r6, #8"
+                    "   4:	e3c664ff 	bic	r6, r6, #-16777216	@ 0xff000000"
                 >>,
             ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
         end},
@@ -1831,8 +1828,7 @@ and_large_immediate_test_() ->
             Dump =
                 <<
                     "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-                    "   4:	e3a0500f 	mov	r5, #15\n"
-                    "   8:	e1c66005 	bic	r6, r6, r5"
+                    "   4:	e3c6600f 	bic	r6, r6, #15"
                 >>,
             ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
         end},
@@ -1844,8 +1840,7 @@ and_large_immediate_test_() ->
             Dump =
                 <<
                     "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-                    "   4:	e3a050ff 	mov	r5, #255	@ 0xff\n"
-                    "   8:	e1c66005 	bic	r6, r6, r5"
+                    "   4:	e3c660ff 	bic	r6, r6, #255	@ 0xff"
                 >>,
             ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
         end},
@@ -1871,8 +1866,7 @@ and_large_immediate_test_() ->
             Dump =
                 <<
                     "   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n"
-                    "   4:	e3e05102 	mvn	r5, #-2147483648	@ 0x80000000\n"
-                    "   8:	e0066005 	and	r6, r6, r5"
+                    "   4:	e3c66102 	bic	r6, r6, #-2147483648	@ 0x80000000"
                 >>,
             ?assertStream(arm32, Dump, ?BACKEND:stream(State2))
         end}
