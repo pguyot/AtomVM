@@ -5320,21 +5320,28 @@ call_only_or_schedule_next(
             Stream2 = StreamModule:append(StreamR, <<I4/binary, I5/binary>>),
             State1 = State0#state{stream = Stream2};
         unknown ->
-            % Label not yet known: emit the far-capable pair so the patch
-            % fits whatever the final distance is
-            I4 = jit_aarch64_asm:bcc(eq, 8),
-            I5 = jit_aarch64_asm:b(0),
-            BrEntry = {BNEOffset + 4, b},
-            ExistingBrs = maps:get(Label, Branches, []),
-            Stream2 = StreamModule:append(StreamR, <<I4/binary, I5/binary>>),
-            State1 = State0#state{
-                stream = Stream2,
-                branches = Branches#{Label => [BrEntry | ExistingBrs]},
-                %% Forward block: targets the cold entry even if the label
-                %% later gains a hot one — record so reuse sites can emit
-                %% a fresh hot block instead (see jump_to_offset).
-                cold_call_blocks = (State0#state.cold_call_blocks)#{EntryOffset => Label}
-            }
+            % Label not yet known. Reserving the far-capable pair here cost an
+            % instruction at every forward call site whether or not the
+            % distance needed it -- and it almost never does, since bcc reaches
+            % +/-1MB and a module is far smaller. Reserve the single branch
+            % optimistically instead and let the backtrack loop grow it in the
+            % rare case it overflows, which is exactly what jump_to_label_cond
+            % already does for every other forward conditional branch.
+            Placeholder = jit_aarch64_asm:bcc(eq, 8),
+            StreamP = StreamModule:append(StreamR, Placeholder),
+            State1 = fuse_cond_branch_forward(
+                State0#state{
+                    stream = StreamP,
+                    branches = Branches,
+                    %% Forward block: targets the cold entry even if the label
+                    %% later gains a hot one — record so reuse sites can emit
+                    %% a fresh hot block instead (see jump_to_offset).
+                    cold_call_blocks = (State0#state.cold_call_blocks)#{EntryOffset => Label}
+                },
+                eq,
+                Label,
+                BNEOffset
+            )
     end,
     % Falling through here means reductions hit zero. The reduction-count
     % flush itself is NOT emitted here: call_primitive_last (below) flushes
