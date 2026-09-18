@@ -173,6 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dividend's sign is unknown, instead of emitting a hardware division: ESTONE's
   `int_arith` micro, which does two `div 2` per call, went from 2.6x slower than BEAM to
   1.3x on x86_64, where a 64-bit `idiv` costs tens of cycles
+- The JIT now inlines the small-integer fast path for `/=` as it already did for `==`, `<`,
+  `>=`, `=:=` and `=/=`, instead of calling the term comparator for every `/=` guard
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,
