@@ -207,8 +207,11 @@ _Static_assert(offsetof(JITState, fr) == 0x18, "jit_state->fr is 0x18 in jit/src
 _Static_assert(offsetof(JITState, dispatcher_ret) == 0x30,
     "jit_state->dispatcher_ret is 0x30 in jit/src/jit_aarch64.erl");
 
-// Offsets for inlining the imported-BIF resolution at gc_bif call sites.
+// Offsets for inlining the imported-BIF resolution at gc_bif call sites and
+// the resolved call_ext fast path.
 _Static_assert(offsetof(Module, imported_funcs) == 0x90, "module->imported_funcs is 0x90 in jit/src/jit_{aarch64,x86_64,riscv64}.erl");
+_Static_assert(offsetof(struct ModuleFunction, target) == 0x8, "module_function->target is 0x8 in jit/src/jit_{aarch64,riscv64}.erl");
+_Static_assert(offsetof(struct ModuleFunction, entry_point) == 0x10, "module_function->entry_point is 0x10 in jit/src/jit_{aarch64,riscv64}.erl");
 // Offset for the inline cross-module return fast path.
 _Static_assert(offsetof(Module, native_code) == 0x78, "module->native_code is 0x78 in jit/src/jit_{aarch64,x86_64}.erl");
 // Offset for the inline call_fun fast path.
@@ -274,9 +277,9 @@ _Static_assert(offsetof(JITState, cp_base) == 0x14,
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
 // Offsets for the inline resolved call_ext fast path.
-_Static_assert(offsetof(Module, imported_funcs) == 0x48, "module->imported_funcs is 0x48 in jit/src/jit_arm32.erl");
-_Static_assert(offsetof(struct ModuleFunction, target) == 0x4, "module_function->target is 0x4 in jit/src/jit_arm32.erl");
-_Static_assert(offsetof(struct ModuleFunction, entry_point) == 0x8, "module_function->entry_point is 0x8 in jit/src/jit_arm32.erl");
+_Static_assert(offsetof(Module, imported_funcs) == 0x48, "module->imported_funcs is 0x48 in jit/src/jit_{arm32,riscv32}.erl");
+_Static_assert(offsetof(struct ModuleFunction, target) == 0x4, "module_function->target is 0x4 in jit/src/jit_{arm32,riscv32}.erl");
+_Static_assert(offsetof(struct ModuleFunction, entry_point) == 0x8, "module_function->entry_point is 0x8 in jit/src/jit_{arm32,riscv32}.erl");
 #ifdef AVM_CP_LOW_IS_NATIVE_PC
 // The return path reads module->native_code to tell a native resume address in
 // the cp's low word from an emulated module's bytecode offset.
