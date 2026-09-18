@@ -5274,7 +5274,10 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
             'div' -> div_;
             'rem' -> rem_
         end,
-    case MMod:supports_div(MSt0) andalso addsub_fastpath_reloadable(Arg1) of
+    %% A power-of-two divisor is strength-reduced to shifts, so the fast path
+    %% applies whether or not the backend has a hardware divide.
+    IsPow2 = pow2_divisor_shift(Arg2 bsr 4, MMod) =/= error,
+    case (IsPow2 orelse MMod:supports_div(MSt0)) andalso addsub_fastpath_reloadable(Arg1) of
         true ->
             op_gc_bif2_divrem_lit_runtime(
                 MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2, Dest
