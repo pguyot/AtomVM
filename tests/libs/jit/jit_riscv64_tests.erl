@@ -475,6 +475,20 @@ call_primitive_direct_test() ->
     >>,
     ?assertStream(riscv64, Dump, ?BACKEND:stream(State1)).
 
+call_ext_last_direct_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:call_ext_last_direct(State0, 7, 3, 2, [ctx, jit_state, 0, 1, 3, 2]),
+    Dump =
+        <<"   0:	00093f83          	ld	t6,0(s2)\n   4:	090fbf83          	ld	t6,144(t6)\n   8:	018fbf03          	ld	t5,24(t6)\n   c:	000f2e83          	lw	t4,0(t5)\n  10:	ff9e8e13          	addi	t3,t4,-7\n  14:	020e1363          	bnez	t3,0x3a\n  18:	000efe93          	andi	t4,t4,0\n  1c:	9f76                	add	t5,t5,t4\n  1e:	01d93423          	sd	t4,8(s2)\n  22:	010a3e03          	ld	t3,16(s4)\n  26:	0fc4b023          	sd	t3,224(s1)\n  2a:	0a61                	addi	s4,s4,24\n  2c:	008f3e83          	ld	t4,8(t5)\n  30:	010f3f03          	ld	t5,16(t5)\n  34:	01d93023          	sd	t4,0(s2)\n  38:	8f02                	jr	t5\n  3a:	03800f93          	li	t6,56\n  3e:	9fce                	add	t6,t6,s3\n  40:	000fbf83          	ld	t6,0(t6)\n  44:	1141                	addi	sp,sp,-16\n  46:	e006                	sd	ra,0(sp)\n  48:	4501                	li	a0,0\n  4a:	4585                	li	a1,1\n  4c:	460d                	li	a2,3\n  4e:	4689                	li	a3,2\n  50:	0544b823          	sd	s4,80(s1)\n  54:	9f82                	jalr	t6\n  56:	8faa                	mv	t6,a0\n  58:	6082                	ld	ra,0(sp)\n  5a:	0141                	addi	sp,sp,16\n  5c:	001fff13          	andi	t5,t6,1\n  60:	000f1463          	bnez	t5,0x68\n  64:	857e                	mv	a0,t6\n  66:	8082                	ret\n  68:	0504ba03          	ld	s4,80(s1)\n  6c:	ffefff93          	andi	t6,t6,-2\n  70:	8f82                	jr	t6">>,
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1)).
+
+call_ext_only_direct_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:call_ext_last_direct(State0, 7, 3, -1, [ctx, jit_state, 0, 1, 3, -1]),
+    Dump =
+        <<"   0:	00093f83          	ld	t6,0(s2)\n   4:	090fbf83          	ld	t6,144(t6)\n   8:	018fbf03          	ld	t5,24(t6)\n   c:	000f2e83          	lw	t4,0(t5)\n  10:	ff9e8e13          	addi	t3,t4,-7\n  14:	000e1e63          	bnez	t3,0x30\n  18:	000efe93          	andi	t4,t4,0\n  1c:	9f76                	add	t5,t5,t4\n  1e:	01d93423          	sd	t4,8(s2)\n  22:	008f3e83          	ld	t4,8(t5)\n  26:	010f3f03          	ld	t5,16(t5)\n  2a:	01d93023          	sd	t4,0(s2)\n  2e:	8f02                	jr	t5\n  30:	03800f93          	li	t6,56\n  34:	9fce                	add	t6,t6,s3\n  36:	000fbf83          	ld	t6,0(t6)\n  3a:	1141                	addi	sp,sp,-16\n  3c:	e006                	sd	ra,0(sp)\n  3e:	4501                	li	a0,0\n  40:	4585                	li	a1,1\n  42:	460d                	li	a2,3\n  44:	56fd                	li	a3,-1\n  46:	0544b823          	sd	s4,80(s1)\n  4a:	9f82                	jalr	t6\n  4c:	8faa                	mv	t6,a0\n  4e:	6082                	ld	ra,0(sp)\n  50:	0141                	addi	sp,sp,16\n  52:	001fff13          	andi	t5,t6,1\n  56:	000f1463          	bnez	t5,0x5e\n  5a:	857e                	mv	a0,t6\n  5c:	8082                	ret\n  5e:	0504ba03          	ld	s4,80(s1)\n  62:	ffefff93          	andi	t6,t6,-2\n  66:	8f82                	jr	t6">>,
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1)).
+
 get_list_head_tail_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),

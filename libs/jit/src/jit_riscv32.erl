@@ -107,7 +107,8 @@
     read_avail_heap_memory/1,
     read_shrink_probe_mismatch/1,
     get_list_head_tail/4,
-    call_primitive_direct/3
+    call_primitive_direct/3,
+    call_ext_last_direct/5
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -300,6 +301,13 @@
 -define(PRIMITIVE(N), {?NATIVE_INTERFACE_REG, N * 4}).
 -define(MODULE_INDEX(ModuleReg), {ModuleReg, 0}).
 -define(MODULE_LOCAL_ATOMS_TABLE_OFFSET, 16#6C).
+%% Offsets for the inline resolved call_ext fast path (asserted in jit.c).
+-define(MODULE_IMPORTED_FUNCS_OFFSET, 16#48).
+-define(MODULE_FUNCTION_TYPE_OFFSET, 0).
+-define(MODULE_FUNCTION_TARGET_OFFSET, 16#4).
+-define(MODULE_FUNCTION_ENTRY_POINT_OFFSET, 16#8).
+-define(MODULE_NATIVE_FUNCTION_TYPE, 7).
+-define(CP_SIZE_IN_TERMS, 2).
 
 -define(JUMP_TABLE_ENTRY_SIZE, 8).
 
