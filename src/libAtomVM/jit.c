@@ -247,6 +247,22 @@ _Static_assert(offsetof(JITState, module) == 0x0, "jit_state->module is 0x0 in 3
 _Static_assert(offsetof(JITState, continuation) == 0x4, "jit_state->continuation is 0x4 in 32-bit backends");
 _Static_assert(offsetof(JITState, remaining_reductions) == 0x8, "jit_state->remaining_reductions is 0x8 in 32-bit backends");
 _Static_assert(offsetof(JITState, fr) == 0xC, "jit_state->fr is 0xC in 32-bit backends");
+// The inline allocation fast paths read the heap fields at hard-coded offsets
+// here too (jit_arm32.erl's ?HEAP_ROOT and ?HEAP_PTR, jit_riscv32.erl's
+// ?HEAP_PTR_OFFSET); they differ from the 64-bit ones asserted above, so they
+// need their own assertions. shrink_probe_heap_end and cp_base are asserted
+// with them so that extending the inlined test_heap corridor check to a
+// 32-bit backend starts from checked offsets.
+_Static_assert(offsetof(Context, heap.root) == 0x4,
+    "heap fragments root is at ctx+0x4 in 32-bit jit backends");
+_Static_assert(offsetof(Context, heap.heap_ptr) == 0xC,
+    "heap_ptr is at ctx+0xC in 32-bit jit backends");
+_Static_assert(offsetof(Context, heap.heap_end) == 0x10,
+    "heap_end is at ctx+0x10 in 32-bit jit backends");
+_Static_assert(offsetof(Context, shrink_probe_heap_end) == 0xDC,
+    "shrink_probe_heap_end is at ctx+0xDC in 32-bit jit backends");
+_Static_assert(offsetof(JITState, cp_base) == 0x14,
+    "cp_base is at jit_state+0x14 in 32-bit jit backends");
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
 // Offsets for the inline resolved call_ext fast path.
