@@ -261,8 +261,16 @@ _Static_assert(offsetof(Context, heap.heap_end) == 0x10,
     "heap_end is at ctx+0x10 in 32-bit jit backends");
 _Static_assert(offsetof(Context, shrink_probe_heap_end) == 0xDC,
     "shrink_probe_heap_end is at ctx+0xDC in 32-bit jit backends");
+// xtensa's JITState carries an extra code_base pointer before cp_base, so it
+// is one word further along there (the 64-bit block excludes it for the same
+// reason).
+#if JIT_ARCH_TARGET == JIT_ARCH_XTENSA
+_Static_assert(offsetof(JITState, cp_base) == 0x18,
+    "cp_base is at jit_state+0x18 in the 32-bit xtensa backend");
+#else
 _Static_assert(offsetof(JITState, cp_base) == 0x14,
     "cp_base is at jit_state+0x14 in 32-bit jit backends");
+#endif
 // Offset for inlining atom-term resolution (module-local atom id -> term).
 _Static_assert(offsetof(Module, local_atoms_to_global_table) == 0x6C, "module->local_atoms_to_global_table is 0x6C in jit/src/jit_{riscv32,arm32,armv6m,xtensa,wasm32}.erl");
 // Offsets for the inline resolved call_ext fast path.
