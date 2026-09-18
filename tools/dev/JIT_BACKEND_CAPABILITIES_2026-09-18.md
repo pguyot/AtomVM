@@ -193,17 +193,23 @@ Done in the session that wrote this survey:
   backend, including without a hardware divide, so arm32 stopped calling the
   BIF for `X div 2` (`pow2probe:d2/1` is a tag test and eleven ALU
   instructions there, against two C calls before).
-- **`read_shrink_probe_mismatch/1` on arm32**, with the shared corridor check
-  generalised from 64-bit to any word size — item 1 for one of the six
-  backends that lacked it.
+- **`read_shrink_probe_mismatch/1` on arm32, riscv32 and riscv64**, with the
+  shared corridor check generalised from 64-bit to any word size — item 1 for
+  three of the six backends that lacked it.  The RISC-V pair also needed
+  `read_avail_heap_memory/1`, and both helpers live in `jit_riscv_impl.hrl`,
+  so one implementation serves 32- and 64-bit.
+- **The `(uint)>` condition and `supports_select_val_ranges/0` on riscv32 and
+  riscv64** — item 7 for both, and the condition is what item 1 needed there.
+  A `case` over runs 1..5 and 20..23 now costs a subtract and one `bltu` per
+  run instead of a compare per value.
 - **`term_from_float_inline/2` and `move_imported_bif_to_native_register/2`
   on aarch64** — item 8, both of them.
 - **The two dead probes removed**, and the 32-bit heap offsets asserted.
 
-Not done, and why: items 1–5 for riscv32, riscv64, xtensa, armv6m and wasm32
-each need the whole inline-heap family first (`read_avail_heap_memory/1` is
-not exported by any of them), and none of those targets can be *measured*
-from a desktop — CI builds them and runs the suites under qemu-user, which
+Not done, and why: items 1–5 for xtensa, armv6m and wasm32 each need the whole
+inline-heap family first (none of them exports `read_avail_heap_memory/1`, and
+xtensa and armv6m have no heap-pointer access at all), and none of those
+targets can be *measured* from a desktop — CI builds them and runs the suites under qemu-user, which
 proves correctness but not that inlining pays on a Cortex-M0+ or an ESP32,
 where code size is the binding constraint.  That measurement belongs on the
 Pi, the Pico and an ESP32 board.  Item 6 (branch relaxation on x86_64) is
