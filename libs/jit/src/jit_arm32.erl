@@ -98,6 +98,7 @@
     heap_bump_alloc/2,
     read_avail_heap_memory/1,
     read_heap_fragments/1,
+    read_shrink_probe_mismatch/1,
     allocate_frame_fast/2,
     call_func_ptr/3,
     return_labels_and_lines/2,
@@ -244,6 +245,8 @@
 %% heap_ptr at 0xC. hp is not pinned on arm32, so it is loaded when needed.
 -define(HEAP_ROOT, {?CTX_REG, 16#4}).
 -define(HEAP_PTR, {?CTX_REG, 16#C}).
+-define(HEAP_END, {?CTX_REG, 16#10}).
+-define(SHRINK_PROBE_HEAP_END, {?CTX_REG, 16#DC}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 % ctx->cp is a 64-bit cp_t occupying two slots (little-endian targets):
 % ?CP holds the low word, ?CP_MODULE holds the high word (Module*). arm32 sets
@@ -4376,6 +4379,36 @@ read_heap_fragments(
     I2 = jit_arm32_asm:ldr(al, Reg, {Reg, 0}),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%%-----------------------------------------------------------------------------
+%% @doc ctx->heap.root->next | (ctx->heap.heap_end ^ ctx->shrink_probe_heap_end),
+%% in a freshly allocated register: zero exactly when no heap fragments are
+%% pending and the shrink probe already ran for this root block, i.e. when a
+%% test_heap whose free space exceeds the shrink corridor can skip the
+%% primitive call entirely (mirrors the probe short-circuit in jit_test_heap).
+%% @end
+%%-----------------------------------------------------------------------------
+-spec read_shrink_probe_mismatch(state()) -> {state(), arm32_register()}.
+read_shrink_probe_mismatch(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp1 = first_avail(Available band (bnot reg_bit(Reg))),
+    Tmp2 = first_avail(Available band (bnot (reg_bit(Reg) bor reg_bit(Tmp1)))),
+    I1 = jit_arm32_asm:ldr(al, Reg, ?HEAP_ROOT),
+    I2 = jit_arm32_asm:ldr(al, Reg, {Reg, 0}),
+    I3 = jit_arm32_asm:ldr(al, Tmp1, ?HEAP_END),
+    I4 = jit_arm32_asm:ldr(al, Tmp2, ?SHRINK_PROBE_HEAP_END),
+    I5 = jit_arm32_asm:eor(al, Tmp1, Tmp1, Tmp2),
+    I6 = jit_arm32_asm:orr(al, Reg, Reg, Tmp1),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp1), Tmp2
+    ),
     {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
 
 %%-----------------------------------------------------------------------------
