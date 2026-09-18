@@ -1,3 +1,8 @@
+<!--
+ Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+-->
+
 # Vector registers and bulk moves: what BeamAsm does, and what is worth copying
 
 2026-09-14, branch `w30/jit-edge`. Prompted by "I've seen BeamAsm using vector
