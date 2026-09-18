@@ -45,6 +45,9 @@
 %%   local 3+: scratch locals for temporary values
 
 -export([
+    %% Exported for the test that keeps it in sync with the C
+    %% ModuleNativeInterface (jit_tests).
+    primitive_returns_void/1,
     word_size/0,
     supports_tail_cache/0,
     constants_are_free/0,
@@ -1931,6 +1934,10 @@ primitive_returns_void(?PRIM_FNEGATE) -> true;
 primitive_returns_void(?PRIM_BITSTRING_COPY_MODULE_STR) -> true;
 primitive_returns_void(?PRIM_FREE) -> true;
 primitive_returns_void(?PRIM_TRY_CASE) -> true;
+primitive_returns_void(?PRIM_RECV_MARKER_RESERVE) -> true;
+primitive_returns_void(?PRIM_RECV_MARKER_USE) -> true;
+primitive_returns_void(?PRIM_RECV_MARKER_CLEAR) -> true;
+primitive_returns_void(?PRIM_REMOVE_MESSAGE_KEEP) -> true;
 primitive_returns_void(_) -> false.
 
 %% Must be kept in sync with ModuleNativeInterface in jit.h.

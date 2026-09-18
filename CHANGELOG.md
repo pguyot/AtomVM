@@ -324,6 +324,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `maps:next/1` on a large (tree-backed) map materialising the whole key/value list on
   the first step, so taking a few entries from a big map reserved `4 * size` heap words and
   walked every entry before returning the first one
+- Fixed the wasm32 JIT calling the four receive-marker primitives with the wrong
+  `call_indirect` signature, which trapped the generated module with "null function or
+  function signature mismatch" as soon as a `receive` used a marker
 
 ## [0.7.0-beta.0] - 2026-09-28
 
