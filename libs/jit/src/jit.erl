@@ -6064,12 +6064,11 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
     %% backends that measured the inline corridor check as a loss (x86_64,
     %% where the well-predicted helper call beat the icache cost of the
     %% per-site check) opt out by not exporting it.
-    case
-        erlang:function_exported(MMod, read_shrink_probe_mismatch, 1) andalso
-            MMod:word_size() =:= 8
-    of
+    case erlang:function_exported(MMod, read_shrink_probe_mismatch, 1) of
         true ->
-            NeedBytes = HeapNeed * 8,
+            WordSize = MMod:word_size(),
+            SignBit = WordSize * 8 - 1,
+            NeedBytes = HeapNeed * WordSize,
             %% HEAP_NEED_GC_SHRINK_THRESHOLD_COEFF in memory.h
             Bound = 63 * NeedBytes,
             {MSt1, AvailReg} = MMod:read_avail_heap_memory(MSt0),
@@ -6080,19 +6079,19 @@ op_test_heap(MMod, MSt0, HeapNeed, Live) when is_integer(HeapNeed) ->
                 %% the call when the shrink probe already ran for this
                 %% root block; undersized ones (Diff negative, sign bit
                 %% set) must always call. Fold both into one test:
-                %% probe_mismatch | (Diff >> 63) is zero exactly when the
-                %% call can be skipped.
+                %% probe_mismatch | (Diff >> sign bit) is zero exactly when
+                %% the call can be skipped.
                 {BSt1, ProbeReg} = MMod:read_shrink_probe_mismatch(BSt0),
                 %% Backends whose ALU ops carry a shift on their second source
                 %% do the copy, the shift and the or in one instruction.
                 BSt5 =
                     case erlang:function_exported(MMod, or_shifted_arith, 4) of
                         true ->
-                            MMod:or_shifted_arith(BSt1, ProbeReg, AvailReg, 63);
+                            MMod:or_shifted_arith(BSt1, ProbeReg, AvailReg, SignBit);
                         false ->
                             {BSt2, DiffCopy} = MMod:copy_to_native_register(BSt1, AvailReg),
                             {BSt3, SignReg} = MMod:shift_right_arith(
-                                BSt2, {free, DiffCopy}, 63
+                                BSt2, {free, DiffCopy}, SignBit
                             ),
                             BSt4 = MMod:or_(BSt3, ProbeReg, SignReg),
                             MMod:free_native_registers(BSt4, [SignReg])
