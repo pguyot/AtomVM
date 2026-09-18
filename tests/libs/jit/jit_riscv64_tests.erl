@@ -450,6 +450,28 @@ increment_sp_test() ->
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
+read_avail_heap_memory_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, _Reg} = ?BACKEND:read_avail_heap_memory(State0),
+    Dump = <<
+        "   0:\t0184bf83          \tld\tt6,24(s1)\n"
+        "   4:\t41fa0fb3          \tsub\tt6,s4,t6"
+    >>,
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1)).
+
+read_shrink_probe_mismatch_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, _Reg} = ?BACKEND:read_shrink_probe_mismatch(State0),
+    Dump = <<
+        "   0:\t0084bf83          \tld\tt6,8(s1)\n"
+        "   4:\t000fbf83          \tld\tt6,0(t6)\n"
+        "   8:\t0204bf03          \tld\tt5,32(s1)\n"
+        "   c:\t1a04be83          \tld\tt4,416(s1)\n"
+        "  10:\t01df4f33          \txor\tt5,t5,t4\n"
+        "  14:\t01efefb3          \tor\tt6,t6,t5"
+    >>,
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1)).
+
 if_block_uint_above_test_() ->
     {setup,
         fun() ->
