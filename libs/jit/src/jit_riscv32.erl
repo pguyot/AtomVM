@@ -103,7 +103,9 @@
     set_vm_record_type/3,
     get_vm_record_type/2,
     heap_bump_alloc/2,
-    supports_select_val_ranges/0
+    supports_select_val_ranges/0,
+    read_avail_heap_memory/1,
+    read_shrink_probe_mismatch/1
 ]).
 
 -export([dwarf_x_reg_offset/0]).
@@ -276,6 +278,11 @@
 -define(E_REG, s4).
 %% ctx->heap.heap_ptr, for inline bump allocation.
 -define(HEAP_PTR_OFFSET, 16#C).
+%% ctx->heap.root, ctx->heap.heap_end and ctx->shrink_probe_heap_end, for the
+%% inlined test_heap corridor check (offsets asserted in jit.c).
+-define(HEAP_ROOT_OFFSET, 16#4).
+-define(HEAP_END_OFFSET, 16#10).
+-define(SHRINK_PROBE_OFFSET, 16#DC).
 -define(Y_REGS, {?CTX_REG, 16#28}).
 -define(X_REG(N), {?CTX_REG, 16#2C + (N * 4)}).
 -define(CP, {?CTX_REG, 16#70}).
