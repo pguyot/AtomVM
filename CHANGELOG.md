@@ -327,6 +327,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the wasm32 JIT calling the four receive-marker primitives with the wrong
   `call_indirect` signature, which trapped the generated module with "null function or
   function signature mismatch" as soon as a `receive` used a marker
+- Fixed `emscripten:run_script/2` with `main_thread` and without `async` never returning: the
+  main thread readied the trapped caller without waking the polling scheduler, so the answer
+  sat in the mailbox of a process no scheduler came back to
 
 ## [0.7.0-beta.0] - 2026-09-28
 
