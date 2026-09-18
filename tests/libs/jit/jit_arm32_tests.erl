@@ -1599,6 +1599,14 @@ ldr_y_reg_invalidates_hidden_temp_cache_test() ->
     >>,
     ?assertStream(arm32, Dump, Stream).
 
+call_fun_with_cp_direct_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:call_fun_with_cp_direct(State1, 7, [ctx, jit_state, 0, {free, Reg}, 1]),
+    Dump =
+        <<"   0:	e597602c 	ldr	r6, [r7, #44]	@ 0x2c\n   4:	e28f0048 	add	r0, pc, #72	@ 0x48\n   8:	e320f000 	nop	{0}\n   c:	e59a1000 	ldr	r1, [sl]\n  10:	e1c707f0 	strd	r0, [r7, #112]	@ 0x70\n  14:	e58ab008 	str	fp, [sl, #8]\n  18:	e599501c 	ldr	r5, [r9, #28]\n  1c:	e92d4020 	push	{r5, lr}\n  20:	e3a00000 	mov	r0, #0\n  24:	e1a01006 	mov	r1, r6\n  28:	e3a02001 	mov	r2, #1\n  2c:	e12fff35 	blx	r5\n  30:	e1a06000 	mov	r6, r0\n  34:	e8bd4020 	pop	{r5, lr}\n  38:	e3160001 	tst	r6, #1\n  3c:	1a000001 	bne	0x48\n  40:	e1a00006 	mov	r0, r6\n  44:	e12fff1e 	bx	lr\n  48:	e5978028 	ldr	r8, [r7, #40]	@ 0x28\n  4c:	e3c66003 	bic	r6, r6, #3\n  50:	e12fff16 	bx	r6">>,
+    ?assertStream(arm32, Dump, ?BACKEND:stream(State2)).
+
 % A primitive called with fewer arguments than there are parameter registers
 % takes the short-list branch of call_func_ptr0, which must still use the
 % normalized argument list: `offset' has to be the stream offset by then, not

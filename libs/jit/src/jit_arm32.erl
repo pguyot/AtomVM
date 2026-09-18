@@ -94,6 +94,7 @@
     call_only_or_schedule_next/2,
     call_ext_with_cp_direct/4,
     call_ext_last_direct/5,
+    call_fun_with_cp_direct/3,
     call_primitive_direct/3,
     heap_bump_alloc/2,
     read_avail_heap_memory/1,
@@ -4525,6 +4526,27 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args) ->
     %% through the dispatch block, so the resume point -- and with it the cp
     %% this site just stored -- is the instruction after it.
     State3 = direct_dispatch(State2, ResultReg, true),
+    State4 = free_native_register(State3, ResultReg),
+    State5 = rewrite_cp_offset(State4, AdrOffset, TempReg),
+    State5#state{regs = jit_regs:invalidate_all(State5#state.regs)}.
+
+%%-----------------------------------------------------------------------------
+%% @doc OP_CALL_FUN / OP_CALL_FUN2: set cp, call PRIM_CALL_FUN_DIRECT and branch
+%% to the resolved fun where we stand instead of round-tripping through the
+%% scheduler loop. No JIT_NATIVE_STAY test: jit_call_fun_direct answers with a
+%% tagged entry point or a Context *, never the sentinel, which jit.c returns
+%% only from the call_ext paths and only for a leaf NIF.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec call_fun_with_cp_direct(state(), non_neg_integer(), [arg()]) -> state().
+call_fun_with_cp_direct(State0, Primitive, Args) ->
+    {State1, AdrOffset, TempReg} = set_cp(State0),
+    %% Same contract as call_ext_with_cp_direct: flush the reductions the
+    %% primitive reads from memory before the call, never after.
+    {State2, ResultReg} = call_primitive_no_reload(
+        emit_reductions_flush(State1), Primitive, Args
+    ),
+    State3 = direct_dispatch(State2, ResultReg, false),
     State4 = free_native_register(State3, ResultReg),
     State5 = rewrite_cp_offset(State4, AdrOffset, TempReg),
     State5#state{regs = jit_regs:invalidate_all(State5#state.regs)}.
