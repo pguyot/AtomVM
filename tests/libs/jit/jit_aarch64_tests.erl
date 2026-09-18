@@ -141,6 +141,19 @@ call_primitive_6_args_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+move_imported_bif_to_native_register_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r7} = ?BACKEND:move_imported_bif_to_native_register(State0, 3),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:\tf9400267 \tldr\tx7, [x19]\n"
+            "   4:\tf94048e7 \tldr\tx7, [x7, #144]\n"
+            "   8:\tf9400ce7 \tldr\tx7, [x7, #24]\n"
+            "   c:\tf94004e7 \tldr\tx7, [x7, #8]"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 term_from_float_inline_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, r7} = ?BACKEND:term_from_float_inline(State0, 0),
