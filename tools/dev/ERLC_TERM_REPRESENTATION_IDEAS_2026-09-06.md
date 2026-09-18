@@ -1,3 +1,8 @@
+<!--
+ Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+-->
+
 # Where erlc still loses, and what the term-representation ideas are worth
 
 Measured 2026-09-06 on macOS aarch64, `build.jit.rebase` (Release, JIT on),
