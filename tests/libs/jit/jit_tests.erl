@@ -1548,6 +1548,88 @@ gc_bif_div_unbounded_range_runtime_fastpath_test_() ->
 gc_bif_div_unbounded_range_runtime_fastpath(Backend) ->
     gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, 'div', 2}, {t_integer, any}).
 
+%% `X div 2^k' / `X rem 2^k' with a literal divisor and an UNTYPED dividend
+%% must not emit a hardware divide. The runtime small-integer fast path
+%% strength-reduces a power-of-two divisor to shifts with a sign correction
+%% (Erlang truncates toward zero), which is worth having on every backend and
+%% is worth a lot on x86_64, where a 64-bit idiv costs tens of cycles and is
+%% bracketed by a push/pop of rdx. A non-power-of-two divisor still divides:
+%% that is the control proving these assertions can fail.
+gc_bif_divrem_pow2_literal_no_hardware_divide_test_() ->
+    [
+        ?_test(divrem_pow2_no_hardware_divide(Backend, Op, Divisor))
+     || Backend <- [jit_x86_64, jit_aarch64],
+        Op <- ['div', 'rem'],
+        Divisor <- [2, 4, 8]
+    ] ++
+        [
+            ?_test(divrem_non_pow2_still_divides(Backend, Op))
+         || Backend <- [jit_x86_64, jit_aarch64], Op <- ['div', 'rem']
+        ].
+
+%% Same strength reduction when the dividend's type is known but its range
+%% spans negatives: the sign correction makes the shift form valid there too,
+%% and knowing the operand is an integer must not produce worse code than not
+%% knowing it (it used to emit the hardware divide).
+gc_bif_divrem_pow2_signed_range_no_hardware_divide_test_() ->
+    [
+        ?_test(divrem_pow2_signed_range_no_hardware_divide(Backend, Op, Divisor))
+     || Backend <- [jit_x86_64, jit_aarch64],
+        Op <- ['div', 'rem'],
+        Divisor <- [2, 8]
+    ].
+
+divrem_pow2_signed_range_no_hardware_divide(Backend, Op, Divisor) ->
+    Code = divrem_literal_code(Backend, Op, Divisor, {t_integer, {-100, 100}}),
+    ?assertEqual(false, has_hardware_divide(Backend, Code)).
+
+divrem_pow2_no_hardware_divide(Backend, Op, Divisor) ->
+    Code = divrem_literal_code(Backend, Op, Divisor),
+    ?assertEqual(false, has_hardware_divide(Backend, Code)).
+
+divrem_non_pow2_still_divides(Backend, Op) ->
+    Code = divrem_literal_code(Backend, Op, 3),
+    ?assertEqual(true, has_hardware_divide(Backend, Code)).
+
+%% gc_bif2 fail=0 live=2 bif=0, x[0], int Divisor, x[1]; untyped.
+divrem_literal_code(Backend, Op, Divisor) ->
+    Chunk =
+        <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, 125, 16#05, 16#20, 16#00, 16#03,
+            ((Divisor bsl 4) bor 1), 16#13, 3>>,
+    divrem_literal_code(Backend, Op, Chunk, fun(_) -> any end).
+
+%% Same site with the dividend carrying a type (typed register, type index 1).
+divrem_literal_code(Backend, Op, Divisor, Type) when is_integer(Divisor) ->
+    Chunk =
+        <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, 125, 16#05, 16#20, 16#00, 16#57, 16#03, 16#10,
+            ((Divisor bsl 4) bor 1), 16#13, 3>>,
+    divrem_literal_code(Backend, Op, Chunk, fun(1) -> Type end);
+divrem_literal_code(Backend, Op, Chunk, TypeResolver) ->
+    jit_tests_common:compile_chunk(
+        Backend,
+        Chunk,
+        fun(_) -> undefined end,
+        fun(_) -> undefined end,
+        TypeResolver,
+        fun(0) -> {erlang, Op, 2} end,
+        fun(_) -> false end
+    ).
+
+%% x86_64 signs-extends into rdx:rax with cqo before idiv; aarch64 emits sdiv
+%% (msub for rem, which follows an sdiv).
+has_hardware_divide(jit_x86_64, Code) ->
+    binary:match(Code, jit_x86_64_asm:cqo()) =/= nomatch;
+has_hardware_divide(jit_aarch64, Code) ->
+    aarch64_has_sdiv(Code).
+
+aarch64_has_sdiv(<<Word:32/little, Rest/binary>>) ->
+    case Word band 16#FFE0FC00 of
+        16#9AC00C00 -> true;
+        _ -> aarch64_has_sdiv(Rest)
+    end;
+aarch64_has_sdiv(_) ->
+    false.
+
 gc_bif_add_unbounded_range_runtime_fastpath(Backend) ->
     gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, '+', 2}, {t_integer, {0, '+inf'}}).
 

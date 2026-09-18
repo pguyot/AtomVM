@@ -5929,7 +5929,72 @@ op_gc_bif2_divrem_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1,
     end.
 
 %% Untag the dividend in place, divide by the literal, re-tag into Dest.
+%% A power-of-two divisor is strength-reduced to shifts (see
+%% divrem_lit_pow2_body): the dividend's sign is unknown here, so the hardware
+%% divide is otherwise the only correct form, and on x86_64 that is a 64-bit
+%% idiv (tens of cycles) bracketed by a push/pop of rdx.
 divrem_lit_smallint_body(MMod, MSt0, BackendOp, R1, DivisorValue, Dest) ->
+    case pow2_divisor_shift(DivisorValue, MMod) of
+        {ok, Shift} ->
+            divrem_lit_pow2_body(MMod, MSt0, BackendOp, R1, Shift, Dest);
+        error ->
+            divrem_lit_divide_body(MMod, MSt0, BackendOp, R1, DivisorValue, Dest)
+    end.
+
+%% A positive power-of-two literal divisor, small enough that the bias shift
+%% below stays within the word and the rem mask stays a 32-bit immediate.
+pow2_divisor_shift(DivisorValue, MMod) when
+    is_integer(DivisorValue), DivisorValue >= 2, DivisorValue band (DivisorValue - 1) =:= 0
+->
+    Shift = log2_pow2(DivisorValue),
+    case Shift =< min(31, MMod:word_size() * 8 - 5) of
+        true -> {ok, Shift};
+        false -> error
+    end;
+pow2_divisor_shift(_DivisorValue, _MMod) ->
+    error.
+
+%% `div'/`rem' by 2^Shift without a hardware divide, for a dividend of unknown
+%% sign. An arithmetic shift floors while Erlang's `div' truncates toward zero,
+%% so a negative dividend is biased by 2^Shift-1 first:
+%%
+%%   Bias = (V bsr (Bits-1)) bsr-logical (Bits-Shift)   % 2^Shift-1 iff V < 0
+%%   div:  (V + Bias) bsr Shift
+%%   rem:  V - ((V + Bias) band bnot (2^Shift-1))
+%%
+%% (-7 div 2 = -3 and -7 rem 2 = -1, matching the BIF the cold arm calls.)
+divrem_lit_pow2_body(MMod, MSt0, BackendOp, R1, Shift, Dest) ->
+    Bits = MMod:word_size() * 8,
+    {MSt1, V} = MMod:shift_right_arith(MSt0, {free, R1}, 4),
+    {MSt2, Sign0} = MMod:copy_to_native_register(MSt1, V),
+    {MSt3, Sign1} = MMod:shift_right_arith(MSt2, {free, Sign0}, Bits - 1),
+    {MSt4, Bias} = MMod:shift_right(MSt3, {free, Sign1}, Bits - Shift),
+    case BackendOp of
+        div_ ->
+            MSt5 = MMod:add(MSt4, V, Bias),
+            MSt6 = MMod:free_native_registers(MSt5, [Bias]),
+            {MSt7, Quotient} = MMod:shift_right_arith(MSt6, {free, V}, Shift),
+            MSt8 = divrem_lit_retag(MMod, MSt7, Quotient, Dest),
+            MMod:free_native_registers(MSt8, [V]);
+        rem_ ->
+            {MSt5, Trunc0} = MMod:copy_to_native_register(MSt4, V),
+            MSt6 = MMod:add(MSt5, Trunc0, Bias),
+            MSt7 = MMod:free_native_registers(MSt6, [Bias]),
+            %% (V + Bias) band bnot (2^Shift-1) is the quotient shifted back up,
+            %% so subtracting it from V leaves the remainder.
+            {MSt8, Trunc} = MMod:and_(MSt7, {free, Trunc0}, bnot ((1 bsl Shift) - 1)),
+            MSt9 = MMod:sub(MSt8, V, Trunc),
+            MSt10 = MMod:free_native_registers(MSt9, [Trunc]),
+            divrem_lit_retag(MMod, MSt10, V, Dest)
+    end.
+
+divrem_lit_retag(MMod, MSt0, Reg, Dest) ->
+    MSt1 = MMod:shift_left(MSt0, Reg, 4),
+    MSt2 = MMod:or_(MSt1, Reg, ?TERM_INTEGER_TAG),
+    MSt3 = MMod:move_to_vm_register(MSt2, Reg, Dest),
+    MMod:free_native_registers(MSt3, [Reg, Dest]).
+
+divrem_lit_divide_body(MMod, MSt0, BackendOp, R1, DivisorValue, Dest) ->
     {MSt1, R1} = MMod:shift_right_arith(MSt0, {free, R1}, 4),
     {MSt2, Divisor} = MMod:move_to_native_register(MSt1, DivisorValue),
     {MSt3, ResReg} = MMod:BackendOp(MSt2, R1, Divisor),
@@ -6890,6 +6955,25 @@ can_inline_pow2_rem({Min1, Max1}, Arg2Value, MMod) when
 can_inline_pow2_rem(_, _, _) ->
     false.
 
+% A power-of-2 divisor with a dividend proven to be a small integer but of
+% unknown sign: the shift form still applies, with the bias that turns the
+% flooring shift into Erlang's truncation toward zero (divrem_lit_pow2_body).
+% This needs no runtime tag test, unlike the untyped fast path.
+can_inline_pow2_divrem_signed({Min1, Max1}, Arg2Value, MMod) when
+    is_integer(Min1), is_integer(Max1)
+->
+    {MinSafe, MaxSafe} = small_integer_bounds(MMod),
+    Min1 >= MinSafe andalso Max1 =< MaxSafe andalso
+        pow2_divisor_shift(Arg2Value, MMod) =/= error;
+can_inline_pow2_divrem_signed(_, _, _) ->
+    false.
+
+%% Shift-form div/rem for a proven small-integer dividend of unknown sign.
+op_gc_bif2_divrem_pow2_signed(MMod, MSt0, BackendOp, Arg1, Arg2Value, Dest) ->
+    {ok, Shift} = pow2_divisor_shift(Arg2Value, MMod),
+    {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+    divrem_lit_pow2_body(MMod, MSt1, BackendOp, Reg1, Shift, Dest).
+
 op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
     is_integer(Arg2)
 ->
@@ -6907,21 +6991,26 @@ op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
             MMod:free_native_registers(MSt5, [Reg1, Dest]);
         false ->
-            case can_inline_div(Range1, Range2, MMod, MSt0) of
+            case can_inline_pow2_divrem_signed(Range1, Arg2Value, MMod) of
                 true ->
-                    {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-                    % Shift right by 4 discards the tag bits
-                    {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
-                    {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
-                    {MSt4, QuotientReg} = MMod:div_(MSt3, Reg1, Reg2),
-                    MSt5 = MMod:shift_left(MSt4, QuotientReg, 4),
-                    MSt6 = MMod:or_(MSt5, QuotientReg, ?TERM_INTEGER_TAG),
-                    MSt7 = MMod:move_to_vm_register(MSt6, QuotientReg, Dest),
-                    MMod:free_native_registers(MSt7, [QuotientReg, Reg1, Reg2, Dest]);
+                    op_gc_bif2_divrem_pow2_signed(MMod, MSt0, div_, Arg1, Arg2Value, Dest);
                 false ->
-                    op_gc_bif2_divrem_lit_fallback(
-                        div_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
-                    )
+                    case can_inline_div(Range1, Range2, MMod, MSt0) of
+                        true ->
+                            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+                            % Shift right by 4 discards the tag bits
+                            {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
+                            {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
+                            {MSt4, QuotientReg} = MMod:div_(MSt3, Reg1, Reg2),
+                            MSt5 = MMod:shift_left(MSt4, QuotientReg, 4),
+                            MSt6 = MMod:or_(MSt5, QuotientReg, ?TERM_INTEGER_TAG),
+                            MSt7 = MMod:move_to_vm_register(MSt6, QuotientReg, Dest),
+                            MMod:free_native_registers(MSt7, [QuotientReg, Reg1, Reg2, Dest]);
+                        false ->
+                            op_gc_bif2_divrem_lit_fallback(
+                                div_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
+                            )
+                    end
             end
     end;
 op_gc_bif2_div(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
@@ -6957,21 +7046,26 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
             MSt3 = MMod:move_to_vm_register(MSt2, Reg1, Dest),
             MMod:free_native_registers(MSt3, [Reg1, Dest]);
         false ->
-            case can_inline_div(Range1, Range2, MMod, MSt0) of
+            case can_inline_pow2_divrem_signed(Range1, Arg2Value, MMod) of
                 true ->
-                    {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
-                    % Shift right by 4 discards the tag bits
-                    {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
-                    {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
-                    {MSt4, RemReg} = MMod:rem_(MSt3, Reg1, Reg2),
-                    MSt5 = MMod:shift_left(MSt4, RemReg, 4),
-                    MSt6 = MMod:or_(MSt5, RemReg, ?TERM_INTEGER_TAG),
-                    MSt7 = MMod:move_to_vm_register(MSt6, RemReg, Dest),
-                    MMod:free_native_registers(MSt7, [RemReg, Reg1, Reg2, Dest]);
+                    op_gc_bif2_divrem_pow2_signed(MMod, MSt0, rem_, Arg1, Arg2Value, Dest);
                 false ->
-                    op_gc_bif2_divrem_lit_fallback(
-                        rem_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
-                    )
+                    case can_inline_div(Range1, Range2, MMod, MSt0) of
+                        true ->
+                            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+                            % Shift right by 4 discards the tag bits
+                            {MSt2, Reg1} = MMod:shift_right_arith(MSt1, {free, Reg1}, 4),
+                            {MSt3, Reg2} = MMod:move_to_native_register(MSt2, Arg2Value),
+                            {MSt4, RemReg} = MMod:rem_(MSt3, Reg1, Reg2),
+                            MSt5 = MMod:shift_left(MSt4, RemReg, 4),
+                            MSt6 = MMod:or_(MSt5, RemReg, ?TERM_INTEGER_TAG),
+                            MSt7 = MMod:move_to_vm_register(MSt6, RemReg, Dest),
+                            MMod:free_native_registers(MSt7, [RemReg, Reg1, Reg2, Dest]);
+                        false ->
+                            op_gc_bif2_divrem_lit_fallback(
+                                rem_, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
+                            )
+                    end
             end
     end;
 op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
@@ -7001,9 +7095,14 @@ op_gc_bif2_rem(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range
 op_gc_bif2_divrem_lit_fallback(
     BackendOp, MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Arg2Value, Dest
 ) ->
+    %% A power-of-two divisor needs no hardware divide at all, so the fast path
+    %% is worth taking even on a backend without one.
+    HasDivide =
+        erlang:function_exported(MMod, supports_div, 1) andalso MMod:supports_div(MSt0),
+    IsPow2 = pow2_divisor_shift(Arg2Value, MMod) =/= error,
     case
-        Arg2Value >= 1 andalso erlang:function_exported(MMod, supports_div, 1) andalso
-            MMod:supports_div(MSt0) andalso addsub_fastpath_reloadable(Arg1)
+        Arg2Value >= 1 andalso (IsPow2 orelse HasDivide) andalso
+            addsub_fastpath_reloadable(Arg1)
     of
         true ->
             op_gc_bif2_divrem_lit_runtime(
