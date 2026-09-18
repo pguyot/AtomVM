@@ -4131,6 +4131,68 @@ supports_select_val_ranges() -> true.
 
 %% Available heap memory in bytes (ctx->e - ctx->heap.heap_ptr) in a freshly
 %% allocated register, for the inline test_heap room and corridor checks.
+%% OP_GET_LIST: load both cells of the cons into DISTINCT registers and track
+%% each as its destination x register, so an immediately following read of
+%% either is served from the register instead of reloading from memory (the
+%% list walk in every tail-recursive traversal reads the tail right back).
+%% RISC-V has no paired load, so the two loads stay two loads: the win here is
+%% the tracking, not the fetch. Falls back to the one-temp form for y_reg/ptr
+%% destinations, or when only one register is free.
+get_list_head_tail(State0, {free, ListReg}, {x_reg, H}, {x_reg, T}) when
+    is_integer(H), is_integer(T), H < ?MAX_REG, T < ?MAX_REG, H =/= T
+->
+    State1 = pending_elide_prev(pending_elide_prev(State0, H), T),
+    #state{stream_module = StreamModule, regs = Regs0} = State1,
+    Available = jit_regs:available_regs(Regs0),
+    HeadReg = first_avail(Available),
+    case Available band (bnot reg_bit(HeadReg)) of
+        0 ->
+            get_list_head_tail_generic(State1, ListReg, {x_reg, H}, {x_reg, T});
+        Rest ->
+            TailReg = first_avail(Rest),
+            LoadH = array_load_code(
+                HeadReg, ListReg, ?LIST_HEAD_INDEX * ?WORD_SIZE_BYTES, HeadReg
+            ),
+            LoadT = array_load_code(
+                TailReg, ListReg, ?LIST_TAIL_INDEX * ?WORD_SIZE_BYTES, TailReg
+            ),
+            %% Each store is noted while it is the last instruction emitted, so
+            %% pending_note_store records its own offset.
+            {HeadBase, HeadOff} = ?X_REG(H),
+            StoreH = ?STORE_WORD(HeadBase, HeadReg, HeadOff),
+            StreamA = StreamModule:append(
+                State1#state.stream, <<LoadH/binary, LoadT/binary, StoreH/binary>>
+            ),
+            StateA = pending_note_store(
+                State1#state{stream = StreamA},
+                H,
+                StreamModule:offset(StreamA) - byte_size(StoreH)
+            ),
+            {TailBase, TailOff} = ?X_REG(T),
+            StoreT = ?STORE_WORD(TailBase, TailReg, TailOff),
+            StreamB = StreamModule:append(StateA#state.stream, StoreT),
+            StateB = pending_note_store(
+                StateA#state{stream = StreamB},
+                T,
+                StreamModule:offset(StreamB) - byte_size(StoreT)
+            ),
+            Regs1 = jit_regs:free_reg(StateB#state.regs, reg_bit(ListReg)),
+            Regs2 = jit_regs:invalidate_vm_loc(Regs1, {x_reg, H}),
+            Regs3 = jit_regs:invalidate_vm_loc(Regs2, {x_reg, T}),
+            Regs4 = jit_regs:set_contents(Regs3, HeadReg, {x_reg, H}),
+            Regs5 = jit_regs:set_contents(Regs4, TailReg, {x_reg, T}),
+            StateB#state{regs = Regs5}
+    end;
+get_list_head_tail(State0, {free, ListReg}, HeadDest, TailDest) ->
+    get_list_head_tail_generic(State0, ListReg, HeadDest, TailDest).
+
+get_list_head_tail_generic(State0, ListReg, HeadDest, TailDest) ->
+    State1 = move_array_element(State0, ListReg, ?LIST_HEAD_INDEX, HeadDest),
+    State2 = free_native_register(State1, HeadDest),
+    State3 = move_array_element(State2, ListReg, ?LIST_TAIL_INDEX, TailDest),
+    State4 = free_native_register(State3, ListReg),
+    free_native_register(State4, TailDest).
+
 read_avail_heap_memory(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
 ) ->

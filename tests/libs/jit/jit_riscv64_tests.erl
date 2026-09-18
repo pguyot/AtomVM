@@ -450,6 +450,21 @@ increment_sp_test() ->
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
+get_list_head_tail_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:get_list_head_tail(State1, {free, Reg}, {x_reg, 1}, {x_reg, 2}),
+    Dump = <<
+        "   0:\t0584bf83          \tld\tt6,88(s1)\n"
+        "   4:\t008fbf03          \tld\tt5,8(t6)\n"
+        "   8:\t000fbe83          \tld\tt4,0(t6)\n"
+        "   c:\t07e4b023          \tsd\tt5,96(s1)\n"
+        "  10:\t07d4b423          \tsd\tt4,104(s1)"
+    >>,
+    ?assertStream(riscv64, Dump, ?BACKEND:stream(State2)),
+    %% Both cells are tracked but neither register stays allocated.
+    ?assertEqual([], ?BACKEND:used_regs(State2)).
+
 read_avail_heap_memory_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, _Reg} = ?BACKEND:read_avail_heap_memory(State0),
