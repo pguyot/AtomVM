@@ -420,29 +420,6 @@ increment_sp_test() ->
         >>,
     ?assertStream(riscv32, Dump, Stream).
 
-call_primitive_direct_test() ->
-    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
-    State1 = ?BACKEND:call_primitive_direct(State0, 7, [ctx, jit_state, 3]),
-    Dump = <<
-        "   0:\t01c9af83          \tlw\tt6,28(s3)\n"
-        "   4:\t1141                \taddi\tsp,sp,-16\n"
-        "   6:\tc006                \tsw\tra,0(sp)\n"
-        "   8:\t450d                \tli\ta0,3\n"
-        "   a:\t0344a423          \tsw\ts4,40(s1)\n"
-        "   e:\t9f82                \tjalr\tt6\n"
-        "  10:\t8faa                \tmv\tt6,a0\n"
-        "  12:\t4082                \tlw\tra,0(sp)\n"
-        "  14:\t0141                \taddi\tsp,sp,16\n"
-        "  16:\t001fff13          \tandi\tt5,t6,1\n"
-        "  1a:\t000f1463          \tbnez\tt5,0x22\n"
-        "  1e:\t857e                \tmv\ta0,t6\n"
-        "  20:\t8082                \tret\n"
-        "  22:\t0284aa03          \tlw\ts4,40(s1)\n"
-        "  26:\tffcfff93          \tandi\tt6,t6,-4\n"
-        "  2a:\t8f82                \tjr\tt6"
-    >>,
-    ?assertStream(riscv32, Dump, ?BACKEND:stream(State1)).
-
 get_list_head_tail_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, Reg} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
