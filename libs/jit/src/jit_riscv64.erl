@@ -99,7 +99,8 @@
     shift_right_arith/3,
     set_vm_record_type/3,
     get_vm_record_type/2,
-    heap_bump_alloc/2
+    heap_bump_alloc/2,
+    supports_select_val_ranges/0
 ]).
 
 -export([dwarf_x_reg_offset/0]).

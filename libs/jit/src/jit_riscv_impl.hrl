@@ -973,6 +973,41 @@ invert_branch_func(bge) -> blt;
 invert_branch_func(bltu) -> bgeu;
 invert_branch_func(bgeu) -> bltu.
 
+%% Unsigned above zero: skip the block when the register is zero.
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0} = State0,
+    {RegOrTuple, '(uint)>', 0}
+) ->
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    BranchInstr = <<16#FFFFFFFF:32/little>>,
+    Stream1 = StreamModule:append(Stream0, BranchInstr),
+    State1 = if_block_free_reg(RegOrTuple, State0),
+    {State1#state{stream = Stream1}, {beq, Reg, zero}, 0};
+%% Unsigned above: skip the block when Reg <= Val unsigned, which RISC-V says
+%% as `bltu Reg, Val + 1' (Val is a bound, never the maximum word).
+if_block_cond(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    {RegOrTuple, '(uint)>', Val}
+) when is_integer(Val), Val > 0 ->
+    Temp = first_avail(jit_regs:available_regs(Regs0)),
+    Reg =
+        case RegOrTuple of
+            {free, Reg0} -> Reg0;
+            RegOrTuple -> RegOrTuple
+        end,
+    OffsetBefore = StreamModule:offset(Stream0),
+    State1 = mov_immediate(State0, Temp, Val + 1),
+    Stream1 = State1#state.stream,
+    BranchDelta = StreamModule:offset(Stream1) - OffsetBefore,
+    BranchInstr = <<16#FFFFFFFF:32/little>>,
+    Stream2 = StreamModule:append(Stream1, BranchInstr),
+    State2 = if_block_free_reg(RegOrTuple, State1),
+    Regs2 = jit_regs:set_contents(State2#state.regs, Temp, {imm, Val + 1}),
+    {State2#state{stream = Stream2, regs = Regs2}, {bltu, Reg, Temp}, BranchDelta};
 if_block_cond(
     #state{stream_module = StreamModule, stream = Stream0} = State0, {RegOrTuple, '<', 0}
 ) ->
@@ -4088,6 +4123,12 @@ get_vm_record_type(#state{regs = Regs}, VmLoc) ->
 %% constant too large for addi, so any block size works.
 %% @end
 %%-----------------------------------------------------------------------------
+%% A run of consecutive select_val values is a subtract and one unsigned
+%% bound test, which is cheaper than the compare chain it replaces; the
+%% unsigned compare is `bltu' (see if_block_cond above).
+-spec supports_select_val_ranges() -> boolean().
+supports_select_val_ranges() -> true.
+
 heap_bump_alloc(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, NWords
 ) ->

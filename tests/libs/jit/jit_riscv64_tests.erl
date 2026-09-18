@@ -450,6 +450,48 @@ increment_sp_test() ->
         >>,
     ?assertStream(riscv64, Dump, Stream).
 
+if_block_uint_above_test_() ->
+    {setup,
+        fun() ->
+            State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+            {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+            {State1, RegA}
+        end,
+        fun({State0, RegA}) ->
+            [
+                %% Skip the block when the register is zero.
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {RegA, '(uint)>', 0},
+                        fun(BSt0) -> ?BACKEND:add(BSt0, RegA, 1) end
+                    ),
+                    Dump = <<
+                        "   0:\t0584bf83          \tld\tt6,88(s1)\n"
+                        "   4:\t000f8363          \tbeqz\tt6,0xa\n"
+                        "   8:\t0f85                \taddi\tt6,t6,1"
+                    >>,
+                    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1))
+                end),
+                %% Skip the block when the register is <= 63 unsigned, which is
+                %% `bltu Reg, 64'.
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {RegA, '(uint)>', 63},
+                        fun(BSt0) -> ?BACKEND:add(BSt0, RegA, 1) end
+                    ),
+                    Dump = <<
+                        "   0:\t0584bf83          \tld\tt6,88(s1)\n"
+                        "   4:\t04000f13          \tli\tt5,64\n"
+                        "   8:\t01efe363          \tbltu\tt6,t5,0xe\n"
+                        "   c:\t0f85                \taddi\tt6,t6,1"
+                    >>,
+                    ?assertStream(riscv64, Dump, ?BACKEND:stream(State1))
+                end)
+            ]
+        end}.
+
 if_block_test_() ->
     {setup,
         fun() ->
