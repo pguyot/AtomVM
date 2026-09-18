@@ -115,6 +115,7 @@
     read_avail_heap_memory/1,
     heap_bump_alloc/2,
     read_heap_fragments/1,
+    read_shrink_probe_mismatch/1,
     allocate_frame_fast/2,
     term_from_float_inline/2,
     supports_vm_reg_cond/0,
@@ -4621,6 +4622,40 @@ read_heap_fragments(
     I2 = jit_x86_64_asm:movq({0, Reg}, Reg),
     Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {
+        State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%% ctx->heap.root->next | (ctx->heap.heap_end ^ ctx->shrink_probe_heap_end),
+%% in a freshly allocated register: zero exactly when no heap fragments are
+%% pending and the shrink probe already ran for this root block, i.e. when a
+%% test_heap whose free space exceeds the shrink corridor can skip the
+%% primitive call entirely (mirrors the probe short-circuit in jit_test_heap).
+-spec read_shrink_probe_mismatch(state()) -> {state(), x86_64_register()}.
+read_shrink_probe_mismatch(
+    #state{
+        stream_module = StreamModule,
+        stream = Stream0,
+        regs = Regs0
+    } = State
+) ->
+    Avail = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Avail),
+    Tmp1 = first_avail(Avail band (bnot reg_bit(Reg))),
+    Tmp2 = first_avail(Avail band (bnot (reg_bit(Reg) bor reg_bit(Tmp1)))),
+    I1 = jit_x86_64_asm:movq({16#8, ?CTX_REG}, Reg),
+    I2 = jit_x86_64_asm:movq({0, Reg}, Reg),
+    I3 = jit_x86_64_asm:movq({16#20, ?CTX_REG}, Tmp1),
+    I4 = jit_x86_64_asm:movq({16#1A0, ?CTX_REG}, Tmp2),
+    I5 = jit_x86_64_asm:xorq(Tmp2, Tmp1),
+    I6 = jit_x86_64_asm:orq(Tmp1, Reg),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp1), Tmp2
+    ),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg

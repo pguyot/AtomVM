@@ -722,6 +722,21 @@ read_heap_fragments_test() ->
         >>,
     ?assertStream(x86_64, Dump, Stream).
 
+read_shrink_probe_mismatch_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, rax} = ?BACKEND:read_shrink_probe_mismatch(State0),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:\t49 8b 46 08          \tmov    0x8(%r14),%rax\n"
+            "   4:\t48 8b 00             \tmov    (%rax),%rax\n"
+            "   7:\t4d 8b 5e 20          \tmov    0x20(%r14),%r11\n"
+            "   b:\t4d 8b 96 a0 01 00 00 \tmov    0x1a0(%r14),%r10\n"
+            "  12:\t4d 31 d3             \txor    %r10,%r11\n"
+            "  15:\t4c 09 d8             \tor     %r11,%rax"
+        >>,
+    ?assertStream(x86_64, Dump, Stream).
+
 allocate_frame_fast_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     State1 = ?BACKEND:allocate_frame_fast(State0, 2),
