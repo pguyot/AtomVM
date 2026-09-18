@@ -25,6 +25,7 @@
 -endif.
 
 -include("jit/include/jit.hrl").
+-include("jit/src/opcodes.hrl").
 
 -define(CODE_CHUNK_0,
     <<0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 177, 0, 0, 0, 7, 0, 0, 0, 3, 1, 16, 153, 16, 2, 18, 34, 0,
@@ -1547,6 +1548,33 @@ gc_bif_div_unbounded_range_runtime_fastpath_test_() ->
 
 gc_bif_div_unbounded_range_runtime_fastpath(Backend) ->
     gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, 'div', 2}, {t_integer, any}).
+
+%% `/=' must inline the same small-integer fast path `==' does. Both test the
+%% same two tags and then compare tagged words; only the branch polarity and
+%% the comparator mask differ, so the two emissions must be the same size.
+%% Before this was fixed, `/=' always called the C comparator, which cost a
+%% call per guard in ordinary pattern-matching code (estone's pat_loop3).
+is_not_equal_inlines_like_is_equal_test_() ->
+    [
+        ?_assertEqual(
+            byte_size(compare_op_code(Backend, ?OP_IS_EQUAL)),
+            byte_size(compare_op_code(Backend, ?OP_IS_NOT_EQUAL))
+        )
+     || Backend <- [jit_x86_64, jit_aarch64]
+    ].
+
+%% <op> fail=0, x[0], x[1]; untyped.
+compare_op_code(Backend, Opcode) ->
+    Chunk = <<16:32, 0:32, 125:32, 1:32, 1:32, 1, 16#10, Opcode, 16#05, 16#03, 16#13, 3>>,
+    jit_tests_common:compile_chunk(
+        Backend,
+        Chunk,
+        fun(_) -> undefined end,
+        fun(_) -> undefined end,
+        fun(_) -> any end,
+        fun(_) -> {erlang, '==', 2} end,
+        fun(_) -> false end
+    ).
 
 %% `X div 2^k' / `X rem 2^k' with a literal divisor and an UNTYPED dividend
 %% must not emit a hardware divide. The runtime small-integer fast path

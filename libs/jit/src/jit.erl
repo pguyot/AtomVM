@@ -7342,15 +7342,19 @@ op_is_lt_default(MMod, MSt0, Label, Arg1, Arg2) ->
     ).
 
 op_is_not_equal(MMod, MSt0, Label, Arg1, Arg2) ->
-    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
-        ctx,
-        jit_state,
-        {free, unwrap_typed(Arg1)},
-        {free, unwrap_typed(Arg2)},
-        ?TERM_COMPARE_EQUAL_ONLY
-    ]),
-    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
-    cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_EQUALS}, Label, MMod, MSt2).
+    %% is_not_equal (/=) jumps to Label when the operands ARE equal. Mirror of
+    %% op_is_equal: for two small integers /= agrees with =/=, so the tagged
+    %% compare is valid, and identical operands are equal whatever their type.
+    emit_smallint_compare_fastpath(
+        MMod,
+        MSt0,
+        Label,
+        Arg1,
+        Arg2,
+        ?TERM_COMPARE_EQUAL_ONLY,
+        fun(BSt0, A1, A2) -> cond_jump_to_label({A1, '==', A2}, Label, MMod, BSt0) end,
+        ?TERM_EQUALS
+    ).
 
 %% Optimized =:= comparison for typed args.
 %% is_eq_exact Label, Arg1, Arg2: jump to Label if Arg1 =/= Arg2.
