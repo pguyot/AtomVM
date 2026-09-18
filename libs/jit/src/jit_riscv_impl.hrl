@@ -422,9 +422,14 @@ call_primitive_no_reload(
 %% that can receive JIT_NATIVE_STAY therefore cannot bit-test for it either: it
 %% has to compare the whole result against 3, which no tagged entry point can
 %% be (that would mean a label at address 2).
+direct_dispatch(State0, ResultReg) ->
+    direct_dispatch(State0, ResultReg, false).
+
+%% @private
 direct_dispatch(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
-    ResultReg
+    ResultReg,
+    TestStay
 ) ->
     Temp = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(ResultReg))),
     {YBase, YOff} = ?Y_REGS,
@@ -440,9 +445,21 @@ direct_dispatch(
     ITest0 = ?ASM:andi(Temp, ResultReg, 1),
     %% Skip the return path when bit 0 is set.
     IBne0 = branch_over(Temp, byte_size(MovRet) + byte_size(IRet)),
+    Tail =
+        case TestStay of
+            true ->
+                %% JIT_NATIVE_STAY is compared as a whole value rather than
+                %% bit-tested, for the alignment reason above. Equal means the
+                %% continuation is this site's own fall-through: skip the
+                %% branch pair and carry on inline.
+                ITest1 = ?ASM:addi(Temp, ResultReg, -3),
+                IBeq = branch_over_eq(Temp, byte_size(IClearTag) + byte_size(IJump)),
+                <<ITest1/binary, IBeq/binary, IClearTag/binary, IJump/binary>>;
+            false ->
+                <<IClearTag/binary, IJump/binary>>
+        end,
     Code =
-        <<ITest0/binary, IBne0/binary, MovRet/binary, IRet/binary, IReload/binary, IClearTag/binary,
-            IJump/binary>>,
+        <<ITest0/binary, IBne0/binary, MovRet/binary, IRet/binary, IReload/binary, Tail/binary>>,
     State0#state{
         stream = StreamModule:append(Stream0, Code),
         regs = jit_regs:invalidate_reg(Regs0, Temp)
@@ -465,6 +482,20 @@ branch_over(Reg, Bytes) ->
             Compressed
     end.
 
+%% @private
+%% `beq Reg, zero' over Bytes of code; same encode-then-redo dance as
+%% branch_over/2.
+branch_over_eq(Reg, Bytes) ->
+    Wide = ?ASM:beq(Reg, zero, 4 + Bytes),
+    case byte_size(Wide) of
+        4 ->
+            Wide;
+        2 ->
+            Compressed = ?ASM:beq(Reg, zero, 2 + Bytes),
+            2 = byte_size(Compressed),
+            Compressed
+    end.
+
 %% Tail-position external call that dispatches on the primitive's result in
 %% generated code. Code after this site is unreachable from it.
 call_primitive_direct(StateP, Primitive, Args0) ->
@@ -482,12 +513,29 @@ call_primitive_direct(StateP, Primitive, Args0) ->
         )
     }.
 
+%% OP_CALL_EXT: set cp, try the inline resolved fast path, and dispatch on the
+%% primitive's result in generated code. JIT_NATIVE_STAY (a leaf NIF that
+%% answered at this very call site) falls through the dispatch block, so the
+%% resume point -- and with it the cp this site just stored -- is the
+%% instruction after it.
+call_ext_with_cp_direct(State0, Primitive, Index, Args0) ->
+    {State1, RewriteOffset, TempReg} = set_cp(State0),
+    State2 = emit_call_ext_fast_path(State1, Index, no_frame_pop),
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% s1/s2, drop them from the argument list.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    {State3, ResultReg} = call_primitive_no_reload(State2, Primitive, Args),
+    State4 = direct_dispatch(State3, ResultReg, true),
+    State5 = free_native_register(State4, ResultReg),
+    State6 = rewrite_cp_offset(State5, RewriteOffset, TempReg),
+    State6#state{regs = jit_regs:invalidate_all(State6#state.regs)}.
+
 %% OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with an inline resolved fast path in
 %% front of the same dispatch as call_primitive_direct. Tail position: no cp is
 %% set here; for CALL_EXT_LAST (NWords >= 0) the fast path pops the frame
 %% exactly like the primitive would.
 call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
-    State1 = emit_call_ext_last_fast_path(State0, Index, NWords),
+    State1 = emit_call_ext_fast_path(State0, Index, NWords),
     call_primitive_direct(State1, Primitive, Args).
 
 %% @private
@@ -497,7 +545,7 @@ call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
 %% native-loaded -- falls through to the primitive, whose tagged-result
 %% dispatch is unchanged. Emits nothing when an offset does not fit the 12-bit
 %% load immediate or there are too few scratch registers.
-emit_call_ext_last_fast_path(StateP, Index, NWords) ->
+emit_call_ext_fast_path(StateP, Index, NWords) ->
     %% The fast path branches to the callee without a C call, and the callee
     %% reads ctx->x: deferred x stores must be committed before the branch, not
     %% by the primitive call that only the slow path reaches.
