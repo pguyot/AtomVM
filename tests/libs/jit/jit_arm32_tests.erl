@@ -1599,6 +1599,17 @@ ldr_y_reg_invalidates_hidden_temp_cache_test() ->
     >>,
     ?assertStream(arm32, Dump, Stream).
 
+% A primitive called with fewer arguments than there are parameter registers
+% takes the short-list branch of call_func_ptr0, which must still use the
+% normalized argument list: `offset' has to be the stream offset by then, not
+% the atom.
+call_primitive_short_arg_list_resolves_offset_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, _Reg} = ?BACKEND:call_primitive(State0, 7, [ctx, jit_state, offset]),
+    Dump =
+        <<"   0:	e599601c 	ldr	r6, [r9, #28]\n   4:	e92d4040 	push	{r6, lr}\n   8:	e3a00008 	mov	r0, #8\n   c:	e12fff36 	blx	r6\n  10:	e1a05000 	mov	r5, r0\n  14:	e8bd4040 	pop	{r6, lr}">>,
+    ?assertStream(arm32, Dump, ?BACKEND:stream(State1)).
+
 %% Test shift_right_arith
 shift_right_arith_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
