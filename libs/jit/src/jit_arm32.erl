@@ -1901,7 +1901,9 @@ call_func_ptr0(
     {RegArgs0, StackArgs} =
         case Args1 of
             [Arg1, Arg2, Arg3, Arg4 | StackArgs0] -> {[Arg1, Arg2, Arg3, Arg4], StackArgs0};
-            _ -> {Args, []}
+            %% Args1, not Args: a call with fewer arguments than parameter
+            %% registers still needs `offset' resolved to the stream offset.
+            _ -> {Args1, []}
         end,
     RegArgsRegs = lists:flatmap(fun arg_to_reg_list/1, RegArgs0),
     StackArgsRegs = lists:flatmap(fun arg_to_reg_list/1, StackArgs),
