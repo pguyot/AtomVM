@@ -18,9 +18,11 @@ run(N) ->
     Keys = [{b, I, x} || I <- lists:seq(1, N)],
     T3 = bench(fun() -> lookups(Keys, Big, 0) end, Reps),
     Ops = Reps * N,
-    io:format("n=~-5b subset_kv ~7.1f ns/entry   next ~7.1f ns/entry   "
-              "lookup ~7.1f ns/key~n",
-              [N, T1 * 1000 / Ops, T2 * 1000 / Ops, T3 * 1000 / Ops]),
+    io:format(
+        "n=~-5b subset_kv ~7.1f ns/entry   next ~7.1f ns/entry   "
+        "lookup ~7.1f ns/key~n",
+        [N, T1 * 1000 / Ops, T2 * 1000 / Ops, T3 * 1000 / Ops]
+    ),
     ok.
 
 bench(F, Reps) ->
@@ -29,8 +31,11 @@ bench(F, Reps) ->
     loop(F, Reps),
     erlang:monotonic_time(microsecond) - T0.
 
-loop(_F, 0) -> ok;
-loop(F, N) -> _ = F(), loop(F, N - 1).
+loop(_F, 0) ->
+    ok;
+loop(F, N) ->
+    _ = F(),
+    loop(F, N - 1).
 
 subset_kv({K, V, Iterator}, BigMap) ->
     Next = maps:next(Iterator),
@@ -38,7 +43,8 @@ subset_kv({K, V, Iterator}, BigMap) ->
         #{K := V} -> subset_kv(Next, BigMap);
         #{} -> false
     end;
-subset_kv(none, _BigMap) -> true.
+subset_kv(none, _BigMap) ->
+    true.
 
 iterate(none, Acc) -> Acc;
 iterate({_K, _V, I}, Acc) -> iterate(maps:next(I), Acc + 1).

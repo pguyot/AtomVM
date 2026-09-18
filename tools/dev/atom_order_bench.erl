@@ -42,8 +42,11 @@ run(Label, L) ->
     T1 = erlang:monotonic_time(microsecond),
     io:format("~s sort_us ~p~n", [Label, T1 - T0]).
 
-warm(_L, 0) -> ok;
-warm(L, N) -> _ = lists:sort(L), warm(L, N - 1).
+warm(_L, 0) ->
+    ok;
+warm(L, N) ->
+    _ = lists:sort(L),
+    warm(L, N - 1).
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{erlang:phash2({I, seed}), X} || {I, X} <- enum(L, 1)])].

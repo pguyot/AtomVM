@@ -13,7 +13,8 @@ run(N) ->
     loop(M, Del, Reps),
     T = erlang:monotonic_time(microsecond) - T0,
     io:format("n=~-6b ~8.2f us per (delete ~p keys)~n", [N, T / Reps, length(Del)]).
-loop(_M, _D, 0) -> ok;
+loop(_M, _D, 0) ->
+    ok;
 loop(M, D, R) ->
     _ = lists:foldl(fun(K, Acc) -> maps:remove(K, Acc) end, M, D),
     loop(M, D, R - 1).
