@@ -5274,10 +5274,7 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
             'div' -> div_;
             'rem' -> rem_
         end,
-    case
-        erlang:function_exported(MMod, supports_div, 1) andalso MMod:supports_div(MSt0) andalso
-            addsub_fastpath_reloadable(Arg1)
-    of
+    case MMod:supports_div(MSt0) andalso addsub_fastpath_reloadable(Arg1) of
         true ->
             op_gc_bif2_divrem_lit_runtime(
                 MMod, MSt0, FailLabel, Live, Bif, BackendOp, Arg1, Arg2, Dest
@@ -5296,11 +5293,7 @@ op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, erlang, Op, Arg1, Arg2, Dest) when
     (Arg2 bsr 4) >= 1,
     (Arg2 bsr 4) =< 59
 ->
-    case
-        erlang:function_exported(MMod, shift_right_arith, 3) andalso
-            MMod:word_size() =:= 8 andalso
-            addsub_fastpath_reloadable(Arg1)
-    of
+    case MMod:word_size() =:= 8 andalso addsub_fastpath_reloadable(Arg1) of
         true ->
             op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
         false ->
@@ -6649,11 +6642,7 @@ op_gc_bif2_shift_fallback(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest
     (Arg2 bsr 4) >= 1,
     (Arg2 bsr 4) =< 59
 ->
-    case
-        erlang:function_exported(MMod, shift_right_arith, 3) andalso
-            MMod:word_size() =:= 8 andalso
-            addsub_fastpath_reloadable(Arg1)
-    of
+    case MMod:word_size() =:= 8 andalso addsub_fastpath_reloadable(Arg1) of
         true ->
             op_gc_bif2_shift_lit_runtime(MMod, MSt0, FailLabel, Live, Bif, Op, Arg1, Arg2, Dest);
         false ->
@@ -7097,8 +7086,7 @@ op_gc_bif2_divrem_lit_fallback(
 ) ->
     %% A power-of-two divisor needs no hardware divide at all, so the fast path
     %% is worth taking even on a backend without one.
-    HasDivide =
-        erlang:function_exported(MMod, supports_div, 1) andalso MMod:supports_div(MSt0),
+    HasDivide = MMod:supports_div(MSt0),
     IsPow2 = pow2_divisor_shift(Arg2Value, MMod) =/= error,
     case
         Arg2Value >= 1 andalso (IsPow2 orelse HasDivide) andalso
