@@ -25,5 +25,8 @@ bench(Label, F, PerRep) ->
     loop(F, Reps),
     T = erlang:monotonic_time(microsecond) - T0,
     io:format("~s ~7.1f ns/op~n", [Label, T * 1000 / (Reps * PerRep)]).
-loop(_F, 0) -> ok;
-loop(F, N) -> _ = F(), loop(F, N - 1).
+loop(_F, 0) ->
+    ok;
+loop(F, N) ->
+    _ = F(),
+    loop(F, N - 1).
