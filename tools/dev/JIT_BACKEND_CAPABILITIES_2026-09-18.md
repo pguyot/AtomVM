@@ -61,8 +61,8 @@ riscv64 + riscv32 only (they serve the flash stream).
 | capability | present on | fallback when absent |
 |---|---|---|
 | `allocate_frame_fast/2` | x86_64, aarch64, arm32 | `PRIM_ALLOCATE` call per `allocate` |
-| `call_ext_with_cp_direct/4`, `call_ext_last_direct/5`, `call_primitive_direct/3` | x86_64, aarch64, arm32 | round trip through the scheduler loop |
-| `call_fun_with_cp_direct/3` | x86_64, aarch64 | same |
+| `call_ext_with_cp_direct/4`, `call_ext_last_direct/5`, `call_primitive_direct/3` | x86_64, aarch64, arm32, riscv32, riscv64 | round trip through the scheduler loop |
+| `call_fun_with_cp_direct/3` | x86_64, aarch64, arm32, riscv32, riscv64 | same |
 | `get_list_head_tail/4` | x86_64, aarch64, arm32 | two loads, one temp, first destination evicted |
 | `read_heap_fragments/1` | x86_64, aarch64, arm32 | — |
 | `supports_select_val_ranges/0` | x86_64, aarch64, arm32 | a compare chain instead of sub + unsigned bound test |
@@ -143,13 +143,24 @@ is portable: no entry needs an instruction the target lacks.
    a load/add/store; those two opcodes are among the most frequent in compiler
    output.
 3. **The direct-call family** (`call_ext_with_cp_direct`,
-   `call_ext_last_direct`, `call_primitive_direct`; missing on riscv32,
-   riscv64, xtensa, armv6m, wasm32).  When arm32 got it (`c6ebd0a33`) the
-   ESTONE `fcalls` micro went **402,887 us -> 221,087 us**, from 4.1x the
-   GRiSP arm32 JIT to 2.25x.  That commit's own conclusion is the reason to
-   extend it: the dispatch alone measured neutral, and all of the win came
-   from resolving `imported_funcs[Index]` inline so the fast path touches no
-   C at all.
+   `call_ext_last_direct`, `call_primitive_direct`, `call_fun_with_cp_direct`;
+   **done on riscv32/riscv64 and completed on arm32 on 2026-09-19**, still
+   missing on xtensa, armv6m, wasm32).  When arm32 got the call_ext half
+   (`c6ebd0a33`) the ESTONE `fcalls` micro went **402,887 us -> 221,087 us**,
+   from 4.1x the GRiSP arm32 JIT to 2.25x.  That commit's own conclusion is
+   why the inline resolution matters more than the dispatch: the dispatch
+   alone measured neutral, and all of the win came from resolving
+   `imported_funcs[Index]` inline so the fast path touches no C at all.
+   RISC-V got both halves; what is still missing everywhere but aarch64 is the
+   inline *local fun* resolution (a 40-instruction block there).
+
+   Two traps found while doing RISC-V, both recorded in the commits: the
+   tagged result may only have **bit 0** masked off, because the C extension
+   puts labels on any even address, and `JIT_NATIVE_STAY` must therefore be
+   compared against 3 rather than bit-tested.  The same reasoning will apply
+   to armv6m and to any other backend whose entry points are not 4-aligned --
+   on Thumb, bit 0 is also the interworking bit, so that backend needs a
+   contract of its own (or the `JIT_VARIANT_DIRECT_CALL` sentinel x86_64 uses).
 4. **`allocate_frame_fast/2`** (missing: riscv32, riscv64, xtensa, armv6m,
    wasm32).  Same shape as 2: an `allocate` with room available becomes a
    compare, a subtract and a store.
