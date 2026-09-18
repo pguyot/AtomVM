@@ -105,7 +105,8 @@
     heap_bump_alloc/2,
     supports_select_val_ranges/0,
     read_avail_heap_memory/1,
-    read_shrink_probe_mismatch/1
+    read_shrink_probe_mismatch/1,
+    get_list_head_tail/4
 ]).
 
 -export([dwarf_x_reg_offset/0]).
