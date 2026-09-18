@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+#
+# This file is part of AtomVM.
+#
+# Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+# SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+#
 """Publication-oriented BEAM/AtomVM A/B benchmark driver.
 
 Runs the same work on OTP's BEAM JIT and an aarch64-AOT AtomVM build.  The

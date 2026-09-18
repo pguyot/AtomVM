@@ -1,3 +1,8 @@
+<!--
+ Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+-->
+
 # Can arm32 use VFP registers as x-register homes?
 
 2026-09-14, measured on mx2.local (Raspberry Pi 2, Cortex-A7, 32-bit, running at
