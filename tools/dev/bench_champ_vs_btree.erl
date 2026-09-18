@@ -20,5 +20,7 @@ run(N, F) ->
     B = atomvm:map_backend_bench(M, Probe, Reps, btree),
     C = atomvm:map_backend_bench(M, Probe, Reps, champ),
     Ops = Reps * length(Probe),
-    io:format("  n=~-6b btree ~6.1f ns   champ ~6.1f ns   champ/btree ~5.2fx~n",
-              [N, B * 1000 / Ops, C * 1000 / Ops, C / max(B, 1)]).
+    io:format(
+        "  n=~-6b btree ~6.1f ns   champ ~6.1f ns   champ/btree ~5.2fx~n",
+        [N, B * 1000 / Ops, C * 1000 / Ops, C / max(B, 1)]
+    ).
