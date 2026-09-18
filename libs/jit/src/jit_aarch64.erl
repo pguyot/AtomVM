@@ -96,6 +96,7 @@
     continuation_entry_point/1,
     get_cp_base/1,
     get_module_atom_index/2,
+    move_imported_bif_to_native_register/2,
     move_imported_gcbif_to_native_register/3,
     and_/3,
     or_/3,
@@ -4086,6 +4087,30 @@ continuation_entry_point(State) ->
 %% @end
 -spec move_imported_gcbif_to_native_register(state(), integer(), non_neg_integer()) ->
     {state(), aarch64_register()}.
+%%-----------------------------------------------------------------------------
+%% @doc Resolve a plain BIF's function pointer inline, for OP_BIF0/1/2:
+%% module = [jit_state+0]; funcs = [module+IMPORTED_FUNCS];
+%% exported = [funcs + Bif*8]; bif0_ptr = [exported + BIF0_PTR]. The pointer is
+%% a load-time constant, so four loads replace the PRIM_GET_IMPORTED_BIF round
+%% trip at every call site. Same chain as the gc_bif variant below, without the
+%% live-register trim that one has to do first.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec move_imported_bif_to_native_register(state(), non_neg_integer()) ->
+    {state(), aarch64_register()}.
+move_imported_bif_to_native_register(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    Bif
+) ->
+    PtrReg = first_avail(jit_regs:available_regs(Regs0)),
+    J1 = jit_aarch64_asm:ldr(PtrReg, ?JITSTATE_MODULE),
+    J2 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, ?MODULE_IMPORTED_FUNCS}),
+    J3 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, Bif * ?WORD_SIZE}),
+    J4 = jit_aarch64_asm:ldr(PtrReg, {PtrReg, ?BIF_BIF0_PTR}),
+    Stream1 = StreamModule:append(Stream0, <<J1/binary, J2/binary, J3/binary, J4/binary>>),
+    Regs1 = jit_regs:alloc_reg(jit_regs:invalidate_reg(Regs0, PtrReg), reg_bit(PtrReg)),
+    {State0#state{stream = Stream1, regs = Regs1}, PtrReg}.
+
 move_imported_gcbif_to_native_register(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
     Live,
