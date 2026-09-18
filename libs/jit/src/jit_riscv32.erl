@@ -109,7 +109,8 @@
     get_list_head_tail/4,
     call_primitive_direct/3,
     call_ext_last_direct/5,
-    call_ext_with_cp_direct/4
+    call_ext_with_cp_direct/4,
+    call_fun_with_cp_direct/3
 ]).
 
 -export([dwarf_x_reg_offset/0]).
