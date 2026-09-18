@@ -185,6 +185,31 @@ form is already 8 instructions with two never-taken branches, and the fused
 form needs `seto` plus a temp), and the `ldp`/`stp` pair family anywhere
 without paired memory instructions.
 
+## State of the worklist
+
+Done in the session that wrote this survey:
+
+- **`div`/`rem` by a power-of-two literal** now strength-reduces on every
+  backend, including without a hardware divide, so arm32 stopped calling the
+  BIF for `X div 2` (`pow2probe:d2/1` is a tag test and eleven ALU
+  instructions there, against two C calls before).
+- **`read_shrink_probe_mismatch/1` on arm32**, with the shared corridor check
+  generalised from 64-bit to any word size — item 1 for one of the six
+  backends that lacked it.
+- **`term_from_float_inline/2` and `move_imported_bif_to_native_register/2`
+  on aarch64** — item 8, both of them.
+- **The two dead probes removed**, and the 32-bit heap offsets asserted.
+
+Not done, and why: items 1–5 for riscv32, riscv64, xtensa, armv6m and wasm32
+each need the whole inline-heap family first (`read_avail_heap_memory/1` is
+not exported by any of them), and none of those targets can be *measured*
+from a desktop — CI builds them and runs the suites under qemu-user, which
+proves correctness but not that inlining pays on a Cortex-M0+ or an ESP32,
+where code size is the binding constraint.  That measurement belongs on the
+Pi, the Pico and an ESP32 board.  Item 6 (branch relaxation on x86_64) is
+four bytes a site with no correctness argument behind it, so it is a size
+experiment, not a bug fix.  Items 7, 9 and 10 are unstarted.
+
 ## Method
 
 The matrix comes from `erlang:function_exported/3` against each compiled
