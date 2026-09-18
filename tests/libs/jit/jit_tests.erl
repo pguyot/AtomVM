@@ -1557,6 +1557,15 @@ gc_bif_div_unbounded_range_runtime_fastpath(Backend) ->
 %% interface and not to that table, which broke every wasm32 JIT run for six
 %% weeks without any build failing.
 wasm32_void_primitives_match_native_interface_test() ->
+    case erlang:system_info(machine) of
+        "BEAM" ->
+            %% Reads the C header with filelib/re, which AtomVM does not have.
+            wasm32_void_primitives_check();
+        _ ->
+            ok
+    end.
+
+wasm32_void_primitives_check() ->
     case jit_header_path() of
         {ok, Path} ->
             {ok, Header} = file:read_file(Path),
