@@ -65,6 +65,21 @@ add_overflow_test() ->
         >>,
     ?assertStream(arm32, Dump, Stream).
 
+read_shrink_probe_mismatch_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r6} = ?BACKEND:read_shrink_probe_mismatch(State0),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:\te5976004 \tldr\tr6, [r7, #4]\n"
+            "   4:\te5966000 \tldr\tr6, [r6]\n"
+            "   8:\te5975010 \tldr\tr5, [r7, #16]\n"
+            "   c:\te59740dc \tldr\tr4, [r7, #220]\t@ 0xdc\n"
+            "  10:\te0255004 \teor\tr5, r5, r4\n"
+            "  14:\te1866005 \torr\tr6, r6, r5"
+        >>,
+    ?assertStream(arm32, Dump, Stream).
+
 sub_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
