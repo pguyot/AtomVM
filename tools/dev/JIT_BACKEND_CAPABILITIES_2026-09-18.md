@@ -163,11 +163,10 @@ is portable: no entry needs an instruction the target lacks.
    over a sizing pass.  x86_64 instead guesses from a static table of
    condition kinds (`cond_skip_disp_width/1`): the small-integer tag test
    `{_, '&', _, '!=', _}` — the most common guard there is — always takes the
-   rel32 form, and a wrong rel8 guess is caught only by an `?ASSERT` in a
-   debug build, silently wrapping into the middle of an instruction in a
-   release one.  So this is correctness hardening as much as size: the
-   convergence loop removes the hazard class *and* lets every site that fits
-   take the short form.
+   rel32 form.  A wrong guess is caught by an always-on assertion (`?ASSERT`
+   is `true = Expr` there, in every build), so this is a size question and
+   not a correctness one: the convergence loop would let every site that
+   fits take the short form, four bytes smaller.
 7. **`supports_select_val_ranges/0`** (missing: riscv32/64, xtensa, armv6m,
    wasm32) — a subtract and one unsigned compare replacing at least twice as
    many compares, in `case` statements over contiguous integers.
