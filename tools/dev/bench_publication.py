@@ -131,6 +131,8 @@ def add_common_paths(parser):
                         help="AtomVM executable (defaults to BUILD/src/AtomVM)")
     parser.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     parser.add_argument("--beam-erl", type=Path, default=DEFAULT_BEAM_ERL)
+    parser.add_argument("--target", default="aarch64",
+                        help="JIT target of the AOT artifacts (avm file names)")
     parser.add_argument("--beam-schedulers", type=int,
                         help="override BEAM scheduler count with +S")
     parser.add_argument("--atomvm-schedulers", type=int,
@@ -145,8 +147,8 @@ def estone_command(args, label):
         return [args.beam_erl, *scheduler_args, "-pa", ebin, "-noshell", "-s", "estone", "start", "-s", "init", "stop"]
     command = [
         args.atomvm or args.build / "src/AtomVM",
-        args.build / "benchmark-aot-aarch64/estone-aarch64.avm",
-        args.build / "libs/atomvmlib-aarch64.avm",
+        args.build / f"benchmark-aot-{args.target}/estone-{args.target}.avm",
+        args.build / f"libs/atomvmlib-{args.target}.avm",
     ]
     return ([Path("/usr/bin/env"), f"AVM_SCHEDULERS={args.atomvm_schedulers}", *command]
             if args.atomvm_schedulers else command)
@@ -234,8 +236,8 @@ def app_command(args, label):
         return [args.beam_erl, *scheduler_args, "-pa", ebin, "-noshell", "-s", "benchmark", "start", "-s", "init", "stop"]
     command = [
         args.atomvm or args.build / "src/AtomVM",
-        args.build / "benchmark-aot-aarch64/benchmark-aarch64.avm",
-        args.build / "libs/atomvmlib-aarch64.avm",
+        args.build / f"benchmark-aot-{args.target}/benchmark-{args.target}.avm",
+        args.build / f"libs/atomvmlib-{args.target}.avm",
     ]
     return ([Path("/usr/bin/env"), f"AVM_SCHEDULERS={args.atomvm_schedulers}", *command]
             if args.atomvm_schedulers else command)
