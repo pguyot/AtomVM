@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ets:info/2` now raises `badarg` for an item it does not know, as OTP does, instead of
   answering `undefined`: that answer is reserved for a table that does not exist, and
   overloading it made a missing item indistinguishable from a missing table
+- Fixed the wasm32 JIT calling the four receive-marker primitives with the wrong
+  `call_indirect` signature, which trapped the generated module with "null function or
+  function signature mismatch" as soon as a `receive` used a marker
 - JIT now fuses `is_tagged_tuple` with the following `get_tuple_element` reads (record field
   access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
   per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
