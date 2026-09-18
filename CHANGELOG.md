@@ -92,6 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dividend's sign is unknown, instead of emitting a hardware division: ESTONE's
   `int_arith` micro, which does two `div 2` per call, went from 2.6x slower than BEAM to
   1.3x on x86_64, where a 64-bit `idiv` costs tens of cycles
+- The JIT now inlines the small-integer fast path for `/=` as it already did for `==`, `<`,
+  `>=`, `=:=` and `=/=`, instead of calling the term comparator for every `/=` guard
 - JIT now fuses `is_tagged_tuple` with the following `get_tuple_element` reads (record field
   access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
   per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
