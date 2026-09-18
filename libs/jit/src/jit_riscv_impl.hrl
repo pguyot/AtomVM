@@ -387,6 +387,110 @@ call_primitive0(
 ) ->
     Available = jit_regs:available_regs(Regs0),
     Pure = prim_pure(Primitive),
+    call_primitive1(State, Primitive, Args, Pure, Available, Regs0, StreamModule, Stream0).
+
+%% @private
+%% As call_primitive/3, but without the post-call reload of the pinned e
+%% register: used where the primitive may return a different Context, whose
+%% caller must not dereference this (possibly freed) one before it has checked.
+call_primitive_no_reload(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State, Primitive, Args
+) ->
+    call_primitive1(
+        State,
+        Primitive,
+        Args,
+        no_reload,
+        jit_regs:available_regs(Regs0),
+        Regs0,
+        StreamModule,
+        Stream0
+    ).
+
+%% @private
+%% Dispatch on what a *_direct primitive returned, in generated code, instead
+%% of going back through the scheduler loop:
+%%   bit 0 clear -- a Context *: hand it to the loop (this process is done
+%%                  running here, and this Context may already be freed, so
+%%                  nothing of ours is dereferenced on the way out);
+%%   bit 0 set   -- a tagged native entry point: e is reloaded (the Context is
+%%                  still ours) and the low bits cleared before branching;
+%%   bit 1 set too, when TestStay -- JIT_NATIVE_STAY, i.e. resume at the
+%%                  instruction after this block.
+direct_dispatch(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    ResultReg,
+    TestStay
+) ->
+    Temp = first_avail(jit_regs:available_regs(Regs0) band (bnot reg_bit(ResultReg))),
+    {YBase, YOff} = ?Y_REGS,
+    MovRet =
+        case ResultReg of
+            a0 -> <<>>;
+            _ -> ?ASM:mv(a0, ResultReg)
+        end,
+    IRet = ?ASM:ret(),
+    IReload = ?LOAD_WORD(?E_REG, YBase, YOff),
+    IClearTag = ?ASM:andi(ResultReg, ResultReg, -4),
+    IJump = ?ASM:jr(ResultReg),
+    ITest0 = ?ASM:andi(Temp, ResultReg, 1),
+    %% Skip the return path when bit 0 is set.
+    IBne0 = branch_over(Temp, byte_size(MovRet) + byte_size(IRet)),
+    Tail =
+        case TestStay of
+            true ->
+                ITest1 = ?ASM:andi(Temp, ResultReg, 2),
+                %% Bit 1 set as well: JIT_NATIVE_STAY, resume at the
+                %% instruction after this block.
+                IBne1 = branch_over(Temp, byte_size(IClearTag) + byte_size(IJump)),
+                <<ITest1/binary, IBne1/binary, IClearTag/binary, IJump/binary>>;
+            false ->
+                <<IClearTag/binary, IJump/binary>>
+        end,
+    Code =
+        <<ITest0/binary, IBne0/binary, MovRet/binary, IRet/binary, IReload/binary, Tail/binary>>,
+    State0#state{
+        stream = StreamModule:append(Stream0, Code),
+        regs = jit_regs:invalidate_reg(Regs0, Temp)
+    }.
+
+%% @private
+%% `bne Reg, zero' over Bytes of code. The branch's own size is part of its
+%% displacement and the assembler compresses a zero comparison from a
+%% compressible register to two bytes, so try the wide form first and redo the
+%% encoding when it came back compressed; the match pins that the second
+%% attempt did not flip back.
+branch_over(Reg, Bytes) ->
+    Wide = ?ASM:bne(Reg, zero, 4 + Bytes),
+    case byte_size(Wide) of
+        4 ->
+            Wide;
+        2 ->
+            Compressed = ?ASM:bne(Reg, zero, 2 + Bytes),
+            2 = byte_size(Compressed),
+            Compressed
+    end.
+
+%% Tail-position external call that dispatches on the primitive's result in
+%% generated code. Code after this site is unreachable from it.
+call_primitive_direct(StateP, Primitive, Args0) ->
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% s1/s2, drop them from the argument list.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    %% The callee reads ctx->x.
+    State0 = pending_clear_all(StateP),
+    {State1, ResultReg} = call_primitive_no_reload(State0, Primitive, Args),
+    State2 = direct_dispatch(State1, ResultReg, false),
+    State3 = free_native_register(State2, ResultReg),
+    State3#state{
+        regs = jit_regs:set_masks(
+            jit_regs:unreachable(State3#state.regs), ?AVAILABLE_REGS_MASK, 0
+        )
+    }.
+
+%% @private
+%% Shared tail of call_primitive/3 and call_primitive_no_reload/3.
+call_primitive1(State, Primitive, Args, Pure, Available, Regs0, StreamModule, Stream0) ->
     case Available of
         0 ->
             call_func_ptr0(State, {primitive, Primitive}, Args, Pure);
@@ -1817,10 +1921,14 @@ call_func_ptr0(
     State4 = set_registers_args(State3, RegArgs, ParameterRegs, StackOffset),
 
     % Call the function pointer (using JALR for call with return)
+    %% `Pure' is true for primitives listed in jit_prim_pure.hrl (no writeback,
+    %% no reload), `no_reload' for one that may return another Context -- the
+    %% caller reloads e itself on the path where this Context is still ours --
+    %% and false otherwise.
     State4b =
         case Pure of
             true -> State4;
-            false -> emit_e_writeback(State4)
+            _ -> emit_e_writeback(State4)
         end,
     Stream4b = State4b#state.stream,
     Call = ?ASM:jalr(ra, FuncPtrReg, 0),
@@ -1872,11 +1980,11 @@ call_func_ptr0(
     Stream7 = pop_registers(SavedRegs, AlignedStackBytes, StreamModule, Stream6),
     Stream8 =
         case Pure of
-            true ->
-                Stream7;
             false ->
                 {YBase2, YOff2} = ?Y_REGS,
-                StreamModule:append(Stream7, ?LOAD_WORD(?E_REG, YBase2, YOff2))
+                StreamModule:append(Stream7, ?LOAD_WORD(?E_REG, YBase2, YOff2));
+            _ ->
+                Stream7
         end,
 
     ResultRegBit = reg_bit(ResultReg),
