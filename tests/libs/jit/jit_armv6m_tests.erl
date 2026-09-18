@@ -33,6 +33,17 @@
 % disassembly obtained with:
 %  arm-elf-objdump -D -b binary -marm --disassembler-options=force-thumb -z
 
+%% A primitive called with fewer arguments than there are parameter registers
+%% takes the short-list branch of call_func_ptr0, which must still use the
+%% normalized argument list: `offset' has to be the stream offset by then, not
+%% the atom.
+call_primitive_short_arg_list_resolves_offset_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, _Reg} = ?BACKEND:call_primitive(State0, 7, [ctx, jit_state, offset]),
+    Dump =
+        <<"   0:\t69d7      \tldr\tr7, [r2, #28]\n   2:\tb405      \tpush\t{r0, r2}\n   4:\t9902      \tldr\tr1, [sp, #8]\n   6:\t2204      \tmovs\tr2, #4\n   8:\t47b8      \tblx\tr7\n   a:\t4607      \tmov\tr7, r0\n   c:\tbc05      \tpop\t{r0, r2}">>,
+    ?assertStream(armv6m, Dump, ?BACKEND:stream(State1)).
+
 add_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
