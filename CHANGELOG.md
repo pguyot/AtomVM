@@ -110,6 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bignum division now estimates each quotient digit with a precomputed reciprocal instead of
   a 128-by-64 software division, so the compiler no longer emits a `__udivmodti4` call per
   digit
+- The JIT now strength-reduces `div` and `rem` by a power-of-two literal to shifts even when
+  the dividend's sign is unknown, instead of emitting a hardware division: ESTONE's
+  `int_arith` micro, which does two `div 2` per call, went from 2.6x slower than BEAM to
+  1.3x on x86_64, where a 64-bit `idiv` costs tens of cycles
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
   calling it with a port now raises `badarg` (previous versions accepted any id-carrying
   term, so it could be used to read port information; there is no `erlang:port_info/2`

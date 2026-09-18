@@ -398,6 +398,7 @@ compile_erlang(int28mul)
 compile_erlang(int28mulneg)
 compile_erlang(int28mulneg2)
 compile_erlang(int28mulneg2)
+compile_erlang(div_rem_pow2)
 compile_erlang(negdiv)
 compile_erlang(absovf)
 compile_erlang(negovf)
@@ -999,6 +1000,7 @@ set(erlang_test_beams
     int28mul.beam
     int28mulneg.beam
     int28mulneg2.beam
+    div_rem_pow2.beam
     negdiv.beam
     absovf.beam
     negovf.beam
