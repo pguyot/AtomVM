@@ -5457,12 +5457,17 @@ static term nif_ets_info(Context *ctx, int argc, term argv[])
     VALIDATE_VALUE(argv[1], term_is_atom);
 
     term ret;
-    // A table that does not exist (or that this process may not read) is
-    // `undefined', as in OTP -- not an error.
-    if (UNLIKELY(ets_info(argv[0], argv[1], &ret, ctx) != EtsOk)) {
-        return UNDEFINED_ATOM;
+    switch (ets_info(argv[0], argv[1], &ret, ctx)) {
+        case EtsOk:
+            return ret;
+        // A table that does not exist (or that this process may not read) is
+        // `undefined', as in OTP -- not an error.
+        case EtsBadAccess:
+            return UNDEFINED_ATOM;
+        // An item info/2 does not know, like OTP.
+        default:
+            RAISE_ERROR(BADARG_ATOM);
     }
-    return ret;
 }
 
 static term nif_persistent_term_get(Context *ctx, int argc, term argv[])

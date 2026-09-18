@@ -650,7 +650,11 @@ ets_result_t ets_info(term name_or_ref, term item, term *ret, Context *ctx)
 
     GlobalContext *global = ctx->global;
     // Every item below is an immediate (atom or small integer), so this never
-    // allocates and needs no GC: callers can use the result directly.
+    // allocates and needs no GC: callers can use the result directly. An item
+    // that matches nothing is badarg, as in OTP: `undefined' is what a table
+    // that does not exist answers, and overloading it here would make a
+    // missing item indistinguishable from a missing table.
+    bool known_item = true;
     *ret = UNDEFINED_ATOM;
     if (item == globalcontext_make_atom(global, ATOM_STR("\x6", "keypos"))) {
         *ret = term_from_int(table->multimap->key_index + 1);
@@ -695,11 +699,13 @@ ets_result_t ets_info(term name_or_ref, term item, term *ret, Context *ctx)
                 *ret = globalcontext_make_atom(global, ATOM_STR("\x9", "protected"));
                 break;
         }
+    } else {
+        known_item = false;
     }
 
     SMP_UNLOCK(table);
 
-    return EtsOk;
+    return known_item ? EtsOk : EtsBadEntry;
 }
 
 ets_result_t ets_first_maybe_gc(term name_or_ref, term *ret, Context *ctx)
