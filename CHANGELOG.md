@@ -158,6 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoder's key order, which broke `==` and made `=>` updates on an existing key produce
   duplicate keys
 - Fixed `binary_to_term/1,2` accepting maps with duplicate keys instead of raising `badarg`
+- Fixed `emscripten:run_script/2` with `main_thread` and without `async` never returning: the
+  main thread readied the trapped caller without waking the polling scheduler, so the answer
+  sat in the mailbox of a process no scheduler came back to
 - Fixed `maps:next/1` on a large (tree-backed) map materialising the whole key/value list on
   the first step, so taking a few entries from a big map reserved `4 * size` heap words and
   walked every entry before returning the first one
