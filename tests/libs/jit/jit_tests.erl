@@ -1549,6 +1549,65 @@ gc_bif_div_unbounded_range_runtime_fastpath_test_() ->
 gc_bif_div_unbounded_range_runtime_fastpath(Backend) ->
     gc_bif_unbounded_range_runtime_fastpath(Backend, {erlang, 'div', 2}, {t_integer, any}).
 
+%% jit_wasm32:primitive_returns_void/1 has to agree with the C
+%% ModuleNativeInterface, member for member: wasm call_indirect carries the
+%% signature, so calling a void primitive through the i32-returning type traps
+%% the whole generated module at runtime with "null function or function
+%% signature mismatch". Four receive-marker primitives were added to the C
+%% interface and not to that table, which broke every wasm32 JIT run for six
+%% weeks without any build failing.
+wasm32_void_primitives_match_native_interface_test() ->
+    case jit_header_path() of
+        {ok, Path} ->
+            {ok, Header} = file:read_file(Path),
+            Members = native_interface_members(Header),
+            ?assert(length(Members) > 50),
+            Expected = [I || {I, <<"void">>} <- Members],
+            Actual = [I || {I, _} <- Members, jit_wasm32:primitive_returns_void(I)],
+            ?assertEqual(Expected, Actual);
+        error ->
+            %% Running without the C sources beside the test (e.g. on AtomVM).
+            ok
+    end.
+
+%% The struct member list, as {Index, ReturnType}, in declaration order --
+%% which is the primitive numbering in jit/src/primitives.hrl.
+native_interface_members(Header) ->
+    [Body | _] = binary:split(
+        element(2, split_after(Header, <<"struct ModuleNativeInterface\n{">>)), <<"\n};">>
+    ),
+    case
+        re:run(Body, "\n\\s*([A-Za-z_][\\w \\*]*?)\\s*\\(\\*\\w+\\)\\(", [
+            global, {capture, all_but_first, binary}
+        ])
+    of
+        {match, Matches} ->
+            lists:zip(
+                lists:seq(0, length(Matches) - 1),
+                [string:trim(Ret) || [Ret] <- Matches]
+            );
+        nomatch ->
+            []
+    end.
+
+split_after(Bin, Needle) ->
+    case binary:split(Bin, Needle) of
+        [_, After] -> {ok, After};
+        [_] -> {error, not_found}
+    end.
+
+jit_header_path() ->
+    Candidates = [
+        "src/libAtomVM/jit.h",
+        "../src/libAtomVM/jit.h",
+        "../../src/libAtomVM/jit.h",
+        "../../../src/libAtomVM/jit.h"
+    ],
+    case [P || P <- Candidates, filelib:is_regular(P)] of
+        [Path | _] -> {ok, Path};
+        [] -> error
+    end.
+
 %% `/=' must inline the same small-integer fast path `==' does. Both test the
 %% same two tags and then compare tagged words; only the branch polarity and
 %% the comparator mask differ, so the two emissions must be the same size.
