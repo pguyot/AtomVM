@@ -22,10 +22,10 @@ ESTONE_LINE_RE = re.compile(r"^(.+?)\s+(\d+)ms\s+(\d+) estones\s+\d+%\s+\d+ loop
 APP_LINE_RE = re.compile(r"^(?P<label>\S.*?):\s*(?P<usec>\d+)\s*$")
 
 
-def cmd_for(engine, workload):
+def cmd_for(engine, workload, target="aarch64"):
     d = Path(engine)
-    avm = "estone-aarch64.avm" if workload == "estone" else "benchmark-aarch64.avm"
-    return [str(d / "AtomVM"), str(d / avm), str(d / "atomvmlib-aarch64.avm")]
+    avm = f"estone-{target}.avm" if workload == "estone" else f"benchmark-{target}.avm"
+    return [str(d / "AtomVM"), str(d / avm), str(d / f"atomvmlib-{target}.avm")]
 
 
 def run_once(cmd, workload):
@@ -72,6 +72,7 @@ def boot_ci(a, b, seed=0, iters=20000):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("workload", choices=["estone", "app"])
+    p.add_argument("--target", default="aarch64", help="JIT target in the avm file names")
     p.add_argument("--a", required=True, help="baseline engine dir")
     p.add_argument("--b", required=True, help="candidate engine dir")
     p.add_argument("--runs", type=int, default=21)
@@ -79,7 +80,7 @@ def main():
     p.add_argument("--output", type=Path)
     args = p.parse_args()
 
-    cmds = {"A": cmd_for(args.a, args.workload), "B": cmd_for(args.b, args.workload)}
+    cmds = {"A": cmd_for(args.a, args.workload, args.target), "B": cmd_for(args.b, args.workload, args.target)}
     for label, c in cmds.items():
         for path in c:
             if not Path(path).exists():
