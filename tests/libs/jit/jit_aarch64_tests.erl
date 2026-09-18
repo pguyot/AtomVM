@@ -141,6 +141,23 @@ call_primitive_6_args_test() ->
         >>,
     ?assertStream(aarch64, Dump, Stream).
 
+term_from_float_inline_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r7} = ?BACKEND:term_from_float_inline(State0, 0),
+    Stream = ?BACKEND:stream(State1),
+    Dump =
+        <<
+            "   0:\taa1603e7 \tmov\tx7, x22\n"
+            "   4:\td2800b08 \tmov\tx8, #0x58\n"
+            "   8:\tf90000e8 \tstr\tx8, [x7]\n"
+            "   c:\tf9400e68 \tldr\tx8, [x19, #24]\n"
+            "  10:\tf9400108 \tldr\tx8, [x8]\n"
+            "  14:\tf90004e8 \tstr\tx8, [x7, #8]\n"
+            "  18:\t910042d6 \tadd\tx22, x22, #0x10\n"
+            "  1c:\tb27f00e7 \torr\tx7, x7, #0x2"
+        >>,
+    ?assertStream(aarch64, Dump, Stream).
+
 add_overflow_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
     {State1, RegA} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),

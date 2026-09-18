@@ -118,6 +118,7 @@
     set_live_masks/2,
     supports_loop_residency/0,
     heap_bump_alloc/2,
+    term_from_float_inline/2,
     jump_table_range_check/4,
     jump_table_dispatch/1,
     shift_right_arith_reg/3,
@@ -5176,6 +5177,42 @@ heap_bump_alloc(
     Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
     {
         State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
+        Reg
+    }.
+
+%%-----------------------------------------------------------------------------
+%% @doc Box fp register F into a term, inline. The compiler only emits
+%% fmove-to-register after a test_heap that reserved the float's two words, so
+%% this is a bump allocation plus two stores -- the same shape as put_list --
+%% instead of a call to PRIM_TERM_FROM_FLOAT.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec term_from_float_inline(state(), non_neg_integer()) -> {state(), aarch64_register()}.
+term_from_float_inline(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0,
+    FPRegIndex
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Temp = first_avail(Available band (bnot reg_bit(Reg))),
+    %% Boxed float header: ((FLOAT_SIZE - 1) bsl 6) bor TERM_BOXED_FLOAT.
+    FloatHeader = (1 bsl 6) bor 16#18,
+    I1 = jit_aarch64_asm:mov(Reg, ?HP_REG),
+    I2 = jit_aarch64_asm:mov(Temp, FloatHeader),
+    I3 = jit_aarch64_asm:str(Temp, {Reg, 0}),
+    %% The double is moved as raw bits: the fp bank holds it already boxed-ready.
+    I4 = jit_aarch64_asm:ldr(Temp, ?FP_REGS),
+    I5 = jit_aarch64_asm:ldr(Temp, {Temp, ?FP_REG_OFFSET(State0, FPRegIndex)}),
+    I6 = jit_aarch64_asm:str(Temp, {Reg, ?WORD_SIZE}),
+    I7 = jit_aarch64_asm:add(?HP_REG, ?HP_REG, 2 * ?WORD_SIZE),
+    %% TERM_PRIMARY_BOXED
+    I8 = jit_aarch64_asm:orr(Reg, Reg, 2),
+    Code =
+        <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary, I7/binary, I8/binary>>,
+    Stream1 = StreamModule:append(Stream0, Code),
+    Regs1 = jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Temp),
+    {
+        State0#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))},
         Reg
     }.
 
