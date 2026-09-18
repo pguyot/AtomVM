@@ -4129,6 +4129,44 @@ get_vm_record_type(#state{regs = Regs}, VmLoc) ->
 -spec supports_select_val_ranges() -> boolean().
 supports_select_val_ranges() -> true.
 
+%% Available heap memory in bytes (ctx->e - ctx->heap.heap_ptr) in a freshly
+%% allocated register, for the inline test_heap room and corridor checks.
+read_avail_heap_memory(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Reg = first_avail(jit_regs:available_regs(Regs0)),
+    I1 = ?LOAD_WORD(Reg, ?CTX_REG, ?HEAP_PTR_OFFSET),
+    I2 = ?ASM:sub(Reg, ?E_REG, Reg),
+    Stream1 = StreamModule:append(Stream0, <<I1/binary, I2/binary>>),
+    Regs1 = jit_regs:invalidate_reg(Regs0, Reg),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
+%% ctx->heap.root->next | (ctx->heap.heap_end ^ ctx->shrink_probe_heap_end), in
+%% a freshly allocated register: zero exactly when no heap fragments are pending
+%% and the shrink probe already ran for this root block, i.e. when a test_heap
+%% whose free space exceeds the shrink corridor can skip the primitive call
+%% (mirrors the probe short-circuit in jit_test_heap).
+read_shrink_probe_mismatch(
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State
+) ->
+    Available = jit_regs:available_regs(Regs0),
+    Reg = first_avail(Available),
+    Tmp1 = first_avail(Available band (bnot reg_bit(Reg))),
+    Tmp2 = first_avail(Available band (bnot (reg_bit(Reg) bor reg_bit(Tmp1)))),
+    I1 = ?LOAD_WORD(Reg, ?CTX_REG, ?HEAP_ROOT_OFFSET),
+    I2 = ?LOAD_WORD(Reg, Reg, 0),
+    I3 = ?LOAD_WORD(Tmp1, ?CTX_REG, ?HEAP_END_OFFSET),
+    I4 = ?LOAD_WORD(Tmp2, ?CTX_REG, ?SHRINK_PROBE_OFFSET),
+    I5 = ?ASM:xor_(Tmp1, Tmp1, Tmp2),
+    I6 = ?ASM:or_(Reg, Reg, Tmp1),
+    Stream1 = StreamModule:append(
+        Stream0, <<I1/binary, I2/binary, I3/binary, I4/binary, I5/binary, I6/binary>>
+    ),
+    Regs1 = jit_regs:invalidate_reg(
+        jit_regs:invalidate_reg(jit_regs:invalidate_reg(Regs0, Reg), Tmp1), Tmp2
+    ),
+    {State#state{stream = Stream1, regs = jit_regs:alloc_reg(Regs1, reg_bit(Reg))}, Reg}.
+
 heap_bump_alloc(
     #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} = State0, NWords
 ) ->
