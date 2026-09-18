@@ -482,6 +482,108 @@ call_primitive_direct(StateP, Primitive, Args0) ->
         )
     }.
 
+%% OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with an inline resolved fast path in
+%% front of the same dispatch as call_primitive_direct. Tail position: no cp is
+%% set here; for CALL_EXT_LAST (NWords >= 0) the fast path pops the frame
+%% exactly like the primitive would.
+call_ext_last_direct(State0, Primitive, Index, NWords, Args) ->
+    State1 = emit_call_ext_last_fast_path(State0, Index, NWords),
+    call_primitive_direct(State1, Primitive, Args).
+
+%% @private
+%% Resolve module->imported_funcs[Index] inline and branch to the callee's
+%% native entry, so an already-resolved cross-module call costs no C call at
+%% all. Anything else -- an unresolved import, a BIF, a NIF, a target not yet
+%% native-loaded -- falls through to the primitive, whose tagged-result
+%% dispatch is unchanged. Emits nothing when an offset does not fit the 12-bit
+%% load immediate or there are too few scratch registers.
+emit_call_ext_last_fast_path(StateP, Index, NWords) ->
+    %% The fast path branches to the callee without a C call, and the callee
+    %% reads ctx->x: deferred x stores must be committed before the branch, not
+    %% by the primitive call that only the slow path reaches.
+    #state{stream_module = StreamModule, stream = Stream0, regs = Regs0} =
+        State0 = pending_clear_all(StateP),
+    Avail = mask_to_list(jit_regs:available_regs(Regs0)),
+    PopsFrame = is_integer(NWords) andalso NWords >= 0,
+    FramePopFits =
+        (not PopsFrame) orelse
+            (NWords + ?CP_SIZE_IN_TERMS) * ?WORD_SIZE_BYTES =< 2047,
+    case length(Avail) >= 4 andalso Index * ?WORD_SIZE_BYTES =< 2047 andalso FramePopFits of
+        false ->
+            State0;
+        true ->
+            [T0, T1, T2, T3 | _] = Avail,
+            Head = <<
+                %% func = jit_state->module->imported_funcs[Index]
+                (?LOAD_WORD(T0, ?JITSTATE_REG, ?JITSTATE_MODULE_OFFSET))/binary,
+                (?LOAD_WORD(T0, T0, ?MODULE_IMPORTED_FUNCS_OFFSET))/binary,
+                (?LOAD_WORD(T1, T0, Index * ?WORD_SIZE_BYTES))/binary,
+                %% func->type is an enum, 32 bits on both widths
+                (?ASM:lw(T2, T1, ?MODULE_FUNCTION_TYPE_OFFSET))/binary,
+                (?ASM:addi(T3, T2, -?MODULE_NATIVE_FUNCTION_TYPE))/binary
+            >>,
+            Tail = <<
+                %% Acquire, pairing with the release store of the in-place
+                %% ModuleFunction -> ModuleNativeFunction upgrade in jit.c: an
+                %% upgraded type must imply the entry point written before it.
+                %% The branch below is only a control dependency, which RVWMO
+                %% lets the target loads speculate past, so carry the type value
+                %% into their base register instead -- an address dependency is
+                %% ordered, and needs no fence. The andi also leaves T2 zeroed
+                %% for the continuation store.
+                (?ASM:andi(T2, T2, 0))/binary,
+                (?ASM:add(T1, T1, T2))/binary,
+                %% Clear any stale continuation, like the *_direct C wrappers.
+                (?STORE_WORD(?JITSTATE_REG, T2, ?JITSTATE_CONTINUATION_OFFSET))/binary,
+                (frame_pop_code(PopsFrame, NWords, T3))/binary,
+                (?LOAD_WORD(T2, T1, ?MODULE_FUNCTION_TARGET_OFFSET))/binary,
+                (?LOAD_WORD(T1, T1, ?MODULE_FUNCTION_ENTRY_POINT_OFFSET))/binary,
+                (?STORE_WORD(?JITSTATE_REG, T2, ?JITSTATE_MODULE_OFFSET))/binary,
+                (?ASM:jr(T1))/binary
+            >>,
+            %% Not ModuleNativeFunction: skip the whole tail and take the
+            %% primitive that follows this block.
+            IBne = branch_over(T3, byte_size(Tail)),
+            Code = <<Head/binary, IBne/binary, Tail/binary>>,
+            State0#state{
+                stream = StreamModule:append(Stream0, Code),
+                regs = lists:foldl(
+                    fun(R, Acc) -> jit_regs:invalidate_reg(Acc, R) end,
+                    Regs0,
+                    [T0, T1, T2, T3]
+                )
+            }
+    end.
+
+%% @private
+%% cp = load_cp(e + NWords); e += NWords + CP_SIZE_IN_TERMS -- what
+%% PRIM_CALL_EXT_DIRECT does for CALL_EXT_LAST before it transfers control.
+-if(?WORD_SIZE_BYTES =:= 4).
+frame_pop_code(false, _NWords, _Temp) ->
+    <<>>;
+frame_pop_code(true, NWords, Temp) ->
+    %% 32-bit: cp spans two words, the offset and the Module *.
+    {CpBase, CpOff} = ?CP,
+    {CpModBase, CpModOff} = ?CP_MODULE,
+    <<
+        (?LOAD_WORD(Temp, ?E_REG, NWords * 4))/binary,
+        (?STORE_WORD(CpBase, Temp, CpOff))/binary,
+        (?LOAD_WORD(Temp, ?E_REG, NWords * 4 + 4))/binary,
+        (?STORE_WORD(CpModBase, Temp, CpModOff))/binary,
+        (?ASM:addi(?E_REG, ?E_REG, (NWords + ?CP_SIZE_IN_TERMS) * 4))/binary
+    >>.
+-else.
+frame_pop_code(false, _NWords, _Temp) ->
+    <<>>;
+frame_pop_code(true, NWords, Temp) ->
+    {CpBase, CpOff} = ?CP,
+    <<
+        (?LOAD_WORD(Temp, ?E_REG, NWords * 8))/binary,
+        (?STORE_WORD(CpBase, Temp, CpOff))/binary,
+        (?ASM:addi(?E_REG, ?E_REG, (NWords + ?CP_SIZE_IN_TERMS) * 8))/binary
+    >>.
+-endif.
+
 %% @private
 %% Shared tail of call_primitive/3 and call_primitive_no_reload/3.
 call_primitive1(State, Primitive, Args, Pure, Available, Regs0, StreamModule, Stream0) ->
