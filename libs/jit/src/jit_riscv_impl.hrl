@@ -530,6 +530,24 @@ call_ext_with_cp_direct(State0, Primitive, Index, Args0) ->
     State6 = rewrite_cp_offset(State5, RewriteOffset, TempReg),
     State6#state{regs = jit_regs:invalidate_all(State6#state.regs)}.
 
+%% OP_CALL_FUN / OP_CALL_FUN2: set cp, call PRIM_CALL_FUN_DIRECT and branch to
+%% the resolved fun in generated code instead of round-tripping through the
+%% scheduler loop. No JIT_NATIVE_STAY test: jit_call_fun_direct answers with a
+%% tagged entry point or a Context *, never the sentinel (jit.c returns that
+%% only from the call_ext paths, for a leaf NIF).
+call_fun_with_cp_direct(State0, Primitive, Args0) ->
+    {State1, RewriteOffset, TempReg} = set_cp(State0),
+    %% Pinned-register convention: primitives read ctx and jit_state from
+    %% s1/s2, drop them from the argument list.
+    Args = [A || A <- Args0, A =/= ctx, A =/= jit_state],
+    %% The callee reads ctx->x.
+    State2 = pending_clear_all(State1),
+    {State3, ResultReg} = call_primitive_no_reload(State2, Primitive, Args),
+    State4 = direct_dispatch(State3, ResultReg),
+    State5 = free_native_register(State4, ResultReg),
+    State6 = rewrite_cp_offset(State5, RewriteOffset, TempReg),
+    State6#state{regs = jit_regs:invalidate_all(State6#state.regs)}.
+
 %% OP_CALL_EXT_LAST/OP_CALL_EXT_ONLY with an inline resolved fast path in
 %% front of the same dispatch as call_primitive_direct. Tail position: no cp is
 %% set here; for CALL_EXT_LAST (NWords >= 0) the fast path pops the frame
