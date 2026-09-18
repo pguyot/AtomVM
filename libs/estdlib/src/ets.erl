@@ -442,12 +442,13 @@ match_delete(Table, Pattern) ->
 %%-----------------------------------------------------------------------------
 %% @param   Table a reference to the ets table
 %% @param   Item the information item to query
-%% @returns the value of the item, or `undefined' for unsupported items
+%% @returns the value of the item, or `undefined' when the table does not exist
 %% @doc Return information about a table.
 %%
 %% `keypos', `size', `type', `name', `named_table' and `protection' are
-%% supported; any other item returns `undefined', as does a table that does
-%% not exist or that this process may not read.
+%% supported; any other item raises `badarg', as in OTP. A table that does not
+%% exist, or that this process may not read, returns `undefined' -- which is
+%% why an unsupported item cannot also answer it.
 %% @end
 %%-----------------------------------------------------------------------------
 -spec info(Table :: table(), Item :: atom()) -> term() | undefined.
