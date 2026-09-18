@@ -179,6 +179,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aarch64 backend already did, instead of calling the runtime helper at every site: with
   `heap_ptr` and `e` in pinned registers the check is four ALU instructions and one
   predicted branch. ESTONE gains 10.7% and the benchmark app 3.1% on x86_64
+- `ets:info/2` now raises `badarg` for an item it does not know, as OTP does, instead of
+  answering `undefined`: that answer is reserved for a table that does not exist, and
+  overloading it made a missing item indistinguishable from a missing table
 
 ### Removed
 - Removed support for BEAM files compiled by OTP 26 with the `no_init_yregs`, `no_make_fun3`,

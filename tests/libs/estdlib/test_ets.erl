@@ -92,12 +92,23 @@ test_info() ->
     test = ets:info(T, name),
     false = ets:info(T, named_table),
     protected = ets:info(T, protection),
-    undefined = ets:info(T, no_such_item),
+    %% An item ets:info/2 does not know is badarg, as in OTP; `undefined' is
+    %% reserved for a table that does not exist (checked below), which is the
+    %% only thing OTP answers it for.
+    ok =
+        try ets:info(T, no_such_item) of
+            Unexpected -> {unexpected, Unexpected}
+        catch
+            error:badarg -> ok
+        end,
     Bag = ets:new(other, [bag, private, {keypos, 3}]),
     3 = ets:info(Bag, keypos),
     0 = ets:info(Bag, size),
     bag = ets:info(Bag, type),
     private = ets:info(Bag, protection),
+    Deleted = ets:new(gone, []),
+    true = ets:delete(Deleted),
+    undefined = ets:info(Deleted, size),
     ok.
 
 new_table(Tuples) ->
