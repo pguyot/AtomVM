@@ -123,6 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ets:info/2` now raises `badarg` for an item it does not know, as OTP does, instead of
   answering `undefined`: that answer is reserved for a table that does not exist, and
   overloading it made a missing item indistinguishable from a missing table
+- Fixed the wasm32 JIT calling the four receive-marker primitives with the wrong
+  `call_indirect` signature, which trapped the generated module with "null function or
+  function signature mismatch" as soon as a `receive` used a marker
 - `erlang:process_info/2` now accepts only pids of local processes, as Erlang/OTP does:
   calling it with a port now raises `badarg` (previous versions accepted any id-carrying
   term, so it could be used to read port information; there is no `erlang:port_info/2`
