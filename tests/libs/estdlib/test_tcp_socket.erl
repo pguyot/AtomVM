@@ -498,6 +498,14 @@ test_accept_nowait(NoWaitRef) ->
                 {'$socket', Socket, select, Ref} ->
                     {ok, ConnSocket} = socket:accept(Socket, 0),
                     socket:send(ConnSocket, <<"hello">>),
+                    % The listening socket lingers for 0 seconds and the
+                    % accepted socket inherits that, so closing here resets the
+                    % connection and takes the five bytes with it if the client
+                    % has not read them yet. Wait for it to say it has.
+                    receive
+                        {Parent, received} -> ok
+                    after 5000 -> exit(timeout)
+                    end,
                     socket:close(ConnSocket)
             after 5000 ->
                 exit(timeout)
@@ -513,6 +521,7 @@ test_accept_nowait(NoWaitRef) ->
     {ok, ClientSocket} = socket:open(inet, stream, tcp),
     ok = socket:connect(ClientSocket, #{family => inet, addr => loopback, port => Port}),
     {ok, <<"hello">>} = socket:recv(ClientSocket, 5),
+    Child ! {Parent, received},
 
     socket:close(ClientSocket),
     ok =

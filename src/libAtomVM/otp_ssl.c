@@ -37,6 +37,7 @@
 
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
+#include <mbedtls/net_sockets.h>
 #include <mbedtls/ssl.h>
 
 #if defined(HAVE_PSA_CRYPTO)
@@ -185,6 +186,12 @@ int mbedtls_ssl_send_cb(void *ctx, const unsigned char *buf, size_t len)
     if (res == SocketWouldBlock) {
         return MBEDTLS_ERR_SSL_WANT_WRITE;
     }
+    if (res == SocketOtherError) {
+        // Anything mbedtls does not recognize it hands back to the caller as
+        // it is, and our -2 then reaches Erlang as {error, -2}, which says
+        // nothing about what went wrong.
+        return MBEDTLS_ERR_NET_SEND_FAILED;
+    }
     return res;
 }
 
@@ -194,6 +201,9 @@ int mbedtls_ssl_recv_cb(void *ctx, unsigned char *buf, size_t len)
     ssize_t res = socket_recv((struct SocketResource *) ctx, buf, len, 0, NULL, NULL);
     if (res == SocketWouldBlock) {
         return MBEDTLS_ERR_SSL_WANT_READ;
+    }
+    if (res == SocketOtherError) {
+        return MBEDTLS_ERR_NET_RECV_FAILED;
     }
     return res;
 }

@@ -249,6 +249,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed `ssl` reporting an opaque `{error, -2}` when a socket failed for a reason other than
+  would-block or a reset: the socket layer's own sentinel reached mbedtls, which handed it
+  straight back. It is now `MBEDTLS_ERR_NET_SEND_FAILED` / `MBEDTLS_ERR_NET_RECV_FAILED`
 - Fixed `enif_select` disarming the other direction of an event: selecting a socket for writing
   dropped a read selection on the same socket, and left it registered with the platform with
   nothing to notify. Read and write now carry their own waiter, and `enif_select_write/6` is
