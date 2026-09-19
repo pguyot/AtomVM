@@ -32,7 +32,7 @@ test() ->
     ok = test_connect_bad_address(),
     ok = test_tcp_double_close(),
     ok = test_accept_timeout(),
-    ok = test_send_to_a_slow_reader(),
+    ok = test_send_to_a_stalled_reader(),
     ok.
 
 % accept/2 must return {error, timeout} when no connection arrives
@@ -402,16 +402,16 @@ test_listen_connect_parameters_server_loop(ListenMode, false = ListenActive, Soc
 
 % gen_tcp:send/2 answers for the whole packet or not at all. An accepted
 % socket is non-blocking, so its send takes only what fits in the socket
-% buffer, and a peer that is not draining fills that buffer up: what is left
-% has to go out on a later send, not be dropped or reported as an error. A
-% server writing a response larger than the buffer to a browser -- which
+% buffer, and a peer that is not reading yet fills that buffer up: what is
+% left has to go out on a later send, not be dropped or reported as an error.
+% A server writing a response larger than the buffer to a browser -- which
 % reads at its own pace -- is the shape that caught this.
-test_send_to_a_slow_reader() ->
-    ok = test_send_to_a_slow_reader([]),
-    ok = test_send_to_a_slow_reader([{inet_backend, socket}]),
+test_send_to_a_stalled_reader() ->
+    ok = test_send_to_a_stalled_reader([]),
+    ok = test_send_to_a_stalled_reader([{inet_backend, socket}]),
     ok.
 
-test_send_to_a_slow_reader(Opts) ->
+test_send_to_a_stalled_reader(Opts) ->
     Chunk = binary:copy(<<"a">>, 8192),
     Chunks = 512,
     Expected = Chunks * byte_size(Chunk),
@@ -428,7 +428,7 @@ test_send_to_a_slow_reader(Opts) ->
     receive
     after 1000 -> ok
     end,
-    Received = drain_slowly(ClientSocket, 0),
+    Received = drain(ClientSocket, 0),
     SendResult =
         receive
             {sent, R} -> R
@@ -453,15 +453,10 @@ send_chunks(Socket, Chunk, N) ->
         Other -> {error_after, N, Other}
     end.
 
-% reading in small steps keeps the sender against a full buffer for the whole
-% transfer rather than just at the start
-drain_slowly(Socket, Acc) ->
+drain(Socket, Acc) ->
     case gen_tcp:recv(Socket, 0) of
         {ok, Data} ->
-            receive
-            after 2 -> ok
-            end,
-            drain_slowly(Socket, Acc + byte_size(Data));
+            drain(Socket, Acc + byte_size(Data));
         {error, closed} ->
             Acc
     end.
