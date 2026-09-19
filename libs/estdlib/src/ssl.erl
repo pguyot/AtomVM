@@ -200,8 +200,13 @@ handshake_loop(SSLContext, Socket) ->
                     Error
             end;
         want_write ->
-            % We're currrently missing non-blocking writes
-            handshake_loop(SSLContext, Socket);
+            case wait_for_room(Socket) of
+                ok ->
+                    handshake_loop(SSLContext, Socket);
+                {error, _Reason} = Error ->
+                    socket:close(Socket),
+                    Error
+            end;
         {error, _Reason} = Error ->
             socket:close(Socket),
             Error
@@ -253,8 +258,13 @@ close_notify_loop(SSLContext, Socket) ->
                     Error
             end;
         want_write ->
-            % We're currrently missing non-blocking writes
-            close_notify_loop(SSLContext, Socket);
+            case wait_for_room(Socket) of
+                ok ->
+                    close_notify_loop(SSLContext, Socket);
+                {error, _Reason} = Error ->
+                    socket:close(Socket),
+                    Error
+            end;
         {error, _Reason} = Error ->
             socket:close(Socket),
             Error
@@ -283,8 +293,35 @@ send({SSLContext, Socket} = SSLSocket, Binary) ->
                     Error
             end;
         want_write ->
-            % We're currrently missing non-blocking writes
-            send(SSLSocket, Binary);
+            case wait_for_room(Socket) of
+                ok ->
+                    send(SSLSocket, Binary);
+                {error, _Reason} = Error ->
+                    Error
+            end;
+        {error, _Reason} = Error ->
+            Error
+    end.
+
+%% mbedtls answers want_write when the socket could not take the record it has
+%% to push out. Waiting for the socket to have room is the same select as
+%% waiting for data to arrive, in the other direction. Where the platform
+%% cannot say when there is room, there is nothing to do but try again shortly
+%% -- which is what this did unconditionally, without even yielding.
+wait_for_room(Socket) ->
+    Ref = erlang:make_ref(),
+    case socket:nif_select_write(Socket, Ref) of
+        ok ->
+            receive
+                {'$socket', Socket, select, Ref} ->
+                    ok;
+                {'$socket', Socket, abort, {Ref, closed}} ->
+                    {error, closed}
+            end;
+        {error, enotsup} ->
+            receive
+            after 1 -> ok
+            end;
         {error, _Reason} = Error ->
             Error
     end.
@@ -318,8 +355,12 @@ recv0({SSLContext, Socket} = SSLSocket, Length, Remaining, Acc) ->
                     Error
             end;
         want_write ->
-            % We're currrently missing non-blocking writes
-            recv0(SSLSocket, Length, Remaining, Acc);
+            case wait_for_room(Socket) of
+                ok ->
+                    recv0(SSLSocket, Length, Remaining, Acc);
+                {error, _Reason} = Error ->
+                    Error
+            end;
         {error, _Reason} = Error ->
             Error
     end.
