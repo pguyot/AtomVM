@@ -26,8 +26,18 @@ describe("run_script_tracked", () => {
   });
 
   it("should track, fetch and garbage collect JS values", () => {
-    // The Erlang module asserts the NIF contract and reports here.
-    cy.get("#result", { timeout: 60000 }).should("contain", "Test success");
+    // The Erlang module asserts the NIF contract and reports here. A run that
+    // stops without reporting leaves `result' at N/A, so the message carries
+    // the step the module last announced and whatever the VM printed: that is
+    // what tells a stalled run from a merely slow one.
+    cy.get("body", { timeout: 60000 }).should((body) => {
+      const step = body.find("#step").text();
+      const log = body.find("#log").text();
+      expect(
+        body.find("#result").text(),
+        `last step: ${step}; VM output: ${log}`,
+      ).to.contain("Test success");
+    });
     // Only the final state can be asserted: the VM may collect dropped handles
     // at any time, and the size may even drop below the baseline if a handle
     // dropped earlier outlived the snapshot in a stale root.
