@@ -24,6 +24,12 @@ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
   </head>
   <body>
     <pre id="result">N/A</pre>
+    <!-- The step the module last announced and anything the VM printed: a
+         run that never reports keeps `result' at N/A, and these two say how
+         far it got and why it stopped. They are what the cypress screenshot
+         of a timed out run carries. -->
+    <pre id="step">not started</pre>
+    <pre id="log"></pre>
     <script type="module">
     import AtomVM from "/AtomVM.mjs";
 
@@ -38,8 +44,13 @@ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
     const libraries = jit
         ? ['/build/libs/atomvmlib-emscripten-wasm32.avm']
         : ['/build/libs/eavmlib/src/eavmlib.avm', '/build/libs/avm_emscripten/src/avm_emscripten.avm', '/build/libs/estdlib/src/estdlib.avm'];
+    const log = window.document.getElementById('log');
     window.Module = await AtomVM({
-        arguments: ['/tests/build/test_run_script_tracked.beam', ...libraries]
+        arguments: ['/tests/build/test_run_script_tracked.beam', ...libraries],
+        printErr: (text) => {
+            log.textContent += text + "\n";
+            console.error(text);
+        }
     });
     </script>
   </body>

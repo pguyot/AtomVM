@@ -21,46 +21,51 @@
 -module(test_run_script_tracked).
 -export([start/0]).
 
+% Announces a step on the page before running it: a run that stops without
+% reporting leaves the name of the step it stopped in behind, which is all a
+% timed out cypress run has to go on.
+-define(STEP(Call), step(??Call, fun() -> Call end)).
+
 start() ->
     try
-        {R1, R2} = test_array_script_yields_one_handle_per_element(),
-        ok = test_keys_are_distinct_nonneg_integers(R1, R2),
-        ok = test_values_are_fetched_in_input_order(R1, R2),
-        ok = test_iodata_script_is_accepted(),
-        ok = test_empty_array_yields_empty_list(),
-        ok = test_null_yields_empty_list(),
-        ok = test_throwing_script_is_an_error(),
-        ok = test_non_array_script_is_an_error(),
-        ok = test_non_iodata_script_raises(),
-        ok = test_non_string_value_is_badvalue(),
-        ok = test_multibyte_utf8_value_round_trips(),
-        ok = test_large_value_round_trips(),
-        ok = test_empty_string_value_round_trips(),
-        ok = test_many_small_values_round_trip(),
-        ok = test_many_large_values_round_trip(),
-        Ra = test_deleted_key_is_badkey(),
-        ok = test_invalid_get_tracked_args_raise(Ra),
-        ok = test_empty_handle_list_yields_empty_list(),
-        ok = test_throwing_get_hook_is_whole_call_error(Ra),
-        ok = test_wrong_length_get_hook_is_whole_call_error(Ra),
-        ok = test_getter_throwing_get_hook_is_whole_call_error(Ra),
-        ok = test_invalid_hook_keys_are_an_error(),
-        ok = test_duplicate_hook_keys_are_an_error(),
-        ok = test_throwing_result_iterator_drops_its_values(),
-        ok = test_script_replacing_a_global_still_answers(),
-        ok = test_exhausted_key_space_is_an_error(),
-        ok = test_wrong_handle_type_raises(),
-        ok = test_repeated_handles_answer_once_each(),
-        ok = test_many_values_in_one_call(),
-        ok = test_large_script_is_accepted(),
-        ok = test_undefined_yields_empty_list(),
-        ok = test_key_survives_value_deletion(),
-        ok = test_handle_is_usable_from_another_process(),
-        ok = test_handle_outlives_its_creating_process(),
-        ok = test_concurrent_callers_get_their_own_values(),
-        ok = test_killed_caller_drops_its_tracked_values(),
+        {R1, R2} = ?STEP(test_array_script_yields_one_handle_per_element()),
+        ok = ?STEP(test_keys_are_distinct_nonneg_integers(R1, R2)),
+        ok = ?STEP(test_values_are_fetched_in_input_order(R1, R2)),
+        ok = ?STEP(test_iodata_script_is_accepted()),
+        ok = ?STEP(test_empty_array_yields_empty_list()),
+        ok = ?STEP(test_null_yields_empty_list()),
+        ok = ?STEP(test_throwing_script_is_an_error()),
+        ok = ?STEP(test_non_array_script_is_an_error()),
+        ok = ?STEP(test_non_iodata_script_raises()),
+        ok = ?STEP(test_non_string_value_is_badvalue()),
+        ok = ?STEP(test_multibyte_utf8_value_round_trips()),
+        ok = ?STEP(test_large_value_round_trips()),
+        ok = ?STEP(test_empty_string_value_round_trips()),
+        ok = ?STEP(test_many_small_values_round_trip()),
+        ok = ?STEP(test_many_large_values_round_trip()),
+        Ra = ?STEP(test_deleted_key_is_badkey()),
+        ok = ?STEP(test_invalid_get_tracked_args_raise(Ra)),
+        ok = ?STEP(test_empty_handle_list_yields_empty_list()),
+        ok = ?STEP(test_throwing_get_hook_is_whole_call_error(Ra)),
+        ok = ?STEP(test_wrong_length_get_hook_is_whole_call_error(Ra)),
+        ok = ?STEP(test_getter_throwing_get_hook_is_whole_call_error(Ra)),
+        ok = ?STEP(test_invalid_hook_keys_are_an_error()),
+        ok = ?STEP(test_duplicate_hook_keys_are_an_error()),
+        ok = ?STEP(test_throwing_result_iterator_drops_its_values()),
+        ok = ?STEP(test_script_replacing_a_global_still_answers()),
+        ok = ?STEP(test_exhausted_key_space_is_an_error()),
+        ok = ?STEP(test_wrong_handle_type_raises()),
+        ok = ?STEP(test_repeated_handles_answer_once_each()),
+        ok = ?STEP(test_many_values_in_one_call()),
+        ok = ?STEP(test_large_script_is_accepted()),
+        ok = ?STEP(test_undefined_yields_empty_list()),
+        ok = ?STEP(test_key_survives_value_deletion()),
+        ok = ?STEP(test_handle_is_usable_from_another_process()),
+        ok = ?STEP(test_handle_outlives_its_creating_process()),
+        ok = ?STEP(test_concurrent_callers_get_their_own_values()),
+        ok = ?STEP(test_killed_caller_drops_its_tracked_values()),
         % must stay last: it snapshots the map size cypress compares against
-        ok = test_garbage_collection_deletes_values(),
+        ok = ?STEP(test_garbage_collection_deletes_values()),
         ok = report_success(),
         % Keep R1, R2 and Ra alive: cypress asserts their values are still
         % tracked, and returning from start/0 would tear the runtime down.
@@ -69,6 +74,13 @@ start() ->
         T:V:S ->
             report_failure(T, V, S)
     end.
+
+step(Name, Fun) ->
+    ok = emscripten:run_script(
+        [<<"window.document.getElementById('step').innerHTML = '">>, Name, <<"';">>],
+        [main_thread]
+    ),
+    Fun().
 
 test_array_script_yields_one_handle_per_element() ->
     {ok, [R1, R2]} = emscripten:run_script_tracked(<<"['atom', 'vm']">>),
