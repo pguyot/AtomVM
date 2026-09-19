@@ -859,6 +859,15 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
         avm_int_t other_int = term_to_int(other);
         return (t_int > other_int) ? TermGreaterThan : TermLessThan;
     }
+    // Before the atom branch below: a caller that only wants equal-or-not has
+    // its answer for two distinct atoms already (t != other was checked
+    // above, and no two distinct immediates are exactly equal), so ordering
+    // them would pay two atom table node lookups for nothing. That is the
+    // shape is_eq_exact, is_not_eq_exact and select_val arrive in.
+    if ((opts & (TermCompareExact | TermCompareEqualOnly))
+        == (TermCompareExact | TermCompareEqualOnly)) {
+        return term_exact_equals(t, other, global);
+    }
     // Two distinct atoms order by table lookup alone; resolving them here
     // skips the tuple/type-index dispatch below. Atom keys are a large share
     // of map/set probes in compiler-style workloads.
@@ -866,10 +875,6 @@ static TermCompareResult term_compare0(term t, term other, TermCompareOpts opts,
         int c = atom_table_cmp_using_atom_index(
             global->atom_table, term_to_atom_index(t), term_to_atom_index(other));
         return (c > 0) ? TermGreaterThan : TermLessThan;
-    }
-    if ((opts & (TermCompareExact | TermCompareEqualOnly))
-        == (TermCompareExact | TermCompareEqualOnly)) {
-        return term_exact_equals(t, other, global);
     }
 
     // Ordering fast path for tuples whose differing element is a scalar
