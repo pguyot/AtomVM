@@ -235,8 +235,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading fast enough: an accepted socket is non-blocking, so a full socket buffer answered
   EAGAIN (reported as `{error, {send, 35}}` on the `inet` backend and as `{error, closed}` on
   the `socket` backend) and what the socket had taken of a larger packet was dropped. Both
-  backends now send the rest. A server writing a response larger than the socket buffer, such
-  as the `wasm_webserver` example serving a 4MB AVM to a browser, was truncating it
+  backends now send the rest, backing off rather than polling while the socket has no room.
+  A server writing a response larger than the socket buffer, such as the `wasm_webserver`
+  example serving a 4MB AVM to a browser, was truncating it
 - Fixed `globalcontext_destroy/1` leaking the atom table and the module table: an embedder that
   starts and stops several VMs in one process lost about 14KB per VM
 - Fixed the ESP32 event queue, queue set and signal semaphore leaking when a second VM is
