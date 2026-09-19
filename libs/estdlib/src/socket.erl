@@ -46,6 +46,7 @@
 %% internal nifs
 -export([
     nif_select_read/2,
+    nif_select_write/2,
     nif_accept/1,
     nif_recv/2,
     nif_recvfrom/2,
@@ -706,6 +707,12 @@ shutdown(_Socket, _How) ->
 
 %% @private
 nif_select_read(_Socket, _Ref) ->
+    erlang:nif_error(undefined).
+
+%% @private
+%% Answers `{error, enotsup}' where the platform cannot tell us when a socket
+%% has room to send again; callers fall back to retrying the send.
+nif_select_write(_Socket, _Ref) ->
     erlang:nif_error(undefined).
 
 %% @private
