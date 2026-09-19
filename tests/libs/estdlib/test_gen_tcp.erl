@@ -32,6 +32,7 @@ test() ->
     ok = test_connect_bad_address(),
     ok = test_tcp_double_close(),
     ok = test_accept_timeout(),
+    ok = test_send_to_a_slow_reader(),
     ok.
 
 % accept/2 must return {error, timeout} when no connection arrives
@@ -397,6 +398,72 @@ test_listen_connect_parameters_server_loop(ListenMode, false = ListenActive, Soc
             end;
         Other ->
             {error, {unexpected_result, server, passive_receive, Other}}
+    end.
+
+% gen_tcp:send/2 answers for the whole packet or not at all. An accepted
+% socket is non-blocking, so its send takes only what fits in the socket
+% buffer, and a peer that is not draining fills that buffer up: what is left
+% has to go out on a later send, not be dropped or reported as an error. A
+% server writing a response larger than the buffer to a browser -- which
+% reads at its own pace -- is the shape that caught this.
+test_send_to_a_slow_reader() ->
+    ok = test_send_to_a_slow_reader([]),
+    ok = test_send_to_a_slow_reader([{inet_backend, socket}]),
+    ok.
+
+test_send_to_a_slow_reader(Opts) ->
+    Chunk = binary:copy(<<"a">>, 8192),
+    Chunks = 512,
+    Expected = Chunks * byte_size(Chunk),
+    {ok, ListenSocket} = gen_tcp:listen(0, Opts ++ [{active, false}, binary]),
+    {ok, {_ListenAddress, Port}} = inet:sockname(ListenSocket),
+    Self = self(),
+    Sender = spawn(fun() ->
+        {ok, ServerSocket} = gen_tcp:accept(ListenSocket),
+        Self ! {sent, send_chunks(ServerSocket, Chunk, Chunks)},
+        gen_tcp:close(ServerSocket)
+    end),
+    {ok, ClientSocket} = gen_tcp:connect({127, 0, 0, 1}, Port, Opts ++ [{active, false}, binary]),
+    % let the sender fill the socket buffer before reading a single byte
+    receive
+    after 1000 -> ok
+    end,
+    Received = drain_slowly(ClientSocket, 0),
+    SendResult =
+        receive
+            {sent, R} -> R
+        after 10000 ->
+            exit(Sender, kill),
+            throw({sender_did_not_answer, ?LINE})
+        end,
+    gen_tcp:close(ClientSocket),
+    gen_tcp:close(ListenSocket),
+    case {SendResult, Received} of
+        {ok, Expected} ->
+            ok;
+        Other ->
+            throw({short_send, Opts, Other, {expected, Expected}, ?LINE})
+    end.
+
+send_chunks(_Socket, _Chunk, 0) ->
+    ok;
+send_chunks(Socket, Chunk, N) ->
+    case gen_tcp:send(Socket, Chunk) of
+        ok -> send_chunks(Socket, Chunk, N - 1);
+        Other -> {error_after, N, Other}
+    end.
+
+% reading in small steps keeps the sender against a full buffer for the whole
+% transfer rather than just at the start
+drain_slowly(Socket, Acc) ->
+    case gen_tcp:recv(Socket, 0) of
+        {ok, Data} ->
+            receive
+            after 2 -> ok
+            end,
+            drain_slowly(Socket, Acc + byte_size(Data));
+        {error, closed} ->
+            Acc
     end.
 
 % Connecting used to be dialled at www.github.com and www.atomvm.org, which

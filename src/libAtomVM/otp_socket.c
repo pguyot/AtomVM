@@ -2577,31 +2577,37 @@ static term nif_socket_send_internal(Context *ctx, int argc, term argv[], bool i
 
     // {ok, RestData} | {error, Reason}
 
-    size_t rest_len = len - sent_data;
-    if (rest_len == 0) {
-        return OK_ATOM;
-    } else if (sent_data > 0) {
-
-        size_t requested_size = term_sub_binary_heap_size(data, rest_len);
-        if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2) + requested_size, 1, &data, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-            AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
-            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-        }
-
-        term rest = term_maybe_create_sub_binary(data, sent_data, rest_len, &ctx->heap, global);
-        return port_create_tuple2(ctx, OK_ATOM, rest);
-
-    } else if (sent_data == 0) {
+    // A socket is non-blocking here, so a full buffer answers SocketWouldBlock
+    // rather than waiting for room. Nothing was sent, which is the whole
+    // packet left over, not a failure -- the caller sends it again, as it does
+    // for any other short send. Note SocketClosed shares the value a send of
+    // zero bytes returns, so `len' is what tells the two apart.
+    if (sent_data == SocketWouldBlock) {
         if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 1, &data, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
             AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
             RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
 
         return port_create_tuple2(ctx, OK_ATOM, data);
-    } else {
+    }
+    if (sent_data < 0 || (sent_data == SocketClosed && len > 0)) {
         TRACE("Unable to send data: res=%zi.\n", sent_data);
         return make_error_tuple(CLOSED_ATOM, ctx);
     }
+
+    size_t rest_len = len - sent_data;
+    if (rest_len == 0) {
+        return OK_ATOM;
+    }
+
+    size_t requested_size = term_sub_binary_heap_size(data, rest_len);
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2) + requested_size, 1, &data, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term rest = term_maybe_create_sub_binary(data, sent_data, rest_len, &ctx->heap, global);
+    return port_create_tuple2(ctx, OK_ATOM, rest);
 }
 
 static term nif_socket_send(Context *ctx, int argc, term argv[])
