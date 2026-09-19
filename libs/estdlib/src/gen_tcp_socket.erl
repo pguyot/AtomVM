@@ -42,6 +42,9 @@
 %% gen_server implementation (hidden)
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+-define(SEND_RETRY_MIN_MS, 1).
+-define(SEND_RETRY_MAX_MS, 32).
+
 -type reason() :: term().
 
 -type option() ::
@@ -99,22 +102,27 @@ connect(Address, Port, Options) ->
 %% @hidden
 -spec send(Socket :: inet:socket(), Packet :: packet()) -> ok | {error, Reason :: reason()}.
 send(Socket, Packet) ->
+    send(Socket, Packet, ?SEND_RETRY_MIN_MS).
+
+% socket:send/2 answers what it could not send: the socket is non-blocking, so
+% a packet larger than the socket buffer, or one sent to a peer that is not
+% draining, goes out over several sends. gen_tcp answers for the whole packet,
+% so the rest is ours to send.
+send(Socket, Packet, RetryMs) ->
     case call(Socket, {send, Packet}) of
         ok ->
             ok;
-        % socket:send/2 answers what it could not send: the socket is
-        % non-blocking, so a packet larger than the socket buffer, or one sent
-        % to a peer that is not draining, goes out over several sends. gen_tcp
-        % answers for the whole packet, so the rest is ours to send.
         {ok, Packet} ->
-            % the buffer is full: give the peer a moment to read rather than
-            % spin on a socket that has no room
+            % The socket had no room at all. Waiting for it to drain is the
+            % only thing to do -- there is no writable notification to select
+            % on yet -- so back off rather than spin, and start over from the
+            % shortest wait as soon as the peer reads again.
             receive
-            after 1 -> ok
+            after RetryMs -> ok
             end,
-            send(Socket, Packet);
+            send(Socket, Packet, min(RetryMs * 2, ?SEND_RETRY_MAX_MS));
         {ok, Rest} ->
-            send(Socket, Rest);
+            send(Socket, Rest, ?SEND_RETRY_MIN_MS);
         Error ->
             Error
     end.
