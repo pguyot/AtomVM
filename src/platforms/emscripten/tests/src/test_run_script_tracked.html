@@ -47,6 +47,10 @@ SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
     const log = window.document.getElementById('log');
     window.Module = await AtomVM({
         arguments: ['/tests/build/test_run_script_tracked.beam', ...libraries],
+        print: (text) => {
+            log.textContent += text + "\n";
+            console.log(text);
+        },
         printErr: (text) => {
             log.textContent += text + "\n";
             console.error(text);
