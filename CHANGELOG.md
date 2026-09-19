@@ -348,6 +348,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped a read selection on the same socket, and left it registered with the platform with
   nothing to notify. Read and write now carry their own waiter, and `enif_select_write/6` is
   implemented rather than only declared
+- Fixed `ssl` reporting an opaque `{error, -2}` when a socket failed for a reason other than
+  would-block or a reset: the socket layer's own sentinel reached mbedtls, which handed it
+  straight back. It is now `MBEDTLS_ERR_NET_SEND_FAILED` / `MBEDTLS_ERR_NET_RECV_FAILED`
 
 ## [0.7.0-beta.0] - 2026-09-28
 
