@@ -46,9 +46,14 @@ bad_reference() ->
         _ -> unexpected_success
     catch
         error:badarg:Stack ->
-            [{erlang, demonitor, _, _} | _] = Stack,
-            ok
+            check_demonitor_stacktrace(Stack)
     end.
+
+% AVM_CREATE_STACKTRACES=off answers `undefined' rather than a list.
+check_demonitor_stacktrace(undefined) ->
+    ok;
+check_demonitor_stacktrace([{erlang, demonitor, _, _} | _]) ->
+    ok.
 
 tail_put(K, V) -> put(K, V).
 tail_erase(K) -> erase(K).
