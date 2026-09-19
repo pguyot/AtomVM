@@ -42,8 +42,8 @@
 %% gen_server implementation (hidden)
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--define(SEND_RETRY_MIN_MS, 1).
--define(SEND_RETRY_MAX_MS, 32).
+%% Only used where the platform cannot notify us that a socket has room again.
+-define(SEND_RETRY_MS, 10).
 
 -type reason() :: term().
 
@@ -102,30 +102,9 @@ connect(Address, Port, Options) ->
 %% @hidden
 -spec send(Socket :: inet:socket(), Packet :: packet()) -> ok | {error, Reason :: reason()}.
 send(Socket, Packet) ->
-    send(Socket, Packet, ?SEND_RETRY_MIN_MS).
-
-% socket:send/2 answers what it could not send: the socket is non-blocking, so
-% a packet larger than the socket buffer, or one sent to a peer that is not
-% draining, goes out over several sends. gen_tcp answers for the whole packet,
-% so the rest is ours to send.
-send(Socket, Packet, RetryMs) ->
-    case call(Socket, {send, Packet}) of
-        ok ->
-            ok;
-        {ok, Packet} ->
-            % The socket had no room at all. Waiting for it to drain is the
-            % only thing to do -- there is no writable notification to select
-            % on yet -- so back off rather than spin, and start over from the
-            % shortest wait as soon as the peer reads again.
-            receive
-            after RetryMs -> ok
-            end,
-            send(Socket, Packet, min(RetryMs * 2, ?SEND_RETRY_MAX_MS));
-        {ok, Rest} ->
-            send(Socket, Rest, ?SEND_RETRY_MIN_MS);
-        Error ->
-            Error
-    end.
+    % The process owning the socket answers for the whole packet: what did not
+    % fit in the socket buffer waits there for the peer to read.
+    call(Socket, {send, Packet}).
 
 %% @hidden
 -spec recv(Socket :: inet:socket(), Length :: non_neg_integer()) ->
@@ -289,7 +268,7 @@ handle_call({send, Packet}, From, State) ->
         {send, Packet}, From, State
     ]),
     ?LOG_INFO("Sending packet"),
-    {reply, socket:send(State#state.socket, Packet), State};
+    {noreply, do_send(State, From, Packet)};
 handle_call({recv, Length, Timeout}, From, State) ->
     ?LOG_DEBUG("handle_call [~p], ~p, ~p]", [
         {recv, Length, Timeout}, From, State
@@ -398,7 +377,19 @@ handle_info({'$socket', _Socket, select, Ref}, State) ->
             NewState = handle_passive_recv(State, From, Length, Timeout),
             {noreply, NewState#state{
                 pending_selects = maps:remove(Ref, State#state.pending_selects)
-            }}
+            }};
+        {send, From, Rest} ->
+            ?LOG_INFO("Select ready for write on send"),
+            % do_send may select again for what is still left, under a ref of
+            % its own, so the map it returns is the one to remove from.
+            NewState = do_send(
+                State#state{
+                    pending_selects = maps:remove(Ref, State#state.pending_selects)
+                },
+                From,
+                Rest
+            ),
+            {noreply, NewState}
     end;
 handle_info({'$socket', Socket, abort, {Ref, closed}}, State) ->
     %% TODO cancel timer
@@ -420,8 +411,16 @@ handle_info({'$socket', Socket, abort, {Ref, closed}}, State) ->
             gen_server:reply(From, {error, closed}),
             {noreply, State#state{
                 pending_selects = maps:remove(Ref, State#state.pending_selects)
+            }};
+        {send, From, _Rest} ->
+            socket:nif_select_stop(Socket),
+            gen_server:reply(From, {error, closed}),
+            {noreply, State#state{
+                pending_selects = maps:remove(Ref, State#state.pending_selects)
             }}
     end;
+handle_info({retry_send, From, Packet}, State) ->
+    {noreply, do_send(State, From, Packet)};
 handle_info({timeout, Ref, From}, State) ->
     ?LOG_DEBUG("handle_info [~p], ~p]", [
         {timeout, Ref, From}, State
@@ -575,6 +574,39 @@ handle_passive_recv(State, From, Length, _Timeout) ->
             ?LOG_ERROR("Error on receive from socket:nif_recv Error=~p", [Error]),
             socket:nif_select_stop(Socket),
             ?LOG_INFO("unable to receive on pending select~n"),
+            gen_server:reply(From, Error),
+            State
+    end.
+
+%% A socket takes only what fits in its buffer, so a packet larger than that,
+%% or one sent to a peer that is not reading, goes out over several sends.
+%% Waiting for the socket to have room again is a select like any other, which
+%% leaves this process free to serve recv, accept and close in the meantime.
+do_send(State, From, Packet) ->
+    case socket:send(State#state.socket, Packet) of
+        ok ->
+            gen_server:reply(From, ok),
+            State;
+        {ok, Rest} ->
+            wait_for_room(State, From, Rest);
+        {error, _Reason} = Error ->
+            gen_server:reply(From, Error),
+            State
+    end.
+
+%% @private
+wait_for_room(State, From, Rest) ->
+    Ref = erlang:make_ref(),
+    case socket:nif_select_write(State#state.socket, Ref) of
+        ok ->
+            PendingSelects = State#state.pending_selects,
+            State#state{pending_selects = PendingSelects#{Ref => {send, From, Rest}}};
+        {error, enotsup} ->
+            % The platform cannot say when a socket has room again, so the
+            % only thing left is to try again in a moment.
+            erlang:send_after(?SEND_RETRY_MS, self(), {retry_send, From, Rest}),
+            State;
+        {error, _Reason} = Error ->
             gen_server:reply(From, Error),
             State
     end.

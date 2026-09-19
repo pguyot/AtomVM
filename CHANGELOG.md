@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added `socket:nif_select_write/2`, so a process can wait for a socket to have room to send
   instead of retrying, on platforms whose sockets can say so (it answers `{error, enotsup}`
-  elsewhere, and callers fall back to retrying)
+  elsewhere, and callers fall back to retrying). `gen_tcp` with the `socket` backend and the
+  `ssl` module now wait on it rather than retrying
 - Added receive markers (`recv_marker_reserve/bind/use/clear`), so a `receive` matching a
   freshly created reference starts after the messages that were already queued instead of
   rescanning them; a selective receive behind a 10,000-message backlog was 358x faster
