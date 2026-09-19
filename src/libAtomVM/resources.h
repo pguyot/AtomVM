@@ -82,6 +82,19 @@ struct ResourceSerializedMark
 };
 
 /**
+ * @brief What one direction of a selectable event answers to, and who it
+ * answers. Read and write are selected for separately and fire separately, so
+ * each carries its own waiter: a socket may be waiting to be readable and to
+ * be writable at the same time, for different processes and different refs.
+ */
+struct SelectEventDirection
+{
+    int32_t local_pid;
+    uint64_t ref_ticks;
+    Message *message;
+};
+
+/**
  * @brief A selectable event.
  */
 struct SelectEvent
@@ -92,9 +105,8 @@ struct SelectEvent
     bool read;
     bool write;
     bool close;
-    int32_t local_pid;
-    uint64_t ref_ticks;
-    Message *message;
+    struct SelectEventDirection reader;
+    struct SelectEventDirection writer;
 };
 
 /**
