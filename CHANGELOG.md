@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `atomvm:add_avm_pack_binary/2`) is rejected when loaded
 - STM32 builds now enable `AVM_MINIMAL_OPCODES` by default, so modules compiled with the
   `no_bs_create_bin`, `no_bs_match` or `no_ssa_opt_bs_ensure` compiler options cannot be loaded
+- Added `socket:nif_select_write/2`, so a process can wait for a socket to have room to send
+  instead of retrying, on platforms whose sockets can say so (it answers `{error, enotsup}`
+  elsewhere, and callers fall back to retrying)
 - Added receive markers (`recv_marker_reserve/bind/use/clear`), so a `receive` matching a
   freshly created reference starts after the messages that were already queued instead of
   rescanning them; a selective receive behind a 10,000-message backlog was 358x faster

@@ -31,6 +31,7 @@ test() ->
     ok = test_recv_nowait(),
     ok = test_accept_nowait(),
     ok = test_setopt_getopt(),
+    ok = test_select_write(),
     case erlang:system_info(machine) of
         "ATOM" ->
             ok = test_abandon_select();
@@ -522,6 +523,50 @@ test_accept_nowait(NoWaitRef) ->
         end,
     socket:close(Socket),
     ok.
+
+% A socket with room to send is writable straight away, so selecting for write
+% answers at once. The point of the test is the pair: a socket selected for
+% read and for write at the same time must answer both, each with its own ref.
+% That is the shape a send waiting for room takes while the owner is also
+% waiting for incoming data.
+test_select_write() ->
+    etest:flush_msg_queue(),
+
+    {ok, ListenSocket} = socket:open(inet, stream, tcp),
+    ok = socket:setopt(ListenSocket, {socket, reuseaddr}, true),
+    ok = socket:bind(ListenSocket, #{family => inet, addr => loopback, port => 0}),
+    ok = socket:listen(ListenSocket),
+    {ok, #{port := Port}} = socket:sockname(ListenSocket),
+
+    {ok, ClientSocket} = socket:open(inet, stream, tcp),
+    ok = socket:connect(ClientSocket, #{family => inet, addr => loopback, port => Port}),
+    {ok, ServerSocket} = socket:accept(ListenSocket),
+
+    ReadRef = erlang:make_ref(),
+    WriteRef = erlang:make_ref(),
+    ok = socket:nif_select_read(ClientSocket, ReadRef),
+    ok = socket:nif_select_write(ClientSocket, WriteRef),
+
+    ok = expect_select(ClientSocket, WriteRef),
+
+    % the read selection survived the write one: data arriving now answers it
+    ok = socket:send(ServerSocket, <<"hello">>),
+    ok = expect_select(ClientSocket, ReadRef),
+    {ok, <<"hello">>} = socket:recv(ClientSocket, 5),
+
+    ok = socket:close(ClientSocket),
+    ok = socket:close(ServerSocket),
+    ok = socket:close(ListenSocket),
+    etest:flush_msg_queue(),
+    ok.
+
+expect_select(Socket, Ref) ->
+    receive
+        {'$socket', Socket, select, Ref} ->
+            ok
+    after 5000 ->
+        error({select_timeout, ?MODULE, ?LINE})
+    end.
 
 test_setopt_getopt() ->
     {ok, Socket} = socket:open(inet, stream, tcp),
