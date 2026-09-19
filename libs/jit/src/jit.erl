@@ -3609,6 +3609,48 @@ emit_pass(
                 Src, Fail, NumPairs, Rest3, MMod, MSt1, State0
             )
     end;
+% 193
+emit_pass(<<?OP_UPDATE_RECORD_ID, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    %% The hint tells the compiler's allocator whether the source may be
+    %% reused; OTP's emulator drops it (erts ops.tab) and so does this.
+    {_Hint, Rest1} = decode_atom(Rest0),
+    %% The id is only what the loader could resolve ahead of time and is []
+    %% for an anonymous update, so pass the record being updated in its place:
+    %% jit_resolve_record_id takes the layout from a record term, which is
+    %% what erl_update_native_record does too.
+    RestAtSrc = skip_compact_term(Rest1),
+    {MSt1, Src, _} = decode_compact_term(RestAtSrc, MMod, MSt0, State0),
+    ?TRACE("OP_UPDATE_RECORD_ID ~p\n", [Src]),
+    put_record_common(Src, RestAtSrc, RestAtSrc, MMod, MSt1, State0);
+% 192
+emit_pass(
+    <<?OP_GET_RECORD_ELEMENTS_ID, Rest0/binary>>,
+    MMod,
+    MSt0,
+    State0
+) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {Fail, Rest1} = decode_label(Rest0),
+    %% The id is what the loader could have resolved ahead of time: the record
+    %% name, a {Module, Name} pair, or [] when nothing is known. The captured
+    %% definition in src decides either way, so skip it -- the OTP emulator
+    %% rewrites this form to the same i_get_record_elements (erts ops.tab).
+    Rest2 = skip_compact_term(Rest1),
+    {MSt1, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt0, State0),
+    {ListLen, Rest4} = decode_extended_list_header(Rest3),
+    ?TRACE("OP_GET_RECORD_ELEMENTS_ID ~p, ~p, ~p\n", [Fail, Src, ListLen]),
+    NumPairs = ListLen div 2,
+    case MMod:get_vm_record_type(MSt1, Src) of
+        #{fields := FieldAtoms} ->
+            get_record_elements_resolved(
+                Src, FieldAtoms, Fail, NumPairs, Rest4, MMod, MSt1, State0
+            );
+        undefined ->
+            get_record_elements_generic(
+                Src, Fail, NumPairs, Rest4, MMod, MSt1, State0
+            )
+    end;
 % 189
 emit_pass(<<?OP_PUT_RECORD, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -9574,6 +9616,13 @@ field_position_map(FieldAtoms) ->
 %% PRIM_RECORD_DEF_ARITY + PRIM_PUT_RECORD.
 put_record_generic(Rest1, MMod, MSt0, State0) ->
     {MSt1, Id, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
+    put_record_common(Id, Rest1, Rest2, MMod, MSt1, State0).
+
+%% @private
+%% Shared body of OP_PUT_RECORD and OP_UPDATE_RECORD_ID. `IdRest' is where the
+%% id operand is re-decoded from after the GC below (the record being updated,
+%% for OP_UPDATE_RECORD_ID) and `Rest2' is positioned at src.
+put_record_common(Id, IdRest, Rest2, MMod, MSt1, State0) ->
     {MSt2, Src, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
     {MSt3, Dest, Rest4} = decode_dest(Rest3, MMod, MSt2),
     {Live, Rest5} = decode_literal(Rest4),
@@ -9587,7 +9636,7 @@ put_record_generic(Rest1, MMod, MSt0, State0) ->
     {MSt7, TrimReg} = MMod:call_primitive(MSt6, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
     MSt8 = MMod:free_native_registers(MSt7, [TrimReg]),
     {MSt8a, NewSrc} = memory_ensure_free_with_extra_root(Src, Live, {free, ArityReg}, MMod, MSt8),
-    {MSt9, NewId, _} = decode_compact_term(Rest1, MMod, MSt8a, State0),
+    {MSt9, NewId, _} = decode_compact_term(IdRest, MMod, MSt8a, State0),
     {MSt10, KVReg} =
         if
             NumPairs > 0 ->

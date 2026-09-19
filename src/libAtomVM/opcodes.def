@@ -267,5 +267,7 @@ X_OPCODE(OP_GET_RECORD_ELEMENTS, 188, get_record_elements, "fS[ad]")
 X_OPCODE(OP_PUT_RECORD, 189, put_record, "jssdt[as]")
 X_OPCODE(OP_IS_RECORD_ACCESSIBLE, 190, is_record_accessible, "fsa")
 X_OPCODE(OP_GET_RECORD_FIELD, 191, get_record_field, "fssad")
+X_OPCODE(OP_GET_RECORD_ELEMENTS_ID, 192, get_record_elements_id, "fsS[ad]")
+X_OPCODE(OP_UPDATE_RECORD_ID, 193, update_record_id, "assdt[as]")
 
 // Remember to keep this list in sync with libs/jit/src/opcodes.hrl

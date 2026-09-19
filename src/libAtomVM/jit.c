@@ -549,6 +549,13 @@ static Context *jit_raise_undef_import(
 
 static const struct RecordDef *jit_resolve_record_id(Context *ctx, JITState *jit_state, term id)
 {
+    if (term_is_record(id)) {
+        // OP_UPDATE_RECORD_ID has no usable id of its own -- it is [] for an
+        // anonymous update -- so the generated code passes the record being
+        // updated and the layout comes from there, as erl_update_native_record
+        // does.
+        return term_get_record_def(id);
+    }
     if (term_is_atom(id)) {
         return module_find_record_def(jit_state->module, id);
     }

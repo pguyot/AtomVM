@@ -535,6 +535,42 @@ op_scan(<<?OP_PUT_TUPLE, Rest0/binary>>) ->
     scan_ops(Rest1, [write]);
 op_scan(<<?OP_PUT, Rest0/binary>>) ->
     scan_ops(Rest0, [read]);
+op_scan(<<?OP_UPDATE_RECORD_ID, Rest0/binary>>) ->
+    %% Hint, id, Src, Dest, Live, [field atom, value...]: OP_PUT_RECORD with
+    %% the fail label replaced by a hint atom, and no fail label at all.
+    case scan_ops(Rest0, [read, read, read, write]) of
+        {plain, R, W, Rest1} ->
+            {Live, Rest2} = decode_value(Rest1),
+            case skip_ext_list(Rest2) of
+                {Ops, Rest3} ->
+                    {plain, [{lt, Live} | R] ++ reads_of(Ops), [{ge, Live} | W], Rest3};
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
+op_scan(<<?OP_GET_RECORD_ELEMENTS_ID, Rest0/binary>>) ->
+    %% As OP_GET_RECORD_ELEMENTS, with the loader hint (record name,
+    %% {Module, Name} or []) between the fail label and src.
+    {FailLabel, Rest1} = decode_value(Rest0),
+    case skip_operand(Rest1) of
+        {_Id, Rest2} ->
+            case skip_operand(Rest2) of
+                {Src, Rest3} ->
+                    case skip_ext_list(Rest3) of
+                        {Ops, Rest4} ->
+                            {Reads, Writes} = kv_reads_writes(Ops, [], []),
+                            {branch, reads_of([Src]) ++ Reads, Writes, [FailLabel], Rest4};
+                        unknown ->
+                            unknown
+                    end;
+                unknown ->
+                    unknown
+            end;
+        unknown ->
+            unknown
+    end;
 op_scan(<<Op, Rest0/binary>>) when
     Op =:= ?OP_GET_MAP_ELEMENTS; Op =:= ?OP_GET_RECORD_ELEMENTS
 ->

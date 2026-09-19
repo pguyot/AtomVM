@@ -51,7 +51,7 @@
 #define MINIMUM_OTP_COMPILER_VERSION 26
 #endif
 #ifndef MAXIMUM_OTP_COMPILER_VERSION
-#define MAXIMUM_OTP_COMPILER_VERSION 29
+#define MAXIMUM_OTP_COMPILER_VERSION 30
 #endif
 
 // Support for BEAM files compiled with specific compiler options.
@@ -6972,9 +6972,32 @@ schedule_in:
                     break;
                 }
 
-                case OP_GET_RECORD_ELEMENTS: {
+                case OP_GET_RECORD_ELEMENTS:
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                case OP_GET_RECORD_ELEMENTS_ID:
+#endif
+                {
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                    // Dispatch is switch (*pc++), so the opcode byte is the
+                    // one just behind pc: the two forms differ only by the
+                    // extra operand read below.
+                    uint8_t elements_opcode = pc[-1];
+#endif
                     uint32_t fail_label;
                     DECODE_LABEL(fail_label, pc);
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                    if (elements_opcode == OP_GET_RECORD_ELEMENTS_ID) {
+                        // What the loader could have resolved ahead of time:
+                        // the record name, a {Module, Name} pair, or [] when
+                        // nothing is known. The captured definition in src is
+                        // what decides here either way, so drop it -- the OTP
+                        // emulator rewrites both forms to the same
+                        // i_get_record_elements (erts ops.tab).
+                        term id;
+                        DECODE_COMPACT_TERM(id, pc);
+                        UNUSED(id);
+                    }
+#endif
                     DEST_REGISTER(src_reg);
                     DECODE_DEST_REGISTER(src_reg, pc);
                     DECODE_EXTENDED_LIST_TAG(pc);
@@ -7034,10 +7057,28 @@ schedule_in:
                     break;
                 }
 
-                case OP_PUT_RECORD: {
-                    uint32_t fail_label;
-                    DECODE_LABEL(fail_label, pc);
-                    UNUSED(fail_label);
+                case OP_PUT_RECORD:
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                case OP_UPDATE_RECORD_ID:
+#endif
+                {
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                    uint8_t record_opcode = pc[-1];
+                    if (record_opcode == OP_UPDATE_RECORD_ID) {
+                        // The hint tells the compiler's allocator whether the
+                        // source may be reused; OTP's emulator drops it (erts
+                        // ops.tab) and so does this: the update below always
+                        // builds a fresh record.
+                        term hint;
+                        DECODE_ATOM(hint, pc);
+                        UNUSED(hint);
+                    } else
+#endif
+                    {
+                        uint32_t fail_label;
+                        DECODE_LABEL(fail_label, pc);
+                        UNUSED(fail_label);
+                    }
                     // The compiler emits id as either an atom literal or a
                     // 2-tuple literal {Module, Name}. Both live in the
                     // module's literal table, not on the context heap, so
@@ -7067,6 +7108,19 @@ schedule_in:
                     TRACE("put_record/6 id=0x%" TERM_X_FMT ", live=%u, list_len=%u\n", id, live, list_len);
 
                     const struct RecordDef *def = NULL;
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+                    if (record_opcode == OP_UPDATE_RECORD_ID) {
+                        // An update takes its layout from the record being
+                        // updated: the id is only what the loader could
+                        // resolve ahead of time and is [] for an anonymous
+                        // update. erl_update_native_record does the same.
+                        if (UNLIKELY(!term_is_record(src))) {
+                            (void) raise_badrecord(ctx, src);
+                            HANDLE_ERROR();
+                        }
+                        def = term_get_record_def(src);
+                    } else
+#endif
                     if (term_is_atom(id)) {
                         // Local record: name atom only, resolve against current module.
                         def = module_find_record_def(mod, id);
