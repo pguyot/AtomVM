@@ -117,6 +117,22 @@ static SemaphoreHandle_t signal_semaphore = NULL;
 
 void esp32_sys_queue_init()
 {
+    // One VM per boot on a device, so this normally runs once. The test
+    // harness starts a fresh VM per test case, and these handles live in
+    // statics: release the previous generation rather than leak it. The
+    // members go first, then the set they pointed at.
+    if (event_queue) {
+        vQueueDelete(event_queue);
+        event_queue = NULL;
+    }
+    if (signal_semaphore) {
+        vSemaphoreDelete(signal_semaphore);
+        signal_semaphore = NULL;
+    }
+    if (event_set) {
+        vQueueDelete(event_set);
+        event_set = NULL;
+    }
     // + 1 accounts for the signal binary semaphore
     event_set = xQueueCreateSet(EVENT_QUEUE_LEN * 4 + 1);
     event_queue = xQueueCreate(EVENT_QUEUE_LEN, sizeof(void *));

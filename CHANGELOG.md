@@ -232,6 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed `globalcontext_destroy/1` leaking the atom table and the module table: an embedder that
   starts and stops several VMs in one process lost about 14KB per VM
+- Fixed the ESP32 event queue, queue set and signal semaphore leaking when a second VM is
+  started in the same boot
 - Fixed `emscripten:run_script/2` with `main_thread` and without `async` never returning: the
   main thread readied the trapped caller without waking the polling scheduler, so the answer
   sat in the mailbox of a process no scheduler came back to
