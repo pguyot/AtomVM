@@ -20,6 +20,8 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "context.h"
 #include "defaultatoms.h"
@@ -29,6 +31,7 @@
 #include "external_term.h"
 #include "globalcontext.h"
 #include "memory.h"
+#include "resources.h"
 #include "scheduler.h"
 #include "utils.h"
 
@@ -704,6 +707,87 @@ void test_resource_release_in_down_handler_two_monitors(void)
     globalcontext_destroy(glb);
 }
 
+static void select_stop(ErlNifEnv *env, void *obj, ErlNifEvent event, int is_direct_call)
+{
+    UNUSED(env);
+    UNUSED(obj);
+    UNUSED(event);
+    UNUSED(is_direct_call);
+}
+
+// Takes the next message, which the test arranged to be the atom naming the
+// direction that fired.
+static term select_take_notification(Context *ctx)
+{
+    assert(mailbox_process_outer_list_native(&ctx->mailbox) == NULL);
+    assert(mailbox_has_next(&ctx->mailbox));
+    term message;
+    assert(mailbox_peek(ctx, &message));
+    mailbox_remove_message(&ctx->mailbox, &ctx->heap);
+    return message;
+}
+
+// A socket is readable and writable independently, and a process may be
+// waiting for both at once -- a send that filled the socket buffer waiting for
+// room while the same socket is selected for incoming data. Selecting for one
+// direction must leave the other one armed and answer it with its own message.
+void test_select_read_and_write(void)
+{
+    GlobalContext *glb = globalcontext_new();
+    Context *ctx = context_new(glb);
+    ErlNifEnv *env = erl_nif_env_from_context(ctx);
+
+    ErlNifResourceTypeInit init;
+    init.members = 2;
+    init.dtor = NULL;
+    init.stop = select_stop;
+    ErlNifResourceFlags flags;
+    ErlNifResourceType *resource_type = enif_init_resource_type(env, "test_select", &init, ERL_NIF_RT_CREATE, &flags);
+    assert(resource_type != NULL);
+
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+
+    void *rsrc = enif_alloc_resource(resource_type, sizeof(uint32_t));
+    assert(rsrc != NULL);
+
+    assert(enif_select_read(env, fds[0], rsrc, &ctx->process_id, READY_INPUT_ATOM, NULL) == 0);
+    assert(enif_select_write(env, fds[0], rsrc, &ctx->process_id, READY_OUTPUT_ATOM, NULL) == 0);
+
+    // Selecting for write must not have disarmed the read side.
+    assert(select_event_notify(fds[0], true, true, glb));
+    term first = select_take_notification(ctx);
+    term second = select_take_notification(ctx);
+    assert((first == READY_INPUT_ATOM && second == READY_OUTPUT_ATOM)
+        || (first == READY_OUTPUT_ATOM && second == READY_INPUT_ATOM));
+    assert(!mailbox_has_next(&ctx->mailbox));
+
+    // Both directions fired, so both are disarmed: nothing is notified again.
+    assert(!select_event_notify(fds[0], true, true, glb));
+
+    // Arming one direction leaves the other one alone.
+    assert(enif_select_write(env, fds[0], rsrc, &ctx->process_id, READY_OUTPUT_ATOM, NULL) == 0);
+    assert(select_event_notify(fds[0], true, true, glb));
+    assert(select_take_notification(ctx) == READY_OUTPUT_ATOM);
+    assert(!mailbox_has_next(&ctx->mailbox));
+
+    // A ref based select arms both directions from one call.
+    assert(enif_select(env, fds[0], ERL_NIF_SELECT_READ | ERL_NIF_SELECT_WRITE, rsrc, &ctx->process_id, UNDEFINED_ATOM) == 0);
+    assert(select_event_notify(fds[0], true, false, glb));
+    assert(term_is_tuple(select_take_notification(ctx)));
+    assert(select_event_notify(fds[0], false, true, glb));
+    assert(term_is_tuple(select_take_notification(ctx)));
+
+    assert(enif_select(env, fds[0], ERL_NIF_SELECT_STOP, rsrc, &ctx->process_id, term_nil()) == ERL_NIF_SELECT_STOP_CALLED);
+
+    enif_release_resource(rsrc);
+    close(fds[0]);
+    close(fds[1]);
+
+    scheduler_terminate(ctx);
+    globalcontext_destroy(glb);
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
@@ -719,6 +803,7 @@ int main(int argc, char **argv)
     test_resource_binaries();
     test_resource_release_in_down_handler();
     test_resource_release_in_down_handler_two_monitors();
+    test_select_read_and_write();
 
     return EXIT_SUCCESS;
 }
