@@ -399,27 +399,51 @@ test_listen_connect_parameters_server_loop(ListenMode, false = ListenActive, Soc
             {error, {unexpected_result, server, passive_receive, Other}}
     end.
 
+% Connecting used to be dialled at www.github.com and www.atomvm.org, which
+% made the suite depend on the runner's egress: a lossy one answers ECONNRESET
+% and the job goes red for no fault of the VM. A listener of our own on the
+% loopback covers the same two client paths -- an address handed over as a
+% tuple, and one the resolver has to turn into an address first -- without
+% leaving the host.
 test_connect_parameters() ->
+    Hostname = "localhost",
     IP =
-        case inet:getaddr("www.github.com", inet) of
+        case inet:getaddr(Hostname, inet) of
             {ok, IPAddress} ->
                 IPAddress;
             Error ->
                 io:format(
-                    "Unable to resolve www.github.com, ~p; unable to complete connection tests.~n",
-                    [Error]
+                    "Unable to resolve ~s, ~p; unable to complete connection tests.~n",
+                    [Hostname, Error]
                 ),
                 throw(Error)
         end,
-    Hostname = "www.atomvm.org",
-    Port = 80,
+    {ok, ListenSocket} = gen_tcp:listen(0, [{active, false}]),
+    {ok, {_ListenAddress, Port}} = inet:sockname(ListenSocket),
+    Acceptor = spawn(fun() -> test_connect_parameters_accept_loop(ListenSocket) end),
     OptTests = [
         [{active, true}],
         [{active, false}],
         [{inet_backend, socket}, {active, true}],
         [{inet_backend, socket}, {active, false}]
     ],
-    test_connect_parameters(OptTests, IP, Hostname, Port, []).
+    try
+        test_connect_parameters(OptTests, IP, Hostname, Port, [])
+    after
+        exit(Acceptor, kill),
+        gen_tcp:close(ListenSocket)
+    end.
+
+% Every connection the test opens is closed again right away, so the server
+% side has nothing to do but take it and drop it.
+test_connect_parameters_accept_loop(ListenSocket) ->
+    case gen_tcp:accept(ListenSocket) of
+        {ok, Socket} ->
+            gen_tcp:close(Socket),
+            test_connect_parameters_accept_loop(ListenSocket);
+        {error, _Reason} ->
+            ok
+    end.
 
 test_connect_parameters([], _IP, _Host, _Port, Results) ->
     case lists:flatten(Results) of
@@ -429,9 +453,7 @@ test_connect_parameters([], _IP, _Host, _Port, Results) ->
             ErrorList
     end;
 test_connect_parameters([Test | TestOpts], IP, Host, Port, Results) ->
-    io:format("GEN_TCP_CONNECT-TEST> IP Address=~p (www.github.com) ClientConnectOptions=~p~n", [
-        IP, Test
-    ]),
+    io:format("GEN_TCP_CONNECT-TEST> IP Address=~p ClientConnectOptions=~p~n", [IP, Test]),
     IpResult =
         case gen_tcp:connect(IP, Port, Test) of
             {ok, Soc0} ->
