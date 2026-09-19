@@ -341,6 +341,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts and stops several VMs in one process lost about 14KB per VM
 - Fixed the ESP32 event queue, queue set and signal semaphore leaking when a second VM is
   started in the same boot
+- Fixed `enif_select` disarming the other direction of an event: selecting a socket for writing
+  dropped a read selection on the same socket, and left it registered with the platform with
+  nothing to notify. Read and write now carry their own waiter, and `enif_select_write/6` is
+  implemented rather than only declared
 
 ## [0.7.0-beta.0] - 2026-09-28
 
