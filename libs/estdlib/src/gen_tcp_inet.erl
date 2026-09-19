@@ -75,10 +75,29 @@ connect(_Address, _Port, _Params) ->
 
 %% @hidden
 -spec send(Socket :: inet:socket(), Packet :: packet()) -> ok | {error, Reason :: reason()}.
+send(Socket, Packet) when is_binary(Packet) ->
+    send_all(Socket, Packet);
 send(Socket, Packet) ->
+    send_all(Socket, erlang:iolist_to_binary(Packet)).
+
+%% The driver takes what fits in the socket buffer and says how much that was,
+%% so a packet larger than the buffer, or one sent to a peer that is not
+%% draining, goes out over several sends. Answering ok after the first of them
+%% loses the rest of the packet.
+send_all(Socket, Packet) ->
+    Size = byte_size(Packet),
     case call(Socket, {send, Packet}) of
-        {ok, _Len} ->
+        {ok, Size} ->
             ok;
+        {ok, 0} ->
+            % the buffer is full: give the peer a moment to read rather than
+            % spin on a socket that has no room
+            receive
+            after 1 -> ok
+            end,
+            send_all(Socket, Packet);
+        {ok, Sent} ->
+            send_all(Socket, binary:part(Packet, Sent, Size - Sent));
         Error ->
             Error
     end.

@@ -99,7 +99,25 @@ connect(Address, Port, Options) ->
 %% @hidden
 -spec send(Socket :: inet:socket(), Packet :: packet()) -> ok | {error, Reason :: reason()}.
 send(Socket, Packet) ->
-    call(Socket, {send, Packet}).
+    case call(Socket, {send, Packet}) of
+        ok ->
+            ok;
+        % socket:send/2 answers what it could not send: the socket is
+        % non-blocking, so a packet larger than the socket buffer, or one sent
+        % to a peer that is not draining, goes out over several sends. gen_tcp
+        % answers for the whole packet, so the rest is ours to send.
+        {ok, Packet} ->
+            % the buffer is full: give the peer a moment to read rather than
+            % spin on a socket that has no room
+            receive
+            after 1 -> ok
+            end,
+            send(Socket, Packet);
+        {ok, Rest} ->
+            send(Socket, Rest);
+        Error ->
+            Error
+    end.
 
 %% @hidden
 -spec recv(Socket :: inet:socket(), Length :: non_neg_integer()) ->
