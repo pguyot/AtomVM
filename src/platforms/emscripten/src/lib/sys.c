@@ -728,7 +728,10 @@ static emscripten_fetch_t *fetch_file(const char *url)
     if (fetch->status == 200) {
         return fetch;
     } else {
-        printf("Downloading %s failed, HTTP failure status code: %d.\n", fetch->url, fetch->status);
+        // stderr, not stdout: this is the only trace a failed load leaves, and
+        // the byte count separates a refused request from a truncated answer.
+        fprintf(stderr, "Downloading %s failed, HTTP status code: %d, %llu bytes read.\n",
+            fetch->url, fetch->status, (unsigned long long) fetch->numBytes);
         emscripten_fetch_close(fetch);
         return NULL;
     }
