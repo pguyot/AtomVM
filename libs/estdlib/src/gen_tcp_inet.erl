@@ -28,6 +28,9 @@
 %% inet API
 -export([port/1, sockname/1, peername/1]).
 
+-define(SEND_RETRY_MIN_MS, 1).
+-define(SEND_RETRY_MAX_MS, 32).
+
 -type reason() :: term().
 
 -type option() ::
@@ -85,19 +88,24 @@ send(Socket, Packet) ->
 %% draining, goes out over several sends. Answering ok after the first of them
 %% loses the rest of the packet.
 send_all(Socket, Packet) ->
+    send_all(Socket, Packet, ?SEND_RETRY_MIN_MS).
+
+send_all(Socket, Packet, RetryMs) ->
     Size = byte_size(Packet),
     case call(Socket, {send, Packet}) of
         {ok, Size} ->
             ok;
         {ok, 0} ->
-            % the buffer is full: give the peer a moment to read rather than
-            % spin on a socket that has no room
+            % The socket had no room at all. Waiting for it to drain is the
+            % only thing to do -- this driver has no writable notification --
+            % so back off rather than spin, and start over from the shortest
+            % wait as soon as the peer reads again.
             receive
-            after 1 -> ok
+            after RetryMs -> ok
             end,
-            send_all(Socket, Packet);
+            send_all(Socket, Packet, min(RetryMs * 2, ?SEND_RETRY_MAX_MS));
         {ok, Sent} ->
-            send_all(Socket, binary:part(Packet, Sent, Size - Sent));
+            send_all(Socket, binary:part(Packet, Sent, Size - Sent), ?SEND_RETRY_MIN_MS);
         Error ->
             Error
     end.
