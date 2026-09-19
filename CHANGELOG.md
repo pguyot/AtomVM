@@ -159,6 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoder's key order, which broke `==` and made `=>` updates on an existing key produce
   duplicate keys
 - Fixed `binary_to_term/1,2` accepting maps with duplicate keys instead of raising `badarg`
+- Fixed `enif_select` disarming the other direction of an event: selecting a socket for writing
+  dropped a read selection on the same socket, and left it registered with the platform with
+  nothing to notify. Read and write now carry their own waiter, and `enif_select_write/6` is
+  implemented rather than only declared
 - Fixed `gen_tcp:send/2` losing part of a packet, or failing outright, when the peer was not
   reading fast enough: an accepted socket is non-blocking, so a full socket buffer answered
   EAGAIN (reported as `{error, {send, 35}}` on the `inet` backend and as `{error, closed}` on

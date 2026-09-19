@@ -169,7 +169,8 @@ static int enif_select_common(ErlNifEnv *env, ErlNifEvent event, enum ErlNifSele
                 resource->resource_type->stop(env, obj, event, true);
             }
             refc_binary_decrement_refcount(resource, global);
-            enif_select_event_message_dispose(select_event->message, global, false);
+            enif_select_event_message_dispose(select_event->reader.message, global, false);
+            enif_select_event_message_dispose(select_event->writer.message, global, false);
             free((void *) select_event);
             return ERL_NIF_SELECT_STOP_CALLED;
         }
@@ -197,34 +198,46 @@ static int enif_select_common(ErlNifEnv *env, ErlNifEvent event, enum ErlNifSele
         }
         select_event->event = event;
         select_event->resource = resource;
-        select_event->message = NULL;
-        select_event->ref_ticks = 0;
+        select_event->read = 0;
+        select_event->write = 0;
+        select_event->reader = (struct SelectEventDirection){ 0, 0, NULL };
+        select_event->writer = (struct SelectEventDirection){ 0, 0, NULL };
         // Resource is used in select_event, so we increase refcount.
         refc_binary_increment_refcount(resource);
         list_init(&select_event->head);
         list_append(select_events, &select_event->head);
     }
-    // Second read or second write overwrite ref/message & pid.
-    enif_select_event_message_dispose(select_event->message, global, false);
-    select_event->message = message;
-    if (message) {
-        select_event->ref_ticks = 0;
-    } else {
-        if (ref == UNDEFINED_ATOM) {
-            select_event->ref_ticks = 0;
-        } else {
-            select_event->ref_ticks = term_to_ref_ticks(ref);
-        }
+    // Only the directions being selected for are touched: the other one may
+    // have a waiter of its own, and overwriting its ref would answer it with
+    // somebody else's, while dropping its flag would leave the event
+    // registered with the platform with nothing left to notify.
+    bool select_read = mode & ERL_NIF_SELECT_READ;
+    bool select_write = mode & ERL_NIF_SELECT_WRITE;
+    uint64_t ref_ticks = (message || ref == UNDEFINED_ATOM) ? 0 : term_to_ref_ticks(ref);
+    // A second select in the same direction replaces its ref/message & pid.
+    if (select_read) {
+        enif_select_event_message_dispose(select_event->reader.message, global, false);
+        select_event->reader.message = message;
+        select_event->reader.ref_ticks = ref_ticks;
+        select_event->reader.local_pid = *pid;
+        select_event->read = 1;
     }
-    select_event->local_pid = *pid;
-    select_event->read = mode & ERL_NIF_SELECT_READ;
-    select_event->write = mode & ERL_NIF_SELECT_WRITE;
+    if (select_write) {
+        enif_select_event_message_dispose(select_event->writer.message, global, false);
+        // A message belongs to one direction. enif_select_read/write name a
+        // single direction; enif_select carries a ref and no message, so both
+        // directions can be armed from one call.
+        select_event->writer.message = select_read ? NULL : message;
+        select_event->writer.ref_ticks = ref_ticks;
+        select_event->writer.local_pid = *pid;
+        select_event->write = 1;
+    }
     select_event->close = 0;
     synclist_unlock(&global->select_events);
-    if (select_event->read) {
+    if (select_read) {
         sys_register_select_event(global, event, false);
     }
-    if (select_event->write) {
+    if (select_write) {
         sys_register_select_event(global, event, true);
     }
     return 0;
@@ -255,6 +268,16 @@ int enif_select_read(ErlNifEnv *env, ErlNifEvent event, void *obj, const ErlNifP
     return enif_select_common(env, event, mode, obj, pid, term_nil(), message);
 }
 
+int enif_select_write(ErlNifEnv *env, ErlNifEvent event, void *obj, const ErlNifPid *pid, ERL_NIF_TERM msg, ErlNifEnv *msg_env)
+{
+    if (UNLIKELY(msg_env != NULL)) {
+        return ERL_NIF_SELECT_BADARG;
+    }
+    Message *message = mailbox_message_create_normal_message_from_term(msg);
+    enum ErlNifSelectFlags mode = ERL_NIF_SELECT_WRITE;
+    return enif_select_common(env, event, mode, obj, pid, term_nil(), message);
+}
+
 term select_event_make_notification(void *rsrc_obj, uint64_t ref_ticks, bool is_write, Heap *heap)
 {
     term notification = term_alloc_tuple(4, heap);
@@ -273,25 +296,26 @@ term select_event_make_notification(void *rsrc_obj, uint64_t ref_ticks, bool is_
 
 static void select_event_send_notification(struct SelectEvent *select_event, bool is_write, GlobalContext *global)
 {
-    if (select_event->message) {
+    struct SelectEventDirection *direction = is_write ? &select_event->writer : &select_event->reader;
+    if (direction->message) {
         enum SendMessageResult result;
 #ifdef AVM_SELECT_IN_TASK
-        result = globalcontext_post_message_from_task(global, select_event->local_pid, select_event->message);
+        result = globalcontext_post_message_from_task(global, direction->local_pid, direction->message);
 #else
-        result = globalcontext_post_message(global, select_event->local_pid, select_event->message);
+        result = globalcontext_post_message(global, direction->local_pid, direction->message);
 #endif
         if (result == SEND_MESSAGE_OK) {
             // Ownership was properly transfered.
             // Otherwise, it will be destroyed when we have a context (when enif_select is called with stop for example)
-            select_event->message = NULL;
+            direction->message = NULL;
         }
     } else {
         BEGIN_WITH_STACK_HEAP(SELECT_EVENT_NOTIFICATION_SIZE, heap)
-        term notification = select_event_make_notification(select_event->resource->data, select_event->ref_ticks, is_write, &heap);
+        term notification = select_event_make_notification(select_event->resource->data, direction->ref_ticks, is_write, &heap);
 #ifdef AVM_SELECT_IN_TASK
-        globalcontext_send_message_from_task(global, select_event->local_pid, NormalMessage, notification);
+        globalcontext_send_message_from_task(global, direction->local_pid, NormalMessage, notification);
 #else
-        globalcontext_send_message(global, select_event->local_pid, notification);
+        globalcontext_send_message(global, direction->local_pid, notification);
 #endif
         END_WITH_STACK_HEAP(heap, global)
     }
@@ -342,7 +366,8 @@ static inline void select_event_destroy(struct SelectEvent *select_event, Global
 #else
     refc_binary_decrement_refcount(select_event->resource, global);
 #endif
-    enif_select_event_message_dispose(select_event->message, global, true);
+    enif_select_event_message_dispose(select_event->reader.message, global, true);
+    enif_select_event_message_dispose(select_event->writer.message, global, true);
     free((void *) select_event);
 }
 
