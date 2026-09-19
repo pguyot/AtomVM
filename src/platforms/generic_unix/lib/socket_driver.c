@@ -645,6 +645,13 @@ term socket_driver_do_send(Context *ctx, term data)
     }
 
     if (sent_data == -1) {
+        // An accepted socket is non-blocking, so a full socket buffer answers
+        // EAGAIN instead of waiting for room. Nothing was sent, which is a
+        // short send of zero bytes rather than a failure: the caller sends the
+        // data again, as it does for any other short send.
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return port_create_ok_tuple(ctx, term_from_int(0));
+        }
         return port_create_sys_error_tuple(ctx, SEND_ATOM, errno);
     } else {
         TRACE("socket_driver_do_send: sent data with len %li to fd %i\n", len, socket_data->sockfd);
