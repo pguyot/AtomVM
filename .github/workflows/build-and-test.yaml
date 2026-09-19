@@ -875,11 +875,17 @@ jobs:
         ./tests/test-jit_stream_flash
 
     - name: "Test: test-mailbox with valgrind"
+      # The only C test that both creates and tears down GlobalContexts and
+      # ends up with nothing outstanding, so it is where a leak in
+      # globalcontext_destroy is caught. The other valgrind steps deliberately
+      # stay on the default summary: several of them leave allocations alive on
+      # purpose.
       if: matrix.library-arch == ''
       working-directory: build
       run: |
         ulimit -c unlimited
-        valgrind --error-exitcode=1 ./tests/test-mailbox
+        valgrind --leak-check=full --errors-for-leak-kinds=definite \
+            --error-exitcode=1 ./tests/test-mailbox
 
     - name: "Test: test-mailbox"
       working-directory: build
