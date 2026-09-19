@@ -68,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added receive markers (`recv_marker_reserve/bind/use/clear`), so a `receive` matching a
   freshly created reference starts after the messages that were already queued instead of
   rescanning them; a selective receive behind a 10,000-message backlog was 358x faster
+- Added support for the OTP 30 `get_record_elements_id/4` and `update_record_id/6` opcodes
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.
