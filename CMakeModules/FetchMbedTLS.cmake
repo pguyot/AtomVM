@@ -22,7 +22,7 @@ include(FetchContent)
 
 FetchContent_Declare(
   mbedtls
-  GIT_REPOSITORY http://github.com/mbed-TLS/mbedtls.git
+  GIT_REPOSITORY https://github.com/mbed-TLS/mbedtls.git
   GIT_TAG        v3.6.3.1
   GIT_SHALLOW    1
 )
