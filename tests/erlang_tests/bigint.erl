@@ -1316,8 +1316,11 @@ conv_to_from_float() ->
             true = (trunc(?MODULE:id(1.157920892373160e77)) > ?MODULE:pow(2, 255)),
             true = (trunc(?MODULE:id(-1.157920892373160e77)) < ?MODULE:pow(-2, 255));
         4 ->
-            true = (trunc(?MODULE:id(1.157920892373163e77)) > ?MODULE:pow(2, 255)),
-            true = (trunc(?MODULE:id(-1.157920892373163e77)) < ?MODULE:pow(-2, 255))
+            % No single precision float reaches 2^255: it tops out around
+            % 3.4e38. Use a magnitude that is representable there and still
+            % well past the 64 bit range, so the bignum conversion is exercised.
+            true = (trunc(?MODULE:id(1.0e30)) > ?MODULE:pow(2, 99)),
+            true = (trunc(?MODULE:id(-1.0e30)) < ?MODULE:pow(-2, 99))
     end,
 
     0.

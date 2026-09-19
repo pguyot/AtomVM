@@ -76,6 +76,15 @@ struct Test
 #define SKIP_STACKTRACES false
 #endif
 
+// A single precision float tops out around 3.4e38, so a test whose point is a
+// float larger than any 64 bit integer -- 1.0e78 and friends -- reads as inf
+// there and raises overflow instead of converting.
+#ifdef AVM_USE_SINGLE_PRECISION
+#define SKIP_SINGLE_PRECISION true
+#else
+#define SKIP_SINGLE_PRECISION false
+#endif
+
 // Enabling this will override malloc and calloc weak symbols,
 // so we can force an alternative version of malloc that returns
 // NULL when size is 0.
@@ -460,13 +469,13 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(truncbadarg, -1),
 
     TEST_CASE_EXPECTED(ceilfloat, -2),
-    TEST_CASE(ceilfloatovf),
+    TEST_CASE_COND(ceilfloatovf, 0, SKIP_SINGLE_PRECISION),
     TEST_CASE_EXPECTED(floorfloat, -3),
-    TEST_CASE(floorfloatovf),
+    TEST_CASE_COND(floorfloatovf, 0, SKIP_SINGLE_PRECISION),
     TEST_CASE_EXPECTED(roundfloat, -3),
-    TEST_CASE(roundfloatovf),
+    TEST_CASE_COND(roundfloatovf, 0, SKIP_SINGLE_PRECISION),
     TEST_CASE_EXPECTED(truncfloat, -2),
-    TEST_CASE(truncfloatovf),
+    TEST_CASE_COND(truncfloatovf, 0, SKIP_SINGLE_PRECISION),
 
     TEST_CASE(floataddovf),
     TEST_CASE(floatadd),
