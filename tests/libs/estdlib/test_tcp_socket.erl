@@ -31,9 +31,10 @@ test() ->
     ok = test_recv_nowait(),
     ok = test_accept_nowait(),
     ok = test_setopt_getopt(),
-    ok = test_select_write(),
     case erlang:system_info(machine) of
         "ATOM" ->
+            % these drive the select NIFs directly, which only AtomVM has
+            ok = test_select_write(),
             ok = test_abandon_select();
         "BEAM" ->
             ok
