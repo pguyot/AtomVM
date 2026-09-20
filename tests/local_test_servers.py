@@ -19,17 +19,21 @@
 # SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 #
 
-"""Local endpoints for the qemu network tests (test_socket, test_ssl).
+"""Local endpoints for the network tests, so they do not leave the machine.
 
-The qemu guest reaches this host at 10.0.2.2 (SLIRP user networking), so
-test_socket and test_ssl talk to these servers instead of an external site:
-CI runner egress is slow and lossy enough that external connections pile up
-in lwIP until the board runs out of memory.
+CI runner egress is slow and lossy enough that connections to an external
+site fail on their own: on esp32 they pile up in lwIP until the board runs
+out of memory, and on generic_unix a TLS handshake under valgrind gives up.
 
-- port 80:  answers any request with an HTTP/1.1 301, like http://github.com
-- port 443: TLS (self-signed, clients don't verify), answers HTTP/1.1 200
+- http port: answers any request with an HTTP/1.1 301
+- tls port:  TLS (self-signed, clients don't verify), answers HTTP/1.1 200
 
-Usage: python3 local_test_servers.py [--certdir DIR]
+Used by the esp32 qemu tests, which reach this host at 10.0.2.2 through
+SLIRP user networking and expect the default ports, and by the estdlib
+test_ssl suite, which is told where to connect through the environment.
+
+Usage: python3 tests/local_test_servers.py [--certdir DIR] [--http-port N]
+                                          [--tls-port N] [--bind ADDR] [--cn NAME]
 Generates a self-signed certificate with the openssl CLI if none is found.
 """
 
@@ -40,13 +44,14 @@ import ssl
 import subprocess
 import threading
 
-HTTP_RESPONSE = (
-    b"HTTP/1.1 301 Moved Permanently\r\n"
-    b"Content-Length: 0\r\n"
-    b"Location: https://10.0.2.2/\r\n"
-    b"Connection: close\r\n"
-    b"\r\n"
-)
+def make_http_response(cn):
+    return (
+        b"HTTP/1.1 301 Moved Permanently\r\n"
+        b"Content-Length: 0\r\n"
+        b"Location: https://" + cn.encode() + b"/\r\n"
+        b"Connection: close\r\n"
+        b"\r\n"
+    )
 
 HTTPS_BODY = b"ok"
 HTTPS_RESPONSE = (
@@ -63,14 +68,17 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-class HTTPHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        try:
-            self.request.settimeout(10)
-            self.request.recv(2048)
-            self.request.sendall(HTTP_RESPONSE)
-        except OSError:
-            pass
+def make_http_handler(response):
+    class HTTPHandler(socketserver.BaseRequestHandler):
+        def handle(self):
+            try:
+                self.request.settimeout(10)
+                self.request.recv(2048)
+                self.request.sendall(response)
+            except OSError:
+                pass
+
+    return HTTPHandler
 
 
 def make_https_handler(context):
@@ -95,7 +103,7 @@ def make_https_handler(context):
     return HTTPSHandler
 
 
-def ensure_certificate(certdir):
+def ensure_certificate(certdir, cn):
     cert = os.path.join(certdir, "cert.pem")
     key = os.path.join(certdir, "key.pem")
     if not (os.path.exists(cert) and os.path.exists(key)):
@@ -107,7 +115,7 @@ def ensure_certificate(certdir):
                 "openssl", "req", "-x509", "-newkey", "ec",
                 "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                 "-keyout", key, "-out", cert, "-days", "30",
-                "-subj", "/CN=10.0.2.2",
+                "-subj", "/CN=" + cn,
             ],
             check=True,
             capture_output=True,
@@ -118,9 +126,13 @@ def ensure_certificate(certdir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--certdir", default=".")
+    parser.add_argument("--http-port", type=int, default=80)
+    parser.add_argument("--tls-port", type=int, default=443)
+    parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument("--cn", default="10.0.2.2")
     args = parser.parse_args()
 
-    cert, key = ensure_certificate(args.certdir)
+    cert, key = ensure_certificate(args.certdir, args.cn)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     # Same parameters a github.com TLS 1.2 handshake uses: the esp32 qemu
     # targets only enable TLS 1.2 and their emulated crypto hardware is
@@ -131,11 +143,17 @@ def main():
     context.set_ecdh_curve("prime256v1")
     context.load_cert_chain(cert, key)
 
-    http_server = ReusableTCPServer(("0.0.0.0", 80), HTTPHandler)
-    https_server = ReusableTCPServer(("0.0.0.0", 443), make_https_handler(context))
+    http_server = ReusableTCPServer(
+        (args.bind, args.http_port), make_http_handler(make_http_response(args.cn))
+    )
+    https_server = ReusableTCPServer((args.bind, args.tls_port), make_https_handler(context))
 
     threading.Thread(target=http_server.serve_forever, daemon=True).start()
-    print("listening on 0.0.0.0:80 (http) and 0.0.0.0:443 (tls)", flush=True)
+    print(
+        "listening on %s:%d (http) and %s:%d (tls)"
+        % (args.bind, args.http_port, args.bind, args.tls_port),
+        flush=True,
+    )
     https_server.serve_forever()
 
 
