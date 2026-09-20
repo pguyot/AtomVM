@@ -235,6 +235,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `header_continuation` / `trailer_header_continuation` response events are no longer emitted
 
 ### Fixed
+- Fixed `test_ssl` depending on reaching test.atomvm.org: CI now starts
+  `tests/local_test_servers.py` (moved there from the esp32 test directory) and points the
+  tests at it through `ATOMVM_TEST_TLS_HOST`, `ATOMVM_TEST_TLS_PORT` and
+  `ATOMVM_TEST_HTTP_PORT`
 - Fixed `ssl` reporting an opaque `{error, -2}` when a socket failed for a reason other than
   would-block or a reset: the socket layer's own sentinel reached mbedtls, which handed it
   straight back. It is now `MBEDTLS_ERR_NET_SEND_FAILED` / `MBEDTLS_ERR_NET_RECV_FAILED`

@@ -17,7 +17,7 @@ SLIRP host (10.0.2.2) instead of an external site. Start them before running
 pytest:
 
 ```shell
-python3 local_test_servers.py --certdir /tmp &
+python3 ../../../../tests/local_test_servers.py --certdir /tmp &
 ```
 
 (They bind ports 80 and 443, so this may require root on Linux.)
