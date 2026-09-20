@@ -262,10 +262,9 @@ jobs:
       # qemu SLIRP) instead of an external site: CI egress is slow and lossy
       # enough that external connections pile up in lwIP until the board OOMs.
       if: matrix.esp-idf-target != 'esp32p4'
-      working-directory: ./src/platforms/esp32/test/
       run: |
         set -e
-        nohup python3 local_test_servers.py --certdir /tmp > /tmp/local_test_servers.log 2>&1 &
+        nohup python3 tests/local_test_servers.py --certdir /tmp > /tmp/local_test_servers.log 2>&1 &
         for i in $(seq 1 20); do
           grep -q listening /tmp/local_test_servers.log && break
           sleep 0.5

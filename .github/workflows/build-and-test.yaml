@@ -713,12 +713,12 @@ jobs:
 
     - name: "Install deps"
       if: matrix.container != ''
-      run: sudo apt install -y ${{ matrix.compiler_pkgs}} cmake gperf zlib1g-dev doxygen valgrind libmbedtls-dev socat
+      run: sudo apt install -y ${{ matrix.compiler_pkgs}} cmake gperf zlib1g-dev doxygen valgrind libmbedtls-dev socat python3 openssl
 
     - name: "Install deps"
       if: matrix.container == ''
       run: |
-        sudo apt install -y ${{ matrix.compiler_pkgs}} cmake gperf zlib1g-dev doxygen libmbedtls-dev libc6-dbg socat
+        sudo apt install -y ${{ matrix.compiler_pkgs}} cmake gperf zlib1g-dev doxygen libmbedtls-dev libc6-dbg socat python3 openssl
         # Get a more recent valgrind
         sudo snap install valgrind --classic
 
@@ -935,6 +935,26 @@ jobs:
       run: |
         ulimit -c unlimited
         ./src/AtomVM ./tests/libs/etest/test_etest.avm
+
+    - name: "Start the local TLS endpoint for test_ssl"
+      # test_ssl used to connect to test.atomvm.org. Reaching an external site
+      # from a loaded runner fails often enough to red the job on its own --
+      # under valgrind the handshake gives up -- so it talks to a server of
+      # ours instead, the same one the esp32 qemu tests use.
+      run: |
+        set -e
+        nohup python3 tests/local_test_servers.py --certdir /tmp \
+          --bind 127.0.0.1 --cn localhost --http-port 8080 --tls-port 8443 \
+          > /tmp/local_test_servers.log 2>&1 &
+        for i in $(seq 1 20); do
+          grep -q listening /tmp/local_test_servers.log && break
+          sleep 0.5
+        done
+        cat /tmp/local_test_servers.log
+        grep -q listening /tmp/local_test_servers.log || { echo "local test servers failed to start"; exit 1; }
+        echo "ATOMVM_TEST_TLS_HOST=127.0.0.1" >> $GITHUB_ENV
+        echo "ATOMVM_TEST_TLS_PORT=8443" >> $GITHUB_ENV
+        echo "ATOMVM_TEST_HTTP_PORT=8080" >> $GITHUB_ENV
 
     - name: "Test: test_estdlib.avm with valgrind"
       if: matrix.library-arch == '' && !contains(matrix.cmake_opts_other, '-DAVM_DISABLE_JIT=OFF')
