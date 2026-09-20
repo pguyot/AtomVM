@@ -1145,7 +1145,7 @@ static term nif_socket_select(Context *ctx, int argc, term argv[], bool is_write
         }
         rsrc_obj->selecting_process_id = INVALID_PROCESS_ID;
         SMP_RWLOCK_UNLOCK(rsrc_obj->socket_lock);
-        return make_error_tuple(posix_errno_to_term(ENOTSUP, global), ctx);
+        return make_error_tuple(posix_errno_to_term(ENOTSUP, ctx->global), ctx);
     }
     LWIP_BEGIN();
     switch (rsrc_obj->socket_state) {
