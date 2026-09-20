@@ -60,33 +60,67 @@ test_ssl() ->
 test_start_twice() ->
     ok = ssl:start().
 
+%% Where to find a TLS endpoint. CI starts tests/local_test_servers.py and
+%% points these at it, because reaching an external site from a loaded runner
+%% fails often enough to red the job on its own. Without them the tests keep
+%% using the public host, which is what a developer running the suite by hand
+%% gets.
+tls_host() ->
+    case os:getenv("ATOMVM_TEST_TLS_HOST") of
+        false -> "test.atomvm.org";
+        Host -> Host
+    end.
+
+tls_port() ->
+    case os:getenv("ATOMVM_TEST_TLS_PORT") of
+        false -> 443;
+        Port -> list_to_integer(Port)
+    end.
+
+%% A port that answers in clear, to check that a TLS handshake against it fails.
+plain_port() ->
+    case os:getenv("ATOMVM_TEST_HTTP_PORT") of
+        false -> 80;
+        Port -> list_to_integer(Port)
+    end.
+
 test_connect_close() ->
-    {ok, SSLSocket} = ssl:connect("test.atomvm.org", 443, [{verify, verify_none}, {active, false}]),
+    {ok, SSLSocket} = ssl:connect(tls_host(), tls_port(), [{verify, verify_none}, {active, false}]),
     ok = ssl:close(SSLSocket).
 
 test_connect_error() ->
-    {error, _Error} = ssl:connect("test.atomvm.org", 80, [{verify, verify_none}, {active, false}]),
+    {error, _Error} = ssl:connect(tls_host(), plain_port(), [
+        {verify, verify_none}, {active, false}
+    ]),
     ok.
 
 test_send_recv() ->
-    {ok, SSLSocket} = ssl:connect("test.atomvm.org", 443, [
+    {ok, SSLSocket} = ssl:connect(tls_host(), tls_port(), [
         {verify, verify_none}, {active, false}, {binary, true}
     ]),
     UserAgent = erlang:system_info(machine),
     ok = ssl:send(SSLSocket, [
-        <<"GET / HTTP/1.1\r\nHost: test.atomvm.org\r\nUser-Agent: ">>, UserAgent, <<"\r\n\r\n">>
+        <<"GET / HTTP/1.1\r\nHost: ">>,
+        tls_host(),
+        <<"\r\nUser-Agent: ">>,
+        UserAgent,
+        <<"\r\n\r\n">>
     ]),
     {ok, <<"HTTP/1.1 200 OK">>} = ssl:recv(SSLSocket, 15),
     ok = ssl:close(SSLSocket),
     ok.
 
 test_send_recv_zero() ->
-    {ok, SSLSocket} = ssl:connect("test.atomvm.org", 443, [
+    {ok, SSLSocket} = ssl:connect(tls_host(), tls_port(), [
         {verify, verify_none}, {active, false}, {binary, true}
     ]),
     UserAgent = erlang:system_info(machine),
     ok = ssl:send(SSLSocket, [
-        <<"GET / HTTP/1.1\r\nHost: test.atomvm.org\r\nUser-Agent: ">>, UserAgent, <<"\r\n\r\n">>
+        <<"GET / HTTP/1.1\r\nHost: ">>,
+        tls_host(),
+        <<"\r\nUser-Agent: ">>,
+        UserAgent,
+        <<"\r\n\r\n">>
     ]),
     {ok, <<"HTTP/1.1 200 OK", _/binary>>} = ssl:recv(SSLSocket, 0),
     ok = ssl:close(SSLSocket),

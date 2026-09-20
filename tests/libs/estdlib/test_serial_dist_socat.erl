@@ -26,6 +26,11 @@
 
 -module(test_serial_dist_socat).
 
+%% Every one of these waits on the peer AtomVM node: it has to be spawned, come
+%% up and finish a distribution handshake over a pty before it can answer. 30
+%% seconds was not enough on a loaded CI runner, where the ping timed out.
+-define(PEER_TIMEOUT, 90000).
+
 -export([test/0, start/0]).
 
 start() ->
@@ -143,7 +148,7 @@ start_peer_node(beam, PtyB, TestName) -> start_beam_peer(PtyB, TestName).
 handle_peer_request("ping", PeerFd) ->
     receive
         {PeerPid, ping} -> PeerPid ! {self(), pong}
-    after 30000 ->
+    after ?PEER_TIMEOUT ->
         drain_peer_output(PeerFd),
         error(ping_timeout)
     end;
@@ -152,7 +157,7 @@ handle_peer_request("rpc", PeerFd) ->
         {PeerPid, {apply, M, F, A}} ->
             Result = apply(M, F, A),
             PeerPid ! {self(), Result}
-    after 30000 ->
+    after ?PEER_TIMEOUT ->
         drain_peer_output(PeerFd),
         error(rpc_timeout)
     end.
@@ -346,7 +351,7 @@ read_peer_line(Fd, Acc) ->
             ok = atomvm:posix_select_read(Fd, self(), undefined),
             receive
                 {select, _FdRes, undefined, ready_input} -> ok
-            after 30000 ->
+            after ?PEER_TIMEOUT ->
                 exit({peer_read_timeout, got_so_far, Acc})
             end,
             read_peer_line(Fd, Acc);
