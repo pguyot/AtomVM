@@ -8032,27 +8032,40 @@ static term nif_jit_variant(Context *ctx, int argc, term argv[])
 
 static term nif_lists_reverse(Context *ctx, int argc, term argv[])
 {
-    // Compared to erlang version, compute the length of the list and allocate
-    // at once the space for the reverse.
+    // One pass while the cells fit in the free space: they are written past
+    // heap_ptr and only claimed once the list turns out to be proper.
+    term result = argc == 2 ? argv[1] : term_nil();
+    term *cell = ctx->heap.heap_ptr;
+    const term *free_end = cell + context_avail_free_memory(ctx);
+    term list_crsr = argv[0];
+    while (term_is_nonempty_list(list_crsr) && free_end - cell >= CONS_SIZE) {
+        const term *list_ptr = term_get_list_ptr(list_crsr);
+        result = term_list_init_prepend(cell, list_ptr[LIST_HEAD_INDEX], result);
+        cell += CONS_SIZE;
+        list_crsr = list_ptr[LIST_TAIL_INDEX];
+    }
+    if (term_is_nil(list_crsr)) {
+        ctx->heap.heap_ptr = cell;
+        return result;
+    }
+    if (UNLIKELY(!term_is_nonempty_list(list_crsr))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    // Out of space: compute the length of the list and allocate at once the
+    // space for the reverse, starting over.
     int proper;
     size_t len = term_list_length(argv[0], &proper);
     if (UNLIKELY(!proper)) {
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    // Only call the allocator when the heap actually lacks space (sort
-    // calls reverse at every merge level; the call's shrink evaluation is
-    // pure overhead then).
-    if (context_avail_free_memory(ctx) < len * CONS_SIZE
-        && UNLIKELY(memory_ensure_free_with_roots(ctx, len * CONS_SIZE, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, len * CONS_SIZE, argc, argv, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
-    term result = term_nil();
-    if (argc == 2) {
-        result = argv[1];
-    }
-    term list_crsr = argv[0];
+    result = argc == 2 ? argv[1] : term_nil();
+    list_crsr = argv[0];
     while (!term_is_nil(list_crsr)) {
         // term is a proper list as verified above
         term *list_ptr = term_get_list_ptr(list_crsr);

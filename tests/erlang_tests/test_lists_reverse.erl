@@ -25,6 +25,7 @@
 start() ->
     ok = test_lists_reverse_1(),
     ok = test_lists_reverse_2(),
+    ok = test_lists_reverse_long(),
     0.
 
 test_lists_reverse_1() ->
@@ -73,3 +74,59 @@ test_lists_reverse_2() ->
     not_a_list = lists:reverse([], not_a_list),
     [c, b, a | not_a_list] = lists:reverse([a, b, c], not_a_list),
     ok.
+
+% Lists longer than the free space on the heap, so the reversal needs a
+% collection, including improper ones whose tail is only reached then. The
+% minimum heap growth strategy leaves no free space to start with.
+test_lists_reverse_long() ->
+    ok = reverse_long(),
+    Opts =
+        case erlang:system_info(machine) of
+            "ATOM" -> [monitor, {atomvm_heap_growth, minimum}];
+            _ -> [monitor]
+        end,
+    {Pid, Ref} = spawn_opt(fun() -> ok = reverse_long() end, Opts),
+    normal =
+        receive
+            {'DOWN', Ref, process, Pid, Reason} -> Reason
+        end,
+    ok.
+
+reverse_long() ->
+    Long = seq(1, 50000),
+    Reversed = seq_down(50000, 1),
+    Reversed = lists:reverse(Long),
+    [50000 | _] = lists:reverse(Long, [tail]),
+    [tail] = drop(50000, lists:reverse(Long, [tail])),
+    ImproperLong = seq(1, 50000, improper),
+    ok =
+        try
+            lists:reverse(ImproperLong),
+            fail
+        catch
+            error:badarg -> ok
+        end,
+    ok =
+        try
+            lists:reverse(ImproperLong, []),
+            fail
+        catch
+            % AtomVM
+            error:badarg -> ok;
+            % BEAM
+            _:_ -> ok
+        end,
+    % The failed reversals left the heap consistent.
+    Reversed = lists:reverse(Long),
+    ok.
+
+seq(From, To) -> seq(From, To, []).
+
+seq(From, To, Tail) when From > To -> Tail;
+seq(From, To, Tail) -> [From | seq(From + 1, To, Tail)].
+
+seq_down(From, To) when From < To -> [];
+seq_down(From, To) -> [From | seq_down(From - 1, To)].
+
+drop(0, List) -> List;
+drop(N, [_ | Tail]) -> drop(N - 1, Tail).
