@@ -1933,20 +1933,60 @@ static uintptr_t jit_return_direct(Context *ctx, JITState *jit_state)
 
 // OP_CALL_EXT/OP_CALL_EXT_ONLY/OP_CALL_EXT_LAST direct dispatch: same
 // contract as call_fun_direct.
-static NOINLINE Context *jit_leaf_nif_error(Context *ctx, JITState *jit_state, int offset, int index, int arity)
+static NOINLINE Context *jit_direct_nif_error(Context *ctx, JITState *jit_state, int offset, int index, int arity)
 {
     PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST_MFA(
         term_invalid_term(), offset, jit_state->module, index, arity);
     UNREACHABLE();
 }
 
-static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
+// A NIF left heap fragments (MEMORY_NO_GC allocations): consolidate them
+// before native code resumes, as jit_call_ext0 does.
+static NOINLINE Context *jit_direct_nif_fragments(Context *ctx, JITState *jit_state)
+{
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, ctx->x, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        return jit_raise_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
+    }
+    return JIT_NATIVE_STAY;
+}
+
+// Non-tail call of an ordinary NIF: the steps of the NIF case of
+// jit_call_ext0, without its prologue and type dispatch, which cost as much
+// as a small NIF. Out of line, its own call and prologue cost as much again.
+static inline __attribute__((always_inline)) uintptr_t jit_call_nif_direct(Context *ctx, JITState *jit_state, const struct ExportedFunction *func, int offset, int arity, int index)
+{
+    ctx->nif_call_arity = arity;
+    term result = EXPORTED_FUNCTION_TO_NIF(func)->nif_ptr(ctx, arity, ctx->x);
+    ctx->nif_call_arity = 0;
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        Context *failed = jit_direct_nif_error(ctx, jit_state, offset, index, arity);
+        return jit_direct_continuation(ctx, jit_state, failed);
+    }
+    ctx->x[0] = result;
+    if (UNLIKELY(ctx->heap.root->next != NULL)) {
+        Context *consolidated = jit_direct_nif_fragments(ctx, jit_state);
+        if (consolidated != JIT_NATIVE_STAY) {
+            return jit_direct_continuation(ctx, jit_state, consolidated);
+        }
+    }
+    if (UNLIKELY(cp_is_terminate(ctx->cp))) {
+        return jit_direct_continuation(ctx, jit_state, NULL);
+    }
+    return (uintptr_t) JIT_NATIVE_STAY;
+}
+
+// Every call_ext goes through jit_call_ext_direct_pin: this must stay
+// inlined in it, which the NIF branch would otherwise prevent.
+static inline __attribute__((always_inline)) uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
     jit_state->continuation = 0;
     const struct ExportedFunction *func = NULL;
-    // A non-tail leaf NIF can return to the native caller directly. Existing
-    // fragments require the generic path's consolidation before native resume.
-    // No NIF arity roots are needed under the leaf contract.
+    // A non-tail NIF call returns to the native caller directly. Existing
+    // fragments require the generic path's consolidation before native
+    // resume. No NIF arity roots are needed under the leaf contract; ordinary
+    // NIFs go through jit_call_nif_direct. Testing both types at once keeps
+    // the leaf test first: testing for an ordinary NIF on its own made the
+    // compiler put it first, and leaf calls 6% slower.
     if (n_words == CALL_EXT_NO_DEALLOC_MFA) {
 #if defined(HAVE_ATOMIC)
         func = atomic_load_explicit(
@@ -1958,7 +1998,10 @@ static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offs
         func = jit_state->module->imported_funcs[index];
         enum FunctionType type = func->type;
 #endif
-        if (type == LeafNIFFunctionType && ctx->heap.root->next == NULL) {
+        if ((type == LeafNIFFunctionType || type == NIFFunctionType) && ctx->heap.root->next == NULL) {
+            if (type == NIFFunctionType) {
+                return jit_call_nif_direct(ctx, jit_state, func, offset, arity, index);
+            }
 #ifndef NDEBUG
             HeapFragment *saved_root = ctx->heap.root;
             term *saved_heap_ptr = ctx->heap.heap_ptr;
@@ -1972,7 +2015,7 @@ static uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offs
             assert(jit_state->remaining_reductions == saved_reductions);
             assert(!context_get_flags(ctx, Trap));
             if (UNLIKELY(term_is_invalid_term(result))) {
-                Context *failed = jit_leaf_nif_error(ctx, jit_state, offset, index, arity);
+                Context *failed = jit_direct_nif_error(ctx, jit_state, offset, index, arity);
                 return jit_direct_continuation(ctx, jit_state, failed);
             }
             ctx->x[0] = result;
