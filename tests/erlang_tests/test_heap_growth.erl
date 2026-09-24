@@ -28,6 +28,8 @@ start() ->
     ok = test_bounded_free_strategy(true),
     ok = test_minimum_strategy(),
     ok = test_fibonacci_strategy(),
+    ok = test_fibonacci_minor_gc_bounded([{atomvm_heap_growth, fibonacci}]),
+    ok = test_fibonacci_minor_gc_bounded([]),
     ok = test_messages_get_gcd(),
     0.
 
@@ -195,6 +197,34 @@ test_fibonacci_strategy() ->
         after 300000 -> timeout
         end,
     ok.
+
+% With the default fullsweep_after, collections are minor ones. A process
+% that keeps allocating garbage around a small live set must not see its
+% young heap grow with every collection, even when its only allocations
+% (here lists:reverse/1) skip the allocator while the heap has room.
+test_fibonacci_minor_gc_bounded(Opts) ->
+    {Pid1, Ref1} = spawn_opt(
+        fun() ->
+            Live = alloc_some_heap_words(100),
+            ok = alloc_garbage(Live, 50000),
+            {total_heap_size, X} = process_info(self(), total_heap_size),
+            true = X < 500000 orelse {heap_too_large, X}
+        end,
+        [monitor | Opts]
+    ),
+    ok =
+        receive
+            {'DOWN', Ref1, process, Pid1, normal} -> ok;
+            {'DOWN', Ref1, process, Pid1, Reason} -> Reason
+        after 60000 -> timeout
+        end,
+    ok.
+
+alloc_garbage(_List, 0) ->
+    ok;
+alloc_garbage(List, N) ->
+    100 = length(lists:reverse(List)),
+    alloc_garbage(List, N - 1).
 
 alloc_some_heap_words(N) ->
     alloc_some_heap_words(N, []).

@@ -59,6 +59,7 @@ static inline term memory_shallow_copy_term_impl(HeapFragment *old_fragment, con
 static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 static enum MemoryGCResult memory_full_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 static enum MemoryGCResult memory_minor_gc(Context *ctx, size_t new_size, size_t num_roots, term *roots);
+static enum MemoryGCResult memory_young_shrink(Context *ctx, size_t young_size, size_t num_roots, term *roots);
 #ifdef ENABLE_REALLOC_GC
 static enum MemoryGCResult memory_shrink(Context *ctx, size_t new_size, size_t num_roots, term *roots);
 static void memory_scan_and_rewrite(size_t count, term *terms, const term *old_start, const term *old_end, intptr_t delta, bool is_heap);
@@ -295,6 +296,10 @@ static size_t next_fibonacci_heap_size(size_t size)
 }
 
 #define FIBONACCI_HEAP_GROWTH_REDUCTION_THRESHOLD 10000
+// Young heaps up to this size are left as a minor collection sized them:
+// fewer collections pay for them (list and sudoku benchmarks lose 20% at a
+// 10000-word threshold, 50000 still loses on lists) and they stay in cache.
+#define FIBONACCI_YOUNG_SHRINK_THRESHOLD 100000
 
 enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_t num_roots, term *roots, enum MemoryAllocMode alloc_mode)
 {
@@ -395,8 +400,8 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
             // next minor GC to re-promote the entire live set. Every
             // allocation-triggered GC would then copy the whole heap twice,
             // degenerating the generational collector into a pathologically
-            // slow full-sweep one. The young heap left by a minor GC is
-            // right-sized by the next minor collection anyway. (After
+            // slow full-sweep one. An oversized young heap left by a minor GC
+            // is shrunk on its own instead (see below). (After
             // MEMORY_FORCE_SHRINK's full GC, gc_count is 0 as well.)
             if (c->gc_count == 0) {
                 should_gc = alloc_mode == MEMORY_FORCE_SHRINK;
@@ -435,6 +440,32 @@ enum MemoryGCResult memory_ensure_free_with_roots(Context *c, size_t size, size_
                         c->heap.high_water_mark = c->heap.heap_ptr;
                     }
                 }
+            } else if (c->heap_growth_strategy == FibonacciHeapGrowth && alloc_mode != MEMORY_NO_SHRINK) {
+                // The young heap was sized for every young word surviving,
+                // plus growth headroom. When most of it died, leaving it that
+                // size is not harmless: the next collection sizes from it
+                // again and grows it further, and allocation sites that skip
+                // this function while the heap has room (lists:reverse,
+                // setelement, boxed integers) never reach the shrink test at
+                // the top. Collect the young generation again when less than
+                // a sixteenth of it is needed, into eight times what is
+                // needed: this copies only that sixteenth. Every collection
+                // that finds the heap full grows it, so the young heap
+                // oscillates between the two; BEAM's ratios (a quarter, three
+                // times) make it oscillate often enough that a process
+                // building 10000-element lists runs 1.5 times slower.
+                size_t young_size = memory_heap_youngest_size(&c->heap);
+                size_t young_needed = young_size - context_avail_free_memory(c) + size;
+                if (young_size > FIBONACCI_YOUNG_SHRINK_THRESHOLD && 16 * young_needed < young_size) {
+                    size_t young_target = next_fibonacci_heap_size(8 * young_needed);
+                    young_target = MAX(c->has_min_heap_size ? c->min_heap_size : 0, young_target);
+                    if (young_target < young_size
+                        && UNLIKELY(memory_young_shrink(c, young_target, num_roots, roots) != MEMORY_GC_OK)) {
+                        TRACE("Unable to allocate memory for young shrink.  young_size=%zu young_needed=%zu\n", young_size, young_needed);
+                        msacc_transition_current(c->global, MsaccStateEmulator);
+                        return MEMORY_GC_ERROR_FAILED_ALLOCATION;
+                    }
+                }
             }
             msacc_transition_current(c->global, MsaccStateEmulator);
         }
@@ -471,6 +502,22 @@ static enum MemoryGCResult memory_gc(Context *ctx, size_t new_size, size_t num_r
         return result;
     }
     return memory_minor_gc(ctx, new_size, num_roots, roots);
+}
+
+static enum MemoryGCResult memory_young_shrink(Context *ctx, size_t young_size, size_t num_roots, term *roots)
+{
+    // With no mature region, a minor collection copies the young survivors
+    // into the new young heap instead of promoting them, and the old
+    // generation stays in place. The survivors keep their age: they are all
+    // behind high_water_mark again afterwards, as after the collection that
+    // just ran. That one already counted towards fullsweep_after.
+    size_t gc_count = ctx->gc_count;
+    ctx->heap.high_water_mark = NULL;
+    enum MemoryGCResult result = memory_minor_gc(ctx, young_size + memory_heap_old_size(&ctx->heap), num_roots, roots);
+    if (result == MEMORY_GC_OK && ctx->gc_count != 0) {
+        ctx->gc_count = gc_count;
+    }
+    return result;
 }
 
 // Append an old-generation cell holding a young pointer to the remembered
