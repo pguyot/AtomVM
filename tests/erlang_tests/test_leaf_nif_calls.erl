@@ -5,6 +5,7 @@
 
 start() ->
     loop(200),
+    ok = ordinary_nifs(),
     Parent = self(),
     spawn_opt(fun() -> Parent ! {payload, {{a, b}, [1, 2, 3], <<1, 2, 3>>}} end, []),
     receive
@@ -54,6 +55,51 @@ check_demonitor_stacktrace(undefined) ->
     ok;
 check_demonitor_stacktrace([{erlang, demonitor, _, _} | _]) ->
     ok.
+
+% Ordinary NIFs take the same direct path at non-tail call sites: an error
+% keeps its MFA stacktrace, and a collection inside the NIF (the minimum
+% heap growth strategy leaves no free space) keeps the arguments and the
+% caller's live values.
+ordinary_nifs() ->
+    ok = bad_list(),
+    Opts =
+        case erlang:system_info(machine) of
+            "ATOM" -> [monitor, {atomvm_heap_growth, minimum}];
+            _ -> [monitor]
+        end,
+    {Pid, Ref} = spawn_opt(fun() -> ok = collect_in_nif(50) end, Opts),
+    normal =
+        receive
+            {'DOWN', Ref, process, Pid, Reason} -> Reason
+        end,
+    ok.
+
+bad_list() ->
+    try lists:reverse(id([a, b | c])) of
+        _ -> unexpected_success
+    catch
+        error:badarg:Stack ->
+            check_reverse_stacktrace(Stack)
+    end.
+
+check_reverse_stacktrace(undefined) ->
+    ok;
+check_reverse_stacktrace([{lists, reverse, _, _} | _]) ->
+    ok.
+
+collect_in_nif(0) ->
+    ok;
+collect_in_nif(N) ->
+    Live = {live, N, [N, N + 1]},
+    List = [{N, I} || I <- lists:seq(1, 200)],
+    Tail = [tail, N],
+    Reversed = lists:reverse(List, Tail),
+    [{N, 200} | _] = Reversed,
+    202 = length(Reversed),
+    {live, N, [N, M]} = Live,
+    M = N + 1,
+    [tail, N] = Tail,
+    collect_in_nif(N - 1).
 
 tail_put(K, V) -> put(K, V).
 tail_erase(K) -> erase(K).
