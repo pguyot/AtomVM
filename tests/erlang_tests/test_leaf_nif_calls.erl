@@ -1,7 +1,17 @@
 % Copyright 2026 Paul Guyot <pguyot@kallisys.net>
 % SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 -module(test_leaf_nif_calls).
--export([start/0, id/1, tail_put/2, tail_erase/1, tail_demonitor/1, tail_size/1]).
+-export([
+    start/0,
+    id/1,
+    tail_put/2,
+    tail_erase/1,
+    tail_demonitor/1,
+    tail_size/1,
+    tail_reverse/1,
+    tail_reverse_framed/2,
+    tail_demonitor_flush/1
+]).
 
 start() ->
     loop(200),
@@ -67,12 +77,37 @@ ordinary_nifs() ->
             "ATOM" -> [monitor, {atomvm_heap_growth, minimum}];
             _ -> [monitor]
         end,
-    {Pid, Ref} = spawn_opt(fun() -> ok = collect_in_nif(50) end, Opts),
+    {Pid, Ref} = spawn_opt(
+        fun() ->
+            ok = collect_in_nif(50),
+            ok = tail_nifs(50)
+        end,
+        Opts
+    ),
     normal =
         receive
             {'DOWN', Ref, process, Pid, Reason} -> Reason
         end,
     ok.
+
+% Tail calls to an ordinary NIF, without a frame (call_ext_only) and after
+% popping one (call_ext_last), and to a NIF that traps.
+tail_nifs(0) ->
+    ok;
+tail_nifs(N) ->
+    List = [{N, I} || I <- lists:seq(1, 200)],
+    [{N, 200} | _] = tail_reverse(List),
+    [{N, 200} | _] = tail_reverse_framed(List, N),
+    [] = tail_reverse([]),
+    ok =
+        try tail_reverse(id([a, b | c])) of
+            _ -> unexpected_success
+        catch
+            error:badarg -> ok
+        end,
+    Ref = monitor(process, self()),
+    true = tail_demonitor_flush(Ref),
+    tail_nifs(N - 1).
 
 bad_list() ->
     try lists:reverse(id([a, b | c])) of
@@ -105,4 +140,9 @@ tail_put(K, V) -> put(K, V).
 tail_erase(K) -> erase(K).
 tail_demonitor(Ref) -> demonitor(Ref).
 tail_size(T) -> erts_debug:flat_size(T).
+tail_reverse(L) -> lists:reverse(L).
+tail_reverse_framed(L, N) ->
+    Tail = id([N]),
+    lists:reverse(L, Tail).
+tail_demonitor_flush(Ref) -> demonitor(Ref, [flush]).
 id(T) -> T.

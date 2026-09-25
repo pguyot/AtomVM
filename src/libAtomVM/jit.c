@@ -1975,29 +1975,97 @@ static inline __attribute__((always_inline)) uintptr_t jit_call_nif_direct(Conte
     return (uintptr_t) JIT_NATIVE_STAY;
 }
 
+// Error or trap of a NIF tail call: the generic path's handling for
+// call_ext_only and call_ext_last, which has no MFA to add.
+static NOINLINE Context *jit_direct_nif_last_error(Context *ctx, JITState *jit_state, int offset)
+{
+    PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(term_invalid_term(), offset);
+    UNREACHABLE();
+}
+
+// Tail call of a NIF (call_ext_only, or call_ext_last with n_words to
+// deallocate): the steps of the NIF case of jit_call_ext0, returning to the
+// caller's continuation.
+static inline __attribute__((always_inline)) uintptr_t jit_call_nif_last_direct(Context *ctx, JITState *jit_state, const struct ExportedFunction *func, int offset, int arity, int n_words)
+{
+    ctx->nif_call_arity = arity;
+    term result = EXPORTED_FUNCTION_TO_NIF(func)->nif_ptr(ctx, arity, ctx->x);
+    ctx->nif_call_arity = 0;
+    if (UNLIKELY(term_is_invalid_term(result))) {
+        Context *failed = jit_direct_nif_last_error(ctx, jit_state, offset);
+        return jit_direct_continuation(ctx, jit_state, failed);
+    }
+    ctx->x[0] = result;
+    // Deallocate after the call, as jit_call_ext0 does (OTP issue 7152).
+    if (n_words >= 0) {
+        ctx->cp = load_cp(ctx->e + n_words);
+        ctx->e += (n_words + CP_SIZE_IN_TERMS);
+    }
+    if (UNLIKELY(ctx->heap.root->next != NULL)) {
+        Context *consolidated = jit_direct_nif_fragments(ctx, jit_state);
+        if (consolidated != JIT_NATIVE_STAY) {
+            return jit_direct_continuation(ctx, jit_state, consolidated);
+        }
+    }
+    if (UNLIKELY(cp_is_terminate(ctx->cp))) {
+        return jit_direct_continuation(ctx, jit_state, NULL);
+    }
+    return jit_direct_continuation(ctx, jit_state, jit_return(ctx, jit_state));
+}
+
+// Resolved import of the calling module, with its type. Acquire pairing with
+// the in-place ModuleFunction -> ModuleNativeFunction upgrade: seeing the new
+// type must imply seeing what was written before it.
+static inline const struct ExportedFunction *jit_imported_function(JITState *jit_state, int index, enum FunctionType *type)
+{
+#if defined(HAVE_ATOMIC)
+    const struct ExportedFunction *func = atomic_load_explicit(
+        (const struct ExportedFunction *_Atomic *) &jit_state->module->imported_funcs[index],
+        memory_order_acquire);
+    *type = atomic_load_explicit(
+        (const _Atomic enum FunctionType *) &func->type, memory_order_acquire);
+#else
+    const struct ExportedFunction *func = jit_state->module->imported_funcs[index];
+    *type = func->type;
+#endif
+    return func;
+}
+
+// Tail calls of jit_call_ext_direct. Out of line, so the non-tail path there
+// compiles as before: sharing the import load with it changed its layout,
+// and ESTONE's bif_dispatch, made of leaf NIF calls, got 3 to 9% slower.
+// Tail calls pay no extra call for it: this replaces the call to
+// jit_call_ext0.
+static NOINLINE uintptr_t jit_call_ext_last_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
+{
+    enum FunctionType type;
+    const struct ExportedFunction *func = jit_imported_function(jit_state, index, &type);
+    if ((type == LeafNIFFunctionType || type == NIFFunctionType) && ctx->heap.root->next == NULL) {
+        return jit_call_nif_last_direct(ctx, jit_state, func, offset, arity, n_words);
+    }
+    if (type == UnresolvedFunctionCall) {
+        func = NULL;
+    }
+    Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true, func);
+    return jit_direct_continuation(ctx, jit_state, result);
+}
+
 // Every call_ext goes through jit_call_ext_direct_pin: this must stay
 // inlined in it, which the NIF branch would otherwise prevent.
 static inline __attribute__((always_inline)) uintptr_t jit_call_ext_direct(Context *ctx, JITState *jit_state, int offset, int arity, int index, int n_words)
 {
     jit_state->continuation = 0;
     const struct ExportedFunction *func = NULL;
-    // A non-tail NIF call returns to the native caller directly. Existing
-    // fragments require the generic path's consolidation before native
-    // resume. No NIF arity roots are needed under the leaf contract; ordinary
-    // NIFs go through jit_call_nif_direct. Testing both types at once keeps
-    // the leaf test first: testing for an ordinary NIF on its own made the
-    // compiler put it first, and leaf calls 6% slower.
+    // A non-tail NIF call returns to the native caller directly, and a tail
+    // one to the caller's continuation. Existing fragments require the
+    // generic path's consolidation before native resume. No NIF arity roots
+    // are needed under the leaf contract; ordinary NIFs go through
+    // jit_call_nif_direct. Testing both types at once keeps the leaf test
+    // first: testing for an ordinary NIF on its own made the compiler put it
+    // first, and leaf calls 6% slower.
     if (n_words == CALL_EXT_NO_DEALLOC_MFA) {
-#if defined(HAVE_ATOMIC)
-        func = atomic_load_explicit(
-            (const struct ExportedFunction *_Atomic *) &jit_state->module->imported_funcs[index],
-            memory_order_acquire);
-        enum FunctionType type = atomic_load_explicit(
-            (const _Atomic enum FunctionType *) &func->type, memory_order_acquire);
-#else
-        func = jit_state->module->imported_funcs[index];
-        enum FunctionType type = func->type;
-#endif
+        enum FunctionType type;
+        func = jit_imported_function(jit_state, index, &type);
         if ((type == LeafNIFFunctionType || type == NIFFunctionType) && ctx->heap.root->next == NULL) {
             if (type == NIFFunctionType) {
                 return jit_call_nif_direct(ctx, jit_state, func, offset, arity, index);
@@ -2024,6 +2092,8 @@ static inline __attribute__((always_inline)) uintptr_t jit_call_ext_direct(Conte
         if (type == UnresolvedFunctionCall) {
             func = NULL;
         }
+    } else {
+        return jit_call_ext_last_direct(ctx, jit_state, offset, arity, index, n_words);
     }
     Context *result = jit_call_ext0(ctx, jit_state, offset, arity, index, n_words, true, func);
     if (result == JIT_NATIVE_STAY) {
