@@ -274,6 +274,7 @@ compile_erlang(test_system_info)
 compile_erlang(test_binary_to_term)
 compile_erlang(test_bitstring_to_list)
 compile_erlang(test_selective_receive)
+compile_erlang(test_socket_selecting_at_exit)
 compile_erlang(test_timeout_not_integer)
 compile_erlang(test_undef)
 
@@ -837,6 +838,7 @@ set(erlang_test_beams
     test_binary_to_term.beam
     test_bitstring_to_list.beam
     test_selective_receive.beam
+    test_socket_selecting_at_exit.beam
     test_timeout_not_integer.beam
     test_undef.beam
 

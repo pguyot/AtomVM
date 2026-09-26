@@ -414,6 +414,7 @@ struct Test tests[] = {
     TEST_CASE(test_binary_to_term),
     TEST_CASE(test_bitstring_to_list),
     TEST_CASE(test_selective_receive),
+    TEST_CASE(test_socket_selecting_at_exit),
     TEST_CASE(test_timeout_not_integer),
     TEST_CASE(test_undef),
     TEST_CASE(test_bs),
