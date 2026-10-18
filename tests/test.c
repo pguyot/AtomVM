@@ -316,6 +316,7 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(spawn_fun1, 42),
     TEST_CASE_EXPECTED(spawn_fun2, 33),
     TEST_CASE_EXPECTED(spawn_fun3, 10),
+    TEST_CASE(test_spawn_after_kill),
 
     TEST_CASE_EXPECTED(binary_at_test, 121),
     TEST_CASE_EXPECTED(binary_first_test, 82),

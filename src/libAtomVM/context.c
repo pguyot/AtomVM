@@ -140,7 +140,7 @@ Context *context_new(GlobalContext *glb)
     return ctx;
 }
 
-void context_destroy(Context *ctx)
+void context_release(Context *ctx)
 {
     // Hold and release the spin lock for timers and cancel any timer
     scheduler_cancel_timeout(ctx);
@@ -307,7 +307,11 @@ void context_destroy(Context *ctx)
     free(ctx->platform_data);
 
     ets_delete_owned_tables(&ctx->global->ets, ctx->process_id, ctx->global);
+}
 
+void context_destroy(Context *ctx)
+{
+    context_release(ctx);
     free(ctx);
 }
 

@@ -361,6 +361,7 @@ compile_erlang(memlimit)
 compile_erlang(spawn_fun1)
 compile_erlang(spawn_fun2)
 compile_erlang(spawn_fun3)
+compile_erlang(test_spawn_after_kill)
 
 compile_erlang(binary_at_test)
 compile_erlang(binary_first_test)
@@ -925,6 +926,7 @@ set(erlang_test_beams
     spawn_fun1.beam
     spawn_fun2.beam
     spawn_fun3.beam
+    test_spawn_after_kill.beam
 
     binary_at_test.beam
     binary_first_test.beam

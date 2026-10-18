@@ -92,6 +92,17 @@ void scheduler_kill(Context *ctx);
 void scheduler_terminate(Context *c);
 
 /**
+ * @brief removes a process and terminates it, leaving its context allocated
+ *
+ * @details same as scheduler_terminate, but a process that is not a leader is
+ * released with context_release instead of being destroyed.
+ * @param c the process that is going to be terminated.
+ * @return true if the caller must free the context with free(), false if it
+ * is a leader process.
+ */
+bool scheduler_terminate_keep_context(Context *c);
+
+/**
  * @brief Terminate all schedulers. Every process is terminated gracefully at next scheduling point.
  *
  * @param global the global context.

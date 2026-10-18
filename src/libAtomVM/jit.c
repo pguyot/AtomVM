@@ -297,9 +297,17 @@ static Context *jit_terminate_context(Context *ctx, JITState *jit_state)
     if (ctx->leader) {
         scheduler_stop_all(global);
     }
-    scheduler_terminate(ctx);
+    bool free_ctx = scheduler_terminate_keep_context(ctx);
     jit_state->remaining_reductions = 0;
-    return scheduler_run(global);
+    // Keep the context allocated until the next process is picked: a new
+    // process could otherwise be given its address, and native code that
+    // compares the returned context with its own would take it for this one
+    // and carry on running this process's code with it.
+    Context *next = scheduler_run(global);
+    if (free_ctx) {
+        free(ctx);
+    }
+    return next;
 }
 
 static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)

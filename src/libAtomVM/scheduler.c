@@ -429,6 +429,13 @@ void scheduler_signal_message_from_task(Context *c)
 
 void scheduler_terminate(Context *ctx)
 {
+    if (scheduler_terminate_keep_context(ctx)) {
+        free(ctx);
+    }
+}
+
+bool scheduler_terminate_keep_context(Context *ctx)
+{
     SMP_SPINLOCK_LOCK(&ctx->global->processes_spinlock);
     context_update_flags(ctx, ~NoFlags, Killed);
     list_remove(&ctx->processes_list_head);
@@ -437,8 +444,10 @@ void scheduler_terminate(Context *ctx)
     list_init(&ctx->processes_list_head);
     SMP_SPINLOCK_UNLOCK(&ctx->global->processes_spinlock);
     if (!ctx->leader) {
-        context_destroy(ctx);
+        context_release(ctx);
+        return true;
     }
+    return false;
 }
 
 void scheduler_stop_all(GlobalContext *global)

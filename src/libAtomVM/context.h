@@ -276,6 +276,15 @@ Context *context_new(GlobalContext *glb);
 void context_destroy(Context *c);
 
 /**
+ * @brief Releases a context, leaving the context structure allocated
+ *
+ * @details Does everything context_destroy does but freeing the context
+ * structure itself, which the caller then frees with free().
+ * @param c the context that will be released.
+ */
+void context_release(Context *c);
+
+/**
  * @brief Ensure we have FP registers, allocating them if necessary.
  * @param c context fo allocate FP registers for
  */
