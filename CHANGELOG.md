@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the ESP32 UART driver blocking the scheduler, until the task watchdog reset the chip,
   when a read had already taken the bytes of a pending data event, or when `uart:read/2` counted
   bytes that the other scheduler then took
+- Fixed the xtensa JIT losing a value held across a call when few registers were free, for
+  example corrupting a binary built with a `little` utf16 segment followed by other segments
 
 ## [0.7.0-beta.0] - 2026-09-28
 

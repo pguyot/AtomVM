@@ -1811,23 +1811,41 @@ call_func_ptr(
                                     RegArgs0
                                 };
                             [] ->
-                                % Swap with a reg used in RegArgs0 that is not in ParameterRegs
-                                [NewArgReg | _] = SetArgsRegsOnlyAvailableArgs,
-                                [FuncPtrReg1 | _] = RegArgsRegs -- ParameterRegs,
-                                MovInstr1 = jit_xtensa_asm:mov(NewArgReg, FuncPtrReg1),
-                                MovInstr2 = jit_xtensa_asm:mov(FuncPtrReg1, FuncPtrReg0),
-                                SetArgsAvailableArgs1 =
-                                    (SetArgsRegsOnlyAvailableArgs -- [FuncPtrReg1]) ++
-                                        [FuncPtrReg0],
-                                RegArgs1 = replace_reg(RegArgs0, FuncPtrReg1, NewArgReg),
-                                {
-                                    StreamModule:append(
-                                        State1#state.stream, <<MovInstr1/binary, MovInstr2/binary>>
-                                    ),
-                                    SetArgsAvailableArgs1,
-                                    FuncPtrReg1,
-                                    RegArgs1
-                                };
+                                case lists:member(?A8_REG, RegArgsRegs) of
+                                    false ->
+                                        % Use the scratch register, which holds no
+                                        % argument and is clobbered by the call
+                                        % anyway, rather than a register an argument
+                                        % lives in, which may still be live after
+                                        % the call
+                                        MovInstr = jit_xtensa_asm:mov(?A8_REG, FuncPtrReg0),
+                                        {
+                                            StreamModule:append(State1#state.stream, MovInstr),
+                                            SetArgsRegsOnlyAvailableArgs ++ [FuncPtrReg0],
+                                            ?A8_REG,
+                                            RegArgs0
+                                        };
+                                    true ->
+                                        % Swap with a reg used in RegArgs0 that is not in
+                                        % ParameterRegs
+                                        [NewArgReg | _] = SetArgsRegsOnlyAvailableArgs,
+                                        [FuncPtrReg1 | _] = RegArgsRegs -- ParameterRegs,
+                                        MovInstr1 = jit_xtensa_asm:mov(NewArgReg, FuncPtrReg1),
+                                        MovInstr2 = jit_xtensa_asm:mov(FuncPtrReg1, FuncPtrReg0),
+                                        SetArgsAvailableArgs1 =
+                                            (SetArgsRegsOnlyAvailableArgs -- [FuncPtrReg1]) ++
+                                                [FuncPtrReg0],
+                                        RegArgs1 = replace_reg(RegArgs0, FuncPtrReg1, NewArgReg),
+                                        {
+                                            StreamModule:append(
+                                                State1#state.stream,
+                                                <<MovInstr1/binary, MovInstr2/binary>>
+                                            ),
+                                            SetArgsAvailableArgs1,
+                                            FuncPtrReg1,
+                                            RegArgs1
+                                        }
+                                end;
                             [FuncPtrReg1 | _] ->
                                 MovInstr = jit_xtensa_asm:mov(FuncPtrReg1, FuncPtrReg0),
                                 SetArgsAvailableArgs1 =
@@ -1880,7 +1898,10 @@ call_func_ptr(
     %% After CALLX8, a8-a15 are all clobbered, so they are all available
     %% (except for any we still need to restore from stack).
     %% a5-a7 are preserved and may still hold live values.
-    PostCallAvail = (AvailableRegs1 -- HighRegs) ++ (HighRegs -- RegsToSave),
+    %% a8 is the scratch register and is not allocatable: a result left there
+    %% would be dropped from the bookkeeping by the next merge and could be
+    %% overwritten, so it is only the last resort below.
+    PostCallAvail = (AvailableRegs1 -- HighRegs) ++ (HighRegs -- [?A8_REG | RegsToSave]),
     {Stream6, UsedRegs2, ResultReg} =
         case PostCallAvail of
             [ResultReg0 | _] ->
