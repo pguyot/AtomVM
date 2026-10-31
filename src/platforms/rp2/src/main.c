@@ -78,6 +78,7 @@ static int app_main()
     }
 
     GlobalContext *glb = globalcontext_new();
+    port_driver_init_all(glb);
     nif_collection_init_all(glb);
 
     uint32_t startup_beam_size;
@@ -153,6 +154,7 @@ static int app_main()
     run_result_t result = globalcontext_run(glb, mod, stdout, 0, NULL);
 
     nif_collection_destroy_all(glb);
+    port_driver_destroy_all(glb);
     globalcontext_destroy(glb);
 
     return (int) result;
