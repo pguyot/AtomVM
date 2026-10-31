@@ -588,6 +588,28 @@ static NativeHandlerResult usb_cdc_driver_consume_mailbox(Context *ctx)
     return is_closed ? NativeTerminate : NativeContinue;
 }
 
-REGISTER_PORT_DRIVER(usb_cdc, usb_cdc_driver_init, NULL, usb_cdc_driver_create_port)
+// Called when the VM exits. A port that is still open is not closed: its
+// context frees cdc_data, but its listener must be unregistered first, as
+// globalcontext_destroy() would free it too.
+static void usb_cdc_driver_destroy(GlobalContext *global)
+{
+    struct USBCDCData *cdc_data = s_cdc_data;
+    if (cdc_data != NULL) {
+        sys_tinyusb_lock(global);
+        s_cdc_data = NULL;
+        sys_tinyusb_unlock(global);
+        sys_unregister_listener(global, &cdc_data->listener);
+        queue_free(&cdc_data->rxqueue);
+#ifndef AVM_NO_SMP
+        smp_mutex_destroy(cdc_data->reader_lock);
+#endif
+    }
+#ifndef AVM_NO_SMP
+    smp_mutex_destroy(s_open_lock);
+    s_open_lock = NULL;
+#endif
+}
+
+REGISTER_PORT_DRIVER(usb_cdc, usb_cdc_driver_init, usb_cdc_driver_destroy, usb_cdc_driver_create_port)
 
 #endif

@@ -101,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   topic with no subscribers subscribing the caller instead
 - Fixed rp2 port drivers' init and destroy callbacks never being called, so opening `usb_cdc`
   with SMP used an uninitialized lock
+- Fixed a crash of rp2 when the VM exits with a `usb_cdc` port still open, which left the
+  device enumerated but unresponsive
 
 ## [0.7.0-beta.0] - 2026-09-28
 
