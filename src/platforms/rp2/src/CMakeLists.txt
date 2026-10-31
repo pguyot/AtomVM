@@ -61,7 +61,7 @@ if (AVM_DISABLE_SMP)
     target_compile_definitions(AtomVM PRIVATE PICO_FLASH_ASSUME_CORE1_SAFE)
 endif()
 
-if (AVM_WAIT_BOOTSEL_ON_EXIT AND NOT AVM_USB_CDC_PORT_DRIVER_ENABLED)
+if (AVM_WAIT_BOOTSEL_ON_EXIT)
     target_compile_definitions(AtomVM PRIVATE WAIT_BOOTSEL_ON_EXIT)
 endif()
 

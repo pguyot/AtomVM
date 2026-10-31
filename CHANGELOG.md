@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `atomvm:add_avm_pack_binary/2`) is rejected when loaded
 - STM32 builds now enable `AVM_MINIMAL_OPCODES` by default, so modules compiled with the
   `no_bs_create_bin`, `no_bs_match` or `no_ssa_opt_bs_ensure` compiler options cannot be loaded
+- rp2 builds with the `usb_cdc` port driver now also reboot into BOOTSEL mode when AtomVM exits,
+  if `AVM_WAIT_BOOTSEL_ON_EXIT` is on (the default)
 
 ### Fixed
 - Fixed maps decoded by `binary_to_term/1,2` and received over distribution keeping the

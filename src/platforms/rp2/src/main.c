@@ -173,6 +173,22 @@ static void exit_handler(bool reboot)
     }
 }
 
+#ifdef WAIT_BOOTSEL_ON_EXIT
+static void __attribute__((noreturn)) reset_to_bootsel(void)
+{
+#ifdef LIB_PICO_STDIO_USB
+    // Let the host read the USB console before the device disappears
+    while (stdio_usb_connected()) {
+        ;
+    }
+#else
+    // Let the UART console drain
+    sleep_ms(100);
+#endif
+    reset_usb_boot(0, 0);
+}
+#endif
+
 /* newlib stubs to get AVM_ABORT to work */
 pid_t _getpid()
 {
@@ -189,10 +205,7 @@ int _kill(pid_t pid, int sig)
     }
     exit_handler(true);
 #ifdef WAIT_BOOTSEL_ON_EXIT
-    while (stdio_usb_connected()) {
-        ;
-    }
-    reset_usb_boot(0, 0);
+    reset_to_bootsel();
 #else
     return 0;
 #endif
@@ -203,10 +216,7 @@ int main()
     int reboot = app_main();
     exit_handler(reboot);
 #ifdef WAIT_BOOTSEL_ON_EXIT
-    while (stdio_usb_connected()) {
-        ;
-    }
-    reset_usb_boot(0, 0);
+    reset_to_bootsel();
 #else
     return 0;
 #endif
