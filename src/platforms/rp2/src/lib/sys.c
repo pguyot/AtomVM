@@ -60,6 +60,9 @@
 
 #ifdef HAVE_PLATFORM_ATOMIC_H
 #include "platform_atomic.h"
+#ifndef AVM_NO_SMP
+critical_section_t atomic_cas_section;
+#endif
 #else
 #if defined(HAVE_ATOMIC)
 #include <stdatomic.h>

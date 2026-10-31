@@ -45,6 +45,7 @@
 #include "rp2_sys.h"
 
 #ifndef AVM_NO_SMP
+#include "platform_atomic.h"
 #include "smp.h"
 #endif
 
@@ -148,6 +149,18 @@ TEST_CASE(atomvm_smp_0)
 {
     int cores = smp_get_online_processors();
     TEST_ASSERT_EQUAL_INT(2, cores);
+}
+#endif
+
+#ifndef AVM_NO_SMP
+TEST_CASE(test_atomic_cas_section_shared)
+{
+    // Compare-and-swap in every compilation unit must use the critical
+    // section initialized by sys_init_platform to be atomic across cores
+    GlobalContext *glb = globalcontext_new();
+    TEST_ASSERT_NOT_NULL(glb);
+    TEST_ASSERT_NOT_NULL(atomic_cas_section.spin_lock);
+    globalcontext_destroy(glb);
 }
 #endif
 

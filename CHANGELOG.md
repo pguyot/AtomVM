@@ -99,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed atomic operations on rp2 with SMP not being atomic across cores: each compilation unit
+  had its own critical section and only one was initialized, so messages sent between processes
+  running on different cores could be lost
 
 ## [0.7.0-beta.0] - 2026-09-28
 
