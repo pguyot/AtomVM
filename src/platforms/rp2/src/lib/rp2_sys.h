@@ -79,6 +79,10 @@ bool sys_try_post_listener_event_from_isr(GlobalContext *global, listener_event_
  */
 void sys_unregister_listener_from_event(GlobalContext *global, listener_event_t listener_queue);
 
+#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#define AVM_USB_PORT_DRIVERS_ENABLED
+#endif
+
 struct RP2PlatformData
 {
 #ifndef AVM_NO_SMP
@@ -86,10 +90,6 @@ struct RP2PlatformData
     cond_t event_poll_cond;
 #endif
     queue_t event_queue;
-
-#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) && !defined(AVM_NO_SMP)
-    mutex_t tinyusb_mutex;
-#endif
 
 #ifndef AVM_NO_SMP
     Mutex *entropy_mutex;
@@ -104,14 +104,16 @@ struct RP2PlatformData
     bool random_is_initialized;
 };
 
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#ifdef AVM_USB_PORT_DRIVERS_ENABLED
 /**
  * @brief Acquire the lock guarding TinyUSB device APIs.
  * @details TinyUSB is not safe to call from multiple cores concurrently
- * (see TinyUSB docs/reference/concurrency.rst). All non-callback uses of
- * tud_xxx and tusb_init must be wrapped with this lock. Callbacks invoked
- * by tud_task already run under the lock and must not relock.
- * No-op when AVM_NO_SMP is defined.
+ * (see TinyUSB docs/reference/concurrency.rst). The device stack is
+ * initialized at boot and tud_task() runs in a low priority interrupt on
+ * core 0 with this lock held. All other uses of tud_xxx must be wrapped with
+ * this lock and must not call tud_task(). Callbacks invoked by tud_task run
+ * in interrupt context with the lock held: they must not relock and should
+ * use sys_try_post_listener_event_from_isr to notify drivers.
  * @end
  */
 void sys_tinyusb_lock(GlobalContext *global);

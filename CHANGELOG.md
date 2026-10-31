@@ -99,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserving the extra heap words it is given
 - Fixed `avm_pubsub` keeping subscribers after they exit, and `avm_pubsub:unsub/2,3` on a
   topic with no subscribers subscribing the caller instead
+- Fixed rp2 `usb_cdc` port driver with SMP: TinyUSB was driven from both cores without
+  protecting its interrupt handler, which could lose or stall transfers. The USB device is
+  now started at boot and its task runs in an interrupt on core 0
 
 ## [0.7.0-beta.0] - 2026-09-28
 

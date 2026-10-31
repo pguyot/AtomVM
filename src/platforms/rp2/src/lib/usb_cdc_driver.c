@@ -105,8 +105,9 @@ static void usb_cdc_driver_init(GlobalContext *global)
 #endif
 }
 
-// TinyUSB CDC receive callback -- invoked by tud_task() in USB core task context.
-// The TinyUSB lock is already held by the caller of tud_task(); do not relock.
+// TinyUSB CDC receive callback -- invoked by tud_task() in the USB task
+// interrupt. The TinyUSB lock is already held by the caller of tud_task(); do
+// not relock.
 void tud_cdc_rx_cb(uint8_t itf)
 {
     if (s_cdc_data == NULL || itf != s_cdc_data->itf) {
@@ -224,16 +225,7 @@ static Context *usb_cdc_driver_create_port(GlobalContext *global, term opts)
     cdc_data->reader_ref_ticks = 0;
     cdc_data->itf = 0;
 
-    // TinyUSB should already be initialized by Pico SDK when
-    // pico_enable_stdio_usb is set. For distribution use, stdio_usb
-    // should be disabled and this driver takes over the CDC interface.
-    // Ensure TinyUSB device stack is running
-    sys_tinyusb_lock(global);
-    if (!tud_inited()) {
-        tusb_init();
-    }
-    sys_tinyusb_unlock(global);
-
+    // TinyUSB device stack is initialized at boot (see sys.c)
     sys_register_listener(global, &cdc_data->listener);
 
     s_cdc_data = cdc_data;
@@ -423,9 +415,6 @@ static void usb_cdc_driver_do_write(Context *ctx, GenMessage gen_message)
                 (const uint8_t *) buffer + written,
                 buffer_size - written);
             tud_cdc_n_write_flush(cdc_data->itf);
-            if (chunk == 0) {
-                tud_task();
-            }
         }
         sys_tinyusb_unlock(glb);
 

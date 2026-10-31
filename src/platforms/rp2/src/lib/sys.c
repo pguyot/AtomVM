@@ -38,6 +38,10 @@
 #endif
 
 #ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#include <device/dcd.h>
+#include <hardware/irq.h>
+#include <hardware/structs/scb.h>
+#include <hardware/timer.h>
 #include <tusb.h>
 #endif
 
@@ -77,6 +81,111 @@
 struct PortDriverDefListItem *port_driver_list;
 struct NifCollectionDefListItem *nif_collection_list;
 
+#ifdef AVM_USB_PORT_DRIVERS_ENABLED
+/*
+ * TinyUSB device task.
+ *
+ * TinyUSB's RP2040 port expects tud_task() to run on the core handling the
+ * USBCTRL interrupt. Like the Pico SDK's stdio_usb, the device stack is
+ * initialized on core 0 at boot and tud_task() runs in a low priority
+ * interrupt on core 0, triggered whenever TinyUSB queues an event (see
+ * tud_event_hook_cb). This interrupt is the one of a hardware alarm, only
+ * enabled on core 0, so either core can trigger it by forcing it.
+ *
+ * Port drivers call TinyUSB APIs from any core with the TinyUSB mutex held.
+ * If the mutex is busy when the task runs, the task is triggered again when
+ * the mutex is released.
+ *
+ * TinyUSB's RP2040 device driver does not protect endpoint state between
+ * API calls and its USBCTRL interrupt handler, as it assumes both run on
+ * the same core. So the USBCTRL interrupt handler also runs with the
+ * TinyUSB mutex held, waiting for the other core to release it if
+ * required (see usbctrl_irq_handler).
+ */
+static mutex_t s_tinyusb_mutex;
+static bool s_usb_inited;
+static uint s_usb_task_alarm;
+static volatile bool s_usb_task_needed;
+
+static void usb_task_trigger(void)
+{
+    hw_set_bits(&timer_hw->intf, 1u << s_usb_task_alarm);
+}
+
+static void usb_task_irq_handler(void)
+{
+    hw_clear_bits(&timer_hw->intf, 1u << s_usb_task_alarm);
+    // Set before trying the mutex, so that a holder releasing it after we
+    // failed to take it triggers the task again (see usb_unlock)
+    s_usb_task_needed = true;
+    if (mutex_try_enter(&s_tinyusb_mutex, NULL)) {
+        s_usb_task_needed = false;
+        tud_task();
+        mutex_exit(&s_tinyusb_mutex);
+    }
+}
+
+static void usb_unlock(void)
+{
+    mutex_exit(&s_tinyusb_mutex);
+    if (s_usb_task_needed) {
+        usb_task_trigger();
+    }
+}
+
+static void usbctrl_irq_handler(void)
+{
+    uint32_t owner;
+    bool acquired = mutex_try_enter(&s_tinyusb_mutex, &owner);
+    // If the code interrupted on this core holds the mutex, proceed as
+    // TinyUSB expects. If the other core holds it, wait: TinyUSB API calls
+    // done with the mutex held never wait for this core.
+    if (!acquired && owner != (uint32_t) lock_get_caller_owner_id()) {
+        mutex_enter_blocking(&s_tinyusb_mutex);
+        acquired = true;
+    }
+    dcd_int_handler(0);
+    if (acquired) {
+        usb_unlock();
+    }
+}
+
+// Called by TinyUSB when an event is queued, from any core: schedule the
+// USB task.
+void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
+{
+    UNUSED(rhport);
+    UNUSED(eventid);
+    UNUSED(in_isr);
+    if (s_usb_inited) {
+        usb_task_trigger();
+    }
+}
+
+static void usb_init(void)
+{
+    mutex_init(&s_tinyusb_mutex);
+    s_usb_task_needed = false;
+
+    // The alarm itself is not armed: its interrupt is only forced
+    s_usb_task_alarm = (uint) hardware_alarm_claim_unused(true);
+    uint irq = hardware_alarm_get_irq_num(s_usb_task_alarm);
+    irq_set_exclusive_handler(irq, usb_task_irq_handler);
+    irq_set_priority(irq, PICO_LOWEST_IRQ_PRIORITY);
+    irq_set_enabled(irq, true);
+    s_usb_inited = true;
+
+    tusb_init();
+
+    // tusb_init installed TinyUSB's handler as a shared handler, whose
+    // function is not public: replace the whole vector table entry, in the
+    // RAM vector table shared by both cores.
+    irq_set_enabled(USBCTRL_IRQ, false);
+    ((irq_handler_t *) scb_hw->vtor)[VTABLE_FIRST_IRQ + USBCTRL_IRQ] = usbctrl_irq_handler;
+    irq_set_enabled(USBCTRL_IRQ, true);
+}
+#endif
+
 void sys_init_platform(GlobalContext *glb)
 {
     struct RP2PlatformData *platform = malloc(sizeof(struct RP2PlatformData));
@@ -87,12 +196,13 @@ void sys_init_platform(GlobalContext *glb)
 #endif
     queue_init(&platform->event_queue, sizeof(queue_t *), EVENT_QUEUE_LEN);
 
-#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) && !defined(AVM_NO_SMP)
-    mutex_init(&platform->tinyusb_mutex);
-#endif
-
 #ifdef HAVE_PLATFORM_ATOMIC_H
     atomic_init();
+#endif
+
+#ifdef AVM_USB_PORT_DRIVERS_ENABLED
+    // sys_init_platform runs on core 0, before schedulers are started
+    usb_init();
 #endif
 
 #ifdef LIB_PICO_CYW43_ARCH
@@ -194,13 +304,6 @@ bool sys_try_post_listener_event_from_isr(GlobalContext *glb, listener_event_t l
 void sys_poll_events(GlobalContext *glb, int timeout_ms)
 {
     struct RP2PlatformData *platform = glb->platform_data;
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
-    sys_tinyusb_lock(glb);
-    if (tud_inited()) {
-        tud_task();
-    }
-    sys_tinyusb_unlock(glb);
-#endif
 #ifndef AVM_NO_SMP
     if (timeout_ms != 0) {
         mutex_enter_blocking(&platform->event_poll_mutex);
@@ -421,25 +524,18 @@ void sys_unregister_listener_from_event(GlobalContext *global, listener_event_t 
     synclist_unlock(&global->listeners);
 }
 
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#ifdef AVM_USB_PORT_DRIVERS_ENABLED
 void sys_tinyusb_lock(GlobalContext *global)
 {
-#ifndef AVM_NO_SMP
-    struct RP2PlatformData *platform = global->platform_data;
-    mutex_enter_blocking(&platform->tinyusb_mutex);
-#else
-    (void) global;
-#endif
+    // Also needed without SMP, to exclude the USB task interrupt
+    UNUSED(global);
+    mutex_enter_blocking(&s_tinyusb_mutex);
 }
 
 void sys_tinyusb_unlock(GlobalContext *global)
 {
-#ifndef AVM_NO_SMP
-    struct RP2PlatformData *platform = global->platform_data;
-    mutex_exit(&platform->tinyusb_mutex);
-#else
-    (void) global;
-#endif
+    UNUSED(global);
+    usb_unlock();
 }
 #endif
 
