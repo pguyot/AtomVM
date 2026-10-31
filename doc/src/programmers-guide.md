@@ -2079,6 +2079,23 @@ The string descriptors can be overridden the same way:
 - **RP2 / STM32** (CMake): `-DAVM_USB_CDC_MANUFACTURER="Your Company"`, `-DAVM_USB_CDC_PRODUCT="Your Product"`, `-DAVM_USB_CDC_INTERFACE_NAME="Your Product CDC ACM"`.
 - **ESP32** (sdkconfig): `CONFIG_TINYUSB_DESC_MANUFACTURER_STRING`, `CONFIG_TINYUSB_DESC_PRODUCT_STRING`, `CONFIG_TINYUSB_DESC_CDC_STRING`.
 
+### USB MIDI
+
+On RP2040/RP2350, AtomVM can expose a class-compliant USB MIDI 1.0 device (one virtual cable with one IN and one OUT port), which is recognized without drivers by macOS (Audio MIDI Setup), Linux (ALSA) and Windows.
+
+Enable it with `-DAVM_USB_MIDI_PORT_DRIVER_ENABLED=ON` in CMake. The USB device then also has a serial port used as the console (stdio is sent to it and to UART0). By default AtomVM does not wait for a terminal at boot; set `-DAVM_WAIT_FOR_USB_CONNECT=ON` (or `-DAVM_USB_WAIT_SECONDS=N`) to wait until the serial port is opened, which is useful to read boot messages. The MIDI port driver can instead be combined with `-DAVM_USB_CDC_PORT_DRIVER_ENABLED=ON`, in which case the serial port is available to the application through the `usb_cdc` module, stdio is routed to UART0 only and AtomVM does not wait for a USB serial connection at boot. The USB device is connected to the host at boot, before the application starts. If AtomVM exits and `AVM_WAIT_BOOTSEL_ON_EXIT` is on (the default), the device reboots into BOOTSEL mode, once the console serial port is closed if a terminal has it open. Setting the console serial port to 1200 baud (for example `stty -f /dev/cu.usbmodem* 1200` on macOS) also reboots into BOOTSEL mode, as with the Pico SDK's USB stdio, so `rebar3 atomvm pico_flash` can flash without pressing the button. The MIDI interface name can be set with `-DAVM_USB_MIDI_INTERFACE_NAME="Your Product MIDI"`, and the VID/PID and product name with the `AVM_USB_CDC_*` options described above. When enabling MIDI, consider using a dedicated PID as the default PID is registered for CDC.
+
+The Erlang-side API is the `usb_midi` module ([`libs/avm_rp2/src/usb_midi.erl`](https://github.com/atomvm/AtomVM/blob/main/libs/avm_rp2/src/usb_midi.erl)): `open/1`, `read/1,2`, `write/2`, `mounted/1` and `close/1`. Data is exchanged as MIDI 1.0 byte streams: `write/2` takes complete MIDI messages without running status, and `read/1,2` returns complete messages received from the host (SysEx may span several reads).
+
+```erlang
+MIDI = usb_midi:open([]),
+% Note On, channel 1, middle C, velocity 100
+ok = usb_midi:write(MIDI, <<16#90, 60, 100>>),
+{ok, Bytes} = usb_midi:read(MIDI, 5000).
+```
+
+Writes are silently dropped while the host has not configured the device.
+
 ### LED Control
 
 The LED Control API can be used to drive LEDs, as well as generate PWM signals on GPIO pins.

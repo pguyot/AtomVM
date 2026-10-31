@@ -39,15 +39,30 @@ extern "C" {
 
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
+// CDC is enabled for the usb_cdc port driver, for the USB console, and also
+// when no AtomVM USB port driver is enabled, as this file may then be picked
+// up by the Pico SDK's stdio_usb.
+#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) || defined(AVM_USB_CONSOLE_ENABLED) || !defined(AVM_USB_MIDI_PORT_DRIVER_ENABLED)
 #define CFG_TUD_CDC 1
+#else
+#define CFG_TUD_CDC 0
+#endif
 #define CFG_TUD_MSC 0
 #define CFG_TUD_HID 0
+#ifdef AVM_USB_MIDI_PORT_DRIVER_ENABLED
+#define CFG_TUD_MIDI 1
+#else
 #define CFG_TUD_MIDI 0
+#endif
 #define CFG_TUD_VENDOR 0
 
 #define CFG_TUD_CDC_RX_BUFSIZE 256
 #define CFG_TUD_CDC_TX_BUFSIZE 256
 #define CFG_TUD_CDC_EP_BUFSIZE 64
+
+#define CFG_TUD_MIDI_RX_BUFSIZE 128
+#define CFG_TUD_MIDI_TX_BUFSIZE 128
+#define CFG_TUD_MIDI_EP_BUFSIZE 64
 
 #ifdef __cplusplus
 }

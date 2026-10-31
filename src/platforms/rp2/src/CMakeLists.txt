@@ -47,7 +47,32 @@ if (AVM_REBOOT_ON_NOT_OK)
     target_compile_definitions(AtomVM PRIVATE CONFIG_REBOOT_ON_NOT_OK)
 endif()
 
-if (AVM_WAIT_FOR_USB_CONNECT)
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED OR AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    set(AVM_USB_PORT_DRIVERS_ENABLED ON)
+else()
+    set(AVM_USB_PORT_DRIVERS_ENABLED OFF)
+endif()
+
+# With the MIDI port driver but without the CDC port driver, AtomVM's USB
+# device also has a CDC interface used as the console (stdio).
+if (AVM_USB_MIDI_PORT_DRIVER_ENABLED AND NOT AVM_USB_CDC_PORT_DRIVER_ENABLED)
+    set(AVM_USB_CONSOLE_ENABLED ON)
+else()
+    set(AVM_USB_CONSOLE_ENABLED OFF)
+endif()
+
+# Waiting for a USB serial connection applies to stdio over USB (Pico SDK's
+# stdio_usb or AtomVM's USB console). With USB port drivers, AtomVM starts
+# immediately by default, unless waiting is explicitly requested for the USB
+# console. The USB device is brought up at boot without waiting for the host.
+if (AVM_USB_PORT_DRIVERS_ENABLED AND NOT AVM_USB_CONSOLE_ENABLED)
+    if (AVM_WAIT_FOR_USB_CONNECT OR AVM_USB_WAIT_SECONDS)
+        message(WARNING "AVM_WAIT_FOR_USB_CONNECT and AVM_USB_WAIT_SECONDS are ignored with the USB CDC port driver (stdio is on UART)")
+    endif()
+    target_compile_definitions(AtomVM PRIVATE PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0)
+elseif (AVM_USB_CONSOLE_ENABLED AND NOT AVM_WAIT_FOR_USB_CONNECT AND NOT AVM_USB_WAIT_SECONDS)
+    target_compile_definitions(AtomVM PRIVATE PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0)
+elseif (AVM_WAIT_FOR_USB_CONNECT)
     target_compile_definitions(AtomVM PRIVATE PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=-1)
 elseif (AVM_USB_WAIT_SECONDS)
     math(EXPR WAIT_FOR_USB_TIMEOUT "1000 * ${AVM_USB_WAIT_SECONDS}")
@@ -73,9 +98,10 @@ set(
 add_subdirectory(lib)
 target_link_libraries(AtomVM PRIVATE libAtomVM${PLATFORM_LIB_SUFFIX})
 
-# Console routing: when our USB CDC port driver owns the TinyUSB device,
-# the Pico SDK's stdio_usb cannot share it -- send stdio to UART instead.
-if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+# Console routing: when our USB CDC or MIDI port drivers own the TinyUSB
+# device, the Pico SDK's stdio_usb cannot share it -- send stdio to UART
+# instead, and also to AtomVM's USB console if enabled (see usb_console.c).
+if (AVM_USB_PORT_DRIVERS_ENABLED)
     pico_enable_stdio_usb(AtomVM 0)
     pico_enable_stdio_uart(AtomVM 1)
 else()

@@ -37,7 +37,7 @@
 #include <pico/cyw43_arch.h>
 #endif
 
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) || defined(AVM_USB_MIDI_PORT_DRIVER_ENABLED)
 #include <device/dcd.h>
 #include <hardware/irq.h>
 #include <hardware/structs/scb.h>
@@ -92,9 +92,9 @@ struct NifCollectionDefListItem *nif_collection_list;
  * tud_event_hook_cb). This interrupt is the one of a hardware alarm, only
  * enabled on core 0, so either core can trigger it by forcing it.
  *
- * Port drivers call TinyUSB APIs from any core with the TinyUSB mutex held.
- * If the mutex is busy when the task runs, the task is triggered again when
- * the mutex is released.
+ * Port drivers and the USB console call TinyUSB APIs from any core with the
+ * TinyUSB mutex held. If the mutex is busy when the task runs, the task is
+ * triggered again when the mutex is released.
  *
  * TinyUSB's RP2040 device driver does not protect endpoint state between
  * API calls and its USBCTRL interrupt handler, as it assumes both run on
@@ -162,8 +162,13 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
     }
 }
 
-static void usb_init(void)
+void rp2_usb_init(void)
 {
+    // Must run on core 0, before schedulers are started. Called early from
+    // main when the USB console is enabled, otherwise from sys_init_platform.
+    if (s_usb_inited) {
+        return;
+    }
     mutex_init(&s_tinyusb_mutex);
     s_usb_task_needed = false;
 
@@ -184,6 +189,21 @@ static void usb_init(void)
     ((irq_handler_t *) scb_hw->vtor)[VTABLE_FIRST_IRQ + USBCTRL_IRQ] = usbctrl_irq_handler;
     irq_set_enabled(USBCTRL_IRQ, true);
 }
+
+bool rp2_usb_lock_until(absolute_time_t until)
+{
+    return mutex_enter_block_until(&s_tinyusb_mutex, until);
+}
+
+bool rp2_usb_try_lock(void)
+{
+    return mutex_try_enter(&s_tinyusb_mutex, NULL);
+}
+
+void rp2_usb_unlock(void)
+{
+    usb_unlock();
+}
 #endif
 
 void sys_init_platform(GlobalContext *glb)
@@ -202,7 +222,7 @@ void sys_init_platform(GlobalContext *glb)
 
 #ifdef AVM_USB_PORT_DRIVERS_ENABLED
     // sys_init_platform runs on core 0, before schedulers are started
-    usb_init();
+    rp2_usb_init();
 #endif
 
 #ifdef LIB_PICO_CYW43_ARCH

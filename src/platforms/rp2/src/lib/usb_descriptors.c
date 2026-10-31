@@ -12,10 +12,15 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) || defined(AVM_USB_MIDI_PORT_DRIVER_ENABLED)
 
 #include <pico/unique_id.h>
 #include <tusb.h>
+
+// CDC interface is used by the usb_cdc port driver or by the USB console
+#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) || defined(AVM_USB_CONSOLE_ENABLED)
+#define USBD_HAS_CDC
+#endif
 
 #ifndef USBD_VID
 #define USBD_VID 0x2E8A
@@ -32,9 +37,24 @@
 #ifndef USBD_INTERFACE_NAME
 #define USBD_INTERFACE_NAME "AtomVM CDC ACM"
 #endif
+#ifndef USBD_MIDI_INTERFACE_NAME
+#define USBD_MIDI_INTERFACE_NAME "AtomVM MIDI"
+#endif
 
-#define USBD_ITF_CDC 0
-#define USBD_ITF_MAX 2
+// Interfaces: CDC uses two (control + data), MIDI uses two (audio control +
+// MIDI streaming).
+enum
+{
+#ifdef USBD_HAS_CDC
+    USBD_ITF_CDC = 0,
+    USBD_ITF_CDC_DATA,
+#endif
+#ifdef AVM_USB_MIDI_PORT_DRIVER_ENABLED
+    USBD_ITF_MIDI,
+    USBD_ITF_MIDI_STREAMING,
+#endif
+    USBD_ITF_MAX
+};
 
 #define USBD_CDC_EP_CMD 0x81
 #define USBD_CDC_EP_OUT 0x02
@@ -42,21 +62,45 @@
 #define USBD_CDC_CMD_MAX_SIZE 8
 #define USBD_CDC_IN_OUT_MAX_SIZE 64
 
+#define USBD_MIDI_EP_OUT 0x03
+#define USBD_MIDI_EP_IN 0x83
+#define USBD_MIDI_EP_SIZE 64
+
 #define USBD_STR_LANG 0
 #define USBD_STR_MANUF 1
 #define USBD_STR_PRODUCT 2
 #define USBD_STR_SERIAL 3
 #define USBD_STR_CDC 4
+#define USBD_STR_MIDI 5
 
-#define USBD_DESC_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
+#ifdef USBD_HAS_CDC
+#define USBD_CDC_DESC_LEN TUD_CDC_DESC_LEN
+#else
+#define USBD_CDC_DESC_LEN 0
+#endif
+#ifdef AVM_USB_MIDI_PORT_DRIVER_ENABLED
+#define USBD_MIDI_DESC_LEN TUD_MIDI_DESC_LEN
+#else
+#define USBD_MIDI_DESC_LEN 0
+#endif
+
+#define USBD_DESC_LEN (TUD_CONFIG_DESC_LEN + USBD_CDC_DESC_LEN + USBD_MIDI_DESC_LEN)
 
 static const tusb_desc_device_t usbd_desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = 0x0200,
+#ifdef USBD_HAS_CDC
+    // CDC descriptor uses an Interface Association Descriptor
     .bDeviceClass = TUSB_CLASS_MISC,
     .bDeviceSubClass = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol = MISC_PROTOCOL_IAD,
+#else
+    // Class is defined at interface level
+    .bDeviceClass = 0x00,
+    .bDeviceSubClass = 0x00,
+    .bDeviceProtocol = 0x00,
+#endif
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = USBD_VID,
     .idProduct = USBD_PID,
@@ -69,8 +113,13 @@ static const tusb_desc_device_t usbd_desc_device = {
 
 static const uint8_t usbd_desc_cfg[USBD_DESC_LEN] = {
     TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_MAX, USBD_STR_LANG, USBD_DESC_LEN, 0, 250),
+#ifdef USBD_HAS_CDC
     TUD_CDC_DESCRIPTOR(USBD_ITF_CDC, USBD_STR_CDC, USBD_CDC_EP_CMD,
         USBD_CDC_CMD_MAX_SIZE, USBD_CDC_EP_OUT, USBD_CDC_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
+#endif
+#ifdef AVM_USB_MIDI_PORT_DRIVER_ENABLED
+    TUD_MIDI_DESCRIPTOR(USBD_ITF_MIDI, USBD_STR_MIDI, USBD_MIDI_EP_OUT, USBD_MIDI_EP_IN, USBD_MIDI_EP_SIZE),
+#endif
 };
 
 static char usbd_serial_str[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
@@ -79,7 +128,12 @@ static const char *const usbd_desc_str[] = {
     [USBD_STR_MANUF] = USBD_MANUFACTURER,
     [USBD_STR_PRODUCT] = USBD_PRODUCT,
     [USBD_STR_SERIAL] = usbd_serial_str,
+#ifdef USBD_HAS_CDC
     [USBD_STR_CDC] = USBD_INTERFACE_NAME,
+#endif
+#ifdef AVM_USB_MIDI_PORT_DRIVER_ENABLED
+    [USBD_STR_MIDI] = USBD_MIDI_INTERFACE_NAME,
+#endif
 };
 
 const uint8_t *tud_descriptor_device_cb(void)

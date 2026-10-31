@@ -45,7 +45,16 @@ set(SOURCE_FILES
 )
 
 if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
-    list(APPEND SOURCE_FILES usb_cdc_driver.c usb_descriptors.c)
+    list(APPEND SOURCE_FILES usb_cdc_driver.c)
+endif()
+if (AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    list(APPEND SOURCE_FILES usb_midi_driver.c)
+endif()
+if (AVM_USB_CONSOLE_ENABLED)
+    list(APPEND SOURCE_FILES usb_console.c)
+endif()
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED OR AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    list(APPEND SOURCE_FILES usb_descriptors.c)
 endif()
 
 set(
@@ -134,15 +143,41 @@ endif()
 
 target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,gpio_nif -Wl,-u -Wl,i2c_nif -Wl,-u -Wl,spi_nif -Wl,-u -Wl,uart_nif -Wl,-u -Wl,otp_crypto_nif")
 
-if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED OR AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    set(USBD_PRODUCT_STRING "${AVM_USB_CDC_PRODUCT}")
+    if (AVM_USB_MIDI_PORT_DRIVER_ENABLED AND USBD_PRODUCT_STRING STREQUAL "AtomVM CDC")
+        # Default product name shows up as the MIDI device name on hosts
+        if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+            set(USBD_PRODUCT_STRING "AtomVM CDC MIDI")
+        else()
+            set(USBD_PRODUCT_STRING "AtomVM MIDI")
+        endif()
+    endif()
     target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE
-        AVM_USB_CDC_PORT_DRIVER_ENABLED
         USBD_VID=${AVM_USB_CDC_VID}
         USBD_PID=${AVM_USB_CDC_PID}
         "USBD_MANUFACTURER=\"${AVM_USB_CDC_MANUFACTURER}\""
-        "USBD_PRODUCT=\"${AVM_USB_CDC_PRODUCT}\""
+        "USBD_PRODUCT=\"${USBD_PRODUCT_STRING}\""
         "USBD_INTERFACE_NAME=\"${AVM_USB_CDC_INTERFACE_NAME}\""
+        "USBD_MIDI_INTERFACE_NAME=\"${AVM_USB_MIDI_INTERFACE_NAME}\""
     )
     target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC tinyusb_device)
+endif()
+
+# These definitions select the TinyUSB classes in tusb_config.h, which is
+# also used when TinyUSB sources are compiled in dependent targets: they
+# must be PUBLIC.
+if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC AVM_USB_CDC_PORT_DRIVER_ENABLED)
     target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,usb_cdcregister_port_driver")
+endif()
+
+if (AVM_USB_CONSOLE_ENABLED)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC AVM_USB_CONSOLE_ENABLED)
+    target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC pico_stdio)
+endif()
+
+if (AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC AVM_USB_MIDI_PORT_DRIVER_ENABLED)
+    target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,usb_midiregister_port_driver")
 endif()

@@ -29,6 +29,7 @@
 
 #include <hardware/regs/addressmap.h>
 #include <pico/cond.h>
+#include <pico/time.h>
 #include <pico/util/queue.h>
 
 #include <mbedtls/ctr_drbg.h>
@@ -79,7 +80,7 @@ bool sys_try_post_listener_event_from_isr(GlobalContext *global, listener_event_
  */
 void sys_unregister_listener_from_event(GlobalContext *global, listener_event_t listener_queue);
 
-#ifdef AVM_USB_CDC_PORT_DRIVER_ENABLED
+#if defined(AVM_USB_CDC_PORT_DRIVER_ENABLED) || defined(AVM_USB_MIDI_PORT_DRIVER_ENABLED)
 #define AVM_USB_PORT_DRIVERS_ENABLED
 #endif
 
@@ -118,6 +119,41 @@ struct RP2PlatformData
  */
 void sys_tinyusb_lock(GlobalContext *global);
 void sys_tinyusb_unlock(GlobalContext *global);
+
+/**
+ * @brief Initialize the TinyUSB device stack and the USB task.
+ * @details Must be called on core 0 before schedulers are started. Does
+ * nothing if already initialized.
+ * @end
+ */
+void rp2_usb_init(void);
+
+/**
+ * @brief Variants of sys_tinyusb_lock usable without a global context.
+ * @end
+ */
+bool rp2_usb_lock_until(absolute_time_t until);
+bool rp2_usb_try_lock(void);
+void rp2_usb_unlock(void);
+#endif
+
+#ifdef AVM_USB_CONSOLE_ENABLED
+/**
+ * @brief Enable stdio over the USB CDC console interface.
+ * @param wait_timeout_ms time to wait for a terminal to open the serial port
+ * (DTR), 0 to not wait, negative to wait forever
+ * @details Initializes USB if required. Must be called on core 0 before
+ * schedulers are started.
+ * @end
+ */
+void usb_console_init(int wait_timeout_ms);
+
+/**
+ * @brief Determine if a terminal has opened the USB console serial port.
+ * @return true if the serial port is open (DTR)
+ * @end
+ */
+bool usb_console_connected(void);
 #endif
 
 #endif

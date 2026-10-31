@@ -82,6 +82,8 @@ set(AVM_USB_CDC_PID "0x0009" CACHE STRING "USB CDC product ID (default: Pi stand
 set(AVM_USB_CDC_MANUFACTURER "AtomVM" CACHE STRING "USB CDC iManufacturer string descriptor")
 set(AVM_USB_CDC_PRODUCT "AtomVM CDC" CACHE STRING "USB CDC iProduct string descriptor")
 set(AVM_USB_CDC_INTERFACE_NAME "AtomVM CDC ACM" CACHE STRING "USB CDC interface string descriptor")
+option(AVM_USB_MIDI_PORT_DRIVER_ENABLED "Enable USB MIDI port driver." OFF)
+set(AVM_USB_MIDI_INTERFACE_NAME "AtomVM MIDI" CACHE STRING "USB MIDI interface string descriptor")
 option(AVM_PRINT_PROCESS_CRASH_DUMPS "Print crash reports when processes die with non-standard reasons" ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m0")
     # Cortex-M0/M0+ (e.g. RP2040): ARMv6-M, Thumb-1 only

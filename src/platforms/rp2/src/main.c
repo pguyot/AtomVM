@@ -68,6 +68,12 @@ static int app_main()
 
     stdio_init_all();
 
+#ifdef AVM_USB_CONSOLE_ENABLED
+    // stdio over AtomVM's own USB device (with USB port drivers), optionally
+    // waiting for a terminal to be connected
+    usb_console_init(PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS);
+#endif
+
     fprintf(stderr, "%s", ATOMVM_BANNER);
     fprintf(stderr, "Starting AtomVM revision " ATOMVM_VERSION "\n");
 
@@ -182,6 +188,12 @@ static void __attribute__((noreturn)) reset_to_bootsel(void)
         ;
     }
 #else
+#ifdef AVM_USB_CONSOLE_ENABLED
+    // Let the host read the USB console before the device disappears
+    while (usb_console_connected()) {
+        ;
+    }
+#endif
     // Let the UART console drain
     sleep_ms(100);
 #endif
