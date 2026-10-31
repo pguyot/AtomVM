@@ -2118,6 +2118,18 @@ FadeMs = 5000.
 ok = ledc:set_fade_with_time(SpeedMode, Channel, TargetDuty, FadeMs).
 ```
 
+### WS2812 RGB LEDs
+
+On RP2040/RP2350, the `ws2812` module ([`libs/avm_rp2/src/ws2812.erl`](https://github.com/atomvm/AtomVM/blob/main/libs/avm_rp2/src/ws2812.erl)) drives WS2812 (NeoPixel) RGB LEDs, such as the LED of the Waveshare RP2040-Zero, with a PIO state machine. `init/1` takes the GPIO connected to the data input of the first LED and returns a resource, or `{error, no_pio}` if no state machine or program space is available. `write/2` sends one `{Red, Green, Blue}` color (each between 0 and 255) per LED, in chain order. `deinit/1` releases the state machine, which is also released when the resource is garbage collected.
+
+```erlang
+{ok, LED} = ws2812:init(16),
+% Dim green
+ok = ws2812:write(LED, [{0, 16, 0}]).
+```
+
+`write/2` blocks while the colors are sent, 30 µs per LED, and if called again within 330 µs, until the previous colors are latched.
+
 ## Protocols
 
 AtomVM supports network programming on devices that support it, specifically the ESP32 platform, with its built-in support for WIFI networking, and of course on the UNIX platform.

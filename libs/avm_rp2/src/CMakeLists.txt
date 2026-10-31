@@ -29,6 +29,7 @@ set(ERLANG_MODULES
     spi
     uart
     usb_cdc
+    ws2812
 )
 
 pack_archive(avm_rp2 DEPENDS_ON eavmlib ERLC_FLAGS +warnings_as_errors MODULES ${ERLANG_MODULES})

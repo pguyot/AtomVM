@@ -34,6 +34,7 @@ set(SOURCE_FILES
     i2cdriver.c
     spidriver.c
     uartdriver.c
+    ws2812driver.c
     networkdriver.c
     otp_crypto_platform.c
     platform_defaultatoms.c
@@ -66,6 +67,7 @@ target_link_libraries(
     PUBLIC
         hardware_gpio
         hardware_i2c
+        hardware_pio
         hardware_spi
         hardware_uart
         hardware_sync
@@ -80,6 +82,8 @@ target_link_libraries(
 if (PICO_RP2040)
     target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC hardware_rtc)
 endif()
+
+pico_generate_pio_header(libAtomVM${PLATFORM_LIB_SUFFIX} ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
 if (NOT AVM_USE_32BIT_FLOAT)
     target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC pico_double)
@@ -132,7 +136,7 @@ if (NOT AVM_DISABLE_JIT)
     target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,jit_stream_flash_get_nif")
 endif()
 
-target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,gpio_nif -Wl,-u -Wl,i2c_nif -Wl,-u -Wl,spi_nif -Wl,-u -Wl,uart_nif -Wl,-u -Wl,otp_crypto_nif")
+target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,gpio_nif -Wl,-u -Wl,i2c_nif -Wl,-u -Wl,spi_nif -Wl,-u -Wl,uart_nif -Wl,-u -Wl,ws2812_nif -Wl,-u -Wl,otp_crypto_nif")
 
 if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
     target_compile_definitions(libAtomVM${PLATFORM_LIB_SUFFIX} PRIVATE
