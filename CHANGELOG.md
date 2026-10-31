@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
   exhausting the C stack
 - `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
+- ESP32-C6 and ESP32-C61 builds now enable `AVM_MINIMAL_OPCODES` by default, as ESP32-C5 builds
+  already did, so their images keep fitting the factory partition
 
 ### Fixed
 - Fixed maps decoded by `binary_to_term/1,2` and received over distribution keeping the

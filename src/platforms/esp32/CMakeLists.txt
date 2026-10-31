@@ -50,8 +50,9 @@ if (${IDF_TARGET} MATCHES "esp32s2|esp32c2|esp32c3|esp32c5|esp32c6|esp32c61|esp3
     set(HAVE_PLATFORM_ATOMIC_H ON)
 endif()
 
-# ESP32-C5 has limited flash space, use minimal opcodes to reduce VM size
-if (${IDF_TARGET} STREQUAL "esp32c5" AND NOT DEFINED AVM_MINIMAL_OPCODES)
+# ESP32-C5, ESP32-C6 and ESP32-C61 images are the closest to the 0x1C0000
+# factory partition: use minimal opcodes to reduce VM size
+if (${IDF_TARGET} MATCHES "^(esp32c5|esp32c6|esp32c61)$" AND NOT DEFINED AVM_MINIMAL_OPCODES)
     message(STATUS "Enabling minimal opcodes for ${IDF_TARGET} to reduce binary size")
     set(AVM_MINIMAL_OPCODES ON)
 endif()
