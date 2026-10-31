@@ -20,14 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `CONFIG_AVM_ENABLE_ETHERNET=y`): `{eth, [...]}` in `network:start/1` brings up the EMAC
   with an RMII PHY, alone or next to STA/AP, plus `network:wait_for_eth/0,1,2` and
   `network:eth_status/0`
-
-### Changed
-- Stopped CI testing on FreeBSD 13, which has reached end of life.
-- `.avm` files, binaries and the pack embedded in an escript must now end exactly with the pack
-  terminator: data after the end of the pack (for example a padded partition dump passed to
-  `atomvm:add_avm_pack_binary/2`) is rejected when loaded
-- STM32 builds now enable `AVM_MINIMAL_OPCODES` by default, so modules compiled with the
-  `no_bs_create_bin`, `no_bs_match` or `no_ssa_opt_bs_ensure` compiler options cannot be loaded
 - Added `socket:nif_select_write/2`, so a process can wait for a socket to have room to send
   instead of retrying, on platforms whose sockets can say so (it answers `{error, enotsup}`
   elsewhere, and callers fall back to retrying). `gen_tcp` with the `socket` backend and the
@@ -40,7 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   promote long-lived terms to a per-process old generation. Tune with the `fullsweep_after`
   `spawn_opt/2,3,4,5` option or `process_flag/2` flag (default 65535 like BEAM, `0` forces a full
   sweep on every collection), inspect with `process_info/2`
-- Added support for non-byte-aligned bitstrings
 - Added support for native records introduced with OTP29
 - Added JIT support for the legacy binary construction opcodes (`bs_add`, `bs_init_bits`,
   `bs_append`, `bs_private_append`, `bs_put_integer`, `bs_put_binary`, `bs_put_float`,
@@ -70,9 +61,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `calendar:seconds_to_time/1` and `calendar:seconds_to_daystime/1`
 - Added `erlang:convert_time_unit/3`
 - `inet:ntoa/1` now formats IPv6 addresses (8-tuples), with RFC 5952 zero compression
-- Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
-  port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
-  images whose root filesystem does not ship libsodium
 - Added `ets:first/1` and `ets:next/2` to traverse the keys of a table; the traversal order is
   unspecified, as for `set` tables on Erlang/OTP
 - Added `ets:match/2`
@@ -81,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the same value as `erts_debug:flat_size/1`
 
 ### Changed
+- Stopped CI testing on FreeBSD 13, which has reached end of life.
+- `.avm` files, binaries and the pack embedded in an escript must now end exactly with the pack
+  terminator: data after the end of the pack (for example a padded partition dump passed to
+  `atomvm:add_avm_pack_binary/2`) is rejected when loaded
+- STM32 builds now enable `AVM_MINIMAL_OPCODES` by default, so modules compiled with the
+  `no_bs_create_bin`, `no_bs_match` or `no_ssa_opt_bs_ensure` compiler options cannot be loaded
 - A receive clause that sends the message it just consumed straight on now hands the incoming
   message block to the next process, with the words that differ patched in place, instead of
   sizing and copying the term into a fresh one. A forwarded hop no longer costs anything
@@ -280,10 +274,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `'$$'` in an `ets:select/2,3` match specification body returning the bound variables
   sorted as atoms rather than by number, so a match specification binding ten or more variables
   listed `'$10'` before `'$2'`
-- Fixed `bs_add` scaling the sum of both operands by the unit instead of only the second one
-  (`Dest = Src1 + Src2 * Unit`), so a binary built by the legacy construction opcodes of OTP 26
-  and 27 out of segments whose total width is neither a whole number of bytes nor under one
-  came out too long
 - Fixed the arm32 and armv6m JIT literal pools going out of reach on a wide `put_tuple2` or
   `put_map`: element stores encode their own offsets, so a run of them added no literal and
   nothing re-examined the pending pool, and a literal loaded before the run ended up further
