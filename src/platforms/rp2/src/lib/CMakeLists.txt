@@ -142,6 +142,7 @@ if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
         "USBD_MANUFACTURER=\"${AVM_USB_CDC_MANUFACTURER}\""
         "USBD_PRODUCT=\"${AVM_USB_CDC_PRODUCT}\""
         "USBD_INTERFACE_NAME=\"${AVM_USB_CDC_INTERFACE_NAME}\""
+        USBD_MAX_POWER_MA=${AVM_USB_CDC_MAX_POWER_MA}
     )
     target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC tinyusb_device)
     target_link_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC "SHELL:-Wl,-u -Wl,usb_cdcregister_port_driver")

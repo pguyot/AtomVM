@@ -2079,6 +2079,8 @@ The string descriptors can be overridden the same way:
 - **RP2 / STM32** (CMake): `-DAVM_USB_CDC_MANUFACTURER="Your Company"`, `-DAVM_USB_CDC_PRODUCT="Your Product"`, `-DAVM_USB_CDC_INTERFACE_NAME="Your Product CDC ACM"`.
 - **ESP32** (sdkconfig): `CONFIG_TINYUSB_DESC_MANUFACTURER_STRING`, `CONFIG_TINYUSB_DESC_PRODUCT_STRING`, `CONFIG_TINYUSB_DESC_CDC_STRING`.
 
+On RP2 and STM32, the device declares to the host that it may draw up to 250 mA from the bus. Some hosts refuse devices that declare more than they can supply: for example, an iPhone with a Lightning to USB Camera Adapter only accepts 100 mA. If your board draws less, lower the declared current with `-DAVM_USB_CDC_MAX_POWER_MA=100` (up to 500).
+
 ### LED Control
 
 The LED Control API can be used to drive LEDs, as well as generate PWM signals on GPIO pins.

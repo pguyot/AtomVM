@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `CONFIG_AVM_ENABLE_ETHERNET=y`): `{eth, [...]}` in `network:start/1` brings up the EMAC
   with an RMII PHY, alone or next to STA/AP, plus `network:wait_for_eth/0,1,2` and
   `network:eth_status/0`
+- Added `AVM_USB_CDC_MAX_POWER_MA` CMake option on rp2 and stm32 to set the bus current declared
+  by the USB device (default 250 mA), so it can be used with hosts that only supply 100 mA
 
 ### Changed
 - Stopped CI testing on FreeBSD 13, which has reached end of life.

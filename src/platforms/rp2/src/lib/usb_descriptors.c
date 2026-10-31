@@ -32,6 +32,10 @@
 #ifndef USBD_INTERFACE_NAME
 #define USBD_INTERFACE_NAME "AtomVM CDC ACM"
 #endif
+#ifndef USBD_MAX_POWER_MA
+#define USBD_MAX_POWER_MA 250
+#endif
+_Static_assert(USBD_MAX_POWER_MA <= 500, "USB 2.0 bus current is at most 500 mA");
 
 #define USBD_ITF_CDC 0
 #define USBD_ITF_MAX 2
@@ -68,7 +72,7 @@ static const tusb_desc_device_t usbd_desc_device = {
 };
 
 static const uint8_t usbd_desc_cfg[USBD_DESC_LEN] = {
-    TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_MAX, USBD_STR_LANG, USBD_DESC_LEN, 0, 250),
+    TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_MAX, USBD_STR_LANG, USBD_DESC_LEN, 0, USBD_MAX_POWER_MA),
     TUD_CDC_DESCRIPTOR(USBD_ITF_CDC, USBD_STR_CDC, USBD_CDC_EP_CMD,
         USBD_CDC_CMD_MAX_SIZE, USBD_CDC_EP_OUT, USBD_CDC_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
 };

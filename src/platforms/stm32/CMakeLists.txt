@@ -153,6 +153,7 @@ set(AVM_USB_CDC_PID "0x4001" CACHE STRING "USB CDC product ID (default: TinyUSB 
 set(AVM_USB_CDC_MANUFACTURER "AtomVM" CACHE STRING "USB CDC iManufacturer string descriptor")
 set(AVM_USB_CDC_PRODUCT "AtomVM CDC" CACHE STRING "USB CDC iProduct string descriptor")
 set(AVM_USB_CDC_INTERFACE_NAME "AtomVM CDC ACM" CACHE STRING "USB CDC interface string descriptor")
+set(AVM_USB_CDC_MAX_POWER_MA "250" CACHE STRING "USB maximum bus current in mA declared to the host (up to 500)")
 if (AVM_USB_CDC_PORT_DRIVER_ENABLED)
     include(cmake/stm32_tinyusb.cmake)
 endif()
