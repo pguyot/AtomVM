@@ -1477,6 +1477,46 @@ static term large_integer_to_term(Context *ctx, int num_bytes, const uint8_t **e
 
 
 
+#if MAXIMUM_OTP_COMPILER_VERSION >= 30
+// Advance past an operand that is an atom, [] or an extended literal without
+// decoding it. Returns false for any other encoding. DECODE_COMPACT_TERM would
+// do, but expanded inside the interpreter loop it makes every jump to its
+// abort path longer, and on Xtensa the loop is already close to the 128KB range
+// of a j instruction.
+static bool skip_atom_or_literal_operand(const uint8_t **pc)
+{
+    uint8_t first_byte = *(*pc)++;
+    switch (first_byte & 0xF) {
+        case COMPACT_ATOM:
+            return true;
+        case COMPACT_LARGE_ATOM:
+            if ((first_byte & COMPACT_LARGE_IMM_MASK) != COMPACT_11BITS_VALUE) {
+                return false;
+            }
+            (*pc)++;
+            return true;
+        case COMPACT_EXTENDED: {
+            if (first_byte != COMPACT_EXTENDED_LITERAL) {
+                return false;
+            }
+            uint8_t extended_byte = *(*pc)++;
+            switch ((extended_byte >> 3) & 0x3) {
+                case 1:
+                    (*pc)++;
+                    return true;
+                case 3:
+                    *pc += (extended_byte >> 5) + 2;
+                    return true;
+                default:
+                    return true;
+            }
+        }
+        default:
+            return false;
+    }
+}
+#endif
+
 #ifdef ENABLE_ADVANCED_TRACE
     static void print_function_args(const Context *ctx, int arity)
     {
@@ -6913,9 +6953,9 @@ schedule_in:
                         // what decides here either way, so drop it -- the OTP
                         // emulator rewrites both forms to the same
                         // i_get_record_elements (erts ops.tab).
-                        term id;
-                        DECODE_COMPACT_TERM(id, pc);
-                        UNUSED(id);
+                        if (UNLIKELY(!skip_atom_or_literal_operand(&pc))) {
+                            VM_ABORT();
+                        }
                     }
 #endif
                     DEST_REGISTER(src_reg);
