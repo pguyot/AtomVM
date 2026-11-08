@@ -51,6 +51,15 @@ avm_get_system_architecture_string(AVM_SYSTEM_ARCHITECTURE_STRING PLATFORM_OS es
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../libAtomVM" "libAtomVM")
 
+# The interpreter loop in context.c spans more than the 128KB reach of the
+# Xtensa j instruction, and GCC merges every jump to the abort path into a
+# single block, so the assembler fails with "operand 1 of 'j' has out of range
+# value" depending on how large the loop happens to be. Let it relax such
+# jumps through literal pools it creates itself.
+if (CONFIG_IDF_TARGET_ARCH_XTENSA)
+    target_compile_options(libAtomVM PRIVATE -mauto-litpools)
+endif()
+
 # Add directory with platform_atomic.h if we mean to use it
 if (HAVE_PLATFORM_ATOMIC_H)
     target_include_directories(libAtomVM PUBLIC ../avm_sys/)
