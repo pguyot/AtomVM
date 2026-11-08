@@ -51,9 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `calendar:seconds_to_time/1` and `calendar:seconds_to_daystime/1`
 - Added `erlang:convert_time_unit/3`
 - `inet:ntoa/1` now formats IPv6 addresses (8-tuples), with RFC 5952 zero compression
-- Added `AVM_STATIC_LIBSODIUM` CMake option to statically link libsodium into the generic_unix
-  port (mirroring `AVM_STATIC_MBEDTLS`), useful for self-contained binaries such as firmware
-  images whose root filesystem does not ship libsodium
 - Added JIT support for the legacy binary construction opcodes (`bs_add`, `bs_init_bits`,
   `bs_append`, `bs_private_append`, `bs_put_integer`, `bs_put_binary`, `bs_put_float`,
   `bs_put_string`, `bs_utf8_size`, `bs_put_utf8`, `bs_utf16_size`, `bs_put_utf16`,
@@ -98,10 +95,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   access), keeping the tag-stripped tuple pointer instead of reloading and re-stripping the source
   per field; the expected record tag atom is resolved before the pointer is loaded so nothing is
   spilled across the resolver call
-- `erlang:term_to_binary/1,2` and `erlang:binary_to_term/1,2` now encode and decode terms
-  iteratively instead of with unbounded C recursion, so a deeply nested term no longer risks
-  exhausting the C stack
-- `erlang:binary_to_term/1,2` now rejects a `LIST_EXT` with no tail (raising `badarg`), matching OTP
 - JIT `is_eq_exact`/`is_ne_exact` now emit a single native word comparison when the `Type` chunk
   proves an operand is a non-boxed immediate (`t_atom` or `nil`), skipping the runtime
   immediate-tag test and the `term_compare` fallback of the untyped path
