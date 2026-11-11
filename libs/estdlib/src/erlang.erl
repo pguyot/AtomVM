@@ -40,6 +40,7 @@
     is_map_key/2,
     is_record/1,
     is_record/2,
+    is_record/3,
     get_record_field/3,
     map_size/1,
     map_get/2,
@@ -626,6 +627,19 @@ is_record(_Term) ->
 %%-----------------------------------------------------------------------------
 -spec is_record(Term :: term(), RecordTag :: atom()) -> boolean().
 is_record(_Term, _RecordTag) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Term
+%% @param   Tag     record tag (tuple record) or module (native record)
+%% @param   Arg3    record size (tuple record) or record name (native record)
+%%
+%% @doc     Returns true if Term is a tuple record of tag Tag and size Arg3, or a
+%%          native record named Arg3 from module Tag, false otherwise.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec is_record(Term :: term(), Tag :: atom(), SizeOrName :: pos_integer() | atom()) -> boolean().
+is_record(_Term, _Tag, _SizeOrName) ->
     erlang:nif_error(undefined).
 
 %%-----------------------------------------------------------------------------

@@ -46,7 +46,7 @@ test(P) ->
     ?ASSERT_MATCH(?FLT(io_lib:format("~p", [P])), Expected),
     ?ASSERT_MATCH(?FLT(io_lib:format("~w", [#empty{}])), "#test_native_records_io_lib:empty{}"),
     ?ASSERT_MATCH(
-        ?FLT(io_lib:format("~p", [{P, #empty{}}])),
+        ?FLT(io_lib:format("~w", [{P, #empty{}}])),
         "{" ++ Expected ++ ",#test_native_records_io_lib:empty{}}"
     ),
     ?ASSERT_MATCH(
