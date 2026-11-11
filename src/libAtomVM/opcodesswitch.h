@@ -6553,10 +6553,14 @@ schedule_in:
                             // Local record: name atom only, resolve against current module.
                             def = module_find_record_def(mod, id);
                         } else if (term_is_tuple(id) && term_get_tuple_arity(id) == 2) {
-                            // Cross-module record: literal {Module, Name}.
+                            // Cross-module record: literal {Module, Name}, which
+                            // requires the record to be exported.
                             def = module_find_record_def_global(ctx->global,
                                 term_get_tuple_element(id, 0),
                                 term_get_tuple_element(id, 1));
+                            if (def != NULL && !def->is_exported) {
+                                def = NULL;
+                            }
                         }
                     }
                     if (UNLIKELY(def == NULL)) {
@@ -6612,6 +6616,13 @@ schedule_in:
                             }
                             term_put_record_value(dst_record, i, default_val);
                         }
+                        // Mark fields without a default as invalid until provided, so
+                        // that missing ones can be detected once the updates are applied.
+                        for (size_t i = 0; i < num_fields; i++) {
+                            if (def->fields[i].default_encoded == NULL) {
+                                term_put_record_value(dst_record, i, term_invalid_term());
+                            }
+                        }
                     } else {
                         for (size_t i = 0; i < num_fields; i++) {
                             term_put_record_value(dst_record, i, term_get_record_value(src, i));
@@ -6635,12 +6646,34 @@ schedule_in:
                             bad_field = field_name;
                         }
                     }
+                    // A field without a default must be provided. Always reset the
+                    // markers so that an abandoned record is valid for the GC.
+                    term missing_field = term_invalid_term();
+                    if (term_is_nil(src)) {
+                        for (size_t i = 0; i < num_fields; i++) {
+                            if (term_is_invalid_term(term_get_record_value(dst_record, i))) {
+                                if (term_is_invalid_term(missing_field)) {
+                                    missing_field = def->fields[i].name;
+                                }
+                                term_put_record_value(dst_record, i, term_nil());
+                            }
+                        }
+                    }
                     if (UNLIKELY(!term_is_invalid_term(bad_field))) {
                         if (fail_label) {
                             pc = mod->labels[fail_label];
                             break;
                         }
                         (void) raise_badfield(ctx, def, term_to_atom_index(bad_field));
+                        HANDLE_ERROR();
+                    }
+
+                    if (UNLIKELY(!term_is_invalid_term(missing_field))) {
+                        if (fail_label) {
+                            pc = mod->labels[fail_label];
+                            break;
+                        }
+                        (void) raise_novalue(ctx, def, term_to_atom_index(missing_field));
                         HANDLE_ERROR();
                     }
 
@@ -6687,7 +6720,7 @@ schedule_in:
                     TRACE("get_record_field/5 fail=%u, field=0x%" TERM_X_FMT "\n",
                         (unsigned) fail_label, field);
 
-                    term value = record_get_field(ctx, fail_label, module_get_name(mod), src, id, field);
+                    term value = record_get_field(ctx, fail_label, src, id, field);
                     if (UNLIKELY(term_is_invalid_term(value))) {
                         if (fail_label) {
                             pc = mod->labels[fail_label];

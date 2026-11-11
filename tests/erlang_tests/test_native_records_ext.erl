@@ -21,10 +21,12 @@
 -module(test_native_records_ext).
 -export([make_vector/3, make_unexported/2]).
 
--export_record([vector, tagged]).
+-export_record([vector, tagged, nodef]).
 -record(#vector{x = 0, y = 0, z = 0}).
 
 -record #unexported{a, b}.
+
+-record #nodef{a, b}.
 
 -record(#tagged{
     tag = ext_default_tag,

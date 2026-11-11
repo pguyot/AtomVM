@@ -23,7 +23,9 @@
 
 -import_record(test_native_records_ext, [vector]).
 
+-export_record([nodef_local]).
 -record #pair{a, b}.
+-record #nodef_local{a, b}.
 -record(#point{x = 0, y = 0, z = 0}).
 -record(#empty{}).
 -record(#with_list_default{items = [a, b, c]}).
@@ -53,6 +55,7 @@ start() ->
     ok = test_ets_bag_record_keys(),
     ok = test_get_record_field_anonymous_id(),
     ok = test_get_record_field_remote_checks(),
+    ok = test_put_record_tuple_id_checks(),
     ok = test_is_record_opcodes(),
     ok = test_is_tuple_disjoint_from_record(),
     ok = test_get_record_field_runtime(),
@@ -247,6 +250,36 @@ test_get_record_field_remote_checks() ->
         V#test_native_records_ext:vector.w
     end),
     {badrecord, U} = catch_error(fun() -> U#test_native_records_ext:unexported.a end),
+    ok.
+
+%% Creating a record with a {Module, Name} id requires it to be exported (even
+%% from the defining module), and each field must be known and have a value.
+test_put_record_tuple_id_checks() ->
+    P = ?MODULE:id(#pair{a = 1, b = 2}),
+    {badrecord, P} = catch_error(fun() -> P#?MODULE:pair.a end),
+    {badrecord, {?MODULE, pair}} = catch_error(fun() -> #?MODULE:pair{a = 1, b = 2} end),
+    {badrecord, {test_native_records_ext, unexported}} = catch_error(fun() ->
+        #test_native_records_ext:unexported{a = 1, b = 2}
+    end),
+    {badfield, {{?MODULE, nodef_local}, zz}} = catch_error(fun() ->
+        #?MODULE:nodef_local{zz = 1}
+    end),
+    {novalue, {{?MODULE, nodef_local}, a}} = catch_error(fun() ->
+        #?MODULE:nodef_local{b = 3}
+    end),
+    {badfield, {{test_native_records_ext, nodef}, zz}} = catch_error(fun() ->
+        #test_native_records_ext:nodef{zz = 1}
+    end),
+    {novalue, {{test_native_records_ext, nodef}, a}} = catch_error(fun() ->
+        #test_native_records_ext:nodef{b = 3}
+    end),
+    {novalue, {{test_native_records_ext, nodef}, b}} = catch_error(fun() ->
+        #test_native_records_ext:nodef{a = 3}
+    end),
+    N = ?MODULE:id(#?MODULE:nodef_local{a = 1, b = 2}),
+    1 = N#?MODULE:nodef_local.a,
+    N2 = N#?MODULE:nodef_local{a = 5},
+    5 = N2#?MODULE:nodef_local.a,
     ok.
 
 expect_badarg(F) ->

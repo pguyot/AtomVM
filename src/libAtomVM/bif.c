@@ -393,7 +393,7 @@ term raise_badrecord(Context *ctx, term src)
     return term_invalid_term();
 }
 
-term raise_badfield(Context *ctx, const struct RecordDef *def, atom_index_t field)
+static term raise_record_field_error(Context *ctx, term tag, const struct RecordDef *def, atom_index_t field)
 {
     if (UNLIKELY(memory_ensure_free(ctx, 3 * TUPLE_SIZE(2)) != MEMORY_GC_OK)) {
         context_set_exception_class(ctx, ERROR_ATOM);
@@ -407,14 +407,24 @@ term raise_badfield(Context *ctx, const struct RecordDef *def, atom_index_t fiel
     term_put_tuple_element(reason, 0, id);
     term_put_tuple_element(reason, 1, term_from_atom_index(field));
     term err = term_alloc_tuple(2, &ctx->heap);
-    term_put_tuple_element(err, 0, BADFIELD_ATOM);
+    term_put_tuple_element(err, 0, tag);
     term_put_tuple_element(err, 1, reason);
     context_set_exception_class(ctx, ERROR_ATOM);
     ctx->exception_reason = err;
     return term_invalid_term();
 }
 
-term record_get_field(Context *ctx, uint32_t fail_label, term current_module, term src, term id, term field)
+term raise_badfield(Context *ctx, const struct RecordDef *def, atom_index_t field)
+{
+    return raise_record_field_error(ctx, BADFIELD_ATOM, def, field);
+}
+
+term raise_novalue(Context *ctx, const struct RecordDef *def, atom_index_t field)
+{
+    return raise_record_field_error(ctx, NOVALUE_ATOM, def, field);
+}
+
+term record_get_field(Context *ctx, uint32_t fail_label, term src, term id, term field)
 {
     if (UNLIKELY(!term_is_record(src))) {
         if (fail_label == 0) {
@@ -430,7 +440,7 @@ term record_get_field(Context *ctx, uint32_t fail_label, term current_module, te
     } else if (term_is_tuple(id) && term_get_tuple_arity(id) == 2) {
         id_matches = (def->module == term_get_tuple_element(id, 0))
             && (def->name == term_get_tuple_element(id, 1))
-            && (def->is_exported || def->module == current_module);
+            && def->is_exported;
     }
     if (UNLIKELY(!id_matches)) {
         if (fail_label == 0) {
@@ -453,7 +463,7 @@ term record_get_field(Context *ctx, uint32_t fail_label, term current_module, te
 
 term bif_erlang_get_record_field_3(Context *ctx, uint32_t fail_label, term src, term id, term field)
 {
-    return record_get_field(ctx, fail_label, term_invalid_term(), src, id, field);
+    return record_get_field(ctx, fail_label, src, id, field);
 }
 
 term bif_records_get_2(Context *ctx, uint32_t fail_label, term key, term record)

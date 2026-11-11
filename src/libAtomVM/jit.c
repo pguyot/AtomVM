@@ -415,9 +415,12 @@ static const struct RecordDef *jit_resolve_record_id(Context *ctx, JITState *jit
         return module_find_record_def(jit_state->module, id);
     }
     if (term_is_tuple(id) && term_get_tuple_arity(id) == 2) {
-        return module_find_record_def_global(ctx->global,
+        // Like ERTS, creating a record with a {Module, Name} id requires it
+        // to be exported.
+        const struct RecordDef *def = module_find_record_def_global(ctx->global,
             term_get_tuple_element(id, 0),
             term_get_tuple_element(id, 1));
+        return (def != NULL && def->is_exported) ? def : NULL;
     }
     return NULL;
 }
@@ -472,7 +475,8 @@ static uint32_t jit_is_record_accessible(Context *ctx, JITState *jit_state, term
 
 static term jit_get_record_field(Context *ctx, JITState *jit_state, uint32_t fail_label, term src, term id, term field)
 {
-    return record_get_field(ctx, fail_label, module_get_name(jit_state->module), src, id, field);
+    UNUSED(jit_state);
+    return record_get_field(ctx, fail_label, src, id, field);
 }
 
 /**
@@ -613,6 +617,25 @@ static term jit_put_record(Context *ctx, JITState *jit_state, term id, term src,
             return raise_badfield(ctx, def, term_to_atom_index(field_name));
         }
         term_put_record_value(dst, k, value);
+    }
+
+    if (term_is_nil(src)) {
+        // A field without a default must be provided.
+        for (size_t i = 0; i < num_fields; i++) {
+            if (def->fields[i].default_encoded != NULL) {
+                continue;
+            }
+            bool provided = false;
+            for (uint32_t j = 0; j < num_pairs && !provided; j++) {
+                provided = kv[j * 2] == def->fields[i].name;
+            }
+            if (!provided) {
+                if (has_fail_label) {
+                    return term_invalid_term();
+                }
+                return raise_novalue(ctx, def, term_to_atom_index(def->fields[i].name));
+            }
+        }
     }
 
     return dst;

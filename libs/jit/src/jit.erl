@@ -4783,7 +4783,7 @@ peek_local_record_id(<<_:4, ?COMPACT_LARGE_ATOM:4, _/binary>> = Bin, #state{
         Info -> {ok, Info, Rest}
     end;
 peek_local_record_id(<<?COMPACT_EXTENDED_LITERAL, Rest0/binary>>, #state{
-    atom_resolver = AR, literal_resolver = LR, record_resolver = RR
+    literal_resolver = LR, record_resolver = RR
 }) ->
     {LitIndex, Rest} = decode_literal(Rest0),
     case LR(LitIndex) of
@@ -4792,16 +4792,8 @@ peek_local_record_id(<<?COMPACT_EXTENDED_LITERAL, Rest0/binary>>, #state{
                 undefined -> not_local;
                 Info -> {ok, Info, Rest}
             end;
-        {Mod, Name} when is_atom(Mod), is_atom(Name) ->
-            case AR(1) of
-                Mod ->
-                    case RR(Name) of
-                        undefined -> not_local;
-                        Info -> {ok, Info, Rest}
-                    end;
-                _ ->
-                    not_local
-            end;
+        % A {Module, Name} id is checked at run time (the record must be
+        % exported and the fields are not validated by the compiler).
         _ ->
             not_local
     end;
