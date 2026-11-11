@@ -416,8 +416,17 @@ recs_skip_large_imm(<<First, _/binary>> = Bin) ->
             <<_, _, Rest/binary>> = Bin,
             Rest;
         ?COMPACT_NBITS_VALUE ->
-            Total = 1 + ((First bsr 5) + 2),
-            <<_Skip:Total/binary, Rest/binary>> = Bin,
+            {Total, Src} =
+                case (First bsr 5) + 2 of
+                    Sz when Sz > 8 ->
+                        % Extended form: first byte, a compact literal N, then N + 9 bytes.
+                        <<_, Rest0/binary>> = Bin,
+                        {N, Rest1} = recs_decode_value(Rest0),
+                        {9 + N, Rest1};
+                    Sz ->
+                        {1 + Sz, Bin}
+                end,
+            <<_Skip:Total/binary, Rest/binary>> = Src,
             Rest
     end.
 
