@@ -2876,7 +2876,8 @@ first_pass(
                         FailLabel, Src, Rest2, MMod, MSt1, State0
                     )
             end;
-        undefined ->
+        _ ->
+            %% Untracked, or tracked with a different name than Id.
             get_record_field_generic(FailLabel, Src, Rest2, MMod, MSt1, State0)
     end.
 
